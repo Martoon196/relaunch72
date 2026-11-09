@@ -29,7 +29,7 @@ import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-cont
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
 import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, creativeEnquiriesPage, generationPage, renderTaskPage, type ReferenceChoice } from './creative-generation-view.js';
-import { holdMessage } from '../creative-studio/generation.js';
+import { holdMessage, isCreativeImageJob } from '../creative-studio/generation.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
@@ -54,7 +54,6 @@ export interface SeoBlogRouteInput {
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
-/** Bound for a creative render held inside one request: 30 s of real-time recording plus launches and the playback check. */
 // connect-src 'self' lets the same-origin status scripts poll (default-src 'none' otherwise blocks their fetch).
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
@@ -146,6 +145,17 @@ function lines(value: string | null): string[] {
 function int(value: string | null, field: string): number {
   if (value === null || !/^\d{1,10}$/.test(value.trim())) throw new SeoBlogError(400, `Enter a whole number for ${field}.`);
   return Number(value.trim());
+}
+
+/** The studio page a failed creative POST returns to (with its message), instead of the studio overview. */
+export function creativeReturnPage(rest: string): string {
+  const p = rest.split('/');
+  if (p[1] === 'generate') return p[2] && p[3] === 'request' ? `creative/generate/${p[2]}` : 'creative/generate';
+  if (p[1] === 'enquiries') return 'creative/enquiries';
+  if (p[1] === 's' && p[2]) return `creative/s/${p[2]}`;
+  if (p[1] === 'task' && p[2]) return `creative/task/${p[2]}`;
+  if (p[1] === 'kit') return 'creative/kit';
+  return 'creative';
 }
 
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
@@ -275,7 +285,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (taskRoute) {
         const task = await studio.renderTask(actor.userId, brandId, taskRoute[1]!.toLowerCase());
         if (task.job.state === 'done' && task.result) return ok(`${SEO_BLOG_BASE}/b/${brandId}/creative/s/${task.result.setId}`, task.result.message);
-        return send(res, 200, renderTaskPage(shell('creative'), { job: task.job, label: task.label }));
+        return send(res, 200, renderTaskPage(shell('creative'), { job: task.job, label: task.label, retryable: !isCreativeImageJob(task.job) }));
       }
       const jobRoute = new RegExp(`^creative/jobs/(${UUID})$`, 'i').exec(rest);
       if (jobRoute) {
@@ -293,12 +303,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const versions = view.state.briefs.filter((b) => b.id === briefId);
         if (!versions.length) throw new SeoBlogError(404, 'That brief was not found.');
         const current = [...versions].sort((a, b) => b.version - a.version)[0]!;
-        const estimate = gen.estimate(view.brand, all.state, view.policy, current.data);
+        const estimate = gen.estimate(view.brand, all.state, view.policy, current.data, view.policyUnreadable);
         return send(res, 200, briefPage(shell('creative'), { brand: view.brand, briefId, versions, state: view.state, estimate, references: await referenceChoices(all.state), previewUrl: generatedUrl }));
       }
       if (rest === 'creative/enquiries') {
         const settings = await studio.enquiries(actor.userId, brandId);
-        return send(res, 200, creativeEnquiriesPage(shell('creative'), { settings, brandId, origin: input.publicOrigin ?? url.origin, live: Boolean(input.service.creativeEnquiries) }));
+        return send(res, 200, creativeEnquiriesPage(shell('creative'), { settings, brandId, origin: input.publicOrigin ?? null, live: Boolean(input.service.creativeEnquiries) }));
       }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
@@ -407,7 +417,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (!known) console.error('seo-blog: request failed', (error as Error).name);
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
       const articleAction = rest.split('/')[2] ?? '';
-      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}` : rest.split('/')[0] || 'overview';
+      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}`
+        : rest.startsWith('creative/') ? creativeReturnPage(rest) : rest.split('/')[0] || 'overview';
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
@@ -461,16 +472,26 @@ async function handlePost(
         }
         if (parts[2] && parts[3] === 'request') {
           const briefId = parts[2].toLowerCase();
+          if (f('confirm') !== '1' && f('confirmedNewIntent') !== '1') throw new SeoBlogError(400, 'Tick the confirmation to use one paid image from this brand\u2019s allowances.');
           const result = await gen.request(actor.userId, brandId, briefId, int(f('version'), 'the brief version'), commandId, f('confirmedNewIntent') === '1', f('replacesIntentId') || null);
           if ('reason' in result) return ok(`${home}/generate/${briefId}`, result.reason === 'new_intent_confirmation_required' ? 'This brief version already has a paid image. Confirm that you want another paid request.' : holdMessage(result.reason));
-          return ok(`${home}/generate/${briefId}`, 'Image request saved. It runs on the server; you can leave this page. One paid request will be made when it starts.');
+          return ok(`${home}/generate/${briefId}`, 'Image request saved. It runs on the server; you can leave this page. One paid request is made only if the allowance and policy checks still pass when it starts.');
         }
         throw new SeoBlogError(404, 'That page was not found.');
       }
       if (parts[1] === 'enquiries') {
+        if (parts[2] === 'rotate') {
+          await studio.rotateEnquiryKey(actor.userId, brandId, int(f('rowVersion'), 'the settings version'));
+          return ok(`${home}/enquiries`, 'New form address issued. The old hosted link and embed code no longer work; update the page your links open.');
+        }
         const saved = await studio.saveEnquiries(actor.userId, brandId, { enabled: f('enabled') === '1', privacyUrl: (f('privacyUrl') ?? '').trim(),
           newStageId: f('newStageId') ?? '', qualifiedStageId: f('qualifiedStageId') ?? '', expectedVersion: int(f('rowVersion'), 'the settings version') });
         return ok(`${home}/enquiries`, saved.enabled ? 'Enquiry form saved and switched on. Add it to the page your tracked links open.' : 'Enquiry settings saved. The form is off.');
+      }
+      if (parts[1] === 'task' && parts[2] && parts[3] === 'retry') {
+        const task = await studio.renderTask(actor.userId, brandId, parts[2].toLowerCase());
+        await engine.retryJob(actor, brandId, task.job.id);
+        return ok(`${home}/task/${task.job.id}`, 'Task queued again. It replays the same request; nothing is duplicated.');
       }
       if (parts[1] === 'kit') {
         const action = f('logo_action') ?? 'keep';
@@ -480,8 +501,12 @@ async function handlePost(
         return ok(home, `Creative kit version ${kit.version} saved. Earlier image approvals for this brand now need a refresh.`);
       }
       if (parts[1] === 'draft') {
+        // Only the creative request fields travel into the job row: never the CSRF token, command id or background selectors.
         const raw: Record<string, string | string[]> = {};
-        for (const key of new Set(form.fields.keys())) raw[key] = key === 'placements' ? form.fields.getAll(key) : form.fields.get(key) ?? '';
+        for (const key of new Set(form.fields.keys())) {
+          if (['_csrf', 'commandId', 'background', 'saved', 'generated', 'file'].includes(key)) continue;
+          raw[key] = key === 'placements' ? form.fields.getAll(key).slice(0, 8) : (form.fields.get(key) ?? '').slice(0, 2000);
+        }
         return queued({ op: 'draft', raw, background: background() });
       }
       if (parts[1] === 's' && parts[2] && (parts[3] === 'concept' || parts[3] === 'refresh') && parts[4]) {

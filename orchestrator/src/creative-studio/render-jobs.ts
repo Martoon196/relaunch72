@@ -29,6 +29,8 @@ export interface RenderPayload {
   readonly commandId: string;
   readonly sponsorUserId: string;
   readonly operation: RenderOperation;
+  /** Digest of the owner's submitted content, so the same command id with different content is refused. */
+  readonly inputSha?: string;
   readonly result?: RenderResult;
 }
 
@@ -43,9 +45,9 @@ export function isCreativeRenderJob(job: Pick<Job, 'kind' | 'payload'>): boolean
   return job.kind === 'write' && job.payload.stage === CREATIVE_RENDER_STAGE;
 }
 
-export function newRenderJob(brandId: string, sponsorUserId: string, commandId: string, operation: RenderOperation, now: string): Job {
+export function newRenderJob(brandId: string, sponsorUserId: string, commandId: string, operation: RenderOperation, now: string, inputSha?: string): Job {
   if (!UUID.test(brandId) || !UUID.test(sponsorUserId) || !UUID.test(commandId) || !OPS.has(operation.op)) throw new SeoBlogError(400, 'Refresh the page and try again.');
-  const render: RenderPayload = { schema: CREATIVE_RENDER_SCHEMA, commandId: commandId.toLowerCase(), sponsorUserId, operation };
+  const render: RenderPayload = { schema: CREATIVE_RENDER_SCHEMA, commandId: commandId.toLowerCase(), sponsorUserId, operation, ...(inputSha ? { inputSha } : {}) };
   return { id: commandId.toLowerCase(), brandId, kind: 'write', idempotencyKey: `creative-render:${commandId.toLowerCase()}`, payload: { stage: CREATIVE_RENDER_STAGE, render },
     state: 'queued', attempts: 0, maxAttempts: 2, leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: `${RENDER_LABEL[operation.op]}…`,
     error: null, createdAt: now, updatedAt: now, rowVersion: 0 };
@@ -53,9 +55,23 @@ export function newRenderJob(brandId: string, sponsorUserId: string, commandId: 
 
 export function decodeRenderJob(job: Job): RenderPayload {
   const r = job.payload.render as Record<string, unknown> | undefined;
-  const op = (r?.operation as Record<string, unknown> | undefined)?.op;
+  const o = r?.operation as Record<string, unknown> | undefined, op = o?.op;
+  const bad = (): never => { throw new SeoBlogError(409, 'This render task is not recognised. Nothing was rendered.'); };
   if (!isCreativeRenderJob(job) || !r || r.schema !== CREATIVE_RENDER_SCHEMA || r.commandId !== job.id || typeof r.sponsorUserId !== 'string' || !UUID.test(r.sponsorUserId)
-    || typeof op !== 'string' || !OPS.has(op)) throw new SeoBlogError(409, 'This render task is not recognised. Nothing was rendered.');
+    || !o || typeof op !== 'string' || !OPS.has(op)) bad();
+  // Shape checks only; the service re-validates every value (placements, heads, scenes, focal range, copy limits).
+  const str = (v: unknown) => typeof v === 'string' && v.length <= 2000;
+  const strs = (v: unknown) => Array.isArray(v) && v.length <= 64 && v.every(str);
+  const obj = (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const bg = (v: unknown) => obj(v) && ['keep', 'neutral', 'prepared'].includes(String((v as { kind?: unknown }).kind));
+  const ok = op === 'draft' ? obj(o!.raw) && Object.keys(o!.raw as object).length <= 40 && bg(o!.background)
+    : op === 'refresh' ? str(o!.setId) && str(o!.conceptKey) && strs(o!.heads)
+    : op === 'edit' ? str(o!.setId) && str(o!.conceptKey) && strs(o!.heads) && obj(o!.patch) && bg(o!.background)
+    : op === 'focal' ? str(o!.versionId) && obj(o!.focal) && Number.isFinite((o!.focal as { x?: unknown }).x) && Number.isFinite((o!.focal as { y?: unknown }).y)
+    : op === 'storyboard' ? str(o!.setId) && str(o!.conceptKey) && str(o!.placement) && typeof o!.likeness === 'boolean'
+    : op === 'storyboard_edit' ? str(o!.versionId) && Array.isArray(o!.scenes) && (o!.scenes as unknown[]).length <= 9 && (o!.scenes as unknown[]).every(obj)
+    : str(o!.versionId);
+  if (!ok) bad();
   return r as unknown as RenderPayload;
 }
 
@@ -107,7 +123,8 @@ export async function executeRender(service: RenderService, brandId: string, p: 
   }
 }
 
-const sameClaim = (current: Job, claim: Job) => current.state === 'running' && current.leaseOwner === claim.leaseOwner && current.attempts === claim.attempts;
+const sameClaim = (current: Job, claim: Job, now: string) => current.state === 'running' && current.leaseOwner === claim.leaseOwner && current.attempts === claim.attempts
+  && (current.leaseExpiresAt === null || Date.parse(current.leaseExpiresAt) > Date.parse(now));
 
 /**
  * Worker coordinator for one claimed render job. Owner-correctable problems (changed facts, newer versions, missing
@@ -119,11 +136,13 @@ export async function runCreativeRenderJob(claim: Job, deps: {
   readonly now: () => string;
 }): Promise<Job> {
   const current = await deps.store.getJob(claim.brandId, claim.id);
-  if (!current || !sameClaim(current, claim)) return current ?? claim;
+  if (!current || !sameClaim(current, claim, deps.now())) return current ?? claim;
+  // A lease that lapsed during a long render is not written back: the next claim replays the same idempotent command.
   const finish = async (patch: Partial<Job>): Promise<Job> => {
     const latest = await deps.store.getJob(claim.brandId, claim.id);
-    if (!latest || !sameClaim(latest, claim)) return latest ?? claim;
-    return deps.store.updateJob({ ...latest, leaseOwner: null, leaseExpiresAt: null, updatedAt: deps.now(), ...patch });
+    if (!latest || !sameClaim(latest, claim, deps.now())) return latest ?? claim;
+    try { return await deps.store.updateJob({ ...latest, leaseOwner: null, leaseExpiresAt: null, updatedAt: deps.now(), ...patch }); }
+    catch { return (await deps.store.getJob(claim.brandId, claim.id).catch(() => null)) ?? latest; }
   };
   let payload: RenderPayload;
   try { payload = decodeRenderJob(current); } catch (e) { return finish({ state: 'blocked', error: (e as Error).message, progress: (e as Error).message }); }
@@ -132,6 +151,8 @@ export async function runCreativeRenderJob(claim: Job, deps: {
     return finish({ state: 'done', error: null, progress: result.message, payload: { ...current.payload, render: { ...payload, result } } });
   } catch (e) {
     const status = e instanceof SeoBlogError ? e.status : 500;
+    // A lost lease surfaces from SQL as 403; if the lease has in fact lapsed, leave the row for the next claim.
+    if (status === 403) { const latest = await deps.store.getJob(claim.brandId, claim.id); if (!latest || !sameClaim(latest, claim, deps.now())) return latest ?? claim; }
     const retry = status >= 500 && current.attempts < current.maxAttempts;
     const message = status < 500 ? (e as Error).message.slice(0, 600)
       : retry ? 'The renderer was unavailable. The task will be retried shortly; nothing was published.' : 'The artwork could not be rendered on the server. Nothing was published. Try again later.';

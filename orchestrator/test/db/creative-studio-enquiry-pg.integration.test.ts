@@ -18,7 +18,7 @@ import { PgCreativeDistributionReader, PgCreativeEnquirySettings, PgCreativeLibr
 import { CreativeStudioService, setView } from '../../src/creative-studio/service.js';
 import { creativeUtmContent } from '../../src/creative-studio/distribution.js';
 import { buildLearning } from '../../src/creative-studio/learning.js';
-import { handleEnquiryPublic, PgEnquiryCapture } from '../../src/creative-studio/enquiry-capture.js';
+import { enquiryToken, handleEnquiryPublic, PgEnquiryCapture } from '../../src/creative-studio/enquiry-capture.js';
 import { CrmCommandService } from '../../src/crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../../src/crm-pg/repository.js';
 import { requestDatabaseContext } from '../../src/db/rls.js';
@@ -170,7 +170,65 @@ test('campaign enquiries on real PostgreSQL: public form → existing CRM comman
       assert.equal((await admin.query("SELECT count(*)::int n FROM app.command_receipts WHERE command_name='crm.createLead' AND idempotency_key LIKE 'creative.enquiry.%'")).rows[0].n, 5, 'the leads themselves were captured');
     });
 
-    await t.test('tampered tags, expired tokens, honeypots and switched-off forms are refused', async () => {
+    await t.test('a second channel for the same concept is attributed; an existing customer cannot hand an old sale to the campaign', async () => {
+      // The same artwork handed off on LinkedIn: a different tracked link with the same campaign and content tags.
+      const linkedin = link.replace('utm_source=instagram', 'utm_source=linkedin');
+      const h2 = { ...h, id: randomUUID(), target: { ...h.target, channel: 'linkedin' }, trackedLink: { ...h.trackedLink, url: linkedin, channel: 'linkedin' } };
+      await a.library.handoff(a.brand.id, randomUUID(), sha(h2.id), h2 as never, art.context);
+      const liQuery = query.replace('utm_source=instagram', 'utm_source=linkedin');
+      const page = await http(capture, 'GET', formPath + liQuery);
+      const sent = await http(capture, 'POST', formPath, { token: field(page.body, 'token'), utm_source: 'linkedin', utm_medium: 'social', utm_campaign: utmCampaign, utm_content: utmContent,
+        name: 'LinkedIn Visitor', email: 'linkedin@example.test', phone: '', message: 'Saw this on LinkedIn.', consent: 'yes', website: '' });
+      assert.equal(sent.status, 200, sent.body.slice(0, 200));
+      const touches = await admin.query('SELECT utm_source,created_contact FROM app.creative_studio_lead_touches WHERE workspace_id=$1 ORDER BY captured_at', [a.brand.id]);
+      assert.deepEqual(touches.rows.map((r) => r.utm_source), ['instagram', 'linkedin']); assert.ok(touches.rows.every((r) => r.created_contact === true));
+      // An existing customer with a won opportunity and a payment sends a new enquiry through the campaign link.
+      const settings = await a.studio.enquiries(a.actor, a.brand.id);
+      const won = settings.stages.find((s) => s.type === 'won')!;
+      const ownerCtx = requestDatabaseContext({ workspaceId: a.brand.id, userId: a.actor, requestId: 'seed-customer' });
+      const customer = await crm.createLead(ownerCtx, { commandKey: `seed-${randomUUID()}`, displayName: 'Existing Customer', contactPoints: [{ kind: 'email', value: 'customer@example.test', isPrimary: true }],
+        pipelineId: settings.pipelineId!, stageId: settings.newStageId!, valueMinor: 0, currency: 'GBP' });
+      const v = Number((await admin.query('SELECT row_version FROM app.opportunities WHERE workspace_id=$1 AND id=$2', [a.brand.id, customer.opportunityId])).rows[0].row_version);
+      await crm.moveOpportunityStage(ownerCtx, { commandKey: `win-${randomUUID()}`, opportunityId: customer.opportunityId, targetStageId: won.id, expectedRowVersion: v });
+      await admin.query("UPDATE app.contacts SET lifecycle_status='customer' WHERE workspace_id=$1 AND id=$2", [a.brand.id, customer.contactId]);
+      const again = await http(capture, 'GET', formPath + query);
+      const resent = await http(capture, 'POST', formPath, { token: field(again.body, 'token'), utm_source: 'instagram', utm_medium: 'social', utm_campaign: utmCampaign, utm_content: utmContent,
+        name: 'Existing Customer', email: 'customer@example.test', phone: '', message: 'Another question.', consent: 'yes', website: '' });
+      assert.equal(resent.status, 200);
+      const row = (await admin.query('SELECT contact_id,created_contact FROM app.creative_studio_lead_touches WHERE workspace_id=$1 ORDER BY captured_at DESC LIMIT 1', [a.brand.id])).rows[0];
+      assert.equal(row.contact_id, customer.contactId); assert.equal(row.created_contact, false, 'the enquiry attached to the existing contact');
+      const read = await a.reader.outcomes(a.brand.id, utmCampaign);
+      const bucket = read.buckets.find((x) => x.utmContent === utmContent)!;
+      assert.equal(bucket.leads, 3, 'three tagged contacts');
+      assert.equal(bucket.sold, 0, 'the earlier win is not this campaign\u2019s sale'); assert.equal(bucket.customers, 0, 'an existing customer is not this campaign\u2019s customer');
+      assert.equal(bucket.qualified, 1, 'only the first lead, moved to the mapped stage after its touch');
+    });
+
+    await t.test('the hourly cap is enforced in the database; expired tokens are refused; a new form address retires the old one; the embed may be framed only by the brand\u2019s origins', async () => {
+      const key = formPath.split('/').at(-1)!;
+      const nonce = () => createHash('sha256').update(randomUUID()).digest('hex');
+      await admin.query('INSERT INTO app.creative_studio_enquiry_admissions(workspace_id,nonce_hash) SELECT $1,unnest($2::text[])', [a.brand.id, Array.from({ length: 50 - 3 }, nonce)]);
+      const receipts = async () => (await admin.query("SELECT count(*)::int n FROM app.command_receipts WHERE workspace_id=$1 AND command_name='crm.createLead'", [a.brand.id])).rows[0].n;
+      const before = await receipts();
+      const page = await http(capture, 'GET', formPath + query);
+      const form = { token: field(page.body, 'token'), utm_source: 'instagram', utm_medium: 'social', utm_campaign: utmCampaign, utm_content: utmContent, name: 'Fifty First', email: 'fifty@example.test', phone: '', message: 'One too many.', consent: 'yes', website: '' };
+      assert.equal((await http(capture, 'POST', formPath, form)).status, 429);
+      assert.equal(await receipts(), before, 'a refused admission creates nothing');
+      await admin.query("UPDATE app.creative_studio_enquiry_admissions SET admitted_at=clock_timestamp()-interval '2 hours' WHERE workspace_id=$1", [a.brand.id]);
+      assert.equal((await http(capture, 'POST', formPath, form)).status, 200, 'older admissions do not count');
+      assert.equal((await http(capture, 'POST', formPath, { ...form, token: enquiryToken(SECRET, a.brand.id, key, { utm_source: 'instagram', utm_medium: 'social', utm_campaign: utmCampaign, utm_content: utmContent }, Date.now() - 3_601_000) })).status, 400, 'expired token');
+      const embed = await http(capture, 'GET', `${formPath}?embed=1`);
+      assert.equal(embed.status, 200); assert.match(embed.headers['content-security-policy']!, /frame-ancestors https:\/\/hearth\.example https:\/\/www\.hearth\.example/u);
+      assert.match((await http(capture, 'GET', formPath)).headers['content-security-policy']!, /frame-ancestors 'none'/u);
+      const s = await a.studio.enquiries(a.actor, a.brand.id);
+      const rotated = await a.studio.rotateEnquiryKey(a.actor, a.brand.id, s.rowVersion);
+      assert.notEqual(rotated.publicKey, key);
+      assert.equal((await http(capture, 'GET', formPath + query)).status, 404, 'the old address is gone');
+      formPath = `/enquire/${a.brand.id}/${rotated.publicKey}`;
+      assert.equal((await http(capture, 'GET', formPath + query)).status, 200);
+    });
+
+    await t.test('tampered tags, honeypots and switched-off forms are refused', async () => {
       const page = await http(capture, 'GET', formPath + query);
       const base = { token: field(page.body, 'token'), utm_source: 'instagram', utm_medium: 'social', utm_campaign: utmCampaign, utm_content: utmContent, name: 'X', email: 'x@example.test', phone: '', message: 'Hi there.', consent: 'yes', website: '' };
       assert.equal((await http(capture, 'POST', formPath, { ...base, utm_content: creativeUtmContent(1, art.id) })).status, 400, 'tags changed after the form was issued');

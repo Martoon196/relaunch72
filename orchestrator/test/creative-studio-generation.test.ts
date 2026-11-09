@@ -13,6 +13,7 @@ import {
 } from '../src/creative-studio/generation.js';
 import { runCreativeImageJob, type CreativeImageWorkerDeps } from '../src/creative-studio/generation-worker.js';
 import { generateImageCandidate, ImageGenerationInputError, prepareImageGenerationRequest, SEO_IMAGE_EDIT_ENDPOINT, SEO_IMAGE_REQUEST, type ImageGenerationReceipt } from '../src/seo-blog/image-generation.js';
+import { SeoBlogError } from '../src/seo-blog/types.js';
 import type { Job, KnowledgeDocument } from '../src/seo-blog/types.js';
 import { fixtureBrand } from './rl72-method-fixtures.js';
 
@@ -137,7 +138,11 @@ function harness(job: Job, o: { decision?: Decision; receiptFailures?: number; r
     store: { getJob: async () => row, updateJob: async (j: Job) => { row = { ...j, rowVersion: row.rowVersion + 1 }; log.push(`update:${j.state}`); return row; } } as unknown as CreativeImageWorkerDeps['store'],
     generation: {
       commitReserve: async () => { log.push('reserve'); return o.decision ?? ({ kind: 'admitted', attemptId: randomUUID(), nonce: randomUUID(), policy: {} } as unknown as Decision); },
-      recordGeneration: (async (_i: unknown, complete: (t: null, j: Job, g: string) => Promise<Job>) => { log.push('record'); return { recorded: true, value: await complete(null, row, randomUUID()) }; }) as unknown as CreativeImageWorkerDeps['generation']['recordGeneration'],
+      // Mirrors SQL: the record step re-reads the job under lock and refuses a claim that has moved on.
+      recordGeneration: (async (i: { leaseOwner: string; leaseAttempt: number }, complete: (t: null, j: Job, g: string) => Promise<Job>) => {
+        const live = await deps.store.getJob(row.brandId, row.id);
+        if (!live || live.leaseOwner !== i.leaseOwner || live.attempts !== i.leaseAttempt) return { recorded: false, hold: 'claim_changed' };
+        log.push('record'); return { recorded: true, value: await complete(null, live, randomUUID()) }; }) as unknown as CreativeImageWorkerDeps['generation']['recordGeneration'],
     },
     media: {
       commitImageAttemptReceipt: async (e) => { log.push('receipt'); if (receiptFailures-- > 0) throw new Error('db down'); return { attemptId: e.attemptId, nonce: e.nonce, candidate: e.candidate ? { id: asset.id, sha256: asset.sha256 } : null, receipt: {}, applyEligible: false, hold: null } as never; },
@@ -213,4 +218,96 @@ test('worker: a lost claim or a tampered intent does nothing paid', async () => 
   const r = await runCreativeImageJob(t.row(), t.deps);
   assert.equal(r.state, 'blocked'); assert.equal(resultCode(r), 'claim_or_intent_changed'); assert.equal(t.log.includes('reserve'), false);
   assert.throws(() => decodeCreativeImageJob({ ...job, brandId: randomUUID() }), /not a recognised/u, 'a command for another brand is refused');
+});
+
+// ---- audit additions: pins and regressions that must fail loudly -------------------------------------------------
+
+test('the article request body and its identity are pinned byte-for-byte; an explicit default equals the implicit one', () => {
+  const command = { brandId: '10000000-0000-4000-8000-000000000001', actorId: '20000000-0000-4000-8000-000000000002', prompt: 'A calm British coastal town, editorial architectural photograph.' };
+  const prepared = prepareImageGenerationRequest(command);
+  assert.equal(prepared.body, '{"model":"gpt-image-2","n":1,"size":"1536x1024","quality":"medium","output_format":"jpeg","output_compression":85,"background":"opaque","moderation":"auto","prompt":"A calm British coastal town, editorial architectural photograph.","safety_identifier":"98692c6e15e0519cdd9015d4dd79c223fcb7f08e50cc7aa33ead222764bf08f2"}');
+  assert.equal(prepared.requestSha256, '550445afa854807066b1571713c78cb1fa7bd33e4cbd045508c1f02b4b9e7dce');
+  assert.equal(prepareImageGenerationRequest(command, { size: '1536x1024', references: [] }).requestSha256, prepared.requestSha256);
+});
+
+test('worker: the claim (lease owner and attempt) is passed to admission and the receipt; both receipt writes carry the identical envelope', async () => {
+  const job = makeJob(); const h = harness(job, { receiptFailures: 1 });
+  const reserve = h.deps.generation.commitReserve; const envelopes: unknown[] = [];
+  h.deps.generation.commitReserve = async (input) => { assert.equal(input.leaseOwner, job.leaseOwner); assert.equal(input.leaseAttempt, job.attempts); assert.equal(input.jobId, job.id); return reserve(input); };
+  const receipt = h.deps.media.commitImageAttemptReceipt; h.deps.media.commitImageAttemptReceipt = async (e) => { envelopes.push(e); return receipt(e); };
+  assert.equal((await runCreativeImageJob(h.row(), h.deps)).state, 'done');
+  assert.equal(envelopes.length, 2); assert.deepEqual(envelopes[0], envelopes[1]);
+  assert.equal((envelopes[0] as { leaseOwner: string; leaseAttempt: number }).leaseOwner, job.leaseOwner); assert.equal((envelopes[0] as { leaseAttempt: number }).leaseAttempt, job.attempts);
+});
+
+test('worker: a lease lost after the provider call is never written back; a stored receipt is reused without a call; a rejected receipt is reported by meaning', async () => {
+  const h = harness(makeJob()); let reads = 0; const first = h.row();
+  h.deps.store.getJob = async () => (++reads <= 1 ? first : { ...first, leaseOwner: 'thief' });
+  const result = await runCreativeImageJob(first, h.deps);
+  assert.equal(result.leaseOwner, 'thief'); assert.equal(h.log.filter((s) => s.startsWith('update')).length, 0, 'nothing written under a lost claim');
+  const attemptId = randomUUID(), nonce = randomUUID();
+  const reuse = harness(makeJob()); const out = jpegOf(1024, 1024);
+  (reuse.deps.generation as { commitReserve: unknown }).commitReserve = async () => ({ kind: 'existing_receipt', attemptId, nonce, receipt: { outcome: 'candidate_received' }, candidate: { id: 'cand', sha256: sha(out) }, applyEligible: true, hold: null });
+  reuse.deps.media.loadPrivateAsset = async () => ({ asset: {} as never, bytes: out });
+  const done = await runCreativeImageJob(reuse.row(), reuse.deps);
+  assert.equal(done.state, 'done'); assert.equal(reuse.log.includes('provider'), false, 'no second paid call');
+  for (const [httpStatus, code] of [[400, 'provider_rejected'], [401, 'provider_auth'], [429, 'provider_rate_limited']] as const) {
+    const r = harness(makeJob());
+    (r.deps.generation as { commitReserve: unknown }).commitReserve = async () => ({ kind: 'existing_receipt', attemptId, nonce, receipt: { outcome: 'rejected', httpStatus }, candidate: null, applyEligible: false, hold: null });
+    const held = await runCreativeImageJob(r.row(), r.deps);
+    assert.equal(held.state, 'blocked'); assert.equal(resultCode(held), code); assert.equal(r.log.includes('provider'), false);
+  }
+});
+
+test('worker: an unconfirmed reservation is re-queued and re-enters admission; a refused one stops; attempts are bounded', async () => {
+  const lost = harness(makeJob());
+  lost.deps.generation.commitReserve = async () => { throw new Error('connection reset'); };
+  const requeued = await runCreativeImageJob(lost.row(), lost.deps);
+  assert.equal(requeued.state, 'queued'); assert.equal(resultCode(requeued), 'admission_unconfirmed'); assert.equal(lost.log.includes('provider'), false);
+  const refused = harness(makeJob());
+  refused.deps.generation.commitReserve = async () => { throw new SeoBlogError(403, 'Permission'); };
+  assert.equal((await runCreativeImageJob(refused.row(), refused.deps)).state, 'blocked');
+  const last = harness({ ...makeJob(), attempts: 3 }, { decision: { kind: 'held', reason: 'global_concurrency' } as Decision });
+  const exhausted = await runCreativeImageJob(last.row(), last.deps);
+  assert.equal(exhausted.state, 'blocked'); assert.match(exhausted.error ?? '', /Make a new request later/u);
+});
+
+test('worker: a storage read failure after a paid call is retried safely (no new call); undecodable bytes are final; an unexpected throw is contained', async () => {
+  const flaky = harness(makeJob()); const load = flaky.deps.media.loadPrivateAsset;
+  flaky.deps.media.loadPrivateAsset = async (ws, id, s) => { if (flaky.log.includes('provider')) throw new Error('db down'); return load(ws, id, s); };
+  const again = await runCreativeImageJob(flaky.row(), flaky.deps);
+  assert.equal(again.state, 'queued'); assert.equal(resultCode(again), 'candidate_read_unavailable');
+  const garbage = harness(makeJob(), { out: Buffer.from('not an image at all, just bytes') });
+  const final = await runCreativeImageJob(garbage.row(), garbage.deps);
+  assert.equal(final.state, 'blocked'); assert.equal(resultCode(final), 'candidate_unverified');
+  const boom = harness(makeJob()); boom.deps.generate = async () => { throw new TypeError('bad buffer'); };
+  const contained = await runCreativeImageJob(boom.row(), boom.deps);
+  assert.equal(contained.state, 'blocked'); assert.equal(resultCode(contained), 'outcome_unknown', 'after a call was attempted the attempt is held as unknown');
+  const early = harness(makeJob()); early.deps.media.loadPrivateAsset = async () => { throw new TypeError('boom'); };
+  const ref = harness(makeJob({ references: [{ assetId: randomUUID(), sha256: sha('r') }] }), { refFails: true });
+  assert.equal(resultCode(await runCreativeImageJob(ref.row(), ref.deps)), 'source_changed');
+  void early;
+});
+
+test('decode refuses every tampered identity field, not only the prompt', () => {
+  const job = makeJob({ references: [{ assetId: randomUUID(), sha256: sha('ref') }] }), image = job.payload.image as CreativeImageIntent;
+  const mutate = (patch: Partial<CreativeImageIntent>) => ({ ...job, payload: { ...job.payload, image: { ...image, ...patch } } });
+  for (const bad of [mutate({ size: '1536x1024' }), mutate({ jobId: randomUUID() }), mutate({ briefVersion: 0 }), mutate({ expectedPolicyVersion: 0 }),
+    mutate({ references: [{ assetId: 'not-a-uuid', sha256: image.referenceSha256s[0]! }] }), mutate({ referenceSha256s: [sha('other')] }),
+    mutate({ privateCommand: { ...image.privateCommand, actorId: randomUUID() } })])
+    assert.throws(() => decodeCreativeImageJob(bad as Job), /not a recognised exact intent/u);
+  assert.doesNotThrow(() => decodeCreativeImageJob(job));
+});
+
+test('the provider prompt uses the confirmed positioning, never the free-text summary, and refuses an over-long brief plus guidance', () => {
+  const { f, source } = sourceFor('home', { text: 'A modern kitchen background with morning light.', size: '1536x1024', references: [], useVisualGuidance: false });
+  const profile = { ...f.profile, summary: 'Boiler service from £89 — call 07700 900123 today!', positioning: 'Practical household maintenance' };
+  (source.snapshot as { profile: unknown }).profile = JSON.parse(canonicalCompanyContentJson(profile));
+  const p = creativeImageCommand({ source, profile, knowledge: [], sponsorUserId: f.profile.confirmedBy! }).prompt;
+  assert.match(p, /<brand_tone>.*Practical household maintenance/u); assert.equal(p.includes('£89'), false); assert.equal(p.includes('07700'), false);
+  const long = sourceFor('home', { text: 'x'.repeat(1500), size: '1536x1024', references: [], useVisualGuidance: true });
+  const doc = { ...visualDoc(long.f.brand.id), text: 'y'.repeat(2000), sha256: sha('y'.repeat(2000)) } as KnowledgeDocument;
+  (long.source.snapshot as { knowledge: unknown }).knowledge = [{ id: doc.id, version: 1, category: doc.category, sha256: doc.sha256, textSha256: sha(doc.text ?? '') }];
+  const noOverflow = creativeImageCommand({ source: long.source, profile: long.f.profile, knowledge: [doc], sponsorUserId: long.f.profile.confirmedBy! });
+  assert.ok([...noOverflow.prompt].length <= 8000, 'within the transport limit');
 });

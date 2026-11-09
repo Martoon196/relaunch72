@@ -316,8 +316,23 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
   assert.equal(new URL((await call(service, owner, 'POST', `${base}/draft`, { ...form, _csrf: csrf })).headers.location!, 'https://x').pathname, taskPath, 'a double submit returns the same job');
   const waiting = await call(service, owner, 'GET', taskPath);
   assert.equal(waiting.status, 200); assert.match(waiting.body, /Creating artwork/u); assert.match(waiting.body, /data-creative-job=/u);
-  assert.equal(JSON.parse((await call(service, owner, 'GET', `${base}/jobs/${form.commandId}`)).body).state, 'queued');
-  assert.notEqual((await call(service, identity(STRANGER.userId), 'GET', taskPath)).status, 200, 'another owner cannot follow this task');
+  const status = await call(service, owner, 'GET', `${base}/jobs/${form.commandId}`);
+  const json = JSON.parse(status.body);
+  assert.equal(json.state, 'queued'); assert.deepEqual(Object.keys(json).sort(), ['detail', 'id', 'state', 'updatedAt'], 'the status projection carries no payload');
+  assert.equal(status.body.includes('render'), false);
+  // The polling script is served, and its endpoint rule accepts exactly the endpoint the task page emits.
+  const script = await call(service, owner, 'GET', '/portal/seo-blog/creative-job-status.js');
+  assert.equal(script.status, 200); assert.match(script.headers['content-type']!, /javascript/u);
+  const rule = new RegExp(/const ENDPOINT=\/(.+?)\/;/u.exec(script.body)![1]!);
+  const endpoint = /data-endpoint="([^"]+)"/u.exec(waiting.body)![1]!;
+  assert.ok(rule.test(endpoint), endpoint); assert.equal(rule.test(`https://evil.example${endpoint}`), false); assert.equal(rule.test(`${endpoint}/extra`), false);
+  assert.equal((await call(service, identity(STRANGER.userId), 'GET', taskPath)).status, 404, 'another owner cannot follow this task');
+  assert.equal((await call(service, identity(STRANGER.userId), 'GET', `${base}/jobs/${form.commandId}`)).status, 404);
+  // Every new creative POST is behind the CSRF guard.
+  for (const action of ['generate/settings', 'generate/brief', `generate/${randomUUID()}/request`, 'enquiries', 'enquiries/rotate', `task/${form.commandId}/retry`, `s/${randomUUID()}/refresh/c1`, `v/${randomUUID()}/focal`, `v/${randomUUID()}/video`]) {
+    const refused = await call(service, owner, 'POST', `${base}/${action}`, { commandId: randomUUID() });
+    assert.equal(refused.status, 303, action); assert.ok(new URL(refused.headers.location!, 'https://x').searchParams.has('e'), action);
+  }
   const worker = async () => {
     const claimed = await h.store.claimJobs({ brandId: hearth.brand.id, now: new Date().toISOString(), owner: 'test-worker', leaseMs: 60_000, limit: 5 });
     return Promise.all(claimed.map((j) => runCreativeRenderJob(j, { store: h.store, service: () => studio, now: () => new Date().toISOString() })));
@@ -328,12 +343,17 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
   assert.equal(opened.status, 303, 'a finished task opens its result');
   const location = new URL(opened.headers.location!, 'https://portal.example');
   assert.match(location.pathname, new RegExp(`${base}/s/[0-9a-f-]{36}$`));
-  // An owner-correctable problem stops the task with the service's own message (no silent retry).
+  // An owner-correctable problem is refused at submit time, with the message, and nothing is queued.
   const bad = await call(service, owner, 'POST', `${base}/draft`, { ...offerForm('Not an approved offer', HEARTH.pages[0]!.url), commandId: randomUUID(), background: 'neutral', _csrf: csrf });
-  const [stopped] = await worker();
-  assert.equal(stopped!.state, 'blocked');
-  const stoppedPage = await call(service, owner, 'GET', new URL(bad.headers.location!, 'https://x').pathname);
-  assert.equal(stoppedPage.status, 200); assert.match(stoppedPage.body, /Nothing was published or approved/u);
+  const badTarget = new URL(bad.headers.location!, 'https://x');
+  assert.equal(badTarget.pathname, `${base}`); assert.ok(badTarget.searchParams.has('e'), 'the error returns to the form page with a message');
+  assert.equal((await worker()).length, 0, 'no job was queued for an invalid request');
+  // The same command id with different content is a conflict, not a silent "Saved".
+  const reuse = await call(service, owner, 'POST', `${base}/draft`, { ...form, _csrf: csrf, concepts: '1' });
+  assert.match(Buffer.from(new URL(reuse.headers.location!, 'https://x').searchParams.get('e') ?? '', 'base64').toString('utf8'), /different content/u);
+  // A stopped task offers a retry only to its own brand; the task page explains the stop.
+  const stoppedPage = await call(service, owner, 'GET', taskPath);
+  assert.equal(stoppedPage.status, 303, 'the finished task still opens its result');
   const compare = await call(service, owner, 'GET', location.pathname);
   assert.equal(compare.status, 200);
   for (const text of ['Compare artwork', 'Approve this image', 'Download', 'does not approve a caption, campaign, schedule or paid advert', 'Vertical story']) assert.ok(compare.body.includes(text), text);
@@ -359,7 +379,7 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
 });
 
 test('typed-brief generated images: previews and backgrounds come only from this brand’s recorded generations, digest-checked', async () => {
-  const h = harness(); const hearth = await creativeBrand(h, HEARTH); const queue = await creativeBrand(h, QUEUE);
+  const h = harness(); const hearth = await creativeBrand(h, HEARTH); const queue = await creativeBrand(h, { ...QUEUE, owner: STRANGER });
   const bytes = syntheticLandscapeJpeg(400, 260); const sha = createHash('sha256').update(bytes).digest('hex');
   const g = { id: randomUUID(), briefId: randomUUID(), briefVersion: 2, jobId: randomUUID(), intentId: randomUUID(), attemptId: randomUUID(), assetId: randomUUID(), sha256: sha,
     width: 400, height: 260, data: { model: 'gpt-image-2' }, createdAt: '2026-11-09T00:00:00.000Z' };
@@ -367,12 +387,20 @@ test('typed-brief generated images: previews and backgrounds come only from this
   const studio = new CreativeStudioService({ library: new MemoryCreativeLibraryStore(), brands: h.store, renderer: new StubRenderer(),
     generatedImages: { find: async (_a, brandId, id) => (brandId === hearth.brand.id && id === g.id ? g : null), load: async () => served } });
   assert.deepEqual((await studio.generatedImage(OWNER.userId, hearth.brand.id, g.id)).sha256, sha);
-  await assert.rejects(studio.generatedImage(OWNER.userId, queue.brand.id, g.id), /not available/u, 'another brand cannot read it');
-  await assert.rejects(studio.generatedImage(STRANGER.userId, hearth.brand.id, g.id), (e: Error) => !/integrity/u.test(e.message), 'a non-manager is refused first');
+  await assert.rejects(studio.generatedImage(OWNER.userId, queue.brand.id, g.id), /do not manage|not available/u, 'another brand cannot read it');
+  await assert.rejects(studio.generatedImage(STRANGER.userId, hearth.brand.id, g.id), /do not manage/u, 'a non-manager is refused before any lookup');
   const set = await studio.draft(OWNER.userId, hearth.brand.id, randomUUID(), offerForm('Annual boiler service', HEARTH.pages[0]!.url, { concepts: '1', placements: 'square' }), { kind: 'generated', generationId: g.id });
   const bg = (await studio.getSet(OWNER.userId, hearth.brand.id, set.setId)).view.concepts[0]!.variants[0]!.version.concept.background;
   assert.equal(bg.kind, 'image');
   if (bg.kind === 'image') { assert.equal(bg.origin, 'generated_studio_image'); assert.equal(bg.provenance.attemptId, g.attemptId); assert.equal(bg.provenance.briefVersion, '2'); }
   served = syntheticLandscapeJpeg(400, 261);
   await assert.rejects(studio.generatedImage(OWNER.userId, hearth.brand.id, g.id), /integrity/u);
+  served = bytes;
+  // Through the router: the owner gets the exact private JPEG; a stranger, and the same id under another brand, get nothing.
+  const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null, creativeEnabled: true, creativeFor: () => studio, creativeSavedImages: async () => [] };
+  const preview = await call(service, identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${hearth.brand.id}/creative/generated/${g.id}.jpg`);
+  assert.equal(preview.status, 200); assert.equal(preview.headers['content-type'], 'image/jpeg'); assert.equal(preview.headers['x-content-type-options'], 'nosniff');
+  assert.equal(createHash('sha256').update(preview.bytes).digest('hex'), sha);
+  assert.equal((await call(service, identity(STRANGER.userId), 'GET', `/portal/seo-blog/b/${hearth.brand.id}/creative/generated/${g.id}.jpg`)).status, 404);
+  assert.equal((await call(service, identity(STRANGER.userId), 'GET', `/portal/seo-blog/b/${queue.brand.id}/creative/generated/${g.id}.jpg`)).status, 404);
 });

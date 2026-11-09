@@ -42,7 +42,7 @@ import {
 import type { SeoBlogCredentialVault } from './vault.js';
 import { linkedPromotionFor, OBSERVATION_CREATE_WINDOW_MS, OBSERVATION_TTL_MS, promotionPublicationHold, type ArticlePromotionApproval, type PromotionNetwork } from './promotions.js';
 import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOverview, type SocialRegistry } from './social.js';
-import { isCreativeStudioJob } from '../creative-studio/generation.js';
+import { isCreativeImageJob, isCreativeStudioJob } from '../creative-studio/generation.js';
 import { automaticImageCommandId, imageJobDto, isArticleWriteJob, isImageJob, type ArticleImageService, type ArticleImageRequestResult } from './image-campaign.js';
 import { createArticleCampaign, fallbackCampaignDrafts, type CampaignDraft } from './campaign.js';
 import { SeoBlogCampaignService, type CampaignReviewPorts, type CampaignSelection } from './campaign-service.js';
@@ -2404,6 +2404,8 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (['done', 'failed', 'cancelled'].includes(job.state)) return job;
+    // A running studio image job may be mid-way through its one paid call; cancelling would hide a charged attempt.
+    if (job.state === 'running' && isCreativeImageJob(job)) throw new SeoBlogError(409, 'This image request is being made right now and cannot be cancelled. Wait for it to finish; it makes at most one paid call.');
     if(job.kind==='publish'&&typeof job.payload.websiteObservation==='string'){
       const p=(await this.store.listPublications(brandId)).find((p)=>p.id===job.payload.websiteObservation);
       if(p?.sitemapRepair&&['calling','unknown'].includes(p.sitemapRepair.state))throw new SeoBlogError(409,'This task tracks an uncertain website operation. Read-only reconciliation must continue; it cannot send another write.');
@@ -2454,7 +2456,15 @@ export class SeoBlogEngine {
       }
       return this.deps.campaignQueue.run(job);
     }
-    if (this.deps.creativeJobs?.handles(job)) return this.deps.creativeJobs.run(job);
+    if (this.deps.creativeJobs?.handles(job)) {
+      // The runners hold their own failures; this keeps one unexpected throw from leaving the rest of the batch leased.
+      try { return await this.deps.creativeJobs.run(job); } catch (error) {
+        const fresh = await this.store.getJob(job.brandId, job.id).catch(() => null);
+        if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+        const message = error instanceof SeoBlogError && error.status < 500 ? error.message : 'This studio task stopped unexpectedly. Nothing new was requested; check the Creative studio before trying again.';
+        return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: message, error: message, updatedAt: this.now() }).catch(() => fresh);
+      }
+    }
     if (isCreativeStudioJob(job)) {
       const fresh = await this.store.getJob(job.brandId, job.id);
       if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;

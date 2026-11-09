@@ -41,10 +41,24 @@ export function verifyEnquiryToken(secret: string, ws: string, key: string, utm:
   return age >= 0 && age < ENQUIRY_LIMITS.tokenSeconds && timingSafeEqual(expected, Buffer.from(mac!, 'hex')) ? nonce! : null;
 }
 
-export interface EnquiryTarget { readonly brandName: string; readonly privacyUrl: string; readonly ownerUserId: string; readonly pipelineId: string; readonly stageId: string; readonly recentHour: number }
+export interface EnquiryTarget {
+  readonly brandName: string; readonly privacyUrl: string; readonly ownerUserId: string; readonly pipelineId: string; readonly stageId: string;
+  /** Origins allowed to embed the form: the brand's own site and its confirmed conversion-page hosts. */
+  readonly frameOrigins: readonly string[];
+}
 export interface EnquiryInput { readonly name: string; readonly email: string; readonly phone: string; readonly message: string }
 export interface EnquiryOutcome { readonly contactId: string; readonly opportunityId: string; readonly replayed: boolean; readonly touch: { recorded: boolean; reason?: string } }
 export class EnquiryError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+
+/**
+ * The CRM task text: the enquiry, the optional phone number, and the contact-permission evidence (what was shown). The time
+ * is the task's own creation time; it is deliberately not repeated here so an identical resubmission hashes identically.
+ */
+export function enquiryTaskDescription(input: EnquiryInput, privacyUrl: string): string {
+  return [input.message, input.phone ? `Phone given on the form: ${input.phone}` : '',
+    `Permission to reply to this enquiry was ticked on the brand enquiry form (privacy notice shown: ${privacyUrl}). This is not marketing consent.`]
+    .filter(Boolean).join('\n\n').slice(0, 4000);
+}
 
 export class PgEnquiryCapture {
   constructor(private readonly deps: { readonly contentPool: Pick<Pool, 'connect'>; readonly crm: Pick<CrmCommandService, 'createLead'> }) {}
@@ -60,18 +74,30 @@ export class PgEnquiryCapture {
     if (!target) throw new EnquiryError(404, 'This enquiry form is not available.');
     // Idempotent per form submission: a double click or refresh re-sends the same nonce and replays the same lead.
     const commandKey = `creative.enquiry.${sha(`${ws}:${key}:${nonce}`)}`;
+    // The hourly cap is enforced in the database under the capture row lock, so a burst cannot overshoot it.
+    const admission = await withTransaction(this.deps.contentPool, { actorKind: 'webhook', workspaceId: ws, requestId }, async (t) =>
+      (await t.query<{ v: { admitted: boolean; reason?: string } }>('SELECT app_private.creative_studio_capture_admit($1,$2,$3) AS v', [ws, key, sha(nonce)])).rows[0]!.v);
+    if (!admission.admitted) {
+      if (admission.reason === 'rate_limited') throw new EnquiryError(429, 'Too many enquiries have been sent just now. Please try again later.');
+      throw new EnquiryError(404, 'This enquiry form is not available.');
+    }
     const context = requestDatabaseContext({ workspaceId: ws, userId: target.ownerUserId, requestId });
-    if (target.recentHour >= ENQUIRY_LIMITS.perHour) throw new EnquiryError(429, 'Too many enquiries have been sent just now. Please try again later.');
+    // Only the email is a contact point: a phone number is kept in the task text, so a visitor cannot attach their own
+    // email to someone else's CRM record by quoting that person's phone number (the investor form matches on email alone too).
     const lead = await this.deps.crm.createLead(context, {
       commandKey, displayName: input.name, source: 'creative_studio_enquiry', ownerUserId: target.ownerUserId,
-      contactPoints: [{ kind: 'email', value: input.email, isPrimary: true, consentStatus: 'unknown' },
-        ...(input.phone ? [{ kind: 'phone' as const, value: input.phone, isPrimary: false, consentStatus: 'unknown' as const }] : [])],
+      contactPoints: [{ kind: 'email', value: input.email, isPrimary: true, consentStatus: 'unknown' }],
       pipelineId: target.pipelineId, stageId: target.stageId, opportunityName: `Website enquiry · ${input.name}`.slice(0, 200), valueMinor: 0, currency: 'GBP',
-      task: { title: 'Reply to the website enquiry', description: input.message },
+      task: { title: 'Reply to the website enquiry', description: enquiryTaskDescription(input, target.privacyUrl) },
     });
-    const touch = await withTransaction(this.deps.contentPool, context, async (t) => (await t.query<{ v: { recorded: boolean; reason?: string } }>(
-      'SELECT app_private.creative_studio_record_touch($1,$2) AS v', [ws, JSON.stringify({ commandKey, utmSource: utm.utm_source ?? null, utmMedium: utm.utm_medium ?? null,
-        utmCampaign: utm.utm_campaign ?? null, utmContent: utm.utm_content ?? null })])).rows[0]!.v);
+    // The lead exists once createLead returns. A touch that cannot be stored right now (content database unavailable)
+    // must not fail the visitor into re-sending and duplicating the lead; attribution for that one lead is lost instead.
+    let touch: { recorded: boolean; reason?: string };
+    try {
+      touch = await withTransaction(this.deps.contentPool, context, async (t) => (await t.query<{ v: { recorded: boolean; reason?: string } }>(
+        'SELECT app_private.creative_studio_record_touch($1,$2) AS v', [ws, JSON.stringify({ commandKey, utmSource: utm.utm_source ?? null, utmMedium: utm.utm_medium ?? null,
+          utmCampaign: utm.utm_campaign ?? null, utmContent: utm.utm_content ?? null })])).rows[0]!.v);
+    } catch { touch = { recorded: false, reason: 'touch_unrecorded' }; }
     return { contactId: lead.contactId, opportunityId: lead.opportunityId, replayed: lead.disposition === 'replayed', touch };
   }
 }
@@ -105,6 +131,11 @@ ${input.error ? `<p class="err" role="alert">${e(input.error)}</p>` : ''}<form m
 <button type="submit">Send enquiry</button></form>`}</main></body></html>`;
 }
 
+function enquiryUnavailablePage(embed: boolean): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Enquiry form unavailable</title><style>
+body{margin:0;background:${embed ? '#fff' : '#f5f6f8'};color:#16202a;font:16px/1.5 system-ui,sans-serif}main{max-width:560px;margin:${embed ? '0' : '40px'} auto;padding:24px}</style></head><body><main><h1>This enquiry form is not available.</h1></main></body></html>`;
+}
+
 /** Embed snippet for the brand's own page: forwards only shape-checked UTM values from that page's address into the frame. */
 export function enquiryEmbedSnippet(origin: string, ws: string, key: string): string {
   const src = `${origin}${ENQUIRY_ROUTE}/${ws}/${key}?embed=1`;
@@ -114,15 +145,19 @@ export function enquiryEmbedSnippet(origin: string, ws: string, key: string): st
 export async function handleEnquiryPublic(req: IncomingMessage, res: ServerResponse, capture: PgEnquiryCapture, secret: string, requestId: string): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost'), [, , ws = '', key = ''] = url.pathname.split('/');
   const embed = url.searchParams.get('embed') === '1';
+  // Framing is allowed only from the brand's own site and confirmed conversion-page hosts, and only for the embed form.
+  let frameAncestors = "'none'";
   const respond = (status: number, body: string) => {
     res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
-      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'${embed ? '' : "; frame-ancestors 'none'"}` });
+      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors ${frameAncestors}` });
     res.end(body);
   };
-  const unavailable = () => respond(404, enquiryPage({ brandName: 'Enquiry', privacyUrl: '#', action: '#', token: '', utm: {}, embed, received: false, error: 'This enquiry form is not available.' }).replace(/<form[\s\S]*<\/form>/u, ''));
+  const unavailable = () => respond(404, enquiryUnavailablePage(embed));
   if (!UUID.test(ws) || !KEY.test(key)) return unavailable();
   const target = await capture.target(ws, key, requestId).catch(() => null);
   if (!target) return unavailable();
+  const origins = target.frameOrigins.filter((o) => /^https:\/\/[a-z0-9.-]{3,253}$/u.test(o));
+  if (embed) { if (!origins.length) return unavailable(); frameAncestors = origins.join(' '); }
   const action = `${ENQUIRY_ROUTE}/${ws}/${key}${embed ? '?embed=1' : ''}`;
   if (req.method === 'GET') {
     const utm = parseUtm(url.searchParams);
@@ -134,8 +169,10 @@ export async function handleEnquiryPublic(req: IncomingMessage, res: ServerRespo
   for await (const chunk of req) { size += (chunk as Buffer).length; if (size > 16_384) return respond(413, 'The enquiry is too long.'); chunks.push(chunk as Buffer); }
   const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
   const utm = parseUtm(form);
-  const nonce = verifyEnquiryToken(secret, ws, key, utm, form.get('token') ?? '');
-  const again = (status: number, error: string) => respond(status, enquiryPage({ brandName: target.brandName, privacyUrl: target.privacyUrl, action, token: enquiryToken(secret, ws, key, utm), utm, embed, error }));
+  const token = form.get('token') ?? '', nonce = verifyEnquiryToken(secret, ws, key, utm, token);
+  // A still-valid token is kept on the re-rendered form, so correcting a field and resending replays the same submission.
+  const again = (status: number, error: string) => respond(status, enquiryPage({ brandName: target.brandName, privacyUrl: target.privacyUrl, action,
+    token: nonce ? token : enquiryToken(secret, ws, key, utm), utm, embed, error }));
   if (!nonce) return again(400, 'This form expired. Please send it again.');
   if (form.get('website')) return respond(200, enquiryPage({ brandName: target.brandName, privacyUrl: target.privacyUrl, action, token: '', utm: {}, embed, received: true }));
   try {

@@ -110,6 +110,12 @@ export interface SavedImagePort {
   load(actorId: string, brandId: string, assetId: string, sha256: string): Promise<Buffer>;
 }
 
+/** A render request as the owner's form submits it: draft and edit carry the owner's background choice, resolved at enqueue. */
+export type RenderRequest =
+  | Exclude<RenderOperation, { op: 'draft' | 'edit' }>
+  | (Omit<Extract<RenderOperation, { op: 'draft' }>, 'background'> & { readonly background: BackgroundChoice })
+  | (Omit<Extract<RenderOperation, { op: 'edit' }>, 'background'> & { readonly background: BackgroundChoice });
+
 export type BackgroundChoice =
   | { readonly kind: 'neutral' }
   | { readonly kind: 'upload'; readonly bytes: Buffer }
@@ -746,24 +752,57 @@ export class CreativeStudioService {
    * Durable render request: checks the owner, resolves and stores any chosen background now (cheap, no rendering),
    * and records one job keyed by the form's command id. The worker renders it; the owner can leave the page.
    */
-  async enqueueRender(actorId: string, brandId: string, commandId: string, operation: RenderOperation | (Omit<Extract<RenderOperation, { op: 'draft' | 'edit' }>, 'background'> & { background: BackgroundChoice })): Promise<Job> {
+  async enqueueRender(actorId: string, brandId: string, commandId: string, operation: RenderRequest): Promise<Job> {
     await this.context(actorId, brandId);
     if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
     if (!this.deps.renderJobs) throw new SeoBlogError(503, 'Background rendering is not available here. Nothing was rendered.');
+    // The same command id with different content is a conflict (as the inline path treated it), not a silent replay.
+    const choice = (operation as { background?: BackgroundChoice }).background;
+    const inputSha = sha(canonical({ ...operation, background: choice ? (choice.kind === 'upload' ? { kind: 'upload', sha: sha(choice.bytes) } : choice) : undefined }));
     const existing = await this.deps.brands.getJob(brandId, commandId.toLowerCase());
     if (existing) {
-      if (!isCreativeRenderJob(existing) || (existing.payload.render as { sponsorUserId?: string } | undefined)?.sponsorUserId !== actorId) throw new SeoBlogError(409, 'Refresh the page and try again.');
+      const render = existing.payload.render as { sponsorUserId?: string; inputSha?: string } | undefined;
+      if (!isCreativeRenderJob(existing) || render?.sponsorUserId !== actorId) throw new SeoBlogError(409, 'Refresh the page and try again.');
+      if (render.inputSha !== inputSha) throw new SeoBlogError(409, 'This form was already used for different content. Refresh the page and submit again.');
       return existing;
     }
+    // Owner-correctable mistakes are reported now, from the same validators the worker will run, not minutes later.
+    await this.validateRender(actorId, brandId, operation);
     let op = operation as RenderOperation;
     if (op.op === 'draft' || op.op === 'edit') {
-      const choice = (operation as { background: BackgroundChoice }).background;
-      const prepared: PreparedBackground = choice.kind === 'keep' || choice.kind === 'neutral' ? choice
+      const prepared: PreparedBackground = !choice || choice.kind === 'keep' || choice.kind === 'neutral' ? (choice as PreparedBackground | undefined) ?? { kind: 'neutral' }
         : { kind: 'prepared', component: await this.background(actorId, brandId, choice, null) };
       op = { ...op, background: prepared };
     }
-    const { job } = await this.deps.renderJobs.enqueueJob(newRenderJob(brandId, actorId, commandId, op, this.now()));
+    const { job } = await this.deps.renderJobs.enqueueJob(newRenderJob(brandId, actorId, commandId, op, this.now(), inputSha));
     return job;
+  }
+
+  /** Cheap pre-checks for a render request (no rendering, no writes): the same rules the worker applies. */
+  private async validateRender(actorId: string, brandId: string, o: RenderRequest): Promise<void> {
+    if (o.op === 'draft') {
+      const { context } = await this.context(actorId, brandId);
+      const request = this.parseRequest(context, o.raw);
+      const gaps = essentialGaps(context, request.purpose, request.source, request.destination);
+      if (gaps.length) throw new SeoBlogError(409, gaps.map((g) => `${g.detail} ${g.action}`).join(' '));
+      if (request.source.kind === 'article') await this.article(brandId, request.source.articleId);
+    } else if (o.op === 'edit' || o.op === 'refresh') {
+      await this.headsFor(brandId, o.setId, o.conceptKey, o.heads);
+      if (o.op === 'edit' && o.patch.cards?.some((c) => !text(c.headline, COPY_LIMITS.cardHeadline))) throw new SeoBlogError(400, 'Every card needs a headline.');
+    } else if (o.op === 'focal') {
+      if (!Number.isFinite(o.focal.x) || !Number.isFinite(o.focal.y) || o.focal.x < 0 || o.focal.x > 1 || o.focal.y < 0 || o.focal.y > 1) throw new SeoBlogError(400, 'Choose a focal point inside the image.');
+      await this.artworkSet(actorId, brandId, o.versionId);
+    } else if (o.op === 'storyboard') {
+      if (!['square', 'portrait', 'vertical', 'landscape'].includes(o.placement)) throw new SeoBlogError(400, 'Choose a square, portrait, vertical or landscape video format.');
+      await this.headsFor(brandId, o.setId, o.conceptKey, []);
+    } else if (o.op === 'storyboard_edit') {
+      const found = await this.deps.library.getVersion(brandId, o.versionId);
+      if (!found || mediaOf(found.version) !== 'storyboard') throw new SeoBlogError(404, 'That storyboard was not found.');
+      validateScenes(o.scenes as readonly Partial<StoryboardScene>[], found.version.concept);
+    } else {
+      const found = await this.deps.library.getVersion(brandId, o.versionId);
+      if (!found || mediaOf(found.version) !== 'storyboard') throw new SeoBlogError(404, 'That storyboard was not found.');
+    }
   }
 
   /** Enquiry form settings: stage mapping (by stage id), privacy notice and the on/off switch. */
@@ -779,6 +818,13 @@ export class CreativeStudioService {
     if (input.privacyUrl && !/^https:\/\/[^\s<>"]{4,500}$/u.test(input.privacyUrl)) throw new SeoBlogError(400, 'The privacy notice must be an https link.');
     return this.deps.enquirySettings.call(brandId, { action: 'save', enabled: input.enabled, privacyUrl: input.privacyUrl, newStageId: uuidOrEmpty(input.newStageId),
       qualifiedStageId: uuidOrEmpty(input.qualifiedStageId), expectedVersion: input.expectedVersion });
+  }
+
+  /** Issues a new public form address; the old hosted link and embed code stop working at once. */
+  async rotateEnquiryKey(actorId: string, brandId: string, expectedVersion: number): Promise<EnquirySettings> {
+    await this.context(actorId, brandId);
+    if (!this.deps.enquirySettings) throw new SeoBlogError(503, 'Enquiry capture is not available here.');
+    return this.deps.enquirySettings.call(brandId, { action: 'rotate', expectedVersion });
   }
 
   /** Owner view of one render task of this brand (no inputs or bytes). */

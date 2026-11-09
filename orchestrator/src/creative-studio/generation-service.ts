@@ -23,6 +23,7 @@ export interface GenerationEstimate {
   /** Operator-set reservation held against the shared monthly limit per attempt; the provider bills tokens. */
   readonly reservedMicrousd: number | null;
   readonly exactCost: string;
+  /** `used` is what admission will count: this month's debits plus unresolved attempts from earlier months. */
   readonly brandAllowance: Readonly<{ limit: number; used: number; remaining: number }>;
   readonly studioAllowance: Readonly<{ enabled: boolean; limit: number; counted: number; unresolved: number; remaining: number }>;
   readonly sharedLimitOpen: boolean;
@@ -50,18 +51,19 @@ export class CreativeGeneration {
 
   async view(actorId: string, brandId: string, briefId?: string) {
     const brand = await this.brand(actorId, brandId);
-    const [state, policy] = await Promise.all([this.deps.store.state(brandId, briefId), this.deps.policy().catch(() => null)]);
-    return { brand, state, policy, providerConfigured: this.deps.providerConfigured };
+    const [state, policyRead] = await Promise.all([this.deps.store.state(brandId, briefId),
+      this.deps.policy().then((p) => ({ policy: p as SeoImageOperatorPolicy | null, unreadable: false }), () => ({ policy: null, unreadable: true }))]);
+    return { brand, state, policy: policyRead.policy, policyUnreadable: policyRead.unreadable, providerConfigured: this.deps.providerConfigured };
   }
 
   /** Honest estimate: no price is invented. The operator's per-attempt reservation is shown as the amount held, not the charge. */
-  estimate(brand: Brand, state: GenerationState, policy: SeoImageOperatorPolicy | null, brief: CreativeBrief): GenerationEstimate {
+  estimate(brand: Brand, state: GenerationState, policy: SeoImageOperatorPolicy | null, brief: CreativeBrief, policyUnreadable = false): GenerationEstimate {
     const studio = brand.settings.studioImages, enabled = studio?.enabled === true, studioLimit = enabled ? studio!.perMonth : 0;
-    const brandLimit = brand.settings.budgets.imagesPerMonth, used = state.usage.brandImagesThisMonth;
+    const brandLimit = brand.settings.budgets.imagesPerMonth, used = state.usage.brandImagesThisMonth + state.usage.brandUnresolvedEarlier;
     const sharedOpen = Boolean(policy && policy.enabled && policy.maxConcurrency > 0 && policy.perAttemptMicrousd > 0 && policy.monthlyMicrousd > 0);
     const blockers = [
       ...(!this.deps.providerConfigured ? ['The image provider is not configured on this server.'] : []),
-      ...(!sharedOpen ? ['Paid image generation is not enabled by the platform operator.'] : []),
+      ...(policyUnreadable ? ['The platform image policy could not be read just now. Try again shortly.'] : !sharedOpen ? ['Paid image generation is not enabled by the platform operator.'] : []),
       ...(!enabled ? ['Studio image generation is switched off for this brand.'] : studioLimit - state.usage.studioImagesCounted <= 0 ? ['The studio image allowance for this month is used up or zero.'] : []),
       ...(brandLimit - used <= 0 ? ['The brand image allowance (shared with blog images) is used up or zero.'] : []),
     ];

@@ -118,7 +118,8 @@ export class PgCreativeEnquirySettings {
       const code = (e as { code?: string }).code;
       if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
       if (code === '40001') throw new SeoBlogError(409, 'Enquiry settings changed. Refresh and try again.');
-      if (code === '22023' || code === '22P02' || code === '23514') throw new SeoBlogError(400, (e as Error).message.slice(0, 200));
+      if (code === '22023') throw new SeoBlogError(400, (e as Error).message.slice(0, 200));
+      if (code === '22P02' || code === '23514') throw new SeoBlogError(400, 'Check the enquiry settings and try again.');
       throw e;
     }
   }
@@ -143,7 +144,8 @@ export class PgCreativeLearningStore implements LearningStore {
       const code = (e as { code?: string }).code;
       if (code === '40001' || code === '23505') throw new SeoBlogError(409, 'This request was already used for something else. Refresh and try again.');
       if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
-      if (code === '22023' || code === '23514' || code === '22P02') throw new SeoBlogError(400, (e as Error).message.slice(0, 300));
+      if (code === '22023') throw new SeoBlogError(400, (e as Error).message.slice(0, 300));
+      if (code === '23514' || code === '22P02') throw new SeoBlogError(400, 'Check the details and try again.');
       if (code === '55000') throw new SeoBlogError(409, (e as Error).message.slice(0, 300));
       throw e;
     }

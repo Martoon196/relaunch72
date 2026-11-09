@@ -218,6 +218,23 @@ test('typed-brief generation on real PostgreSQL: owner intent, shared admission,
       assert.equal(provider.calls.length, before + 1, 'one paid call, never two');
       assert.equal(await usage(a.brand.id), debits + 1);
     });
+
+    await t.test('the same claimed job run twice at once still makes exactly one paid call and one debit', async () => {
+      await settings(a.brand.id, { enabled: true, perMonth: 8, authorizedBy: a.actor, authorizedAt: new Date().toISOString() }, 20);
+      const s = await a.gen.saveBrief(a.actor, a.brand.id, randomUUID(), { text: 'A pale studio backdrop with soft shadows and nothing else.', size: '1024x1024', references: [] });
+      const j = await a.gen.request(a.actor, a.brand.id, s.briefId, 1, randomUUID(), false, null);
+      assert.ok(!('reason' in j));
+      const job = await claim(a.brand.id, (j as Job).id);
+      const before = provider.calls.length, debits = await usage(a.brand.id), gens = (await a.store.state(a.brand.id)).generations.length;
+      await Promise.all([run(job), run({ ...job })]);
+      assert.equal(provider.calls.length, before + 1, 'the second runner found the first attempt and never called');
+      assert.equal(await usage(a.brand.id), debits + 1);
+      // Whichever runner lost the race left the job held; a re-run finds the stored receipt and records without calling.
+      await admin.query("UPDATE app.seo_blog_jobs SET state='queued',lease_expires_at=NULL,run_after=now()-interval '1 second',data=data||'{\"state\":\"queued\",\"leaseOwner\":null}'::jsonb WHERE workspace_id=$1 AND id=$2", [a.brand.id, job.id]);
+      const settled = await run(await claim(a.brand.id, job.id, 'settler'));
+      assert.equal(settled.state, 'done', settled.error ?? settled.progress);
+      assert.equal(provider.calls.length, before + 1); assert.equal((await a.store.state(a.brand.id)).generations.length, gens + 1);
+    });
   } finally {
     await pool.end(); await admin.end();
   }

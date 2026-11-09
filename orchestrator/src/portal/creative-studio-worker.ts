@@ -22,7 +22,7 @@ export function imageProviderKey(env: NodeJS.ProcessEnv): { key: string; configu
 export function createCreativeWorkerJobs(input: { contentPool: Pick<Pool, 'connect'>; requestId: string; env: NodeJS.ProcessEnv; now?: () => string;
   /** Durable local render runner (creative_render jobs), supplied by the render composition. */
   render?: (job: Job) => Promise<Job> }): CreativeWorkerJobs | undefined {
-  if (input.env.CREATIVE_STUDIO_ENABLED !== 'true') return undefined;
+  if (input.env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true') return undefined;
   const principal = { kind: 'worker' as const, requestId: input.requestId };
   const media = new PgSeoBlogMediaStore(input.contentPool, principal, { publicOrigin: 'https://app.relaunch72.com' });
   const store = new PgSeoBlogStore(input.contentPool, principal, media);

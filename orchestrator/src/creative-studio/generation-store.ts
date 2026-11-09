@@ -27,7 +27,7 @@ export interface GenerationState {
   readonly generations: readonly GenerationRecord[];
   readonly jobs: readonly GenerationJobView[];
   readonly attempts: readonly GenerationAttemptView[];
-  readonly usage: Readonly<{ brandImagesThisMonth: number; studioImagesCounted: number; studioUnresolved: number; period: string }>;
+  readonly usage: Readonly<{ brandImagesThisMonth: number; brandUnresolvedEarlier: number; studioImagesCounted: number; studioUnresolved: number; period: string }>;
 }
 export interface CreativeReserveInput {
   readonly workspaceId: string; readonly jobId: string; readonly intentId: string; readonly nonce: string; readonly leaseOwner: string; readonly leaseAttempt: number;
@@ -44,7 +44,7 @@ export type IntentResult = Job | Readonly<{ kind: 'held'; reason: string; replac
 export interface GenerationStore {
   saveBrief(brandId: string, commandId: string, inputSha: string, briefId: string, brief: CreativeBrief): Promise<{ replayed: boolean; id: string }>;
   readBriefSource(brandId: string, briefId: string, version: number): Promise<CreativeBriefSource | null>;
-  state(brandId: string, briefId?: string): Promise<GenerationState>;
+  state(brandId: string, briefId?: string, generationId?: string): Promise<GenerationState>;
   initializeIntent(brandId: string, intent: CreativeImageIntent): Promise<IntentResult>;
   commitReserve(input: CreativeReserveInput): Promise<SeoImageAttemptDecision>;
   /** Records the private generated image and lets `complete` mark the job done in the same transaction. */
@@ -77,7 +77,8 @@ export class PgCreativeGenerationStore implements GenerationStore {
       if (e instanceof SeoBlogError || e instanceof InactivePortalSessionError) throw e;
       const code = (e as { code?: string }).code;
       if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
-      if (code === '22023' || code === '23514' || code === '22P02') throw new SeoBlogError(400, (e as Error).message.slice(0, 300));
+      if (code === '22023') throw new SeoBlogError(400, (e as Error).message.slice(0, 300));
+      if (code === '23514' || code === '22P02') throw new SeoBlogError(400, 'Check the brief details and try again.');
       if (code === '40001' || code === '23505') throw new SeoBlogError(409, 'This request was already used for something else, or changed. Refresh and try again.');
       if (code === '55000') throw new SeoBlogError(409, (e as Error).message.slice(0, 300));
       throw e;
@@ -97,12 +98,13 @@ export class PgCreativeGenerationStore implements GenerationStore {
     id(briefId); if (!Number.isInteger(version) || version < 1) throw new SeoBlogError(400, 'Invalid brief version.');
     return this.tx(brandId, (t) => this.one<CreativeBriefSource | null>(t, 'SELECT app_private.creative_studio_read_brief_source($1,$2,$3,$4) AS result', [brandId, this.sessionHash, briefId, version]));
   }
-  async state(brandId: string, briefId?: string): Promise<GenerationState> {
-    const raw = await this.tx(brandId, (t) => this.one<GenerationState>(t, 'SELECT app_private.creative_studio_generation_state($1,$2,$3) AS result', [brandId, this.sessionHash, JSON.stringify(briefId ? { briefId } : {})]));
+  async state(brandId: string, briefId?: string, generationId?: string): Promise<GenerationState> {
+    const raw = await this.tx(brandId, (t) => this.one<GenerationState>(t, 'SELECT app_private.creative_studio_generation_state($1,$2,$3) AS result', [brandId, this.sessionHash, JSON.stringify({ ...(briefId ? { briefId } : {}), ...(generationId ? { generationId } : {}) })]));
     const iso = (v: string) => new Date(v).toISOString();
     return { ...raw, briefs: raw.briefs.map((b) => ({ ...b, createdAt: iso(b.createdAt) })), generations: raw.generations.map((g) => ({ ...g, createdAt: iso(g.createdAt) })),
       jobs: raw.jobs.map((j) => ({ ...j, createdAt: iso(j.createdAt), updatedAt: iso(j.updatedAt) })), attempts: raw.attempts.map((a) => ({ ...a, reservedMicrousd: Number(a.reservedMicrousd), createdAt: iso(a.createdAt) })),
-      usage: { brandImagesThisMonth: Number(raw.usage.brandImagesThisMonth), studioImagesCounted: Number(raw.usage.studioImagesCounted), studioUnresolved: Number(raw.usage.studioUnresolved), period: String(raw.usage.period) } };
+      usage: { brandImagesThisMonth: Number(raw.usage.brandImagesThisMonth), brandUnresolvedEarlier: Number(raw.usage.brandUnresolvedEarlier ?? 0), studioImagesCounted: Number(raw.usage.studioImagesCounted),
+        studioUnresolved: Number(raw.usage.studioUnresolved), period: String(raw.usage.period) } };
   }
 
   /** Owner-only: initialise the durable job after the SQL intent check. The same command id replays the same job. */

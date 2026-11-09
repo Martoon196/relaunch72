@@ -9,7 +9,7 @@ import type { BriefVersion, GenerationState } from '../creative-studio/generatio
 import { base, STYLE } from './creative-studio-view.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 import type { EnquirySettings } from '../creative-studio/pg-store.js';
-import { ENQUIRY_ROUTE, enquiryEmbedSnippet } from '../creative-studio/enquiry-capture.js';
+import { ENQUIRY_LIMITS, ENQUIRY_ROUTE, enquiryEmbedSnippet } from '../creative-studio/enquiry-capture.js';
 
 const e = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, (c) => `&#${c.charCodeAt(0)};`);
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro % 10_000 ? 4 : 2)}`;
@@ -71,12 +71,12 @@ export function briefPage(shell: Shell, data: { brand: Brand; briefId: string; v
   const cost = `<div class="cost"><strong>Before you generate</strong><dl>
 <dt>Paid requests</dt><dd>${est.paidGenerations} image</dd><dt>Model</dt><dd>${e(est.model)} · quality ${e(est.quality)} (set by the platform policy)</dd>
 <dt>Size</dt><dd>${e(SIZE_LABEL[est.size])}</dd><dt>Reference images</dt><dd>${est.references}</dd>
-<dt>Reserved against the platform limit</dt><dd>${est.reservedMicrousd === null ? 'Not available (paid images are not enabled)' : `${usd(est.reservedMicrousd)} (an upper-bound hold, not the charge)`}</dd>
+<dt>Reserved against the platform limit</dt><dd>${est.reservedMicrousd === null ? 'Not available (paid images are not enabled)' : `${usd(est.reservedMicrousd)} (a fixed reservation set by the operator; it is not the charge and does not cap it)`}</dd>
 <dt>Exact cost</dt><dd>${e(est.exactCost)}</dd>
 <dt>Brand image allowance</dt><dd>${est.brandAllowance.remaining} of ${est.brandAllowance.limit} left this month</dd>
 <dt>Studio image allowance</dt><dd>${est.studioAllowance.enabled ? `${est.studioAllowance.remaining} of ${est.studioAllowance.limit} left this month` : 'off'}${est.studioAllowance.unresolved ? ` (${est.studioAllowance.unresolved} awaiting reconciliation still count)` : ''}</dd></dl>
 ${est.blockers.length ? `<ul class="blockers small">${est.blockers.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}</div>`;
-  const requestForm = active ? `<p role="status" data-creative-job="${e(active.id)}" data-endpoint="${base(shell)}/jobs/${e(active.id)}">${pill(active.state)} <span data-job-detail>${e(active.progress)}</span></p><p class="small muted">You can leave this page; the request continues on the server and survives restarts.</p>`
+  const requestForm = active ? `<p role="status" data-creative-job="${e(active.id)}" data-endpoint="${base(shell)}/jobs/${e(active.id)}">${pill(active.state)} <span data-job-detail>${e(active.progress)}</span></p><p class="small muted">You can leave this page; the request continues on the server and survives restarts.</p><noscript><p class="small"><a href="">Refresh to check progress</a></p></noscript>`
     : `<form method="post" action="${base(shell)}/generate/${e(data.briefId)}/request">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="version" value="${current.version}">
 ${lastIntent ? `<input type="hidden" name="replacesIntentId" value="${e(lastIntent)}"><label><input type="checkbox" name="confirmedNewIntent" value="1" required style="width:auto"> I want another paid image for this same brief version. The earlier one stays on record.</label>` : `<label><input type="checkbox" name="confirm" value="1" required style="width:auto"> Use one paid image from this brand’s allowances.</label>`}
 <button type="submit"${est.blockers.length ? ' disabled' : ''}>${lastIntent ? 'Generate another image (new paid request)' : 'Generate image (1 paid request)'}</button></form>`;
@@ -92,12 +92,14 @@ ${lastIntent ? `<input type="hidden" name="replacesIntentId" value="${e(lastInte
 }
 
 /** Brand enquiry form: where campaign leads enter the existing CRM, which stage means "qualified", and the embed code. */
-export function creativeEnquiriesPage(shell: Shell, data: { settings: EnquirySettings; brandId: string; origin: string; live: boolean }): string {
+export function creativeEnquiriesPage(shell: Shell, data: { settings: EnquirySettings; brandId: string; origin: string | null; live: boolean }): string {
   const s = data.settings, open = s.stages.filter((x) => x.type === 'open');
   const select = (name: string, id: string, chosen: string | null, label: string, help: string) => s.stages.length
     ? `<label for="${id}">${label}</label><select id="${id}" name="${name}">${open.map((x) => `<option value="${e(x.id)}"${x.id === chosen ? ' selected' : ''}>${e(x.name)}</option>`).join('')}</select><p class="small muted">${help}</p>` : '';
-  const hosted = s.publicKey ? `${data.origin}${ENQUIRY_ROUTE}/${data.brandId}/${s.publicKey}` : null;
-  const ready = s.enabled && hosted && data.live;
+  const hosted = s.publicKey && data.origin ? `${data.origin}${ENQUIRY_ROUTE}/${data.brandId}/${s.publicKey}` : null;
+  const ready = s.enabled && data.live;
+  // Pre-select a sensible "qualified" stage on first setup: the stage named Qualified…, else the next open stage.
+  const defaultQualified = s.qualifiedStageId ?? (open.find((x) => /^qualif/iu.test(x.name)) ?? open[1] ?? open[0])?.id ?? null;
   return layout(shell, 'Enquiries', `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><h1>Enquiry form</h1>
 <p class="muted">Leads from your tracked campaign links arrive here: a short form that creates the contact and opportunity in this brand’s CRM pipeline, and keeps the campaign tags only when they match a tracked link this brand issued. Nothing is published, emailed or spent.</p>
 <section class="card"><h2>Settings</h2>
@@ -106,24 +108,27 @@ export function creativeEnquiriesPage(shell: Shell, data: { settings: EnquirySet
 <li><strong>Campaign-tagged leads so far:</strong> ${s.touches}.</li></ul>
 <form method="post" action="${base(shell)}/enquiries" class="cs-form">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${s.rowVersion}">
 ${select('newStageId', 'enq-new', s.newStageId, 'Stage for new enquiries', 'New leads start here.')}
-${select('qualifiedStageId', 'enq-qual', s.qualifiedStageId, 'Stage that means “qualified”', 'Results count a lead as qualified when it reaches this stage (or a later open stage, or is won). Stored by stage id, so renaming the stage keeps the meaning.')}
+${select('qualifiedStageId', 'enq-qual', defaultQualified, 'Stage that means “qualified”', 'Results count a lead as qualified when it reaches this stage (or a later open stage, or is won). Stored by stage id, so renaming the stage keeps the meaning.')}
 <label for="enq-privacy">Privacy notice (https link)</label><input id="enq-privacy" name="privacyUrl" type="url" maxlength="500" value="${e(s.privacyUrl ?? '')}" placeholder="https://your-site.example/privacy">
 <label><input type="checkbox" name="enabled" value="1"${s.enabled ? ' checked' : ''} style="width:auto"> Accept enquiries through this form</label>
 <button type="submit">Save</button></form></section>
-${ready ? `<section class="card"><h2>Put the form where your links land</h2>
-<p class="small">Embed it on the page your tracked links open (recommended — the tracked link stays on your own site):</p>
-<textarea readonly rows="6" class="small" aria-label="Embed code">${e(enquiryEmbedSnippet(data.origin, data.brandId, s.publicKey!))}</textarea>
-<p class="small">Or use the hosted form: <a href="${e(hosted!)}" rel="noopener" target="_blank">${e(hosted!)}</a></p>
-<p class="small muted">The embed passes only the campaign tags (utm_source, utm_medium, utm_campaign, utm_content) from the page address. Names, emails and messages are sent in the form, never in a link. Up to ${50} enquiries per hour are accepted.</p></section>` : ''}`);
+${ready ? hosted ? `<section class="card"><h2>Put the form where your links land</h2>
+<p class="small">Embed it on the page your tracked links open (recommended — the tracked link stays on your own site). The form can only be embedded on this brand’s own website and its confirmed conversion pages:</p>
+<textarea readonly rows="6" class="small" aria-label="Embed code">${e(enquiryEmbedSnippet(data.origin!, data.brandId, s.publicKey!))}</textarea>
+<p class="small">Or use the hosted form: <a class="link-out" href="${e(hosted)}" rel="noopener" target="_blank">${e(hosted)}</a></p>
+<p class="small muted">The embed passes only the campaign tags (utm_source, utm_medium, utm_campaign, utm_content) from the page address. Names, emails and messages are sent in the form, never in a link. Up to ${ENQUIRY_LIMITS.perHour} enquiries per hour are accepted.</p>
+<form method="post" action="${base(shell)}/enquiries/rotate" class="cs-form">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${s.rowVersion}"><button class="secondary" type="submit">Issue a new form address</button> <span class="small muted">Use this if the link or embed code has leaked. The old address stops working at once.</span></form></section>`
+  : `<section class="card"><h2>Put the form where your links land</h2><p class="small">This portal has no public address configured, so the hosted link and embed code cannot be shown. Ask the release owner to set the portal base URL.</p></section>` : ''}`);
 }
 
 /** One durable render task: follows the job, explains a stop, and is replaced by the result page once it is done. */
-export function renderTaskPage(shell: Shell, data: { job: Job; label: string }): string {
+export function renderTaskPage(shell: Shell, data: { job: Job; label: string; retryable?: boolean }): string {
   const { job } = data, live = job.state === 'queued' || job.state === 'running';
   const status = live
     ? `<p role="status" data-creative-job="${e(job.id)}" data-endpoint="${base(shell)}/jobs/${e(job.id)}">${pill(job.state)} <span data-job-detail>${e(job.progress)}</span></p>
 <p class="small muted">The work runs on the server and survives restarts. You can leave this page and come back from the Creative studio or Tasks. Rendering is local: no provider is called and nothing is charged.</p><noscript><p><a href="">Refresh to check progress</a></p></noscript>`
-    : `<p>${pill(job.state)} ${e(job.error ?? job.progress)}</p><p class="small muted">Nothing was published or approved.</p>`;
+    : `<p>${pill(job.state)} ${e(job.error ?? job.progress)}</p><p class="small muted">Nothing was published or approved.</p>${['blocked', 'failed'].includes(job.state) && data.retryable
+      ? `<form method="post" action="${base(shell)}/task/${e(job.id)}/retry" class="cs-form">${csrfField(shell.csrf)}<button class="secondary" type="submit">Try again</button> <span class="small muted">Replays the same request after you have fixed what stopped it. Rendering is local; nothing is charged.</span></form>` : ''}`;
   return layout(shell, data.label, `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><h1>${e(data.label)}</h1>
 <section class="card">${status}</section>${live ? `<script src="${SEO_BLOG_BASE}/creative-job-status.js" defer></script>` : ''}`);
 }
@@ -134,9 +139,11 @@ const ENDPOINT=/^\\/portal\\/seo-blog\\/b\\/[0-9a-f-]{36}\\/creative\\/jobs\\/[0
 for(const el of document.querySelectorAll('[data-creative-job]')){
   const url=el.getAttribute('data-endpoint')||'';if(!ENDPOINT.test(url))continue;
   const detail=el.querySelector('[data-job-detail]');let rounds=0;
-  const tick=async()=>{rounds++;if(rounds>300)return;
+  const stop=(msg)=>{if(detail)detail.textContent=msg;};
+  const tick=async()=>{rounds++;if(rounds>300){stop('Progress updates paused. Refresh this page to check.');return;}
     const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),10000);
     try{const r=await fetch(url,{credentials:'same-origin',headers:{accept:'application/json'},signal:ctl.signal});
+      if(r.status===401||r.status===403||r.status===404){stop('Progress could not be read (you may need to sign in again). Refresh this page to check.');return;}
       if(r.ok){const j=await r.json();if(j&&typeof j.state==='string'){if(detail&&typeof j.detail==='string')detail.textContent=j.detail;
         if(!['queued','running'].includes(j.state)){location.replace(location.pathname);return;}}}}catch(e){}finally{clearTimeout(t);}
     setTimeout(tick,4000);};

@@ -37,7 +37,7 @@ export interface PortalSeoBlogService {
   readonly research: 'live' | 'unconfigured';
   /** Whether per-brand social registration/delivery is composed (Zernio command boundary + content pools). */
   readonly social: 'live' | 'unavailable';
-  /** Creative Studio: mounted only when CREATIVE_STUDIO_ENABLED=true (after migration 0143). Drafts only; no provider calls. */
+  /** Creative Studio: mounted only when CREATIVE_STUDIO_ENABLED=true (after migration 0144). Renders are local; paid images go through the worker's shared admission. */
   readonly creativeEnabled?: boolean;
   creativeFor?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine): CreativeStudioService | null;
   /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
@@ -93,17 +93,17 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     generation: runtime.llm ? 'live' : 'unavailable',
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',
-    creativeEnabled: env.CREATIVE_STUDIO_ENABLED === 'true',
-    ...(env.CREATIVE_STUDIO_ENABLED === 'true' && crmCommandPool
+    creativeEnabled: env.CREATIVE_STUDIO_ENABLED?.trim() === 'true',
+    ...(env.CREATIVE_STUDIO_ENABLED?.trim() === 'true' && crmCommandPool
       ? { creativeEnquiries: new PgEnquiryCapture({ contentPool: contentCommandPool, crm: new CrmCommandService({ transactionRunner: createPgCrmTransactionRunner(crmCommandPool) }) }) } : {}),
     creativeFor(identity, requestId, engine) {
-      if (env.CREATIVE_STUDIO_ENABLED !== 'true') return null;
+      if (env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true') return null;
       const creators = env.SEO_BLOG_METHOD_PACKS === 'true' && env.SEO_BLOG_CAMPAIGN_CREATORS === 'true'
         ? new PgCampaignCreatorStore(contentCommandPool, { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId }) : undefined;
       return createCreativeStudio({ contentCommandPool, identity, requestId, engine, env, ...(creators ? { creators } : {}) });
     },
     async creativeSavedImages(identity, _requestId, engine, brandId) {
-      return env.CREATIVE_STUDIO_ENABLED === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
+      return env.CREATIVE_STUDIO_ENABLED?.trim() === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
     },
     engineFor(identity, requestId) {
       const social = socialFor(identity, requestId);

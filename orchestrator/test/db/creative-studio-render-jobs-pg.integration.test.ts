@@ -131,6 +131,13 @@ test('durable render jobs on real PostgreSQL: request records, worker renders fo
       await assert.rejects(bound.approve(a.brand.id, cmd, 'a'.repeat(64), { id: randomUUID(), versionId: head.id, renderSha256: head.render.sha256, approvedBy: a.actor, scope: 'image_only' } as never, ctx), /owner session|permission/iu, 'never approves');
       await assert.rejects(bound.saveKit(a.brand.id, cmd, 'a'.repeat(64), {} as never), /owner session|permission/iu, 'never changes the kit');
       await assert.rejects(bound.appendVersions(a.brand.id, randomUUID(), 'a'.repeat(64), setId, [head], ctx), /owner session|permission/iu, 'only its own command');
+      // Even under its own command, a refresh job may neither create a set nor append to a set it was not queued for.
+      const otherCmd = randomUUID();
+      await a.studio.enqueueRender(a.actor, a.brand.id, otherCmd, { op: 'draft', raw: { ...form(a), concepts: '1' }, background: { kind: 'neutral' } });
+      const otherSet = ((await runner.render!(await claim(a.brand.id, otherCmd))).payload.render as { result: { setId: string } }).result.setId;
+      assert.notEqual(otherSet, setId);
+      await assert.rejects(bound.appendVersions(a.brand.id, cmd, 'a'.repeat(64), otherSet, [head], ctx), /owner session|permission/iu, 'not another set of the same brand');
+      await assert.rejects(bound.createSet(a.brand.id, cmd, 'a'.repeat(64), { id: randomUUID(), brandId: a.brand.id, createdBy: a.actor } as never, [head], ctx), /owner session|permission/iu, 'a refresh job cannot create a set');
       for (const forged of [{ id: randomUUID(), leaseOwner: job.leaseOwner!, attempt: job.attempts }, { id: job.id, leaseOwner: 'someone-else', attempt: job.attempts },
         { id: job.id, leaseOwner: job.leaseOwner!, attempt: job.attempts + 1 }])
         await assert.rejects(new PgCreativeLibraryStore(pool, wPrincipal, forged).renderActor(a.brand.id), /owner session|permission/iu);

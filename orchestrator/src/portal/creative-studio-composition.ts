@@ -72,7 +72,7 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
     renderJobs: brands,
     enquirySettings: new PgCreativeEnquirySettings(input.contentCommandPool, principal),
     generatedImages: {
-      async find(_actorId, brandId, generationId) { return (await generationStore.state(brandId)).generations.find((g) => g.id === generationId) ?? null; },
+      async find(_actorId, brandId, generationId) { return (await generationStore.state(brandId, undefined, generationId)).generations.find((g) => g.id === generationId) ?? null; },
       // The brand's private media store (owner session, workspace RLS, digest-checked); independent of article image review.
       async load(_actorId, brandId, assetId, sha256) { return (await media.loadPrivateAsset(brandId, assetId, sha256)).bytes; },
     },
@@ -85,7 +85,7 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
  * lease is held, and only to read and append rendered versions. Rendering is local Chromium: no provider, no charge.
  */
 export function creativeRenderRunner(pool: Pool, requestId: string, env: NodeJS.ProcessEnv): { render?: (job: Job) => Promise<Job> } {
-  if (env.CREATIVE_STUDIO_ENABLED !== 'true') return {};
+  if (env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true') return {};
   const principal = { kind: 'worker' as const, requestId };
   const media = new PgSeoBlogMediaStore(pool, principal, { publicOrigin: 'https://app.relaunch72.com' });
   const store = new PgSeoBlogStore(pool, principal, media);
