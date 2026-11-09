@@ -317,6 +317,7 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
   const image = await call(service, owner, 'GET', art);
   assert.equal(image.status, 200); assert.equal(image.headers['content-type'], 'image/jpeg'); assert.equal(image.headers['x-content-type-options'], 'nosniff');
   assert.equal(createHash('sha256').update(image.bytes).digest('hex'), art.split('/').at(-1)!.replace('.jpg', ''));
+  assert.equal((await call(service, owner, 'GET', art.replace(/\.jpg$/u, '.mp4'))).status, 404, 'the extension must match the stored media type');
   const dl = await call(service, owner, 'GET', `${art}?download=1`);
   assert.match(dl.headers['content-disposition']!, /attachment; filename=".*-draft\.jpg"/);
   // Approve via the route, then download is labelled approved.

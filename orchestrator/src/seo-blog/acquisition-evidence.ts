@@ -32,7 +32,8 @@ export function buildAcquisitionEvidence(input: {
 }): AcquisitionEvidence {
   const { profile } = input;
   const seen = new Set<string>();
-  const plans = [...input.plans].filter((p) => p.brandId === profile.brandId && p.status !== 'rejected')
+  // Only plans the owner still stands behind: rejected plans were refused; superseded plans were replaced by newer research.
+  const plans = [...input.plans].filter((p) => p.brandId === profile.brandId && p.status !== 'rejected' && p.status !== 'superseded')
     .sort((a, b) => (a.status === 'accepted' ? 0 : 1) - (b.status === 'accepted' ? 0 : 1) || b.createdAt.localeCompare(a.createdAt));
   const research: ResearchSource[] = [];
   for (const plan of plans) for (const source of plan.sources) {

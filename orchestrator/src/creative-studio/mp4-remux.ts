@@ -6,8 +6,9 @@
  * returns null so the caller keeps the original bytes rather than guessing.
  */
 
-interface Box { readonly type: string; readonly start: number; readonly header: number; readonly end: number }
-function boxes(b: Buffer, start: number, end: number): Box[] | null {
+export interface Box { readonly type: string; readonly start: number; readonly header: number; readonly end: number }
+/** Top-level or child box walk; null on any malformed size. */
+export function boxes(b: Buffer, start: number, end: number): Box[] | null {
   const out: Box[] = [];
   for (let o = start; o < end;) {
     if (o + 8 > end) return null;
@@ -20,15 +21,19 @@ function boxes(b: Buffer, start: number, end: number): Box[] | null {
   }
   return out;
 }
-const child = (b: Buffer, parent: Box, type: string) => boxes(b, parent.start + parent.header, parent.end)?.find((x) => x.type === type) ?? null;
+export const child = (b: Buffer, parent: Box, type: string) => boxes(b, parent.start + parent.header, parent.end)?.find((x) => x.type === type) ?? null;
 const box = (type: string, ...parts: Buffer[]) => { const body = Buffer.concat(parts); const h = Buffer.alloc(8); h.writeUInt32BE(8 + body.length, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, body]); };
 const full = (type: string, version: number, flags: number, ...parts: Buffer[]) => { const vf = Buffer.alloc(4); vf.writeUInt32BE(((version & 0xff) << 24) | (flags & 0xffffff), 0); return box(type, vf, ...parts); };
 const u32 = (...values: number[]) => { const out = Buffer.alloc(values.length * 4); values.forEach((v, i) => out.writeUInt32BE(v >>> 0, i * 4)); return out; };
 
-/** Rewrites a duration field in a copy of an mvhd/mdhd/tkhd box (version 0 or 1). */
-function withDuration(b: Buffer, x: Box, duration: number): Buffer | null {
+/**
+ * Rewrites a duration field in a copy of an mvhd/mdhd/tkhd box (version 0 or 1).
+ * mvhd/mdhd: creation, modification, timescale(4), duration  → v0 +12, v1 +20.
+ * tkhd:      creation, modification, track_ID(4), reserved(4), duration → v0 +16, v1 +24.
+ */
+export function withDuration(b: Buffer, x: Box, duration: number): Buffer | null {
   const copy = Buffer.from(b.subarray(x.start, x.end)), v = copy[x.header]!, base = x.header + 4;
-  const at = x.type === 'tkhd' ? (v === 1 ? base + 28 : base + 16) : (v === 1 ? base + 20 : base + 12);
+  const at = x.type === 'tkhd' ? (v === 1 ? base + 24 : base + 16) : (v === 1 ? base + 20 : base + 12);
   if (at + (v === 1 ? 8 : 4) > copy.length) return null;
   if (v === 1) copy.writeBigUInt64BE(BigInt(duration), at); else copy.writeUInt32BE(Math.min(0xffffffff, duration), at);
   return copy;
@@ -81,7 +86,7 @@ export function remuxFragmentedMp4(input: Buffer): Buffer | null {
       if (!(flags & 0x10000)) sync.push(durations.length);
     }
   }
-  if (!durations.length || firstDecode !== 0 || !sync.length || sync[0] !== 1) return null;
+  if (!durations.length || firstDecode !== 0 || !sync.length || sync[0] !== 1 || durations.some((d) => d <= 0)) return null;
   const mediaDuration = durations.reduce((n, d) => n + d, 0);
   const movieDuration = Math.round(mediaDuration * timescale(b, mvhd) / timescale(b, mdhd));
   const stts: number[] = [];

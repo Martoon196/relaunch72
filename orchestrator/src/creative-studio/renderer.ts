@@ -23,6 +23,15 @@ const FONT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fonts'
 const FONTS = Object.freeze({ 'display.otf': 'inter-display-bold.otf', 'text.otf': 'inter-regular.otf', 'strong.otf': 'inter-semibold.otf' });
 const SCRIM_STEPS = Object.freeze([0.42, 0.55, 0.68, 0.8, 0.9]);
 const RENDER_TIMEOUT_MS = 20_000;
+/** Upper bound on one in-page step; the playback check's own waits stay well inside it. */
+const SESSION_TIMEOUT_MS = 90_000;
+let fontCache: Map<string, Buffer> | null = null;
+/** Vendored fonts are immutable; read them once per process. */
+function fonts(): Map<string, Buffer> {
+  fontCache ??= new Map(Object.entries(FONTS).map(([key, file]) => [`/f/${key}`, readFileSync(path.join(FONT_DIR, file))]));
+  return fontCache;
+}
+type SessionFiles = Map<string, { type: string; body: Buffer }>;
 
 export interface ArtworkInput {
   readonly placement: Placement;
@@ -100,6 +109,10 @@ export interface ArtworkRenderer {
   renderContactSheet?(frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }>;
   /** Records the scenes to a real video file and verifies it plays back. */
   renderVideo?(input: VideoInput): Promise<RenderedVideo>;
+  /** Frames plus contact sheet in one browser session (fewer launches); falls back to renderBatch + renderContactSheet when absent. */
+  renderStoryboard?(inputs: readonly ArtworkInput[], captions: readonly { caption: string; script: string | null }[], title: string): Promise<{ frames: RenderedArtwork[]; sheet: { bytes: Buffer; sha256: string; width: number; height: number } }>;
+  /** Overlay frames plus recording in one browser session; falls back to renderBatch({captureOverlay}) + renderVideo when absent. */
+  renderSceneVideo?(inputs: readonly ArtworkInput[], timing: readonly { durationMs: number; motion: MotionId }[], video: Omit<VideoInput, 'scenes'> & { background: VerifiedImage | null; focal: Readonly<{ x: number; y: number }> }): Promise<{ frames: RenderedArtwork[]; video: RenderedVideo }>;
 }
 
 export class RendererUnavailableError extends Error {
@@ -298,7 +311,7 @@ const VIDEO_SCRIPT = `async ({ scenes, palette, fps, bits }) => {
 /** Independent playback check of the recorded bytes: metadata, real dimensions, a decodable non-blank frame. */
 const PLAYBACK_CHECK = `async ({ src, w, h }) => {
   const v = document.createElement('video'); v.muted = true; v.preload = 'auto'; v.src = src; document.body.appendChild(v);
-  const wait = (ev, ms = 20000) => new Promise((ok, fail) => { const t = setTimeout(() => fail(new Error('timeout ' + ev)), ms); v.addEventListener(ev, () => { clearTimeout(t); ok(); }, { once: true }); v.addEventListener('error', () => { clearTimeout(t); fail(new Error('decode')); }, { once: true }); });
+  const wait = (ev, ms = 12000) => new Promise((ok, fail) => { const t = setTimeout(() => fail(new Error('timeout ' + ev)), ms); v.addEventListener(ev, () => { clearTimeout(t); ok(); }, { once: true }); v.addEventListener('error', () => { clearTimeout(t); fail(new Error('decode')); }, { once: true }); });
   try {
     await wait('loadeddata');
     // A decodable, non-blank frame near the start.
@@ -307,7 +320,7 @@ const PLAYBACK_CHECK = `async ({ src, w, h }) => {
     const px = x.getImageData(0, 0, 64, 64).data; let min = 255, max = 0;
     for (let i = 0; i < px.length; i += 4) { const l = (px[i] + px[i + 1] + px[i + 2]) / 3; if (l < min) min = l; if (l > max) max = l; }
     // Recorder output is fragmented and under-reports its length until read: play it all (fast) to the end.
-    v.currentTime = 0; await wait('seeked'); v.playbackRate = 16; await v.play(); await wait('ended', 30000);
+    v.currentTime = 0; await wait('seeked'); v.playbackRate = 16; await v.play(); await wait('ended', 25000);
     const ends = [v.duration, v.currentTime].filter(Number.isFinite);
     return { ok: max - min > 8, duration: ends.length ? Math.max(...ends) : null, width: v.videoWidth, height: v.videoHeight };
   } catch (e) { return { ok: false, duration: null, width: v.videoWidth, height: v.videoHeight }; }
@@ -328,102 +341,36 @@ export class ChromiumArtworkRenderer implements ArtworkRenderer {
   available(): boolean { return this.executable !== null; }
 
   renderBatch(inputs: readonly ArtworkInput[]): Promise<RenderedArtwork[]> {
-    if (!this.executable) return Promise.reject(new RendererUnavailableError());
-    if (inputs.length < 1 || inputs.length > 24) return Promise.reject(new Error('Render between 1 and 24 artworks at a time.'));
-    const executable = this.executable;
-    return serialised(async () => {
-      const { chromium } = await import('playwright-core');
-      let browser: Awaited<ReturnType<typeof chromium.launch>>;
-      try { browser = await chromium.launch({ executablePath: executable, headless: true, chromiumSandbox: process.getuid?.() !== 0, args: ['--disable-gpu', '--font-render-hinting=none', '--disable-lcd-text'] }); }
-      catch { throw new RendererUnavailableError(); }
-      try {
-        const context = await browser.newContext({ javaScriptEnabled: true, serviceWorkers: 'block', deviceScaleFactor: 1, viewport: { width: 1080, height: 1080 }, offline: false });
-        const fonts = new Map(Object.entries(FONTS).map(([key, file]) => [key, readFileSync(path.join(FONT_DIR, file))]));
-        let images = new Map<string, VerifiedImage>();
-        await context.route('**/*', async (route) => {
-          const url = route.request().url();
-          if (url.startsWith(`${ORIGIN}/f/`)) {
-            const font = fonts.get(url.slice(ORIGIN.length + 3));
-            return font ? route.fulfill({ status: 200, contentType: 'font/otf', body: font }) : route.abort();
-          }
-          if (url.startsWith(`${ORIGIN}/i/`)) {
-            const image = images.get(url.slice(ORIGIN.length + 3));
-            return image ? route.fulfill({ status: 200, contentType: image.mime, body: image.bytes }) : route.abort();
-          }
-          return route.abort('blockedbyclient');
-        });
-        const page = await context.newPage();
-        page.setDefaultTimeout(RENDER_TIMEOUT_MS);
-        const results: RenderedArtwork[] = [];
-        for (const input of inputs) {
-          const { width: W, height: H } = input.placement;
-          images = new Map();
-          if (input.background) images.set('bg', input.background);
-          if (input.logo) images.set('logo', input.logo);
-          await page.setViewportSize({ width: W, height: H });
-          await page.setContent(artworkHtml(input), { waitUntil: 'load' });
-          const fit = await page.evaluate(`(${FIT_SCRIPT})(${JSON.stringify({ max: input.placement.headline.max, min: input.placement.headline.min, maxLines: input.placement.headline.maxLines, bodyLines: input.placement.body.maxLines, bodySize: input.placement.body.size })})`) as { size: number; fits: boolean; bodyFits: boolean };
-          const boxes = await page.evaluate(BOXES_SCRIPT) as { role: string; x: number; y: number; w: number; h: number }[];
-          let scrim = SCRIM_STEPS[0]!; let contrast: Record<string, number> = {};
-          for (const step of SCRIM_STEPS) {
-            scrim = step;
-            await page.evaluate(`document.getElementById('art').style.setProperty('--scrim','${step}');document.body.classList.add('measuring')`);
-            const shot = decodeScreenshot(await page.screenshot({ type: 'jpeg', quality: 95, animations: 'disabled' }));
-            contrast = Object.fromEntries(boxes.map((b) => [b.role, Number(measureBoxContrast(shot, b, input.palette.light).toFixed(2))]));
-            if (boxes.every((b) => (contrast[b.role] ?? 0) >= (THRESHOLD[b.role] ?? 4.5))) break;
-          }
-          await page.evaluate(`document.body.classList.remove('measuring')`);
-          const bytes = await page.screenshot({ type: 'jpeg', quality: 90, animations: 'disabled' });
-          const issues: ArtworkIssue[] = [];
-          if (!fit.fits || !fit.bodyFits) issues.push({ code: 'text_overflow', blocking: true, detail: `The copy does not fit the ${input.placement.label} layout at a legible size. Shorten the headline or body.` });
-          for (const b of boxes) {
-            const need = THRESHOLD[b.role] ?? 4.5, got = contrast[b.role] ?? 0;
-            if (got < need) issues.push({ code: 'low_contrast', blocking: true, detail: `The ${b.role} reaches ${got}:1 contrast against this background (needs ${need}:1). Choose a darker brand dark colour, a calmer background or move the focal point.` });
-          }
-          if (input.cta) {
-            const ratio = contrastRatio(luminance(parseHex(input.palette.accent) ?? [0, 0, 0]), luminance(parseHex(inkFor(input.palette.accent, input.palette)) ?? [0, 0, 0]));
-            contrast.cta = Number(ratio.toFixed(2));
-            if (ratio < 4.5) issues.push({ code: 'cta_contrast', blocking: true, detail: `The button colours reach only ${ratio.toFixed(2)}:1 contrast. Choose an accent colour that contrasts with the brand light or dark colour.` });
-          }
-          let overlay: Buffer | null = null;
-          if (input.captureOverlay) {
-            await page.evaluate(`(() => { const bg = document.getElementById('bg'); if (bg) bg.style.visibility = 'hidden'; document.documentElement.style.background = 'transparent'; document.body.style.background = 'transparent'; })()`);
-            overlay = Buffer.from(await page.screenshot({ type: 'png', omitBackground: true, animations: 'disabled' }));
-          }
-          const owned = Buffer.from(bytes);
-          const result = { mime: 'image/jpeg' as const, sha256: createHash('sha256').update(owned).digest('hex'), width: W, height: H, contrast: Object.freeze(contrast), scrimAlpha: scrim, headlineSize: fit.size, issues: Object.freeze(issues) };
-          Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(owned) });
-          if (overlay) { const layer = overlay; Object.defineProperty(result, 'overlay', { enumerable: false, get: () => Buffer.from(layer) }); }
-          results.push(Object.freeze(result) as RenderedArtwork);
-        }
-        await context.close();
-        return results;
-      } finally {
-        await browser.close();
-      }
-    });
+    const invalid = ChromiumArtworkRenderer.checkInputs(inputs);
+    if (invalid) return Promise.reject(invalid);
+    return this.session((page, files) => this.renderInputs(page, files, inputs), 'images');
+  }
+
+  private static checkInputs(inputs: readonly ArtworkInput[]): Error | null {
+    return inputs.length < 1 || inputs.length > 24 ? new Error('Render between 1 and 24 artworks at a time.') : null;
   }
 
   /** One offline browser page serving only in-memory files from the private pseudo-origin. */
-  private session<T>(work: (page: import('playwright-core').Page, files: Map<string, { type: string; body: Buffer }>) => Promise<T>): Promise<T> {
+  private session<T>(work: (page: import('playwright-core').Page, files: SessionFiles) => Promise<T>, mode: 'images' | 'media' = 'media'): Promise<T> {
     if (!this.executable) return Promise.reject(new RendererUnavailableError());
     const executable = this.executable;
     return serialised(async () => {
       const { chromium } = await import('playwright-core');
       let browser: Awaited<ReturnType<typeof chromium.launch>>;
-      try { browser = await chromium.launch({ executablePath: executable, headless: true, chromiumSandbox: process.getuid?.() !== 0, args: ['--disable-gpu', '--font-render-hinting=none', '--autoplay-policy=no-user-gesture-required'] }); }
+      const args = ['--disable-gpu', '--font-render-hinting=none', ...(mode === 'images' ? ['--disable-lcd-text'] : ['--autoplay-policy=no-user-gesture-required'])];
+      try { browser = await chromium.launch({ executablePath: executable, headless: true, chromiumSandbox: process.getuid?.() !== 0, args }); }
       catch { throw new RendererUnavailableError(); }
       try {
         const context = await browser.newContext({ javaScriptEnabled: true, serviceWorkers: 'block', deviceScaleFactor: 1, viewport: { width: 1280, height: 900 } });
-        const files = new Map<string, { type: string; body: Buffer }>();
-        for (const [key, file] of Object.entries(FONTS)) files.set(`/f/${key}`, { type: 'font/otf', body: readFileSync(path.join(FONT_DIR, file)) });
+        const files: SessionFiles = new Map();
+        for (const [key, body] of fonts()) files.set(key, { type: 'font/otf', body });
         await context.route('**/*', async (route) => {
           const url = new URL(route.request().url());
           const file = url.origin === ORIGIN ? files.get(url.pathname) : undefined;
           return file ? route.fulfill({ status: 200, contentType: file.type, body: file.body, headers: { 'accept-ranges': 'none' } }) : route.abort('blockedbyclient');
         });
         const page = await context.newPage();
-        page.setDefaultTimeout(RENDER_TIMEOUT_MS + VIDEO_LIMITS.totalMs);
+        page.setDefaultTimeout(mode === 'images' ? RENDER_TIMEOUT_MS : SESSION_TIMEOUT_MS);
         const result = await work(page, files);
         await context.close();
         return result;
@@ -431,58 +378,141 @@ export class ChromiumArtworkRenderer implements ArtworkRenderer {
     });
   }
 
-  renderContactSheet(frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }> {
-    if (!frames.length || frames.length > VIDEO_LIMITS.scenes + 1) return Promise.reject(new Error('A storyboard has one to nine frames.'));
-    return this.session(async (page, files) => {
-      frames.forEach((f, i) => files.set(`/sb/${i}.jpg`, { type: 'image/jpeg', body: f.image }));
-      const cards = frames.map((f, i) => `<figure><img src="${ORIGIN}/sb/${i}.jpg" alt=""><figcaption><b>Scene ${i + 1}</b> · ${escape(f.caption)}${f.script ? `<span class="script">Script only — no audio produced: ${escape(f.script)}</span>` : ''}</figcaption></figure>`).join('');
-      files.set('/sheet', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  /** Lay out, fit, measure and capture each input on the given page. */
+  private async renderInputs(page: import('playwright-core').Page, files: SessionFiles, inputs: readonly ArtworkInput[]): Promise<RenderedArtwork[]> {
+    const results: RenderedArtwork[] = [];
+    for (const input of inputs) {
+      const { width: W, height: H } = input.placement;
+      files.delete('/i/bg'); files.delete('/i/logo');
+      if (input.background) files.set('/i/bg', { type: input.background.mime, body: input.background.bytes });
+      if (input.logo) files.set('/i/logo', { type: input.logo.mime, body: input.logo.bytes });
+      await page.setViewportSize({ width: W, height: H });
+      await page.setContent(artworkHtml(input), { waitUntil: 'load' });
+      const fit = await page.evaluate(`(${FIT_SCRIPT})(${JSON.stringify({ max: input.placement.headline.max, min: input.placement.headline.min, maxLines: input.placement.headline.maxLines, bodyLines: input.placement.body.maxLines, bodySize: input.placement.body.size })})`) as { size: number; fits: boolean; bodyFits: boolean };
+      const boxes = await page.evaluate(BOXES_SCRIPT) as { role: string; x: number; y: number; w: number; h: number }[];
+      let scrim = SCRIM_STEPS[0]!; let contrast: Record<string, number> = {};
+      for (const step of SCRIM_STEPS) {
+        scrim = step;
+        await page.evaluate(`document.getElementById('art').style.setProperty('--scrim','${step}');document.body.classList.add('measuring')`);
+        const shot = decodeScreenshot(await page.screenshot({ type: 'jpeg', quality: 95, animations: 'disabled' }));
+        contrast = Object.fromEntries(boxes.map((b) => [b.role, Number(measureBoxContrast(shot, b, input.palette.light).toFixed(2))]));
+        if (boxes.every((b) => (contrast[b.role] ?? 0) >= (THRESHOLD[b.role] ?? 4.5))) break;
+      }
+      await page.evaluate(`document.body.classList.remove('measuring')`);
+      const bytes = await page.screenshot({ type: 'jpeg', quality: 90, animations: 'disabled' });
+      const issues: ArtworkIssue[] = [];
+      if (!fit.fits || !fit.bodyFits) issues.push({ code: 'text_overflow', blocking: true, detail: `The copy does not fit the ${input.placement.label} layout at a legible size. Shorten the headline or body.` });
+      for (const b of boxes) {
+        const need = THRESHOLD[b.role] ?? 4.5, got = contrast[b.role] ?? 0;
+        if (got < need) issues.push({ code: 'low_contrast', blocking: true, detail: `The ${b.role} reaches ${got}:1 contrast against this background (needs ${need}:1). Choose a darker brand dark colour, a calmer background or move the focal point.` });
+      }
+      if (input.cta) {
+        const ratio = contrastRatio(luminance(parseHex(input.palette.accent) ?? [0, 0, 0]), luminance(parseHex(inkFor(input.palette.accent, input.palette)) ?? [0, 0, 0]));
+        contrast.cta = Number(ratio.toFixed(2));
+        if (ratio < 4.5) issues.push({ code: 'cta_contrast', blocking: true, detail: `The button colours reach only ${ratio.toFixed(2)}:1 contrast. Choose an accent colour that contrasts with the brand light or dark colour.` });
+      }
+      let overlay: Buffer | null = null;
+      if (input.captureOverlay) {
+        await page.evaluate(`(() => { const bg = document.getElementById('bg'); if (bg) bg.style.visibility = 'hidden'; document.documentElement.style.background = 'transparent'; document.body.style.background = 'transparent'; })()`);
+        overlay = Buffer.from(await page.screenshot({ type: 'png', omitBackground: true, animations: 'disabled' }));
+      }
+      const owned = Buffer.from(bytes);
+      const result = { mime: 'image/jpeg' as const, sha256: createHash('sha256').update(owned).digest('hex'), width: W, height: H, contrast: Object.freeze(contrast), scrimAlpha: scrim, headlineSize: fit.size, issues: Object.freeze(issues) };
+      Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(owned) });
+      if (overlay) { const layer = overlay; Object.defineProperty(result, 'overlay', { enumerable: false, get: () => Buffer.from(layer) }); }
+      results.push(Object.freeze(result) as RenderedArtwork);
+    }
+    return results;
+  }
+
+  private async sheetOn(page: import('playwright-core').Page, files: SessionFiles, frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }> {
+    if (!frames.length || frames.length > VIDEO_LIMITS.scenes + 1) throw new Error('A storyboard has one to nine frames.');
+    frames.forEach((f, i) => files.set(`/sb/${i}.jpg`, { type: 'image/jpeg', body: f.image }));
+    const cards = frames.map((f, i) => `<figure><img src="${ORIGIN}/sb/${i}.jpg" alt=""><figcaption><b>Scene ${i + 1}</b> · ${escape(f.caption)}${f.script ? `<span class="script">Script only — no audio produced: ${escape(f.script)}</span>` : ''}</figcaption></figure>`).join('');
+    files.set('/sheet', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @font-face{font-family:R72Text;src:url(${ORIGIN}/f/text.otf);font-weight:400}@font-face{font-family:R72Text;src:url(${ORIGIN}/f/strong.otf);font-weight:600}
 body{margin:0;width:1600px;background:#f3f4f6;font-family:R72Text;color:#111827}header{background:#111827;color:#fff;padding:22px 32px;font-weight:600;font-size:26px;display:flex;justify-content:space-between}
 header span{background:#fbbf24;color:#111827;padding:4px 12px;border-radius:6px;font-size:18px}main{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;padding:24px 32px 32px}
 figure{margin:0;background:#fff;border-radius:10px;padding:10px;box-shadow:0 1px 3px rgba(0,0,0,.12)}img{width:100%;display:block;border-radius:6px}figcaption{font-size:15px;line-height:1.35;margin-top:8px}
 .script{display:block;margin-top:6px;color:#4b5563;font-size:14px;border-left:3px solid #fbbf24;padding-left:8px}</style></head><body><header>${escape(title)}<span>STORYBOARD — NOT A VIDEO</span></header><main>${cards}</main></body></html>`) });
-      await page.setViewportSize({ width: 1600, height: 900 });
-      await page.goto(`${ORIGIN}/sheet`, { waitUntil: 'load' });
-      await page.evaluate('document.fonts.ready');
-      const bytes = Buffer.from(await page.screenshot({ type: 'jpeg', quality: 85, fullPage: true }));
-      const size = await page.evaluate('[document.documentElement.scrollWidth, document.documentElement.scrollHeight]') as [number, number];
-      return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), width: size[0], height: size[1] };
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`${ORIGIN}/sheet`, { waitUntil: 'load' });
+    await page.evaluate('document.fonts.ready');
+    const bytes = Buffer.from(await page.screenshot({ type: 'jpeg', quality: 85, fullPage: true }));
+    const size = await page.evaluate('[document.documentElement.scrollWidth, document.documentElement.scrollHeight]') as [number, number];
+    return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), width: size[0], height: size[1] };
+  }
+
+  renderContactSheet(frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }> {
+    if (!frames.length || frames.length > VIDEO_LIMITS.scenes + 1) return Promise.reject(new Error('A storyboard has one to nine frames.'));
+    return this.session((page, files) => this.sheetOn(page, files, frames, title));
+  }
+
+  renderStoryboard(inputs: readonly ArtworkInput[], captions: readonly { caption: string; script: string | null }[], title: string) {
+    const invalid = ChromiumArtworkRenderer.checkInputs(inputs);
+    if (invalid || captions.length !== inputs.length) return Promise.reject(invalid ?? new Error('One caption per frame is required.'));
+    return this.session(async (page, files) => {
+      const frames = await this.renderInputs(page, files, inputs);
+      const sheet = await this.sheetOn(page, files, frames.map((f, i) => ({ image: f.bytes, ...captions[i]! })), title);
+      return { frames, sheet };
     });
   }
 
-  renderVideo(input: VideoInput): Promise<RenderedVideo> {
+  private static checkVideo(input: VideoInput): Error | null {
     const total = input.scenes.reduce((n, s) => n + s.durationMs, 0);
-    if (!input.scenes.length || input.scenes.length > VIDEO_LIMITS.scenes || total > VIDEO_LIMITS.totalMs
-      || input.scenes.some((s) => s.durationMs < VIDEO_LIMITS.sceneMs[0] || s.durationMs > VIDEO_LIMITS.sceneMs[1] || !MOTIONS.includes(s.motion))) {
-      return Promise.reject(new Error('A video has one to eight scenes of 1.5–8 seconds, at most 30 seconds in total.'));
-    }
+    return !input.scenes.length || input.scenes.length > VIDEO_LIMITS.scenes || total > VIDEO_LIMITS.totalMs
+      || input.scenes.some((s) => s.durationMs < VIDEO_LIMITS.sceneMs[0] || s.durationMs > VIDEO_LIMITS.sceneMs[1] || !MOTIONS.includes(s.motion))
+      ? new Error('A video has one to eight scenes of 1.5–8 seconds, at most 30 seconds in total.') : null;
+  }
+
+  private async videoOn(page: import('playwright-core').Page, files: SessionFiles, input: VideoInput): Promise<RenderedVideo> {
+    const total = input.scenes.reduce((n, s) => n + s.durationMs, 0);
+    const scenes = input.scenes.map((s, i) => {
+      if (s.background) files.set(`/v/bg${i}`, { type: s.background.mime, body: s.background.bytes });
+      files.set(`/v/ov${i}`, { type: 'image/png', body: s.overlay });
+      return { bg: s.background ? `${ORIGIN}/v/bg${i}` : null, ov: `${ORIGIN}/v/ov${i}`, focal: s.focal, ms: s.durationMs, motion: s.motion };
+    });
+    files.set('/video', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><body style="margin:0;background:#000"><canvas id="c" width="${input.width}" height="${input.height}"></canvas></body></html>`) });
+    await page.setViewportSize({ width: input.width, height: input.height });
+    await page.goto(`${ORIGIN}/video`, { waitUntil: 'load' });
+    const recorded = await page.evaluate(`(${VIDEO_SCRIPT})(${JSON.stringify({ scenes, palette: input.palette, fps: VIDEO_LIMITS.fps, bits: VIDEO_LIMITS.bitsPerSecond })})`) as { mime: string; b64: string; frames: number };
+    const recordedBytes = Buffer.from(recorded.b64, 'base64');
+    const mime = recorded.mime.startsWith('video/mp4') ? 'video/mp4' as const : 'video/webm' as const;
+    // Same encoded samples, standard index-first layout with real durations; unknown shapes stay as recorded.
+    const progressive = mime === 'video/mp4' ? remuxFragmentedMp4(recordedBytes) : null;
+    const bytes = progressive ?? recordedBytes;
+    const container = mime === 'video/webm' ? 'webm' as const : progressive ? 'progressive' as const : 'fragmented' as const;
+    if (!bytes.length || bytes.length > VIDEO_LIMITS.bytes) throw new Error('The recorded video is empty or exceeds the 20 MB limit.');
+    files.set('/v/out', { type: mime, body: bytes });
+    files.set('/check', { type: 'text/html; charset=utf-8', body: Buffer.from('<!DOCTYPE html><html><body></body></html>') });
+    await page.goto(`${ORIGIN}/check`, { waitUntil: 'load' });
+    // A file the browser cannot play is an honest "not playable" result, never a thrown render failure.
+    let check: { ok: boolean; duration: number | null; width: number; height: number } = { ok: false, duration: null, width: 0, height: 0 };
+    try { check = await page.evaluate(`(${PLAYBACK_CHECK})(${JSON.stringify({ src: `${ORIGIN}/v/out`, w: input.width, h: input.height })})`) as typeof check; } catch { /* timeout or evaluation failure: stays not playable */ }
+    const result = { mime, codec: recorded.mime, container, sha256: createHash('sha256').update(bytes).digest('hex'), width: input.width, height: input.height, durationMs: total,
+      measuredDurationMs: check.duration === null ? null : Math.round(check.duration * 1000),
+      playable: check.ok && check.width === input.width && check.height === input.height, byteLength: bytes.length };
+    Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(bytes) });
+    return Object.freeze(result) as RenderedVideo;
+  }
+
+  renderVideo(input: VideoInput): Promise<RenderedVideo> {
+    const invalid = ChromiumArtworkRenderer.checkVideo(input);
+    if (invalid) return Promise.reject(invalid);
+    return this.session((page, files) => this.videoOn(page, files, input));
+  }
+
+  renderSceneVideo(inputs: readonly ArtworkInput[], timing: readonly { durationMs: number; motion: MotionId }[], video: Omit<VideoInput, 'scenes'> & { background: VerifiedImage | null; focal: Readonly<{ x: number; y: number }> }) {
+    const invalid = ChromiumArtworkRenderer.checkInputs(inputs);
+    if (invalid || timing.length !== inputs.length) return Promise.reject(invalid ?? new Error('One timing entry per scene is required.'));
+    const planned: VideoInput = { width: video.width, height: video.height, palette: video.palette, scenes: timing.map((t) => ({ background: video.background, focal: video.focal, overlay: Buffer.alloc(0), durationMs: t.durationMs, motion: t.motion })) };
+    const invalidVideo = ChromiumArtworkRenderer.checkVideo(planned);
+    if (invalidVideo) return Promise.reject(invalidVideo);
     return this.session(async (page, files) => {
-      const scenes = input.scenes.map((s, i) => {
-        if (s.background) files.set(`/v/bg${i}`, { type: s.background.mime, body: s.background.bytes });
-        files.set(`/v/ov${i}`, { type: 'image/png', body: s.overlay });
-        return { bg: s.background ? `${ORIGIN}/v/bg${i}` : null, ov: `${ORIGIN}/v/ov${i}`, focal: s.focal, ms: s.durationMs, motion: s.motion };
-      });
-      files.set('/video', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><body style="margin:0;background:#000"><canvas id="c" width="${input.width}" height="${input.height}"></canvas></body></html>`) });
-      await page.setViewportSize({ width: input.width, height: input.height });
-      await page.goto(`${ORIGIN}/video`, { waitUntil: 'load' });
-      const recorded = await page.evaluate(`(${VIDEO_SCRIPT})(${JSON.stringify({ scenes, palette: input.palette, fps: VIDEO_LIMITS.fps, bits: VIDEO_LIMITS.bitsPerSecond })})`) as { mime: string; b64: string; frames: number };
-      const recordedBytes = Buffer.from(recorded.b64, 'base64');
-      const mime = recorded.mime.startsWith('video/mp4') ? 'video/mp4' as const : 'video/webm' as const;
-      // Same encoded samples, standard index-first layout with real durations; unknown shapes stay as recorded.
-      const progressive = mime === 'video/mp4' ? remuxFragmentedMp4(recordedBytes) : null;
-      const bytes = progressive ?? recordedBytes;
-      const container = mime === 'video/webm' ? 'webm' as const : progressive ? 'progressive' as const : 'fragmented' as const;
-      if (!bytes.length || bytes.length > VIDEO_LIMITS.bytes) throw new Error('The recorded video is empty or exceeds the 20 MB limit.');
-      files.set('/v/out', { type: mime, body: bytes });
-      files.set('/check', { type: 'text/html; charset=utf-8', body: Buffer.from('<!DOCTYPE html><html><body></body></html>') });
-      await page.goto(`${ORIGIN}/check`, { waitUntil: 'load' });
-      const check = await page.evaluate(`(${PLAYBACK_CHECK})(${JSON.stringify({ src: `${ORIGIN}/v/out`, w: input.width, h: input.height })})`) as { ok: boolean; duration: number | null; width: number; height: number };
-      const result = { mime, codec: recorded.mime, container, sha256: createHash('sha256').update(bytes).digest('hex'), width: input.width, height: input.height, durationMs: total,
-        measuredDurationMs: check.duration === null ? null : Math.round(check.duration * 1000),
-        playable: check.ok && check.width === input.width && check.height === input.height, byteLength: bytes.length };
-      Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(bytes) });
-      return Object.freeze(result) as RenderedVideo;
+      const frames = await this.renderInputs(page, files, inputs.map((i) => ({ ...i, captureOverlay: true })));
+      if (frames.some((f) => !f.overlay)) throw new Error('The renderer did not capture the overlay layer needed for video.');
+      const recorded = await this.videoOn(page, files, { ...planned, scenes: planned.scenes.map((s, i) => ({ ...s, overlay: frames[i]!.overlay! })) });
+      return { frames, video: recorded };
     });
   }
 }

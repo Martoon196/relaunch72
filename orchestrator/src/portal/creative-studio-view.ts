@@ -1,7 +1,7 @@
 /** Server-rendered Creative Studio pages inside the existing multi-brand SEO area. No client script required. */
 import type { CreativeBrandContext } from '../creative-studio/brand-context.js';
 import { PLACEMENTS, PLACEMENT_IDS, type PlacementId } from '../creative-studio/placements.js';
-import type { SavedGeneratedImage, ApprovalState, setView } from '../creative-studio/service.js';
+import { videoEstimate, type SavedGeneratedImage, type ApprovalState, type setView } from '../creative-studio/service.js';
 import type { CreativeSetSummary, CreativeSetRecord } from '../creative-studio/store.js';
 import { CREATIVE_PURPOSES, PURPOSE_LABELS, type BrandKit, type CreativeVersion } from '../creative-studio/types.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -148,7 +148,7 @@ ${[...scenes, null].map((x, i) => `<fieldset><legend>${x ? `Scene ${i + 1}` : 'A
 <div class="row"><label>Seconds<select name="scene.${i}.duration">${Array.from({ length: 14 }, (_, k) => 1500 + k * 500).map((ms) => `<option value="${ms}"${ms === (x?.durationMs ?? 3000) ? ' selected' : ''}>${ms / 1000}</option>`).join('')}</select></label><label>Motion<select name="scene.${i}.motion">${MOTION_OPTIONS.map(([m, l]) => `<option value="${m}"${m === (x?.motion ?? 'zoom_in') ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
 ${c.concept.cta ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.cta" value="1"${x?.showCta ? ' checked' : ''}> Show the “${e(c.concept.cta)}” button</label>` : ''}<label>Voiceover script <span class="muted">(script only — no voice is generated)</span><textarea name="scene.${i}.script" maxlength="400" style="min-height:50px">${e(x?.script ?? '')}</textarea></label>${x ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.remove" value="1"> Remove this scene</label>` : ''}</fieldset>`).join('')}
 <button type="submit">Save storyboard</button></form></details>`;
-      const est = Math.ceil(total / 1000 + scenes.length * 1.5 + 4);
+      const est = videoEstimate({ scenes }).renderSecondsApprox;
       const renderForm = `<form method="post" action="${base(shell)}/v/${e(v.id)}/video">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><button type="submit"${blocking || sb.staleContext || !data.rendererReady ? ' disabled' : ''}>${fresh ? 'Render again' : 'Render video'}</button> <span class="small muted">${(total / 1000).toFixed(1)} s · about ${est} s to render on this server · no provider call or charge · silent with on-screen text</span></form>`;
       const player = video ? (() => { const x = video.version; const r = x.render;
         return `<figure class="art" id="v-${e(x.id)}"><video controls muted playsinline preload="metadata" width="${r.width}" height="${r.height}" src="${artUrl(shell, x)}" style="width:100%;height:auto;border-radius:6px;background:#000"></video>

@@ -39,8 +39,10 @@ export interface AdvocacyKit { title:string; summary:string; requests:AdvocacyRe
 export type CampaignContent=EmailCampaign|AdvocacyKit|AcquisitionProposal;
 /** JSONB reorders object keys; idempotency compares canonical values, not serialisation order. */
 export function campaignInputHash(brief:CampaignBrief):string {
+  // The evidence pack is derived on the server from saved records at generation time; the owner's inputs alone identify the command.
+  const {evidence:_derived,...owned}=brief;
   const stable=(value:unknown):string=>value!==null&&typeof value==='object'?(Array.isArray(value)?'['+value.map(stable).join(',')+']':'{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+stable(v)).join(',')+'}'):JSON.stringify(value);
-  return methodHash(stable(brief));
+  return methodHash(stable(owned));
 }
 export interface CreatorVersion { number:number; content:CampaignContent; contentSha:string; methodReceiptId:string|null; createdAt:string; createdBy:string }
 export interface CreatorRecord {
@@ -117,8 +119,10 @@ export function campaignProblems(brief:CampaignBrief,content:unknown,profile:Bra
       if(c.addresses.some(i=>i>=p.insights.length))problems.push('A concept must address listed insights.');
     }
     // Predictions are hypotheses: no invented rates, costs, returns or volumes; actual results are never written here.
-    const forecast=JSON.stringify({hypotheses:p.hypotheses,measurement:{...p.measurement,reviewAfterDays:null},objective:p.objective});
+    // objective.goal restates the owner's own words and may legitimately contain a number; predictions and the plan may not.
+    const forecast=JSON.stringify({hypotheses:p.hypotheses,measurement:{...p.measurement,reviewAfterDays:null},primaryMetric:p.objective.primaryMetric});
     if(/\d/.test(forecast))problems.push('Predictions and the measurement plan must not invent numbers or targets; state them as testable hypotheses.');
+    if(/\b(?:achieved|delivered|resulted in|generated)\b/i.test(p.objective.goal))problems.push('A proposal cannot report results; keep predictions as hypotheses.');
     if(/\b(?:roas|return on ad spend|cpa|cac|ctr)\b[^.]{0,40}\b(?:will|is|of|at)\b/i.test(forecast))problems.push('Do not state predicted ROAS, CPA, CAC or CTR as facts.');
     if(/\b(?:achieved|delivered|resulted in|generated)\b/i.test(forecast))problems.push('A proposal cannot report results; keep predictions as hypotheses.');
     const approvedText=JSON.stringify({offers:profile.offers,claims:profile.approvedClaims}).toLowerCase();

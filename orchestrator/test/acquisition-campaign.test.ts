@@ -154,3 +154,21 @@ test('routes and review page: proposal form appears with the pack; review separa
   const record = (await f.store.list(f.brand.id))[0]!;
   assert.ok(campaignCreatorReviewPage({ brands: [], brand: f.brand, tab: 'campaigns', csrf, creativeAvailable: false }, record, f.profile).indexOf('Create artwork') === -1, 'no artwork link when the studio is off');
 });
+
+test('the owner\u2019s own goal may contain a number; predictions still may not, and the command hash ignores derived evidence', async () => {
+  const f = await acquisitionFixture();
+  const id = randomUUID();
+  const r = await f.creator.create(f.actor, f.brand.id, id, acquisitionBrief(f.profile, { goal: 'Fill 10 spring boiler-service slots with calm first enquiries.' }));
+  assert.equal(r.state, 'draft', 'a numeric owner goal echoed into objective.goal is not an invented prediction');
+  const p = r.version!.content as AcquisitionProposal;
+  assert.match(campaignProblems(r.brief, { ...p, hypotheses: [{ statement: 'We should see about 40 enquiries.', basis: 'A guess that the research does not support.' }] }, f.profile).join(' '), /must not invent numbers/);
+  assert.match(campaignProblems(r.brief, { ...p, objective: { ...p.objective, goal: 'We generated 10 slots last spring.' } }, f.profile).join(' '), /cannot report results/);
+  // New research saved after the first call must not turn an identical resubmission into a conflict.
+  await f.blogs.savePlan(plan(f.brand.id, 'accepted', [researchSource(4)], '2026-11-05T00:00:00.000Z'));
+  const again = await f.creator.create(f.actor, f.brand.id, id, acquisitionBrief(f.profile, { goal: 'Fill 10 spring boiler-service slots with calm first enquiries.' }));
+  assert.equal(again.id, id); assert.equal(f.model.acquisitionCalls, 1);
+  // Superseded plans no longer contribute evidence.
+  await f.blogs.savePlan(plan(f.brand.id, 'superseded', [researchSource(8)], '2026-11-06T00:00:00.000Z'));
+  const ev = buildAcquisitionEvidence({ profile: f.profile, knowledge: await f.blogs.listKnowledge(f.brand.id), plans: await f.blogs.listPlans(f.brand.id), articles: [] });
+  assert.ok(!ev.research.some((x) => x.id === 'src-8'));
+});

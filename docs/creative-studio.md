@@ -161,3 +161,33 @@ Production rules → ensure **Hook & Close** is on → Campaign creators → **A
 - MP4 recording was proven on this container's newer headless build (Chromium 153). The production build pinned by `playwright-core@1.61.1` (headless shell 1228) could not be downloaded here because the session's network policy blocks `cdn.playwright.dev`. If that build lacks H.264 recording, the renderer automatically produces WebM (accepted by the existing posting contract) and still enforces the playback check; confirm on the first Growth HQ build.
 - The browser recorder produces variable frame timing; platforms requiring constant frame rate or audio tracks are not addressed. No music, voice or captions file is produced.
 - Brand font files, provider image-to-video and avatar/voice providers are intentionally not added: no permissioned use case or credentials exist yet.
+
+---
+
+# Audit of Milestones 1–3 (before Milestone 4)
+
+An independent review of the whole diff (eight angles: line-by-line, removed behaviour, cross-file, reuse, simplification, efficiency, altitude, conventions) produced 20 findings. All were addressed except two recorded as deliberate:
+
+| Finding | Fix |
+|---|---|
+| Portal server drops idle sockets after 30 s; a video render records in real time | Creative render requests (draft, concept, refresh, storyboard, scenes, video) extend their own socket timeout to 120 s. Recorded as a bounded stop-gap: the durable fix is a job + status polling like article images (see Remaining). |
+| MP4 remux wrote the version-1 `tkhd` duration at the wrong offset | Corrected to +24; a synthetic fragmented-MP4 test now parses mvhd/tkhd/mdhd/stts from the output; the real-Chromium test checks header durations against the timeline. |
+| Zero default sample duration would produce a 0-length MP4 | Remux refuses and the recorded bytes are kept as-is. |
+| Playback check could outlive the page timeout and throw a generic error | Session timeout 90 s, check waits bounded, evaluation failures become an honest "failed playback check". |
+| Owner goal containing a number (e.g. "Fill 10 slots") made every proposal fail the no-invented-numbers guard | Guard now covers hypotheses and the measurement plan (and the primary metric), not the owner's restated goal; claimed results in the goal are still refused. |
+| Command hash included the server-derived evidence pack, so an identical resubmission after new research was refused | Hash covers owner inputs only. |
+| A stale storyboard with unchanged scenes could never be refreshed | Saving an unchanged storyboard after a brand/kit change re-renders it as "refreshed from current brand context". |
+| Focal-point edit accepted storyboard/video ids | Refused as not found. |
+| `renderVideo` assumed overlays exist | Clear error when a renderer cannot capture the overlay layer. |
+| Empty contrast map stored `Infinity` | Defaults to 21:1 when a frame has no measured text. |
+| Storyboard/video commands checked replay before authorisation | Authorisation first, like every other command. |
+| Artwork URL extension not checked against the stored media type | 404 on mismatch. |
+| Fonts re-read from disk per render; two or three Chromium launches per storyboard/video | Fonts cached per process; one browser session renders frames and then the sheet or the recording. |
+| View duplicated the render-estimate formula | Shared `videoEstimate`. |
+| Dead corpus expression; unused parameter | Removed. |
+| Superseded topic plans still fed research | Excluded with rejected plans. |
+| Missing header-duration test | Added (above). |
+| Reuse `canonicalCompanyContentJson` | Not changed: it throws on `undefined` values, while the studio's canonicaliser must drop undefined optional fields (e.g. `media`) so digests stay stable; the two are not interchangeable. |
+| Altitude: long renders held in a request | Recorded; see Remaining. |
+
+Remaining from the audit: move storyboard/video rendering behind a durable job with status polling (the SEO article-image pattern) so a deploy or restart mid-render leaves an honest "unknown" record rather than a dropped request. Until then renders are bounded to 30 s of video and the request's own 120 s socket limit.

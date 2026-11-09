@@ -9,7 +9,7 @@ import { ChromiumArtworkRenderer, findCreativeChromium, type ArtworkInput, type 
 import { verifyCreativeImage } from '../src/creative-studio/image-input.js';
 import { PLACEMENTS } from '../src/creative-studio/placements.js';
 import type { ConceptComponents } from '../src/creative-studio/types.js';
-import { remuxFragmentedMp4 } from '../src/creative-studio/mp4-remux.js';
+import { boxes, child, remuxFragmentedMp4 } from '../src/creative-studio/mp4-remux.js';
 import { harness, OWNER } from './seo-blog-fixtures.js';
 import { creativeBrand, HEARTH, syntheticLandscapeJpeg, syntheticLogoPng } from './creative-studio-fixtures.js';
 
@@ -161,6 +161,9 @@ test('real Chromium records a playable MP4/WebM of the exact scenes and the play
     const order: string[] = []; for (let o = 0; o < v.bytes.length;) { const n = v.bytes.readUInt32BE(o); order.push(v.bytes.toString('latin1', o + 4, o + 8)); o += n; }
     assert.deepEqual(order, ['ftyp', 'moov', 'mdat']);
     assert.equal(remuxFragmentedMp4(v.bytes), null, 'an already-progressive file is never rewritten again');
+    const d = mp4Durations(v.bytes);
+    assert.ok(Math.abs(d.movie / d.mvhdTimescale * 1000 - 4000) <= 1000 && Math.abs(d.track - d.movie) <= 1 && Math.abs(d.media / d.mdhdTimescale * 1000 - 4000) <= 1000, `header durations agree with the timeline (${JSON.stringify(d)})`);
+    assert.equal(d.tkhdReserved, 0);
   }
   const sheet = await r.renderContactSheet(frames.map((f, i) => ({ image: f.bytes, caption: `2.0 s · scene ${i + 1}`, script: null })), 'Fixture');
   assert.equal(jpeg.decode(sheet.bytes).width, 1600);
@@ -187,4 +190,69 @@ test('MP4 remux refuses anything outside the supported recorder shape instead of
   const ftyp = box('ftyp', Buffer.from('isom\0\0\0\0isom'));
   assert.equal(remuxFragmentedMp4(Buffer.concat([ftyp, box('moov', Buffer.alloc(0)), box('mdat', Buffer.alloc(16))])), null, 'no fragments');
   assert.equal(remuxFragmentedMp4(Buffer.concat([ftyp, box('moov', Buffer.alloc(0)), box('moof', Buffer.alloc(0))]).subarray(0, 30)), null, 'truncated');
+});
+
+/** Read movie/track/media durations and the stts total from a progressive MP4. */
+function mp4Durations(b: Buffer) {
+  const top = boxes(b, 0, b.length)!, moov = top.find((x) => x.type === 'moov')!;
+  const mvhd = child(b, moov, 'mvhd')!, trak = child(b, moov, 'trak')!, tkhd = child(b, trak, 'tkhd')!, mdia = child(b, trak, 'mdia')!, mdhd = child(b, mdia, 'mdhd')!;
+  const minf = child(b, mdia, 'minf')!, stbl = child(b, minf, 'stbl')!, stts = child(b, stbl, 'stts')!;
+  const read = (x: typeof mvhd, offsets: [number, number]) => { const v = b[x.start + x.header]!, at = x.start + x.header + 4 + (v === 1 ? offsets[1] : offsets[0]); return v === 1 ? Number(b.readBigUInt64BE(at)) : b.readUInt32BE(at); };
+  const tkhdReserved = (() => { const v = b[tkhd.start + tkhd.header]!; return b.readUInt32BE(tkhd.start + tkhd.header + 4 + (v === 1 ? 32 : 20)); })();
+  let total = 0; const n = b.readUInt32BE(stts.start + stts.header + 4);
+  for (let i = 0; i < n; i++) total += b.readUInt32BE(stts.start + stts.header + 8 + i * 8) * b.readUInt32BE(stts.start + stts.header + 12 + i * 8);
+  return { movie: read(mvhd, [12, 20]), track: read(tkhd, [16, 24]), media: read(mdhd, [12, 20]), sttsTotal: total, tkhdReserved, mvhdTimescale: b.readUInt32BE(mvhd.start + mvhd.header + 4 + (b[mvhd.start + mvhd.header] === 1 ? 16 : 8)), mdhdTimescale: b.readUInt32BE(mdhd.start + mdhd.header + 4 + (b[mdhd.start + mdhd.header] === 1 ? 16 : 8)) };
+}
+
+/** Minimal single-track fragmented MP4 in the shape Chromium's recorder writes (version-1 headers, default-base-is-moof). */
+function syntheticFragmentedMp4(sampleCount = 6, sampleDuration = 3000, timescale = 90000): Buffer {
+  const box = (t: string, ...parts: Buffer[]) => { const body = Buffer.concat(parts); const h = Buffer.alloc(8); h.writeUInt32BE(8 + body.length); h.write(t, 4, 'latin1'); return Buffer.concat([h, body]); };
+  const u32 = (...v: number[]) => { const o = Buffer.alloc(v.length * 4); v.forEach((x, i) => o.writeUInt32BE(x >>> 0, i * 4)); return o; };
+  const u64 = (...v: number[]) => { const o = Buffer.alloc(v.length * 8); v.forEach((x, i) => o.writeBigUInt64BE(BigInt(x), i * 8)); return o; };
+  const vf = (version: number, flags = 0) => u32(((version & 0xff) << 24) | flags);
+  const matrix = u32(0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000);
+  const mvhd = box('mvhd', vf(1), u64(0, 0), u32(1000), u64(0), u32(0x10000), Buffer.alloc(2 + 2 + 8), matrix, Buffer.alloc(24), u32(2));
+  const tkhd = box('tkhd', vf(1, 3), u64(0, 0), u32(1), u32(0), u64(0), Buffer.alloc(8), Buffer.alloc(8), matrix, u32(1080 << 16, 1920 << 16));
+  const mdhd = box('mdhd', vf(1), u64(0, 0), u32(timescale), u64(0), Buffer.alloc(4));
+  const hdlr = box('hdlr', vf(0), u32(0), Buffer.from('vide'), Buffer.alloc(12), Buffer.from('VideoHandler\0'));
+  const stsd = box('stsd', vf(0), u32(1), box('avc1', Buffer.alloc(78)));
+  const stbl = box('stbl', stsd, box('stts', vf(0), u32(0)), box('stsc', vf(0), u32(0)), box('stsz', vf(0), u32(0, 0)), box('stco', vf(0), u32(0)));
+  const minf = box('minf', box('vmhd', vf(0, 1), Buffer.alloc(8)), box('dinf', box('dref', vf(0), u32(1), box('url ', vf(0, 1)))), stbl);
+  const moov = box('moov', mvhd, box('trak', tkhd, box('mdia', mdhd, hdlr, minf)), box('mvex', box('trex', vf(0), u32(1, 1, 0, 0, 0x10000))));
+  const samples = Array.from({ length: sampleCount }, (_, i) => Buffer.alloc(40 + i, i + 1));
+  const trunEntries = Buffer.concat(samples.map((smp, i) => u32(sampleDuration, smp.length, i === 0 ? 0x02000000 : 0x01010000)));
+  const trunBody = Buffer.concat([vf(0, 0x701), u32(sampleCount), u32(0), trunEntries]);
+  const moofWithoutOffset = box('moof', box('mfhd', vf(0), u32(1)), box('traf', box('tfhd', vf(0, 0x20000), u32(1)), box('tfdt', vf(1), u64(0)), box('trun', trunBody)));
+  const dataOffset = moofWithoutOffset.length + 8;
+  const trun = box('trun', Buffer.concat([vf(0, 0x701), u32(sampleCount), Buffer.from(u32(dataOffset)), trunEntries]));
+  const moof = box('moof', box('mfhd', vf(0), u32(1)), box('traf', box('tfhd', vf(0, 0x20000), u32(1)), box('tfdt', vf(1), u64(0)), trun));
+  return Buffer.concat([box('ftyp', Buffer.from('iso5'), u32(512), Buffer.from('iso5iso6mp41')), moov, moof, box('mdat', ...samples)]);
+}
+
+test('MP4 remux writes correct version-1 header durations (regression: tkhd v1 offset) and refuses zero-length samples', () => {
+  const out = remuxFragmentedMp4(syntheticFragmentedMp4(6, 3000, 90000));
+  assert.ok(out, 'supported recorder shape is remuxed');
+  const d = mp4Durations(out!);
+  assert.equal(d.sttsTotal, 18000); assert.equal(d.media, 18000, 'mdhd (90 kHz) carries the media duration');
+  assert.equal(d.movie, 200); assert.equal(d.track, 200, 'tkhd v1 duration is the movie duration in the movie timescale (1 kHz)');
+  assert.equal(d.tkhdReserved, 0, 'the tkhd reserved field after the duration is untouched');
+  const order: string[] = []; for (let o = 0; o < out!.length;) { const n = out!.readUInt32BE(o); order.push(out!.toString('latin1', o + 4, o + 8)); o += n; }
+  assert.deepEqual(order, ['ftyp', 'moov', 'mdat']);
+  assert.equal(remuxFragmentedMp4(syntheticFragmentedMp4(6, 0, 90000)), null, 'zero sample durations are refused rather than written as a 0-length file');
+});
+
+test('an unchanged storyboard saved after a brand-kit change is refreshed, and focal edits refuse non-image versions', async () => {
+  const s = await studioWithSet();
+  await s.studio.createStoryboard(OWNER.userId, s.brandId, s.setId, 'c1', 'vertical', randomUUID(), false);
+  const sb = (await view(s)).concepts[0]!.storyboards[0]!.version;
+  const unchanged = sb.variant.storyboard!.scenes.map((x) => ({ ...x }));
+  assert.deepEqual((await s.studio.editStoryboard(OWNER.userId, s.brandId, sb.id, randomUUID(), unchanged)).changed, [], 'no change and no stale context: nothing saved');
+  await assert.rejects(s.studio.editFocal(OWNER.userId, s.brandId, sb.id, randomUUID(), { x: 0.3, y: 0.3 }), /not found/);
+  await s.studio.saveKit(OWNER.userId, s.brandId, randomUUID(), { palette: { primary: '#0f766e', accent: '#fbbf24', dark: '#0b2421', light: '#ffffff' }, disclosure: '', restricted: '', logo: { kind: 'keep' }, expectedVersion: 0 });
+  await assert.rejects(s.studio.renderVideo(OWNER.userId, s.brandId, sb.id, randomUUID()), /changed since this storyboard was made/);
+  const refreshed = await s.studio.editStoryboard(OWNER.userId, s.brandId, sb.id, randomUUID(), unchanged);
+  assert.deepEqual(refreshed.changed, ['refreshed from current brand context']);
+  const sb2 = (await view(s)).concepts[0]!.storyboards[0]!.version;
+  assert.equal(sb2.number, 2); assert.equal(sb2.context.kitVersion, 1); assert.deepEqual(sb2.variant.storyboard!.scenes, sb.variant.storyboard!.scenes);
+  assert.equal((await s.studio.renderVideo(OWNER.userId, s.brandId, sb2.id, randomUUID())).playable, true);
 });

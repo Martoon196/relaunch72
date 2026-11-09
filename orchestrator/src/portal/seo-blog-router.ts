@@ -50,6 +50,8 @@ export interface SeoBlogRouteInput {
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
+/** Bound for a creative render held inside one request: 30 s of real-time recording plus launches and the playback check. */
+const CREATIVE_RENDER_SOCKET_TIMEOUT_MS = 120_000;
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
@@ -221,11 +223,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const parts = rest.split('/');
-      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.(?:jpg|mp4|webm)$`, 'i').exec(rest);
+      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.(jpg|mp4|webm)$`, 'i').exec(rest);
       if (art) {
         const found = await studio.artwork(actor.userId, brandId, art[1]!.toLowerCase(), art[2]!.toLowerCase());
         const v = found.version;
         const ext = v.render.mime === 'video/mp4' ? 'mp4' : v.render.mime === 'video/webm' ? 'webm' : 'jpg';
+        if (art[3]!.toLowerCase() !== ext) throw new SeoBlogError(404, 'That artwork was not found.');
         const kind = v.media === 'storyboard' ? '-storyboard' : v.media === 'video' ? '-video' : '';
         const name = `${brand.slug}-${v.conceptKey}${kind}-${v.placement}${v.card ? `-card${v.card}` : ''}-v${v.number}-${v.media === 'storyboard' ? 'not-a-video' : found.approved ? 'approved' : 'draft'}.${ext}`.replace(/[^a-z0-9.-]/giu, '_');
         res.writeHead(200, { 'content-type': v.render.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
@@ -372,6 +375,9 @@ async function handlePost(
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
       const commandId = f('commandId') ?? '';
+      // Rendering happens inside this request (a video records in real time, up to 30 s, then plays back).
+      // The server's 30 s idle-socket limit would otherwise drop the connection while the work completes.
+      if (['draft', 's', 'v'].includes(parts[1] ?? '')) res.socket?.setTimeout(CREATIVE_RENDER_SOCKET_TIMEOUT_MS);
       const background = (): BackgroundChoice => {
         const kind = f('background') ?? 'neutral';
         if (kind === 'keep') return { kind: 'keep' };
