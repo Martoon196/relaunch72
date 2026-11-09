@@ -33,7 +33,8 @@ test('runtime resolution presents the shipped Journey Manager only with its capa
   assert.equal(byId.get('inbox')?.state, 'preview');
   assert.equal(byId.get('inbox')?.route, '/portal/inbox');
   assert.equal(byId.get('listening')?.state, 'planned');
-  assert.equal(byId.get('webinars')?.state, 'planned');
+  assert.equal(byId.get('webinars')?.state, 'ready');
+  assert.equal(byId.get('webinars')?.route, '/portal/webinars');
 });
 
 test('conversion facts use stable internal event names without accepting external envelopes', () => {

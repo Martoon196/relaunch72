@@ -179,6 +179,14 @@ import {
 } from './creator-watch-pg-service.js';
 
 import { createPgFinanceDraftsService } from './finance-drafts-pg-service.js';
+import { CrmCommandService as WebinarCrmCommands, createPgCrmTransactionRunner as webinarCrmRunner } from '../crm-pg/index.js';
+import { loadWebinarConfig } from '../webinars/config.js';
+import { createPostmarkMailer } from '../webinars/messages.js';
+import { PgWebinarService } from '../webinars/service.js';
+import { CloudflareStreamClient } from '../webinars/stream.js';
+import { WebinarWorker } from '../webinars/worker.js';
+import { StudioRelay } from '../webinars/studio.js';
+import type { WebinarSetupInput } from './router.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 
 export interface PgPortalPlatform {
@@ -200,6 +208,14 @@ export interface PgPortalPlatform {
   followupFlows?: PortalFollowupFlowService;
   /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
   seoBlog?: PortalSeoBlogService;
+  /** Native webinars; omitted unless r72_content_command is ready and migration 0144 is applied. */
+  webinars?: PgWebinarService;
+  /** In-process worker for webinar messages and Cloudflare reconciliation (started by the server). */
+  webinarWorker?: WebinarWorker;
+  /** Browser-studio relay (camera/mic/screen → recorded live input); present with the webinar service. */
+  webinarStudio?: StudioRelay;
+  /** Always present: what the Webinars setup page reports. */
+  webinarSetup: WebinarSetupInput;
   releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
   /** Brand-routed Zernio account webhook receipts; absent when social delivery is not composed. */
   seoBlogZernioWebhook?: SeoBlogZernioWebhookBrands;
@@ -1280,6 +1296,37 @@ export async function buildPgPortalPlatform(
     const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
       ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined, commandPool)
       : undefined;
+    // Native webinars reuse r72_content_command (like the SEO blog) and the CRM command
+    // identity for the owner-triggered CRM handoff. Cloudflare Stream is optional inside it:
+    // without it the pages show the exact missing settings instead of fake controls.
+    const webinarConfig = loadWebinarConfig(env);
+    let webinars: PgWebinarService | undefined;
+    let webinarWorker: WebinarWorker | undefined;
+    let webinarStudio: StudioRelay | undefined;
+    let webinarSetup: WebinarSetupInput = { database: false, config: webinarConfig, crmAvailable: true,
+      databaseDetail: 'Set DATABASE_CONTENT_COMMAND_URL (the r72_content_command identity) to enable webinars.' };
+    if (contentCommandPool) {
+      try {
+        const probe = await contentCommandPool.query<{ ready: boolean }>(
+          `/* portal.webinars-schema-readiness */ SELECT to_regprocedure('app_private.webinar_public_event(text)') IS NOT NULL AS ready`);
+        if (probe.rows[0]?.ready === true) {
+          const stream = webinarConfig.stream ? new CloudflareStreamClient(webinarConfig.stream) : null;
+          webinars = new PgWebinarService({ pool: contentCommandPool, config: webinarConfig, stream,
+            crm: { commands: new WebinarCrmCommands({ transactionRunner: webinarCrmRunner(commandPool) }), pool: commandPool } });
+          webinarWorker = new WebinarWorker({ pool: contentCommandPool, config: webinarConfig, stream, mailer: createPostmarkMailer(),
+            log: (line) => console.warn(line) });
+          // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
+          webinarStudio = new StudioRelay({ ...webinarConfig.studio });
+          // Probed even before Cloudflare is configured, so the panel reports ffmpeg from day one.
+          const studioProbe = await webinarStudio.probe();
+          webinarSetup = { database: true, databaseDetail: '', config: webinarConfig, crmAvailable: true, studio: studioProbe };
+        } else {
+          webinarSetup = { ...webinarSetup, databaseDetail: 'Migration 0144 (native webinars) is not applied to this database yet.' };
+        }
+      } catch {
+        webinarSetup = { ...webinarSetup, databaseDetail: 'The webinar schema check failed; webinars stay off until it passes.' };
+      }
+    }
     // Registered brands' signed account-lifecycle receipts route by provider profile; PP's own path is untouched.
     const seoBlogZernioWebhook = seoBlog?.social === 'live' && zernioSocialReadinessPool ? createSeoBlogZernioWebhookBrands(zernioSocialReadinessPool) : undefined;
     let mhp: MhpRuntime | undefined;
@@ -1334,6 +1381,10 @@ export async function buildPgPortalPlatform(
       releasedSeoMedia: new PgSeoBlogReleasedMediaReader(webPool),
       seoBlogZernioWebhook,
       seoBlogVaultReady: Boolean(SeoBlogCredentialVault.fromEnv(env)),
+      webinars,
+      webinarWorker,
+      webinarStudio,
+      webinarSetup,
       companyAssets,
       companyContentSync,
       companyContentReview,

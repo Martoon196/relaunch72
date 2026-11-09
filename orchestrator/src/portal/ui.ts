@@ -9,7 +9,7 @@ import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import { mhpMemberNavigationLinks } from '../mhp/member-navigation.js';
 
-export type PortalSection = 'overview' | 'actions' | 'crm' | 'investors' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
+export type PortalSection = 'overview' | 'actions' | 'crm' | 'investors' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'webinars' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -258,6 +258,7 @@ export function appShell(opts: AppShellOptions): string {
     || (opts.active === 'content' && id === 'content')
     || (opts.active === 'affiliates' && id === 'affiliates')
     || (opts.active === 'inbox' && id === 'inbox')
+    || (opts.active === 'webinars' && id === 'webinars')
     || (opts.active === 'billing' && id === 'settings');
   // Investor pages add conversations.read only for an entitled business, and
   // investorProfile includes inbox in visibleNavigation only for that business.

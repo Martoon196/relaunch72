@@ -18,6 +18,10 @@ import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
+import { handleWebinars } from './webinar-router.js';
+import type { SetupStatus as WebinarSetupStatus } from './webinar-view.js';
+import type { PgWebinarService } from '../webinars/service.js';
+export type WebinarSetupInput = Omit<WebinarSetupStatus, 'workspaceId'>;
 import { ZERNIO_CONNECTION_CALLBACK_URL } from '../public-social-outbound/zernio-connection-contract.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import { parseCookies } from '../server/admin/session.js';
@@ -543,6 +547,12 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   followupFlows?: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
+  /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */
+  webinars?: PgWebinarService;
+  /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
+  webinarSetup?: WebinarSetupInput;
+  /** Browser-studio relay; absent when webinars are not composed. */
+  webinarStudio?: import('../webinars/studio.js').StudioRelay;
   /** Exact released public image snapshots; independent of current membership/SEO generation. */
   releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
   /** True when website credentials can be sealed (SEO_BLOG_CREDENTIAL_KEY configured). */
@@ -990,6 +1000,7 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
       : []),
     ...(deps.affiliateCompliance ? ['affiliates.compliance.read'] as const : []),
     ...(deps.inbox ? ['conversations.read'] as const : []),
+    ...(deps.webinars ? ['webinars.manage'] as const : []),
   ];
 }
 
@@ -1978,6 +1989,38 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       ...(deps.portalBaseUrl ? { publicOrigin: deps.portalBaseUrl } : {}),
       ...(deps.sessionCookieName === '__Host-r72_content' ? { applicationName: 'Relaunch72 Content' } : {}) });
     return;
+  }
+  if (p === '/portal/webinars' || p.startsWith('/portal/webinars/')) {
+    const webinarShell = (title: string, workspaceName: string, body: string, csrfToken: string): string => appShell({
+      title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${title} — ${workspaceName}`,
+      tenantName: workspaceName,
+      active: 'webinars',
+      productProfile: deps.productProfile,
+      capabilities: new Set<PlatformCapability>([
+        'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+        ...(deps.kind === 'postgres' && deps.journeys ? ['journeys.read'] as const : []),
+        ...optionalPortalCapabilities(deps),
+      ]),
+      billingAvailable: false,
+      crmAvailable: deps.kind === 'postgres',
+      mode: deps.kind === 'postgres' ? 'crm' : 'sandbox',
+      csrfToken,
+      body,
+    });
+    const handled = await handleWebinars(req, res, url, {
+      service: deps.kind === 'postgres' ? deps.webinars : undefined,
+      setup: deps.kind === 'postgres' && deps.webinarSetup ? deps.webinarSetup
+        : { database: false, databaseDetail: deps.kind === 'postgres'
+            ? 'The webinar service is not composed on this deployment: it needs DATABASE_CONTENT_COMMAND_URL (r72_content_command) and migration 0144 applied.'
+            : 'Webinars need the PostgreSQL workspace (this deployment runs the legacy sandbox portal).', config: null, crmAvailable: false },
+      identity: deps.kind === 'postgres' ? portalIdentity : null,
+      authenticated: deps.kind === 'postgres' ? portalIdentity !== null : tenantId !== null,
+      requestId: resolvedRequestContext?.requestId ?? 'portal-webinars',
+      sessionSecret: deps.sessionSecret,
+      studio: deps.kind === 'postgres' ? deps.webinarStudio : undefined,
+      shell: webinarShell,
+    });
+    if (handled) return;
   }
   // ── one-time account setup / login / logout (no auth) ──
   if (p === PROPERTY_PREDATOR_SSO_START_ROUTE && method === 'GET') {

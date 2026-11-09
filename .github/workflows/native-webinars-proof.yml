@@ -1,0 +1,77 @@
+name: Native webinars exact-source integration gate
+on:
+  push:
+    branches: [codex/native-webinars-integration-20261109]
+permissions:
+  contents: read
+jobs:
+  exact-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Required local media runtime
+        run: ffmpeg -hide_banner -version
+      - name: Install pinned renderer for actual artwork and video checks
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+        run: npx --no-install playwright-core install --with-deps --only-shell chromium
+      - name: TypeScript and supply-chain gates
+        run: |
+          npm run typecheck
+          node scripts/supply-chain.mjs --check
+      - name: Apply all exact migrations to disposable localhost only
+        env:
+          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+      - name: Actual-role native webinars and failure recovery
+        working-directory: orchestrator
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test --test-concurrency=1 test/db/native-webinars.integration.test.ts test/db/native-webinars-http.integration.test.ts test/db/native-webinars-recovery.integration.test.ts test/db/mhp-wa-direct-inbox.integration.test.ts
+      - name: Existing Creative Studio actual-role neighbours
+        working-directory: orchestrator
+        env:
+          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test --test-concurrency=1 test/db/creative-studio-pg.integration.test.ts test/db/creative-studio-video-pg.integration.test.ts test/db/acquisition-campaign-pg.integration.test.ts test/db/creative-studio-distribution-pg.integration.test.ts test/db/creative-studio-learning-pg.integration.test.ts test/db/creative-studio-generation-pg.integration.test.ts test/db/creative-studio-enquiry-pg.integration.test.ts
+      - name: Fetch exact prepared 0144 recovery source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ba05116ace7b4ac53bbb98bbb31eb6a38bfb3ed5
+          path: recovery-source
+          persist-credentials: false
+      - name: Prove recovery against actual exact 0145 ledger
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx scripts/native-webinars-recovery-proof.mjs
+      - name: Exact-source offline suite with real local media tools
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+          TEST_DATABASE_URL: ''
+          RL72_METHODS_PG_TEST_URL: ''
+          RELAUNCH72_DATABASE_INTEGRATION: ''
+        run: npm test

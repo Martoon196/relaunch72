@@ -190,14 +190,14 @@ export const RELAUNCH72_PRODUCT_PROFILE = createProfile({
     accent: '#ed9c24', accentDeep: '#a45f08', accentSoft: '#fff3de',
     nav: '#101827', navRaised: '#182236', navLine: '#2a374b', navText: '#e8edf4', navMuted: '#8f9db0',
   },
-  visibleNavigation: ['overview', 'crm', 'content', 'analytics', 'settings'],
-  moduleLabels: { overview: 'Home', crm: 'CRM', content: 'Content', analytics: 'Reports', settings: 'Settings' },
+  visibleNavigation: ['overview', 'crm', 'content', 'webinars', 'analytics', 'settings'],
+  moduleLabels: { overview: 'Home', crm: 'CRM', content: 'Content', webinars: 'Webinars', analytics: 'Reports', settings: 'Settings' },
   journeyBlueprints: [],
   readinessRails: [
     { id: 'content', label: 'Content engine', summary: 'On-brand drafts and approval.', state: 'foundation' },
     { id: 'social', label: 'Social publishing', summary: 'Scheduling and provider-confirmed outcomes.', state: 'planned' },
     { id: 'inbox', label: 'Shared inbox', summary: 'Email, WhatsApp and social conversations.', state: 'planned' },
-    { id: 'webinars', label: 'Webinars', summary: 'Registration, attendance and follow-up.', state: 'planned' },
+    { id: 'webinars', label: 'Webinars', summary: 'Registration, branded rooms, replays and follow-up.', state: 'foundation', href: '/portal/webinars' },
     { id: 'automations', label: 'Automations', summary: 'Guardrailed conversion recipes.', state: 'planned' },
   ],
 });
@@ -224,9 +224,9 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     accent: '#00e5cc', accentDeep: '#00e5cc', accentSoft: '#0a2c2c',
     nav: '#050608', navRaised: '#111318', navLine: '#1e2430', navText: '#eef1f7', navMuted: '#9aa6ba',
   },
-  visibleNavigation: ['overview', 'crm', 'inbox', 'content', 'analytics'],
+  visibleNavigation: ['overview', 'crm', 'inbox', 'content', 'webinars', 'analytics'],
   moduleLabels: {
-    overview: 'Today', crm: 'People', inbox: 'Inbox', content: 'Content', analytics: 'Results',
+    overview: 'Today', crm: 'People', inbox: 'Inbox', content: 'Content', webinars: 'Webinars', analytics: 'Results',
   },
   journeyBlueprints: [
     {
@@ -260,7 +260,7 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
       href: '/portal/providers/readiness',
     },
     { id: 'inbox', label: 'Conversion inbox', summary: 'Approval-led email, WhatsApp, SMS, Messenger and Instagram test rails.', state: 'foundation' },
-    { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },
+    { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'foundation', href: '/portal/webinars' },
     { id: 'automations', label: 'Conversion recipes', summary: 'Approval-led sequences with visible stop rules.', state: 'planned' },
   ],
   contentWorkspace: {
@@ -307,7 +307,7 @@ export const MHP_MARKETING_WORKSPACE_PROFILE = createProfile({
   suiteLabel: 'MHP marketing', investorWorkspace: false, marketingWorkspace: true,
   home: { eyebrow: 'MHP brand workspace', title: 'Enquiries and follow-ups',
     summary: 'Manage brand enquiries, relationships and the next follow-up.' },
-  visibleNavigation: ['crm'], moduleLabels: { crm: 'Enquiries' },
+  visibleNavigation: ['crm', 'webinars'], moduleLabels: { crm: 'Enquiries', webinars: 'Webinars' },
 });
 
 const PROFILES: Readonly<Record<PortalProductProfileId, PortalProductProfile>> = Object.freeze({
