@@ -1,0 +1,72 @@
+# Isolated, owner-approved rehearsal. No production service or database appears here.
+services:
+  - type: web
+    name: rl72-webinar-rehearsal-20261109
+    runtime: node
+    repo: https://github.com/Martoon196/relaunch72
+    branch: codex/native-webinars-rehearsal-20261109
+    region: frankfurt
+    plan: free
+    autoDeployTrigger: "off"
+    healthCheckPath: /ready
+    buildCommand: npm ci --ignore-scripts --no-audit --no-fund && node --import tsx --test scripts/webinar-rehearsal.test.mjs && npm run typecheck
+    startCommand: node --import tsx scripts/webinar-rehearsal.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.4
+      - key: NODE_ENV
+        value: production
+      - key: PORTAL_POSTGRES_ENABLED
+        value: "true"
+      - key: PORTAL_PROXY_MODE
+        value: render
+      - key: DATABASE_POOL_MAX
+        value: "2"
+      - key: REHEARSAL_DISPOSABLE_DATABASE
+        value: rl72-private-webinar-rehearsal-20261109
+      - key: REHEARSAL_DATABASE_URL
+        fromDatabase:
+          name: rl72-webinar-rehearsal-db-20261109
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PORTAL_ABUSE_HASH_SECRET
+        generateValue: true
+      - key: REHEARSAL_ROLE_SECRET
+        generateValue: true
+      - key: REHEARSAL_OWNER_PASSWORD
+        generateValue: true
+      - key: WEBINAR_ACCESS_SECRET
+        generateValue: true
+      - key: WEBINAR_EMAIL_MODE
+        value: "off"
+      - key: WEBINAR_WORKER_ENABLED
+        value: "true"
+      - key: WEBINAR_MAX_LIVE_INPUTS_PER_WORKSPACE
+        value: "2"
+      - key: WEBINAR_MAX_UPLOAD_MINUTES
+        value: "10"
+      - key: WEBINAR_STUDIO_MAX_SESSIONS
+        value: "1"
+      - key: WEBINAR_STUDIO_MAX_MINUTES
+        value: "10"
+      - key: WEBINAR_RECORDING_RETENTION_DAYS
+        value: "7"
+      - key: CLOUDFLARE_ACCOUNT_ID
+        value: 6a6ff0ccb07da5dd5c3ced7bfd9dc4c8
+      - key: APOLLO_ENABLED
+        value: "false"
+      - key: CREATIVE_STUDIO_ENABLED
+        value: "false"
+      - key: PLATFORM_SUBSCRIPTIONS_ENABLED
+        value: "false"
+      - key: PUBLIC_LEAD_CAPTURE_ENABLED
+        value: "false"
+databases:
+  - name: rl72-webinar-rehearsal-db-20261109
+    plan: free
+    region: frankfurt
+    postgresMajorVersion: "18"
+    databaseName: rl72_webinar_rehearsal_db_20261109
+    user: rl72_webinar_rehearsal_db_20261109_user
+    ipAllowList: []
