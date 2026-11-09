@@ -5,6 +5,7 @@ import { CENTRAL_CONTENT_COOKIE, CENTRAL_CONTENT_LOGIN_CSRF_COOKIE, CENTRAL_CONT
 import { handlePortal, type PostgresPortalDeps } from '../src/portal/router.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE, PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 import { portalLoginCsrfToken } from '../src/portal/session.js';
+import { layout } from '../src/portal/seo-blog-view.js';
 
 const identity = { sessionToken: 'native-central-session', userId: '11111111-1111-4111-8111-111111111111', workspaceId: '22222222-2222-4222-8222-222222222222', userEmail: 'owner@example.com' };
 function fixture(manages = true) {
@@ -120,4 +121,32 @@ test('default PP and MHP native login/setup retain no-referrer in header and HTM
     formPolicy(await call(f, 'GET', '/portal/login'), 'no-referrer');
     formPolicy((await setupForm(f)).page, 'no-referrer');
   }
+});
+
+test('central webinar owner routes preserve central authentication, membership and Origin gates', async () => {
+  const f = fixture();
+  const headers = { cookie: `${CENTRAL_CONTENT_COOKIE}=${identity.sessionToken}` };
+  assert.equal((await call(f, 'GET', '/portal/webinars')).headers.location, '/portal/login');
+  const page = await call(f, 'GET', '/portal/webinars', headers);
+  assert.equal(page.code, 200); assert.match(page.body, /Webinars need a little setup/);
+  assert.equal((await call(fixture(false), 'GET', '/portal/webinars', headers)).code, 403);
+  assert.equal((await call(f, 'POST', '/portal/webinars', { ...headers, origin: 'https://attacker.example' })).code, 403);
+  const script = await call(f, 'GET', '/portal/webinars/_assets/studio.js', headers);
+  assert.equal(script.code, 200); assert.match(script.headers['content-type']!, /javascript/);
+  assert.equal((await call(f, 'GET', '/portal/webinars-unknown', headers)).code, 404);
+});
+
+test('central attendee assets and signed provider ingress reach native handlers without owner cookies', async () => {
+  const f = fixture();
+  f.portal.webinars = { config: { stream: null } } as unknown as NonNullable<PostgresPortalDeps['webinars']>;
+  const asset = await call(f, 'GET', '/w/_assets/room.js');
+  assert.equal(asset.code, 200); assert.match(asset.headers['content-type']!, /javascript/);
+  const webhook = await call(f, 'POST', '/api/webinars/stream-webhook');
+  assert.equal(webhook.code, 503); assert.match(webhook.body, /webhook_not_configured/);
+  assert.equal((await call(f, 'GET', '/api/webinars/not-a-route')).code, 404);
+});
+
+test('central content header exposes the native Webinars destination', () => {
+  const html = layout({ brands: [], brand: null, tab: null, csrf: '', applicationName: 'Relaunch72 Content' }, 'Brands', '');
+  assert.match(html, /href="\/portal\/webinars">Webinars<\/a>/);
 });

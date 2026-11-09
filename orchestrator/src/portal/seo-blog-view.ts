@@ -97,7 +97,7 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
   if (shell.methodsAvailable) tabs.push(['methods','Production rules']);
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}${centralActionFeedbackHead(feedback)}</head><body>${centralActionFeedbackStatus(feedback)}
-<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
+<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}${feedback ? '<a href="/portal/webinars">Webinars</a>' : ''}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
 <main>${shell.limitsAvailable ? `<p><a href="${SEO_BLOG_BASE}/limits">Usage &amp; limits</a></p>` : ''}${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
 

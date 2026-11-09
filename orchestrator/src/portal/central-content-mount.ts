@@ -5,6 +5,8 @@ import { handlePortal, type PostgresPortalDeps } from './router.js';
 import { RELAUNCH72_PRODUCT_PROFILE } from './product-profile.js';
 import type { PortalAuthenticatedSession, PortalSessionIdentity } from './auth-service.js';
 import { createReleasedSeoMediaMount, RELEASED_SEO_MEDIA_PREFIX, serveReleasedSeoMedia, type PortalReleasedSeoMediaReader } from './seo-blog-media.js';
+import { handleWebinarPublic, WEBINAR_PUBLIC_PREFIX } from '../webinars/public-router.js';
+import { handleStreamWebhook, STREAM_WEBHOOK_ROUTE, webinarClientKey } from '../webinars/http.js';
 
 export const CENTRAL_CONTENT_ORIGIN = 'https://app.relaunch72.com';
 export const CENTRAL_CONTENT_COOKIE = '__Host-r72_content' as const;
@@ -71,8 +73,20 @@ export function createCentralContentMount(input: {
       // Exact released ID/SHA only. No private asset enumeration or dependency
       // on today's owner session, draft, image opt-in or generation feature flag.
       if (url.pathname.startsWith(RELEASED_SEO_MEDIA_PREFIX)) return serveReleasedSeoMedia(req, res, url, base.releasedSeoMedia);
+      // Native attendee routes are public, with their own signed-access and
+      // same-origin gates. Provider notifications use their signature instead
+      // of browser Origin; neither route may fall through to another host.
+      if (url.pathname.startsWith(WEBINAR_PUBLIC_PREFIX) || url.pathname === STREAM_WEBHOOK_ROUTE) {
+        if (!base.webinars) return status(res, 503, 'Webinars are temporarily unavailable.');
+        const handled = url.pathname === STREAM_WEBHOOK_ROUTE
+          ? await handleStreamWebhook(req, res, base.webinars)
+          : await handleWebinarPublic(req, res, url, { service: base.webinars, secureCookies: true, clientKey: webinarClientKey });
+        if (!handled) status(res, 404, 'Page not found.');
+        return;
+      }
       const method = req.method ?? 'GET';
       const seo = url.pathname === '/portal/seo-blog' || url.pathname.startsWith('/portal/seo-blog/');
+      const webinars = url.pathname === '/portal/webinars' || url.pathname.startsWith('/portal/webinars/');
       const auth = ['/portal/login', '/portal/logout', '/portal/setup'].includes(url.pathname);
       const asset = url.pathname === '/portal/appearance.js' && method === 'GET';
       if (method === 'POST' && (req.headers.origin !== input.origin
@@ -82,9 +96,9 @@ export function createCentralContentMount(input: {
       if (['/', '/portal', '/portal/'].includes(url.pathname) && method === 'GET') {
         res.writeHead(303, { location: '/portal/seo-blog', 'cache-control': 'no-store' }); res.end(); return;
       }
-      if (!seo && !auth && !asset) return status(res, 404, 'Page not found.');
+      if (!seo && !webinars && !auth && !asset) return status(res, 404, 'Page not found.');
       if (!base.seoBlog) return status(res, 503, 'The content application is temporarily unavailable.');
-      if (seo) {
+      if (seo || webinars) {
         const token = parseCookies(req.headers.cookie)[CENTRAL_CONTENT_COOKIE];
         const identity = token ? await base.auth.resolve(token, Date.now()) : null;
         // This guard must run before handlePortal's early SEO route delegation.
