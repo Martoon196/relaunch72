@@ -11,6 +11,17 @@ import {MethodController} from '../src/seo-blog/method-packs.js';
 import {MemoryMethodStore} from '../src/seo-blog/method-store.js';
 import {upgradeSnapshot} from './rl72-upgrade-fixtures.js';
 
+test('ordinary article edits save current checks and reset approval without another model call or usage charge',async()=>{
+ const f=await websiteFixture('github_static'),beforeCalls=f.h.llm.calls.length,beforeUsage=await f.h.store.usageSince(f.brand.id,'model_tokens','2026-01-01T00:00:00.000Z');
+ const before=await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId);assert.ok(before.version);
+ const edit={excerpt:'Record the assumptions and compare the evidence before choosing the next step.'};
+ const saved=await f.h.engine.editArticle(OWNER,f.brand.id,f.articleId,before.version!.id,edit);
+ const after=await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId);
+ assert.equal(saved.number,before.version!.number+1);assert.equal(saved.body.excerpt,edit.excerpt);assert.equal(after.article.currentVersionId,saved.id);assert.equal(after.article.checks!.versionId,saved.id);assert.equal(after.article.approval,null);assert.equal(saved.promotionPack!.mode,'excerpt_fallback');
+ assert.equal(f.h.llm.calls.length,beforeCalls);assert.equal(await f.h.store.usageSince(f.brand.id,'model_tokens','2026-01-01T00:00:00.000Z'),beforeUsage);
+ assert.equal((await f.h.engine.editArticle(OWNER,f.brand.id,f.articleId,saved.id,edit)).id,saved.id);assert.equal(f.h.llm.calls.length,beforeCalls);
+});
+
 test('private-method copy rejection saves the accepted article and fallback with exactly one existing method-cost debit',async()=>{
  let methods:MemoryMethodStore;
  const f=await websiteFixture('github_static',undefined,async(h,brandId)=>{
