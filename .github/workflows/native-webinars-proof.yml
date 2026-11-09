@@ -59,7 +59,21 @@ jobs:
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx --test --test-concurrency=1 test/db/creative-studio-pg.integration.test.ts test/db/creative-studio-video-pg.integration.test.ts test/db/acquisition-campaign-pg.integration.test.ts test/db/creative-studio-distribution-pg.integration.test.ts test/db/creative-studio-learning-pg.integration.test.ts test/db/creative-studio-generation-pg.integration.test.ts test/db/creative-studio-enquiry-pg.integration.test.ts
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import pg from 'pg';
+          const url = new URL(process.env.RL72_METHODS_PG_TEST_URL);
+          assert(['localhost', '127.0.0.1'].includes(url.hostname));
+          assert.equal(url.pathname, '/relaunch72_test');
+          assert.equal(process.env.RELAUNCH72_DATABASE_INTEGRATION, 'explicit-disposable-run');
+          const admin = new pg.Pool({ connectionString: url.toString(), max: 1 });
+          try {
+            // Webinar fixtures rotate this role's password; restore the neighbour fixture's local-only password.
+            await admin.query("ALTER ROLE r72_content_command PASSWORD 'local-methods-test-only'");
+          } finally { await admin.end(); }
+          NODE
+          node --import tsx --test --test-concurrency=1 test/db/creative-studio-pg.integration.test.ts test/db/creative-studio-video-pg.integration.test.ts test/db/acquisition-campaign-pg.integration.test.ts test/db/creative-studio-distribution-pg.integration.test.ts test/db/creative-studio-learning-pg.integration.test.ts test/db/creative-studio-generation-pg.integration.test.ts test/db/creative-studio-enquiry-pg.integration.test.ts
       - name: Fetch exact prepared 0144 recovery source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
