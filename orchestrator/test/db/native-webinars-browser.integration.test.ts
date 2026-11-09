@@ -37,6 +37,29 @@ test('real Chromium creates a webinar through the normal form without relaxing O
       const stored = await harness.service.list(brand.owner, randomUUID());
       assert.equal(stored.webinars.length, 1);
       assert.equal(stored.webinars[0]!.event.title, 'Browser-created private webinar');
+      const id = stored.webinars[0]!.event.id;
+      await harness.service.provisionLiveInput(brand.owner, randomUUID(), id);
+      await harness.service.setStatus(brand.owner, randomUUID(), id, 'publish');
+      await page.goto(harness.origin + '/portal/webinars/' + id + '/studio');
+      let navigations = 0, dialogs = 0;
+      page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
+      page.on('dialog', async dialog => { dialogs++; await dialog.accept(); });
+      await page.getByRole('button', { name: 'Go live', exact: true }).click();
+      await page.getByRole('button', { name: 'End session', exact: true }).waitFor();
+      assert.equal((await harness.service.get(brand.owner, randomUUID(), id)).event.sessionState, 'live');
+      assert.equal(navigations, 0, 'Go live must preserve the document and its recorder/WebSocket');
+      await page.getByRole('button', { name: 'End session', exact: true }).click();
+      await page.getByRole('button', { name: 'End for everyone', exact: true }).waitFor();
+      assert.equal((await harness.service.get(brand.owner, randomUUID(), id)).event.sessionState, 'live', 'inline confirmation does not end prematurely');
+      await page.getByRole('button', { name: 'Keep broadcasting', exact: true }).click();
+      await page.getByRole('button', { name: 'End session', exact: true }).click();
+      await page.getByRole('button', { name: 'End for everyone', exact: true }).click();
+      await page.getByText('Session ended. The replay appears once Cloudflare finishes processing the recording.', { exact: true }).waitFor();
+      assert.equal((await harness.service.get(brand.owner, randomUUID(), id)).event.sessionState, 'ended');
+      assert.equal(navigations, 0, 'no document navigation for either Studio control');
+      assert.equal(dialogs, 0, 'confirmation works inside the page, including browsers without native dialogs');
+      assert.equal(harness.mailer.sent.length, 0);
+
     } finally {
       await browser?.close();
       await harness?.close();

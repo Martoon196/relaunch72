@@ -28,6 +28,10 @@ test('acquisition proposals: reviewed-pack gate, atomic reservation, single char
     await admin.query("INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status,source_organization_id) VALUES($1,$2,$3,'owner','active',$2)", [f.brand.id, f.brand.organizationId, actor]);
     await admin.query("INSERT INTO app.user_sessions(token_hash,csrf_secret_hash,user_id,selected_workspace_id,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 hour')", [createHash('sha256').update(token).digest(), createHash('sha256').update('csrf' + token).digest(), actor, f.brand.id]);
     await admin.query('INSERT INTO app.seo_blog_brands(workspace_id,organization_id,created_by_user_id,settings) VALUES($1,$2,$3,$4)', [f.brand.id, f.brand.organizationId, actor, JSON.stringify(f.brand.settings)]);
+    // 0145 deliberately starts every new brand at zero. Give only this synthetic
+    // fixture its explicit test allowance after insert, as founder provisioning does.
+    await admin.query('UPDATE app.seo_blog_brands SET settings=$2::jsonb WHERE workspace_id=$1', [f.brand.id, JSON.stringify({ ...f.brand.settings,
+      operatorLimits: { modelTokens: 2000000, searchCalls: 100, images: 0, studioImages: 0, configuredBy: actor, configuredAt: new Date().toISOString() } })]);
     await admin.query("INSERT INTO app.seo_blog_method_private_organizations(organization_id,evidence,automatic_defaults,default_owner_user_id) VALUES($1,'Explicit test-only owned organization',false,null)", [f.brand.organizationId]);
     const principal = { kind: 'user' as const, userId: actor, requestId: 'acq-pg-test', sessionToken: token, selectedWorkspaceId: f.brand.id };
     const blogs = new PgSeoBlogStore(pool, principal), methods = new PgMethodStore(pool, principal), store = new PgCampaignCreatorStore(pool, principal);
