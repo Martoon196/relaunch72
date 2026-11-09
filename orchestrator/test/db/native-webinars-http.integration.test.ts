@@ -42,7 +42,7 @@ class Browser {
 
 const SECRETS = /synthetic-api-token|synthetic-postmark|key-[0-9a-f]{32}|rtmps:\/\/|srt:\/\/|streamKey|passphrase|"pp"/;
 
-test('0144 native webinars over HTTP: menu, management, brand isolation, attendee room, Q&A, CTA and webhooks', { skip, timeout: 300_000 }, async () => {
+test('0145 native webinars over HTTP: menu, management, brand isolation, attendee room, Q&A, CTA and webhooks', { skip, timeout: 300_000 }, async () => {
   const admin = await openTestDatabase();
   const content = await loginRole(admin, 'r72_content_command');
   const crmPool = await loginRole(admin, 'r72_crm_command');
@@ -254,7 +254,7 @@ const ffmpegWithRtmps = (() => {
   return r.status === 0 && /^\s*rtmps\s*$/m.test(r.stdout.split(/Output:/)[1] ?? '');
 })();
 
-test('0144 browser studio over HTTP: owner-only tickets, no stream key in the browser, honest when the relay is missing', { skip: skip || (ffmpegWithRtmps ? false : 'ffmpeg with RTMPS not installed'), timeout: 120_000 }, async () => {
+test('0145 browser studio over HTTP: owner-only tickets, no stream key in the browser, honest when the relay is missing', { skip: skip || (ffmpegWithRtmps ? false : 'ffmpeg with RTMPS not installed'), timeout: 120_000 }, async () => {
   const admin = await openTestDatabase();
   const content = await loginRole(admin, 'r72_content_command');
   const crmPool = await loginRole(admin, 'r72_crm_command');

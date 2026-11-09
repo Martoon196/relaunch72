@@ -229,7 +229,8 @@ Bounded: one live input, one 5-minute private rehearsal, one owner-only registra
 3. Broadcast setup → Create live input. Then either stream from OBS (Show encoder settings), or open the
    **Studio**, turn on camera and microphone, share a screen and press Start sending, for 5 minutes. Check
    *Encoder connected* and the private preview. Before the studio run, confirm Setup status → Browser studio
-   shows every compatibility check passing on Render.
+   shows every required compatibility check passing on the rehearsal host. Check Render's
+   actual runtime separately after the approved production rollout.
 4. Go live, open the attendee link on a phone, confirm signed playback; reveal the CTA; ask and answer a question.
 5. End session; confirm the replay appears (webhook or poll) and plays on the phone.
 6. **Studio proof (separately recorded evidence):** repeat steps 3–5 from the Studio in Chrome with camera,

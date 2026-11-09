@@ -69,7 +69,7 @@ export function setupChecklist(setup: SetupStatus): string {
   const item = (ok: boolean, title: string, detail: string) => `<li><span class="wb-status ${ok ? 'ok' : 'warn'}">${ok ? 'Ready' : 'Setup'}</span><div><strong>${e(title)}</strong><div class="wb-help">${detail}</div></div></li>`;
   const sender = c && setup.workspaceId ? c.senders.get(setup.workspaceId.toLowerCase()) : undefined;
   const items = [
-    item(setup.database, 'Webinar database', setup.database ? 'Migration 0144 is applied and the content identity is connected.' : e(setup.databaseDetail)),
+    item(setup.database, 'Webinar database', setup.database ? 'Migration 0145 is applied and the content identity is connected.' : e(setup.databaseDetail)),
     item(Boolean(c?.stream), 'Cloudflare Stream video', c?.stream ? `Account connected; playback is served from <code>customer-${e(c.stream.customerCode)}.cloudflarestream.com</code> with signed URLs.`
       : `Needed for uploads, live inputs and playback. Missing: ${(c?.streamBlockers ?? ['configuration']).map((b) => e(b)).join(' ')}`),
     item(Boolean(c?.stream?.webhookSecret), 'Cloudflare Stream webhook', c?.stream?.webhookSecret ? 'Ready notifications are verified with the webhook secret.'
