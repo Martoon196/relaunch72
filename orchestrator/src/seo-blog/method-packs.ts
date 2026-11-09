@@ -213,7 +213,7 @@ export class MethodRun {
         revisionPasses:Math.max(0,this.attempts-1),outcome,resultHash:outcome==='accepted'?methodHash(JSON.stringify(this.lastValue)):null,
         approvalState:'draft',createdAt:new Date().toISOString(),compiledHash:methodHash(this.compiled),...(outcome!=='accepted'&&JSON.stringify(this.lastValue).length<64000?{heldDraft:this.lastValue}:{})};
       if(outcome!=='accepted'&&(this.structuredPlanning||this.structuredArticle)&&this.sidecar===null&&this.lastResponse!==null)receipt.heldResponse=this.lastResponse;
-      if(['email','advocacy'].includes(this.context.stage)&&outcome==='accepted')receipt.resultText=JSON.stringify(this.lastValue);
+      if(['email','advocacy','acquisition'].includes(this.context.stage)&&outcome==='accepted')receipt.resultText=JSON.stringify(this.lastValue);
       try { await this.store.saveReceipt(receipt); }
       catch(error) {
         // A commit can succeed while its acknowledgement is lost. Read the

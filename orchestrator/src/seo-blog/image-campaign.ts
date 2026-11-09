@@ -22,8 +22,16 @@ export interface ArticleImageProposal {
   readonly variants: readonly ArticleImageVariant[];
   readonly preparedAt: string;
 }
+/** Where finished local artwork came from, when it was not a plain owner upload. Provenance only, never an approval. */
+export interface LocalImageOrigin {
+  readonly kind: 'creative_studio';
+  readonly creativeVersionId: string;
+  readonly creativeSha256: string;
+  readonly placement: string;
+}
 /** Owner-selected local crop of durable bytes; never a new paid generation attempt. */
 export interface ArticleLocalImageProposal {
+  readonly origin?: LocalImageOrigin;
   readonly commandId: string;
   readonly articleVersionId: string;
   readonly candidateAssetId: string;

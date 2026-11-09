@@ -23,3 +23,6 @@ data/
 # Licensed third-party skill source material (DigitalMarketer) — working notes only,
 # must NEVER enter git history. Ports are rewritten own-IP (LS-5).
 .sources/
+
+# Creative Studio renderer: headless Chromium installed at build time (not source)
+.playwright-browsers/

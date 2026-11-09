@@ -18,7 +18,7 @@ services:
     plan: starter
     branch: codex/relaunch72-platform-foundation
     numInstances: 1
-    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test && (PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx --no-install playwright-core install --only-shell chromium || echo 'creative-studio: Chromium headless shell unavailable; the artwork renderer stays off')
     startCommand: npm run serve
     # /health remains process liveness. /ready must fail unless the protected
     # PostgreSQL portal and locked production runtime are genuinely ready.

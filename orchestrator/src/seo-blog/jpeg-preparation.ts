@@ -148,6 +148,20 @@ function resample(data: Uint8Array, sourceWidth: number, sourceHeight: number, c
   return output;
 }
 
+/**
+ * Decode with the same structural header checks, orientation refusal and codec
+ * limits as variant preparation. Used by the deterministic creative compositor.
+ */
+export function decodeVerifiedJpeg(input: Uint8Array): { readonly width: number; readonly height: number; readonly data: Uint8Array; readonly sha256: string } {
+  if (!(input instanceof Uint8Array) || !input.byteLength || input.byteLength > JPEG_PREPARATION_LIMITS.inputBytes) throw new JpegPreparationError('invalid_input', 'Supply JPEG bytes within the 8 MiB input limit.');
+  const source = Buffer.from(input); const dimensions = inspectHeader(source);
+  let decoded: jpeg.RawImageData<Uint8Array>;
+  try { decoded = jpeg.decode(source, { useTArray: true, formatAsRGBA: true, tolerantDecoding: false, maxResolutionInMP: JPEG_PREPARATION_LIMITS.inputPixels / 1_000_000, maxMemoryUsageInMB: JPEG_PREPARATION_LIMITS.decoderMemoryMiB }); }
+  catch { throw new JpegPreparationError('malformed', 'The JPEG could not be decoded safely within the preparation limits.'); }
+  if (decoded.width !== dimensions.width || decoded.height !== dimensions.height || decoded.data.length !== dimensions.width * dimensions.height * 4) invalid();
+  return Object.freeze({ width: decoded.width, height: decoded.height, data: decoded.data, sha256: digest(source) });
+}
+
 /** Synchronous sequential decoding/transforms; no internal parallel work or fake storage URLs. */
 export function prepareJpegVariants(input: Uint8Array, request: { profiles?: readonly JpegVariantProfile[]; focal?: JpegFocalPoint } = {}): { readonly original: PreparedJpeg; readonly variants: readonly PreparedJpeg[] } {
   if (!(input instanceof Uint8Array) || !input.byteLength || input.byteLength > JPEG_PREPARATION_LIMITS.inputBytes) throw new JpegPreparationError('invalid_input', 'Supply JPEG bytes within the 8 MiB input limit.');

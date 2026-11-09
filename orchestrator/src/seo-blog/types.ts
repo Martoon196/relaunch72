@@ -45,6 +45,11 @@ export interface BrandAuthor {
 export interface BrandSettings {
   /** Explicit owner opt-in; absence is OFF, independent of the image-attempt allowance. */
   readonly media?: { readonly imageGenerationEnabled: boolean; readonly authorizedBy: string; readonly authorizedAt: IsoInstant };
+  /**
+   * Creative Studio typed-brief image generation. Absent means OFF with a zero allowance. Each generation also counts
+   * against `budgets.imagesPerMonth` (shared with blog images) and the platform operator's image policy.
+   */
+  readonly studioImages?: { readonly enabled: boolean; readonly perMonth: number; readonly authorizedBy: string; readonly authorizedAt: IsoInstant };
   readonly programme?: BrandProgrammeSettings;
   /** Off by default. On = articles that do not require review may publish without a per-article approval. */
   readonly autoPublish: boolean;

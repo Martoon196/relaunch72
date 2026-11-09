@@ -42,6 +42,7 @@ import {
 import type { SeoBlogCredentialVault } from './vault.js';
 import { linkedPromotionFor, OBSERVATION_CREATE_WINDOW_MS, OBSERVATION_TTL_MS, promotionPublicationHold, type ArticlePromotionApproval, type PromotionNetwork } from './promotions.js';
 import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOverview, type SocialRegistry } from './social.js';
+import { isCreativeImageJob, isCreativeStudioJob } from '../creative-studio/generation.js';
 import { automaticImageCommandId, imageJobDto, isArticleWriteJob, isImageJob, type ArticleImageService, type ArticleImageRequestResult } from './image-campaign.js';
 import { createArticleCampaign, fallbackCampaignDrafts, type CampaignDraft } from './campaign.js';
 import { SeoBlogCampaignService, type CampaignReviewPorts, type CampaignSelection } from './campaign-service.js';
@@ -91,6 +92,8 @@ export interface EngineDeps {
   readonly campaignReview?: CampaignReviewPorts;
   readonly mediaReview?: ArticleMediaReviewService;
   readonly campaignQueue?: SeoBlogCampaignQueueService;
+  /** Creative Studio worker jobs (typed-brief images, durable renders). Absent: such jobs are held, never run by the article paths. */
+  readonly creativeJobs?: { handles(job: Job): boolean; run(job: Job): Promise<Job> };
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
@@ -1563,6 +1566,17 @@ export class SeoBlogEngine {
     await this.brandFor(actor, brandId);
     await this.mediaReview().upload(actor.userId, brandId, articleId, versionId, commandId, bytes, filename);
   }
+  /**
+   * Finished, owner-approved Creative Studio artwork enters this article's existing private media path as one
+   * exact-size format. Quality review, image use, post approval and the posting plan stay the existing separate steps.
+   */
+  async importCreativeImage(actor: Actor, brandId: string, articleId: string, commandId: string, bytes: Buffer,
+    profile: import('./jpeg-preparation.js').JpegVariantProfile, origin: import('./image-campaign.js').LocalImageOrigin): Promise<import('./image-campaign.js').ArticleLocalImageProposal> {
+    await this.brandFor(actor, brandId);
+    const article = await this.store.getArticle(brandId, articleId);
+    if (!article?.currentVersionId) throw new SeoBlogError(404, 'That article was not found.');
+    return this.mediaReview().upload(actor.userId, brandId, articleId, article.currentVersionId, commandId, bytes, `creative-studio-${origin.creativeVersionId}.jpg`, { profiles: [profile], origin });
+  }
   async withdrawCampaignImage(actor: Actor, brandId: string, articleId: string, input: import('./media-types.js').SeoMediaWithdrawalInput): Promise<void> {
     await this.brandFor(actor, brandId);
     await this.mediaReview().withdraw(actor.userId, brandId, articleId, input);
@@ -2390,6 +2404,8 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (['done', 'failed', 'cancelled'].includes(job.state)) return job;
+    // A running studio image job may be mid-way through its one paid call; cancelling would hide a charged attempt.
+    if (job.state === 'running' && isCreativeImageJob(job)) throw new SeoBlogError(409, 'This image request is being made right now and cannot be cancelled. Wait for it to finish; it makes at most one paid call.');
     if(job.kind==='publish'&&typeof job.payload.websiteObservation==='string'){
       const p=(await this.store.listPublications(brandId)).find((p)=>p.id===job.payload.websiteObservation);
       if(p?.sitemapRepair&&['calling','unknown'].includes(p.sitemapRepair.state))throw new SeoBlogError(409,'This task tracks an uncertain website operation. Read-only reconciliation must continue; it cannot send another write.');
@@ -2439,6 +2455,20 @@ export class SeoBlogEngine {
         return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: 'Campaign delivery is unavailable on this worker.', error: 'A capable campaign worker is required. No article or social post was published.', updatedAt: this.now() });
       }
       return this.deps.campaignQueue.run(job);
+    }
+    if (this.deps.creativeJobs?.handles(job)) {
+      // The runners hold their own failures; this keeps one unexpected throw from leaving the rest of the batch leased.
+      try { return await this.deps.creativeJobs.run(job); } catch (error) {
+        const fresh = await this.store.getJob(job.brandId, job.id).catch(() => null);
+        if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+        const message = error instanceof SeoBlogError && error.status < 500 ? error.message : 'This studio task stopped unexpectedly. Nothing new was requested; check the Creative studio before trying again.';
+        return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: message, error: message, updatedAt: this.now() }).catch(() => fresh);
+      }
+    }
+    if (isCreativeStudioJob(job)) {
+      const fresh = await this.store.getJob(job.brandId, job.id);
+      if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+      return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: 'Creative Studio work is unavailable on this worker.', error: 'The Creative Studio worker must be configured before this task can run. Nothing was requested or charged.', updatedAt: this.now() });
     }
     if (isImageJob(job)) {
       if (this.deps.images) return this.deps.images.run(job);
@@ -2617,6 +2647,8 @@ export function normaliseWebsite(raw: string): string {
 
 function validateSettings(s: BrandSettings): void {
   if (s.media && typeof s.media.imageGenerationEnabled !== 'boolean') throw new SeoBlogError(400, 'Invalid image generation toggle.');
+  if (s.studioImages && (typeof s.studioImages.enabled !== 'boolean' || !Number.isInteger(s.studioImages.perMonth) || s.studioImages.perMonth < 0 || s.studioImages.perMonth > 1000))
+    throw new SeoBlogError(400, 'Studio image allowance must be a whole number from 0 to 1000.');
   validateCadence(s.cadence);
   if (!Number.isInteger(s.planningHorizonDays) || s.planningHorizonDays < 7 || s.planningHorizonDays > 120) throw new SeoBlogError(400, 'Planning horizon must be 7–120 days.');
   if (!Number.isInteger(s.backlogCeiling) || s.backlogCeiling < 0 || s.backlogCeiling > 50) throw new SeoBlogError(400, 'Backlog ceiling must be 0–50 articles.');

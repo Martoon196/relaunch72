@@ -5,6 +5,7 @@
  * commit labels or permission jargon are shown.
  */
 
+import { isCreativeImageJob, isCreativeStudioJob } from '../creative-studio/generation.js';
 import { randomUUID } from 'node:crypto';
 import type { BrandReadiness } from '../seo-blog/engine.js';
 import { sha256, USAGE_ESTIMATES } from '../seo-blog/engine.js';
@@ -29,7 +30,7 @@ export function friendlyTaskState(state:string):string {
 export function friendlyDeliveryState(state:string):string {
   return ({queued:'Scheduled',leased:'Getting ready',calling:'Sending',reconciliation_pending:'Checking the result',succeeded:'Sent',failed:'Needs checking',needs_attention:'Needs checking',cancelled:'Cancelled'} as Record<string,string>)[state]??'Needs checking';
 }
-export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity' | 'authority' | 'campaigns' | 'methods';
+export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity' | 'authority' | 'campaigns' | 'methods' | 'creative';
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--muted:#5b6570;--line:#d9dee4;--accent:#0b5cad;--ok:#1d7a3a;--warn:#9a5b00;--bad:#b42318}
@@ -63,6 +64,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 
 export interface Shell {
   readonly creatorsAvailable?:boolean;
+  readonly creativeAvailable?:boolean;
   readonly methodsAvailable?:boolean;
   readonly brands: readonly Brand[];
   readonly brand: Brand | null;
@@ -88,6 +90,7 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
     : '';
   const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['social', 'Social'], ['activity', 'Activity']];
   if (feedback) tabs.push(['authority', 'Authority']);
+  if (shell.creativeAvailable) tabs.push(['creative','Creative studio']);
   if (shell.creatorsAvailable) tabs.push(['campaigns','Campaign creators']);
   if (shell.methodsAvailable) tabs.push(['methods','Production rules']);
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
@@ -429,7 +432,7 @@ export function activityPage(shell: Shell, data: { events: ActivityEvent[]; jobs
   const b = shell.brand!;
   const label: Record<string, string> = { inventory: 'Read website', plan: 'Plan content', write: 'Write article', publish: 'Publish', daily: 'Daily top-up' };
   return layout(shell, 'Activity', `<h1>Activity</h1>
-<section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>State</th><th>Detail</th><th></th></tr></thead><tbody>${data.jobs.slice(0, 50).map((j) => `<tr><td>${e(isImageJob(j) ? 'Images' : isProfileJob(j) ? 'Read brand guidance' : j.payload.campaignQueue ? 'Posting plan' : label[j.kind] ?? 'Background task')}</td><td>${e(friendlyTaskState(j.state))}</td><td><details><summary>Task details</summary><p>${e(j.state)} · ${e(j.error ?? j.progress)}</p></details></td><td>${['queued', 'running', 'blocked'].includes(j.state) ? `<form method="post" action="${url(b, `jobs/${j.id}/cancel`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Cancel</button></form>` : ''}${['blocked', 'failed'].includes(j.state) ? isImageJob(j) ? imageJobRecovery(shell, j) : isProfileJob(j) && profilePayload(j).start && !profilePayload(j).receipt ? `<a href="${url(b, 'setup')}#brand-profile">Review before a new extraction</a>` : `<form method="post" action="${url(b, `jobs/${j.id}/retry`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">${isProfileJob(j) && profilePayload(j).receipt ? 'Apply saved result (no model call)' : 'Retry'}</button></form>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No tasks.</td></tr>'}</tbody></table></section>
+<section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>State</th><th>Detail</th><th></th></tr></thead><tbody>${data.jobs.slice(0, 50).map((j) => `<tr><td>${e(isCreativeStudioJob(j) ? 'Creative studio' : isImageJob(j) ? 'Images' : isProfileJob(j) ? 'Read brand guidance' : j.payload.campaignQueue ? 'Posting plan' : label[j.kind] ?? 'Background task')}</td><td>${e(friendlyTaskState(j.state))}</td><td><details><summary>Task details</summary><p>${e(j.state)} · ${e(j.error ?? j.progress)}</p></details></td><td>${['queued', 'running', 'blocked'].includes(j.state) && !(j.state === 'running' && isCreativeImageJob(j)) ? `<form method="post" action="${url(b, `jobs/${j.id}/cancel`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Cancel</button></form>` : ''}${['blocked', 'failed'].includes(j.state) ? isCreativeImageJob(j) ? `<a href="${url(b, `creative/generate/${String((j.payload.image as { briefId?: string } | undefined)?.briefId ?? '')}`)}">Review in the Creative studio</a>` : isCreativeStudioJob(j) ? `<a href="${url(b, `creative/task/${j.id}`)}">Review this task</a>` : isImageJob(j) ? imageJobRecovery(shell, j) : isProfileJob(j) && profilePayload(j).start && !profilePayload(j).receipt ? `<a href="${url(b, 'setup')}#brand-profile">Review before a new extraction</a>` : `<form method="post" action="${url(b, `jobs/${j.id}/retry`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">${isProfileJob(j) && profilePayload(j).receipt ? 'Apply saved result (no model call)' : 'Retry'}</button></form>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No tasks.</td></tr>'}</tbody></table></section>
 <section class="card"><h2>History</h2><ul>${data.events.map((ev) => `<li><span class="muted">${e(ev.at.slice(0, 16).replace('T', ' '))} UTC</span> ${e(ev.message)}</li>`).join('') || '<li class="muted">Nothing yet.</li>'}</ul></section>`);
 }
 

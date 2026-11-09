@@ -1,6 +1,7 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
+import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -274,6 +275,19 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
       && pending[0]?.checksum === MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(MHP_EVENT_WHATSAPP_MIGRATION) === MHP_EVENT_WHATSAPP_CHECKSUM) {
+    return;
+  }
+  // A release bundling the additive 0144 Creative Studio library is deployed to every
+  // consumer BEFORE 0144 is applied, and only on top of the exact applied MHP 0143 ledger
+  // (never during the 0142 payments or 0143 inbox cut-overs). Until 0144 is applied the
+  // studio stays unmounted (CREATIVE_STUDIO_ENABLED is off), so nothing reads its tables.
+  if (pending.length === 1
+      && migrations.length === 144
+      && migrations[143]?.filename === CREATIVE_STUDIO_MIGRATION
+      && pending[0]?.filename === CREATIVE_STUDIO_MIGRATION
+      && pending[0]?.checksum === CREATIVE_STUDIO_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION) === DIRECT_WA_CHECKSUM
+      && applied.get(MHP_PAYMENTS_LIVE_MIGRATION) === MHP_PAYMENTS_LIVE_CHECKSUM) {
     return;
   }
   if (pending.length > 0) {

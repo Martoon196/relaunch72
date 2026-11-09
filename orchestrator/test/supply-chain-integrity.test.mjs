@@ -15,6 +15,10 @@ import {
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const GATE_COMMAND = 'node scripts/supply-chain.mjs --check';
 const BUILD_COMMAND = `npm ci --ignore-scripts --include=dev && ${GATE_COMMAND} && npm run typecheck && npm test`;
+// Owner-approved (Creative Studio renderer): only the Growth HQ portal service may append this exact, non-fatal
+// step, after the npm integrity gate and tests. It installs Playwright's pinned headless shell into the project
+// directory; it is not an npm package, so the SBOM gate does not cover it and it can never fail the build.
+const CREATIVE_RENDERER_SUFFIX = " && (PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx --no-install playwright-core install --only-shell chromium || echo 'creative-studio: Chromium headless shell unavailable; the artwork renderer stays off')";
 
 async function repositoryLock() {
   return JSON.parse(await readFile(path.join(ROOT, 'package-lock.json'), 'utf8'));
@@ -92,8 +96,13 @@ test('Render invokes a repository-owned built-in-only Node gate before applicati
     const manifest = await readFile(path.join(ROOT, manifestName), 'utf8');
     const commands = [...manifest.matchAll(/^\s*buildCommand:\s*(.+)$/gm)].map((match) => match[1].trim());
     assert.equal(commands.length, expectedServiceCount);
-    assert.deepEqual(commands, Array.from({ length: expectedServiceCount }, () => BUILD_COMMAND));
-    assert.doesNotMatch(commands.join('\n'), /--import|tsx|esbuild|node_modules/);
+    const expected = Array.from({ length: expectedServiceCount }, () => BUILD_COMMAND);
+    if (manifestName === 'render.property-predator.production.yaml') {
+      assert.match(manifest, /name: property-predator-growth-hq\n(?:.*\n){1,8}?\s*buildCommand: [^\n]*playwright-core install --only-shell chromium/u, 'the renderer step belongs to the portal service only');
+      expected[0] = BUILD_COMMAND + CREATIVE_RENDERER_SUFFIX;
+    }
+    assert.deepEqual(commands, expected);
+    assert.doesNotMatch(commands.join('\n').replace(CREATIVE_RENDERER_SUFFIX, ''), /--import|tsx|esbuild|node_modules/);
   }
   const rootManifest = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(rootManifest.scripts['supply-chain:check'], GATE_COMMAND);

@@ -1975,6 +1975,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const callbackOrigin = new URL(ZERNIO_CONNECTION_CALLBACK_URL).origin;
     await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true,
       socialConnectHere: deps.sessionCookieName !== '__Host-r72_content' && deps.productProfile?.id === 'property_predator_growth', socialConnectHost: callbackOrigin,
+      ...(deps.portalBaseUrl ? { publicOrigin: deps.portalBaseUrl } : {}),
       ...(deps.sessionCookieName === '__Host-r72_content' ? { applicationName: 'Relaunch72 Content' } : {}) });
     return;
   }

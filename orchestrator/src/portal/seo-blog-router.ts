@@ -28,11 +28,15 @@ import { campaignPage, type CampaignActionResult } from './seo-blog-campaign-vie
 import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-controller.js';
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
+import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, creativeEnquiriesPage, generationPage, renderTaskPage, type ReferenceChoice } from './creative-generation-view.js';
+import { holdMessage, isCreativeImageJob } from '../creative-studio/generation.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
+import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
+import type { BackgroundChoice } from '../creative-studio/service.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -41,6 +45,8 @@ export interface SeoBlogRouteInput {
   readonly sessionSecret: string;
   readonly vaultReady: boolean;
   readonly applicationName?: string;
+  /** Public origin of this portal (for brand enquiry form links). */
+  readonly publicOrigin?: string;
   /** Whether provider OAuth callbacks return to this host; connection starts only where they complete. */
   readonly socialConnectHere?: boolean;
   readonly socialConnectHost?: string;
@@ -48,7 +54,8 @@ export interface SeoBlogRouteInput {
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
-const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+// connect-src 'self' lets the same-origin status scripts poll (default-src 'none' otherwise blocks their fetch).
+const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
@@ -140,10 +147,22 @@ function int(value: string | null, field: string): number {
   return Number(value.trim());
 }
 
+/** The studio page a failed creative POST returns to (with its message), instead of the studio overview. */
+export function creativeReturnPage(rest: string): string {
+  const p = rest.split('/');
+  if (p[1] === 'generate') return p[2] && p[3] === 'request' ? `creative/generate/${p[2]}` : 'creative/generate';
+  if (p[1] === 'enquiries') return 'creative/enquiries';
+  if (p[1] === 's' && p[2]) return `creative/s/${p[2]}`;
+  if (p[1] === 'task' && p[2]) return `creative/task/${p[2]}`;
+  if (p[1] === 'kit') return 'creative/kit';
+  return 'creative';
+}
+
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/creative-job-status.js`) return send(res, 200, CREATIVE_JOB_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
@@ -214,14 +233,103 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady });
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
+    if (rest === 'creative' || rest.startsWith('creative/')) {
+      const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
+      if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
+      const parts = rest.split('/');
+      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.(jpg|mp4|webm)$`, 'i').exec(rest);
+      if (art) {
+        const found = await studio.artwork(actor.userId, brandId, art[1]!.toLowerCase(), art[2]!.toLowerCase());
+        const v = found.version;
+        const ext = v.render.mime === 'video/mp4' ? 'mp4' : v.render.mime === 'video/webm' ? 'webm' : 'jpg';
+        if (art[3]!.toLowerCase() !== ext) throw new SeoBlogError(404, 'That artwork was not found.');
+        const kind = v.media === 'storyboard' ? '-storyboard' : v.media === 'video' ? '-video' : '';
+        const name = `${brand.slug}-${v.conceptKey}${kind}-${v.placement}${v.card ? `-card${v.card}` : ''}-v${v.number}-${v.media === 'storyboard' ? 'not-a-video' : found.approved ? 'approved' : 'draft'}.${ext}`.replace(/[^a-z0-9.-]/giu, '_');
+        res.writeHead(200, { 'content-type': v.render.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
+          ...(url.searchParams.get('download') === '1' ? { 'content-disposition': `attachment; filename="${name}"` } : {}) });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const logo = /^creative\/kit-logo\/\d+\/([0-9a-f]{64})$/i.exec(rest);
+      if (logo) {
+        const found = await studio.kitLogo(actor.userId, brandId, logo[1]!.toLowerCase());
+        res.writeHead(200, { 'content-type': found.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow' });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const generatedPreview = new RegExp(`^creative/generated/(${UUID})\\.jpg$`, 'i').exec(rest);
+      if (generatedPreview) {
+        const found = await studio.generatedImage(actor.userId, brandId, generatedPreview[1]!.toLowerCase());
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer' });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
+      const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      if (rest === 'creative') {
+        const overview = await studio.overview(actor.userId, brandId);
+        const saved = await savedWithPreview();
+        const otherPatterns = await studio.learning().otherBrandPatterns(actor.userId, brandId).catch(() => null);
+        const generated = studio.generationAvailable ? await studio.generation().view(actor.userId, brandId).catch(() => null) : null;
+        const generatedImages = (generated?.state.generations ?? []).slice(0, 12).map((g) => ({ id: g.id, label: `Generated ${g.createdAt.slice(0, 10)} (${g.width}×${g.height})`,
+          previewUrl: generatedUrl(g.id) }));
+        const generation = { available: studio.generationAvailable, enabled: generated?.brand.settings.studioImages?.enabled === true, remaining: 0 };
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, generatedImages, generation, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+      }
+      // ── Typed-brief image generation ──
+      const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
+      const referenceChoices = async (state?: import('../creative-studio/generation-store.js').GenerationState): Promise<ReferenceChoice[]> => {
+        const saved = await savedWithPreview();
+        return [...(state?.generations ?? []).slice(0, 12).map((g) => ({ assetId: g.assetId, sha256: g.sha256, label: `Generated ${g.createdAt.slice(0, 10)}`, previewUrl: generatedUrl(g.id) })),
+          ...saved.slice(0, 12).map((x) => ({ assetId: x.assetId, sha256: x.sha256, label: x.articleTitle, previewUrl: x.previewAssetId ? media(x.previewAssetId, x.previewSha256!) : media(x.assetId, x.sha256) }))];
+      };
+      const taskRoute = new RegExp(`^creative/task/(${UUID})$`, 'i').exec(rest);
+      if (taskRoute) {
+        const task = await studio.renderTask(actor.userId, brandId, taskRoute[1]!.toLowerCase());
+        if (task.job.state === 'done' && task.result) return ok(`${SEO_BLOG_BASE}/b/${brandId}/creative/s/${task.result.setId}`, task.result.message);
+        return send(res, 200, renderTaskPage(shell('creative'), { job: task.job, label: task.label, retryable: !isCreativeImageJob(task.job) }));
+      }
+      const jobRoute = new RegExp(`^creative/jobs/(${UUID})$`, 'i').exec(rest);
+      if (jobRoute) {
+        const status = await studio.jobStatus(actor.userId, brandId, jobRoute[1]!.toLowerCase());
+        return send(res, 200, JSON.stringify(status), 'application/json; charset=utf-8');
+      }
+      if (rest === 'creative/generate') {
+        const view = await studio.generation().view(actor.userId, brandId);
+        return send(res, 200, generationPage(shell('creative'), { brand: view.brand, state: view.state, policy: view.policy, providerConfigured: view.providerConfigured, references: await referenceChoices(view.state) }));
+      }
+      const briefRoute = new RegExp(`^creative/generate/(${UUID})$`, 'i').exec(rest);
+      if (briefRoute) {
+        const briefId = briefRoute[1]!.toLowerCase(), gen = studio.generation();
+        const [view, all] = await Promise.all([gen.view(actor.userId, brandId, briefId), gen.view(actor.userId, brandId)]);
+        const versions = view.state.briefs.filter((b) => b.id === briefId);
+        if (!versions.length) throw new SeoBlogError(404, 'That brief was not found.');
+        const current = [...versions].sort((a, b) => b.version - a.version)[0]!;
+        const estimate = gen.estimate(view.brand, all.state, view.policy, current.data, view.policyUnreadable);
+        return send(res, 200, briefPage(shell('creative'), { brand: view.brand, briefId, versions, state: view.state, estimate, references: await referenceChoices(all.state), previewUrl: generatedUrl }));
+      }
+      if (rest === 'creative/enquiries') {
+        const settings = await studio.enquiries(actor.userId, brandId);
+        return send(res, 200, creativeEnquiriesPage(shell('creative'), { settings, brandId, origin: input.publicOrigin ?? null, live: Boolean(input.service.creativeEnquiries) }));
+      }
+      if (rest === 'creative/kit') {
+        const { context, kit } = await studio.context(actor.userId, brandId);
+        return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID() }));
+      }
+      if (parts[1] === 's' && parts[2] && parts.length === 3) {
+        const [found, articles, saved, distribution, acquisitions] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview(),
+          studio.distribution(actor.userId, brandId, parts[2]).catch(() => null), studio.acquisitionTargets(actor.userId, brandId).catch(() => null)]);
+        return send(res, 200, creativeSetPage(shell('creative'), { ...found, articles: articles.map((a) => ({ id: a.article.id, title: a.title })), savedImages: saved, newCommand: () => randomUUID(), rendererReady: studio.rendererReady,
+          distribution, acquisitions }));
+      }
+      throw new SeoBlogError(404, 'That page was not found.');
+    }
     if(rest==='methods')return send(res,200,productionRulesPage(shell('methods'),await engine.methodOverview(actor,brandId),engine.campaignCreatorsReady));
     if(rest==='campaigns'||rest.startsWith('campaigns/')){
       const creator=engine.creators(),parts=rest.split('/');
       if(!parts[1]){
         const settings=await engine.methodOverview(actor,brandId),pins=settings.assignment?.pins??[];
-        const enabled=(['email','advocacy'] as const).filter(kind=>pins.some(p=>p.packId===(kind==='email'?'email-writing':'advocacy-and-referral')));
-        return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId),enabled));
+        const enabled=(['email','advocacy','acquisition'] as const).filter(kind=>pins.some(p=>p.packId===(kind==='email'?'email-writing':kind==='advocacy'?'advocacy-and-referral':'conversion-copy')));
+        const articles=(await engine.listArticles(actor,brandId)).filter(a=>a.article.currentVersionId).map(a=>({id:a.article.id,title:a.title}));
+        return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId),enabled,articles));
       }
       const record=await creator.get(actor.userId,brandId,parts[1]);
       if(parts[2]==='export'){
@@ -229,7 +337,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const format=url.searchParams.get('format')==='json'?'json':'txt';
         return send(res,200,format==='json'?json:creatorTextExport(record,JSON.parse(json).content),format==='json'?'application/json; charset=utf-8':'text/plain; charset=utf-8',{'content-disposition':`attachment; filename="campaign.${format}"`});
       }
-      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId)));
+      const studio=record.brief.kind==='acquisition'?input.service.creativeFor?.(identity,input.requestId,engine)??null:null;
+      // undefined = studio off; null = read failed (shown as such); a 404 means no proposal exists yet and is also plan-only.
+      const learning=studio?await studio.learning().view(actor.userId,brandId,record.id).catch((error:unknown)=>error instanceof SeoBlogError&&error.status===404?undefined:null):undefined;
+      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId),learning));
     }
     if (rest === 'authority') {
       if (input.applicationName !== 'Relaunch72 Content') throw new SeoBlogError(404, 'That page was not found.');
@@ -306,7 +417,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (!known) console.error('seo-blog: request failed', (error as Error).name);
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
       const articleAction = rest.split('/')[2] ?? '';
-      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}` : rest.split('/')[0] || 'overview';
+      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}`
+        : rest.startsWith('creative/') ? creativeReturnPage(rest) : rest.split('/')[0] || 'overview';
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
@@ -326,6 +438,123 @@ async function handlePost(
   const parts = rest.split('/');
   const rowVersion = () => int(f('rowVersion'), 'the form version');
   switch (parts[0]) {
+    case 'creative': {
+      const identity = input.identity!;
+      const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
+      if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
+      const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
+      const commandId = f('commandId') ?? '';
+      // Rendering runs in the background worker as a durable job; this request only records it (and stores any uploaded
+      // background), then sends the owner to the task page, which follows the job and opens the result when it is ready.
+      const queued = async (operation: Parameters<typeof studio.enqueueRender>[3]) => {
+        const job = await studio.enqueueRender(actor.userId, brandId, commandId, operation);
+        return ok(`${home}/task/${job.id}`, 'Saved. The artwork is being rendered on the server; you can leave this page.');
+      };
+      const background = (): BackgroundChoice => {
+        const kind = f('background') ?? 'neutral';
+        if (kind === 'keep') return { kind: 'keep' };
+        if (kind === 'upload') { if (!form.file?.data.length) throw new SeoBlogError(400, 'Choose an image file to upload.'); return { kind: 'upload', bytes: form.file.data }; }
+        if (kind === 'saved') { const [assetId, sha] = (f('saved') ?? '').split(':'); return { kind: 'saved', assetId: assetId ?? '', sha256: sha ?? '' }; }
+        if (kind === 'generated') return { kind: 'generated', generationId: (f('generated') ?? '').toLowerCase() };
+        return { kind: 'neutral' };
+      };
+      if (parts[1] === 'generate') {
+        const gen = studio.generation();
+        if (parts[2] === 'settings') {
+          await gen.configure(actor.userId, brandId, rowVersion(), f('enabled') === '1', int(f('perMonth'), 'the studio image allowance'));
+          return ok(`${home}/generate#generation-settings`, 'Studio image allowance saved. Nothing was requested or charged.');
+        }
+        if (parts[2] === 'brief') {
+          const refs = form.fields.getAll('reference').map((v) => { const [assetId, sha256] = v.split(':'); return { assetId: assetId ?? '', sha256: sha256 ?? '' }; });
+          const saved = await gen.saveBrief(actor.userId, brandId, commandId, { title: f('title') ?? '', text: f('text') ?? '', size: f('size') ?? '', useVisualGuidance: f('useVisualGuidance') === '1', references: refs },
+            f('briefId') ? (f('briefId') ?? '').toLowerCase() : undefined);
+          return ok(`${home}/generate/${saved.briefId}`, saved.replayed ? 'This brief was already saved.' : `Brief saved (version ${saved.version}). Review the cost before generating. Nothing was charged.`);
+        }
+        if (parts[2] && parts[3] === 'request') {
+          const briefId = parts[2].toLowerCase();
+          if (f('confirm') !== '1' && f('confirmedNewIntent') !== '1') throw new SeoBlogError(400, 'Tick the confirmation to use one paid image from this brand\u2019s allowances.');
+          const result = await gen.request(actor.userId, brandId, briefId, int(f('version'), 'the brief version'), commandId, f('confirmedNewIntent') === '1', f('replacesIntentId') || null);
+          if ('reason' in result) return ok(`${home}/generate/${briefId}`, result.reason === 'new_intent_confirmation_required' ? 'This brief version already has a paid image. Confirm that you want another paid request.' : holdMessage(result.reason));
+          return ok(`${home}/generate/${briefId}`, 'Image request saved. It runs on the server; you can leave this page. One paid request is made only if the allowance and policy checks still pass when it starts.');
+        }
+        throw new SeoBlogError(404, 'That page was not found.');
+      }
+      if (parts[1] === 'enquiries') {
+        if (parts[2] === 'rotate') {
+          await studio.rotateEnquiryKey(actor.userId, brandId, int(f('rowVersion'), 'the settings version'));
+          return ok(`${home}/enquiries`, 'New form address issued. The old hosted link and embed code no longer work; update the page your links open.');
+        }
+        const saved = await studio.saveEnquiries(actor.userId, brandId, { enabled: f('enabled') === '1', privacyUrl: (f('privacyUrl') ?? '').trim(),
+          newStageId: f('newStageId') ?? '', qualifiedStageId: f('qualifiedStageId') ?? '', expectedVersion: int(f('rowVersion'), 'the settings version') });
+        return ok(`${home}/enquiries`, saved.enabled ? 'Enquiry form saved and switched on. Add it to the page your tracked links open.' : 'Enquiry settings saved. The form is off.');
+      }
+      if (parts[1] === 'task' && parts[2] && parts[3] === 'retry') {
+        const task = await studio.renderTask(actor.userId, brandId, parts[2].toLowerCase());
+        await engine.retryJob(actor, brandId, task.job.id);
+        return ok(`${home}/task/${task.job.id}`, 'Task queued again. It replays the same request; nothing is duplicated.');
+      }
+      if (parts[1] === 'kit') {
+        const action = f('logo_action') ?? 'keep';
+        const logo = action === 'remove' ? { kind: 'remove' as const } : action === 'upload' && form.file?.data.length ? { kind: 'upload' as const, bytes: form.file.data, label: f('logo_label') ?? '' } : { kind: 'keep' as const };
+        const kit = await studio.saveKit(actor.userId, brandId, commandId, { palette: { primary: f('primary') ?? '', accent: f('accent') ?? '', dark: f('dark') ?? '', light: f('light') ?? '' },
+          disclosure: f('disclosure') ?? '', restricted: f('restricted') ?? '', logo, expectedVersion: int(f('expectedVersion'), 'the kit version') });
+        return ok(home, `Creative kit version ${kit.version} saved. Earlier image approvals for this brand now need a refresh.`);
+      }
+      if (parts[1] === 'draft') {
+        // Only the creative request fields travel into the job row: never the CSRF token, command id or background selectors.
+        const raw: Record<string, string | string[]> = {};
+        for (const key of new Set(form.fields.keys())) {
+          if (['_csrf', 'commandId', 'background', 'saved', 'generated', 'file'].includes(key)) continue;
+          raw[key] = key === 'placements' ? form.fields.getAll(key).slice(0, 8) : (form.fields.get(key) ?? '').slice(0, 2000);
+        }
+        return queued({ op: 'draft', raw, background: background() });
+      }
+      if (parts[1] === 's' && parts[2] && (parts[3] === 'concept' || parts[3] === 'refresh') && parts[4]) {
+        const heads = (f('heads') ?? '').split(',').filter(Boolean);
+        if (parts[3] === 'refresh') return queued({ op: 'refresh', setId: parts[2], conceptKey: parts[4], heads });
+        const headlines = form.fields.getAll('card_headline'), bodies = form.fields.getAll('card_body');
+        const patch = { ...(f('hook') !== null ? { hook: f('hook')! } : {}), ...(f('headline') !== null ? { headline: f('headline')! } : {}), ...(f('body') !== null ? { body: f('body')! } : {}),
+          ...(f('cta') !== null ? { cta: f('cta')! } : {}), ...(headlines.length ? { cards: headlines.map((h, i) => ({ headline: h, body: bodies[i] ?? '' })) } : {}), illustrativeTag: f('illustrative') === '1' };
+        return queued({ op: 'edit', setId: parts[2], conceptKey: parts[4], heads, patch, background: background() });
+      }
+      if (parts[1] === 's' && parts[2] && parts[3] === 'storyboard' && parts[4]) {
+        return queued({ op: 'storyboard', setId: parts[2], conceptKey: parts[4], placement: f('placement') ?? 'vertical', likeness: f('likeness') === '1' });
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3] === 'scenes') {
+        const count = Math.min(9, Math.max(0, Number(f('scene_count') ?? 0)));
+        const scenes = Array.from({ length: count }, (_, i) => ({ headline: f(`scene.${i}.headline`) ?? '', body: f(`scene.${i}.body`) ?? '', durationMs: Number(f(`scene.${i}.duration`)),
+          motion: (f(`scene.${i}.motion`) ?? 'none') as never, showCta: f(`scene.${i}.cta`) === '1', script: f(`scene.${i}.script`) ?? '', remove: f(`scene.${i}.remove`) === '1' }))
+          .filter((x) => !x.remove && x.headline.trim()).map(({ remove: _r, ...x }) => x);
+        return queued({ op: 'storyboard_edit', versionId: parts[2], scenes });
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3] === 'video') {
+        return queued({ op: 'video', versionId: parts[2] });
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3]) {
+        const version = parts[2];
+        const located = await studio.artworkSet(actor.userId, brandId, version);
+        const back = `${home}/s/${located}#v-${version}`;
+        if (parts[3] === 'approve') {
+          await studio.approve(actor.userId, brandId, version, commandId, f('sha') ?? '', f('figures_confirmed') === '1');
+          return ok(back, 'Approved this exact asset. Captions, campaigns, schedules and paid adverts are not approved by this.');
+        }
+        if (parts[3] === 'focal') return queued({ op: 'focal', versionId: version, focal: { x: Number(f('x')), y: Number(f('y')) } });
+        if (parts[3] === 'handoff') {
+          // `article:<id>` or `acq:<campaignId>:<conceptIndex>:<channel>`; legacy `article` field still accepted.
+          const raw = (f('target') ?? (f('article') ? `article:${f('article')}` : '')).toLowerCase(), bits = raw.split(':');
+          const target = bits[0] === 'article' && bits.length === 2 ? { kind: 'article_campaign' as const, articleId: bits[1]! }
+            : bits[0] === 'acq' && bits.length === 4 && /^\d{1,2}$/u.test(bits[2]!) ? { kind: 'creator_campaign' as const, campaignId: bits[1]!, concept: Number(bits[2]), channel: bits[3]! } : null;
+          if (!target) throw new SeoBlogError(400, 'Choose where to hand this artwork off.');
+          const result = await studio.handoff(actor.userId, brandId, version, commandId, target);
+          const route = result.handoff?.route;
+          return ok(`${home}/s/${located}#distribution`, result.replayed ? 'This hand-off was already recorded.' : route === 'article_media'
+            ? 'Added to the article’s private images. Review it there, choose it for a post and plan the post. Nothing was published, scheduled or spent.'
+            : route === 'tracked_link' ? 'Tracked link issued for this artwork. Post it yourself; nothing was published or spent.'
+            : 'Recorded for download only: no connected integration accepts this format. Nothing was published or spent.');
+        }
+      }
+      throw new SeoBlogError(404, 'That page was not found.');
+    }
     case 'methods': {
       if(parts[1]==='update'||parts[1]==='disable'){
         await engine.setReviewedMethods(actor,brandId,int(f('revision'),'the current rule assignment'),parts[1]==='disable'?[]:form.fields.getAll('packId'));
@@ -341,7 +570,8 @@ async function handlePost(
         const profile=await engine.getProfile(actor,brandId),index=int(f('ctaIndex'),'the next-step link');
         const cta=profile?.conversionPages[index];if(!cta)throw new SeoBlogError(400,'Choose a confirmed next-step link.');
         const brief:CampaignBrief={kind:f('kind') as CampaignBrief['kind'],name:f('name')??'',goal:f('goal')??'',audience:f('audience')??'',purpose:f('purpose') as CampaignBrief['purpose'],count:int(f('count'),'the email count'),cta,
-          offerName:f('offerName')||null,permissionContext:f('permissionContext')??'',customerMoment:f('customerMoment')??'',consentProcess:f('consentProcess')??'',incentiveTerms:f('incentiveTerms')??'None'};
+          offerName:f('offerName')||null,permissionContext:f('permissionContext')??'',customerMoment:f('customerMoment')??'',consentProcess:f('consentProcess')??'',incentiveTerms:f('incentiveTerms')??'None',
+          ...(f('kind')==='acquisition'?{objective:(f('objective')??'') as CampaignBrief['objective'],channels:form.fields.getAll('channels') as CampaignBrief['channels'],articleIds:form.fields.getAll('articleId')}:{})};
         const r=await creator.create(actor.userId,brandId,f('commandId')??'',brief);
         return ok(back('campaigns/'+r.id),r.state==='draft'?'Campaign draft ready for review.':'Campaign saved. Review its current state before starting another run.');
       }
@@ -354,6 +584,16 @@ async function handlePost(
         const record=await creator.get(actor.userId,brandId,id);
         await creator.edit(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',creatorContentFromForm(record,form.fields));
         return ok(back('campaigns/'+id),'New draft version saved. Review it before export.');
+      }
+      if(['findings','pattern','pattern-withdraw','guidance'].includes(parts[2]??'')){
+        const learning=input.service.creativeFor?.(input.identity!,input.requestId,engine)?.learning();
+        if(!learning)throw new SeoBlogError(404,'The learning journal is not enabled for this brand.');
+        const here=back('campaigns/'+id)+'#learning';
+        if(parts[2]==='findings'){const r=await learning.record(actor.userId,brandId,id,f('commandId')??'');return ok(here,r.replayed?'These findings were already recorded.':'Findings recorded with today’s date and the exact outcomes they cite. Nothing was changed or started.');}
+        if(parts[2]==='pattern'){await learning.sharePattern(actor.userId,brandId,f('findingId')??'',f('statement')??'',f('commandId')??'');return ok(here,'General pattern shared with your other brands. It carries no figures, names or offers, and you can withdraw it.');}
+        if(parts[2]==='pattern-withdraw'){await learning.withdrawPattern(actor.userId,brandId,f('patternId')??'',f('commandId')??'');return ok(here,'Pattern withdrawn. Your other brands no longer see it.');}
+        await learning.copyToGuidance(actor.userId,brandId,id,f('findingId')??'',f('acknowledge')==='1');
+        return ok(back('setup'),'Findings saved to brand guidance as an audience note. Setup still shows the profile as confirmed for blog writing; use “Re-extract from current guidance”, then confirm, before the creative studio and campaign creators can use this brand again.');
       }
       if(parts[2]==='approve'){
         await creator.approve(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',f('reviewed')==='1');

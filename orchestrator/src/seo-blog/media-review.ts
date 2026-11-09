@@ -2,8 +2,8 @@
 import { createHash } from 'node:crypto';
 import type { SeoMediaAssetManifestInput, SeoMediaAuthorizationInput, SeoMediaCanonicalApproval, SeoMediaCanonicalManifest,
   SeoMediaAsset, SeoMediaCandidateInput, SeoMediaOwnerAuthorization, SeoMediaPreparation, SeoMediaPreparationInput, SeoMediaPrivateBytes, SeoMediaSocialUseInput, SeoMediaSocialAuthorization, SeoMediaUseInput, SeoMediaUseReservation, SeoMediaWithdrawal, SeoMediaWithdrawalInput } from './media-types.js';
-import { prepareJpegVariants, JpegPreparationError } from './jpeg-preparation.js';
-import type { ArticleLocalImageProposal } from './image-campaign.js';
+import { prepareJpegVariants, JpegPreparationError, type JpegVariantProfile } from './jpeg-preparation.js';
+import type { ArticleLocalImageProposal, LocalImageOrigin } from './image-campaign.js';
 import { canonicalCompanyContentJson } from '../company-content-pg/validation.js';
 import type { CompanyContentService } from '../company-content-pg/service.js';
 import type { DatabaseRequestContext } from '../db/rls.js';
@@ -111,7 +111,9 @@ export class ArticleMediaReviewService {
     const current = await this.article(actorId, brandId, articleId);
     if (!current.mediaWithdrawals?.some(w => w.id === result.id)) await this.store.updateArticle({ ...current, mediaWithdrawals: [...(current.mediaWithdrawals ?? []), result] });
   }
-  async upload(actorId: string, brandId: string, articleId: string, versionId: string, commandId: string, bytes: Buffer, filename: string): Promise<ArticleLocalImageProposal> {
+  /** `options` narrows preparation to exact-size formats for finished artwork (e.g. a Creative Studio hand-off); defaults are unchanged. */
+  async upload(actorId: string, brandId: string, articleId: string, versionId: string, commandId: string, bytes: Buffer, filename: string,
+    options: { readonly profiles?: readonly JpegVariantProfile[]; readonly origin?: LocalImageOrigin } = {}): Promise<ArticleLocalImageProposal> {
     await this.article(actorId, brandId, articleId);
     const version = await this.store.getVersion(brandId, versionId);
     if (!version || version.articleId !== articleId) throw new SeoBlogError(404, 'The source article version was not found.');
@@ -121,28 +123,33 @@ export class ArticleMediaReviewService {
     const saved = await this.media.persistCandidateReceipt(brandId, { commandId, bytes, provenance: { kind: 'uploaded', brandSha256, sourceName }, receipt: { outcome: 'uploaded', code: 'uploaded', usage: null } });
     const sha = createHash('sha256').update(`seo-blog-upload-crops/v1:${commandId}`).digest('hex');
     const cropCommand = `${sha.slice(0, 8)}-${sha.slice(8, 12)}-5${sha.slice(13, 16)}-8${sha.slice(17, 20)}-${sha.slice(20, 32)}`;
-    return this.crop(actorId, brandId, articleId, versionId, cropCommand, saved.id, saved.sha256, { x: .5, y: .5 });
+    return this.crop(actorId, brandId, articleId, versionId, cropCommand, saved.id, saved.sha256, { x: .5, y: .5 }, options);
   }
-  async crop(actorId: string, brandId: string, articleId: string, versionId: string, commandId: string, candidateAssetId: string, candidateSha256: string, focal: { x: number; y: number }): Promise<ArticleLocalImageProposal> {
+  async crop(actorId: string, brandId: string, articleId: string, versionId: string, commandId: string, candidateAssetId: string, candidateSha256: string, focal: { x: number; y: number },
+    options: { readonly profiles?: readonly JpegVariantProfile[]; readonly origin?: LocalImageOrigin } = {}): Promise<ArticleLocalImageProposal> {
     const article = await this.article(actorId, brandId, articleId);
     const previous = article.localImageProposals?.find(p => p.commandId === commandId);
     if (previous) {
-      if (previous.candidateAssetId !== candidateAssetId || previous.candidateSha256 !== candidateSha256 || previous.articleVersionId !== versionId || previous.focal.x !== focal.x || previous.focal.y !== focal.y) throw new SeoBlogError(409, 'This crop command belongs to another exact image or focal point.');
+      if (previous.candidateAssetId !== candidateAssetId || previous.candidateSha256 !== candidateSha256 || previous.focal.x !== focal.x || previous.focal.y !== focal.y) throw new SeoBlogError(409, 'This crop command belongs to another exact image or focal point.');
+      if (previous.articleVersionId !== versionId) throw new SeoBlogError(409, 'This image was prepared for an earlier blog version. Refresh and prepare it again for the current version.');
       return previous;
     }
+    // Finished Creative Studio artwork is never re-cropped: the owner approved exact pixels, and a crop would cut its text.
+    if (!options.origin && article.localImageProposals?.some((p) => p.candidateAssetId === candidateAssetId && p.origin?.kind === 'creative_studio')) throw new SeoBlogError(409, 'This image is approved Creative Studio artwork and cannot be re-cropped. Create a different format in the Creative Studio instead.');
     if (article.currentVersionId !== versionId) throw new SeoBlogError(409, 'The blog changed. Refresh before preparing its crop.');
     if ((article.localImageProposals?.length ?? 0) >= 64) throw new SeoBlogError(409, 'The retained local crop limit was reached. Previous crops were not discarded.');
     const source = await this.media.loadPrivateAsset(brandId, candidateAssetId, candidateSha256);
     if (source.asset.kind !== 'candidate') throw new SeoBlogError(400, 'Choose the original saved candidate for a new crop.');
     // Pure bounded decoding occurs outside all database transactions and cannot call a provider.
     let prepared: ReturnType<typeof prepareJpegVariants>;
-    try { prepared = prepareJpegVariants(source.bytes, { focal }); }
+    try { prepared = prepareJpegVariants(source.bytes, { focal, ...(options.profiles ? { profiles: options.profiles } : {}) }); }
     catch (error) { if (error instanceof JpegPreparationError) throw new SeoBlogError(400, error.message); throw error; }
     const saved = await this.media.commitPreparation(brandId, { commandId, sourceAssetId: candidateAssetId, sourceSha256: candidateSha256,
       outcome: 'prepared', sourceDimensions: { width: prepared.original.width, height: prepared.original.height }, detail: null,
       variants: prepared.variants.map(v => ({ bytes: v.bytes, recipe: v.recipe! })) });
     const proposal: ArticleLocalImageProposal = { commandId, articleVersionId: versionId, candidateAssetId, candidateSha256, focal,
-      variants: saved.variants.map(a => ({ assetId: a.id, sha256: a.sha256, profile: a.recipe!.profile, width: a.width!, height: a.height! })), preparedAt: this.now() };
+      variants: saved.variants.map(a => ({ assetId: a.id, sha256: a.sha256, profile: a.recipe!.profile, width: a.width!, height: a.height! })), preparedAt: this.now(),
+      ...(options.origin ? { origin: options.origin } : {}) };
     const current = await this.article(actorId, brandId, articleId);
     if (current.currentVersionId !== versionId) throw new SeoBlogError(409, 'The blog changed while preparing its private crop. No review or public use was applied.');
     const retained = current.localImageProposals?.find(p => p.commandId === commandId);
