@@ -294,7 +294,7 @@ export function appShell(opts: AppShellOptions): string {
   const suiteLabel = escapeHtml(profile.suiteLabel);
   const memberNavigation = profile.id==='martin_howard_property'&&!profile.marketingWorkspace
     ? `<nav class="mhp-member-nav" aria-label="Member navigation">${mhpMemberNavigationLinks({owner:profile.programmeAdmin===true})}</nav>` : '';
-  return `${pageHead(opts.title, profile, crmMode ? crmPageReferrerPolicy(profile) : 'no-referrer')}<body><a class="skip-link" href="#main-content">Skip to main content</a>
+  return `${pageHead(opts.title, profile, opts.active === 'webinars' ? 'same-origin' : crmMode ? crmPageReferrerPolicy(profile) : 'no-referrer')}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
       <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${brandName}<small>${suiteLabel}</small></span></a>

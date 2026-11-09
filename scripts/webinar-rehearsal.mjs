@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
-import { Server } from 'node:http';
 import { runMigrations, discoverMigrations } from '../orchestrator/src/db/migrate.ts';
 import { hashPassword } from '../orchestrator/src/portal/accounts.ts';
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from '../orchestrator/src/db/webinar-schema.ts';
@@ -139,21 +138,6 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   try {
     await bootstrap();
     stage = 'reviewed application startup';
-    // Bounded, rehearsal-only diagnostics for the observed hosted form refusal.
-    // No body, cookies, addresses, access tokens or forwarded headers are logged.
-    const emit = Server.prototype.emit;
-    let originChecks = 0;
-    Server.prototype.emit = function(event, ...args) {
-      const req = args[0];
-      if (event === 'request' && req?.method === 'POST' && req.url?.startsWith('/portal/webinars') && originChecks++ < 3) {
-        let originHost = 'absent';
-        try { if (req.headers.origin) originHost = new URL(req.headers.origin).host; } catch { originHost = 'invalid'; }
-        console.log(JSON.stringify({ rehearsalOriginCheck: true,
-          requestHost: /^[a-zA-Z0-9.:-]{1,253}$/.test(req.headers.host ?? '') ? req.headers.host : 'invalid',
-          originHost, fetchSite: ['same-origin','same-site','cross-site','none'].includes(req.headers['sec-fetch-site']) ? req.headers['sec-fetch-site'] : 'absent' }));
-      }
-      return Reflect.apply(emit, this, [event, ...args]);
-    };
     await import('../orchestrator/src/server/index.ts');
   } catch (error) {
     console.error(JSON.stringify({ rehearsal: true, failedStage: stage, sqlState: /^[0-9A-Z]{5}$/.test(error?.code ?? '') ? error.code : undefined }));
