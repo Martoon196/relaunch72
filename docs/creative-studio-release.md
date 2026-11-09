@@ -52,11 +52,12 @@ Only one migration is added. All applied migrations 0001–0143 are byte-identic
 | `0143_mhp_whatsapp_direct_inbox.sql` (canonical, unchanged) | `69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e` | applied in canonical |
 | `0144_creative_studio_library.sql` | `79f92a7d7091cc98d6b63235c57e8cdfac2951afeb131ec4226f5e07adb5a535` | **unapplied**; pinned as `CREATIVE_STUDIO_CHECKSUM` in `orchestrator/src/db/creative-studio-schema.ts` |
 
-0144 is additive: new tables, functions, grants and policies. It replaces three functions in place:
+0144 is additive: new tables, functions, grants and policies. It replaces four functions in place:
 
 - `seo_image_reserve`: a studio branch runs before the unchanged article branch;
 - `seo_image_apply_hold`: a studio branch;
-- `seo_creator_command` (Milestone 2): kind lists only.
+- `seo_creator_command` (Milestone 2): kind lists only;
+- `seo_method_save_receipt` (Milestone 2): the acquisition kind in its stage list.
 
 It also adds grants to the NOLOGIN definer roles. Runtime roles get EXECUTE on named functions only, and no table access.
 
@@ -164,7 +165,7 @@ Expected cost is a few US cents of output-image tokens (published per-token rate
 |---|---|---|
 | `CREATIVE_STUDIO_ENABLED=true` | Growth HQ web **and** SEO worker | Mounts the studio, routes, render and image jobs, and the enquiry route. Default off. |
 | `SEO_BLOG_ENABLED=true` | both (existing) | The SEO area and worker loop. |
-| `SEO_BLOG_IMAGE_API_KEY` | SEO worker (existing secret) | Image provider credential. Only the worker uses it. |
+| `SEO_BLOG_IMAGE_API_KEY` | SEO worker **and** Growth HQ web (existing secret, as for article images) | The worker makes the call. The web service reads only whether the key is present, to show "provider configured" before a request; without it the Generate button is disabled. The value is never logged. |
 | `DATABASE_CONTENT_COMMAND_URL` | both (existing) | Role `r72_content_command`. |
 | `DATABASE_CRM_COMMAND_URL` | web (existing) | Role `r72_crm_command`. Required for the enquiry route. |
 | `SESSION_SECRET` | web (existing) | Signs enquiry form tokens. No new secret. |
@@ -183,7 +184,7 @@ Both allowances below must permit a request, and a third (studio) allowance is a
      config=config||'{"enabled":true,"maxConcurrency":1,"perAttemptMicrousd":<hold per image>,"monthlyMicrousd":<monthly cap>}'::jsonb;
    ```
 
-   - `perAttemptMicrousd` is held per attempt against the monthly cap, and shown to owners as an upper-bound hold, not a price.
+   - `perAttemptMicrousd` is reserved per attempt against the monthly cap. Owners see it as a fixed reservation set by the operator; it is not the charge and does not cap the provider's bill.
    - To close it again, set `"enabled":false` with `version=version+1`.
    - This policy also governs article images, but only for brands that separately opted in to them.
 2. **Brand image allowance** (owner): SEO Blog → brand → Publishing → images per month. It is shared with blog images and defaults to 0.

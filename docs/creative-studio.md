@@ -354,7 +354,7 @@ It never receives offers, prices, claims, conversion pages, audiences, contacts 
 
 ## Owner and operator steps
 
-1. **Operator** (database role `r72_owner` only): open `app_private.seo_image_operator_policy`. Set `enabled`, `maxConcurrency`, `monthlyMicrousd` and `perAttemptMicrousd` (the reservation shown to owners as an upper-bound hold, not a price). It is closed by default.
+1. **Operator** (database role `r72_owner` only): open `app_private.seo_image_operator_policy`. Set `enabled`, `maxConcurrency`, `monthlyMicrousd` and `perAttemptMicrousd` (a fixed reservation per attempt against the monthly cap; owners are told it is not the charge and does not cap it). It is closed by default.
 2. **Owner**: SEO Blog → brand → **Publishing**. Set the brand image allowance (`imagesPerMonth`, shared with blog images).
 3. **Owner**: Creative studio → **Generate a new image** → **Allowances**. Tick *Allow paid images from typed briefs* and set *Studio images per UTC month*. It defaults to **off / 0**. A writing (model-token) allowance is not an image allowance.
 4. Write a brief → **Save brief and review the cost**. The page shows:
@@ -384,7 +384,7 @@ Configuration: `CREATIVE_STUDIO_ENABLED=true` on both the web service and the SE
   - a reference reaches the provider as one multipart part;
   - reference and brand isolation;
   - no direct table access, and the tables are append-only.
-- **Unit** (`test/creative-studio-generation.test.ts`, 11 tests): brief rules, prompt boundaries, transport compatibility, the edits multipart, refusal classification, and the worker order with fakes. Also one service test for previews and backgrounds.
+- **Unit** (`test/creative-studio-generation.test.ts`, 18 tests): brief rules, prompt boundaries, the article request pinned byte-for-byte, the edits multipart, refusal classification, and the worker order with fakes (claim binding, lease loss, receipt reuse, unconfirmed and refused reservations, bounded attempts, safe read-back retry, contained throws, every tampered identity field). Also one service test for previews and backgrounds.
 - **Visual** (`test/manual-creative-generation-pg-demo.ts`): the production portal and worker compositions on a disposable database, driven in Chromium. Every screenshot is marked *SYNTHETIC PROVIDER RESPONSE*: the picture is a generated gradient, not a provider image. It found and fixed:
   - generated previews were refused by the article-variant media route, so a dedicated brand-scoped, digest-checked preview route was added;
   - loading generated images depended on article image review being configured;
@@ -485,9 +485,57 @@ Until now only imported contacts carried campaign tags, so live campaign leads a
   - tampered tags, a missing consent tick and a switched-off form are refused, and a honeypot hit creates nothing;
   - the runtime role has no table access.
 - The Milestone 4 proof now shows that a stage slugged "qualified" is not counted until it is mapped.
-- Unit tests cover the UTM filter, tokens bound to brand, key, tags and time, input checks, the embed code and the owner page.
+- Unit tests cover the UTM filter, tokens bound to brand, key, tags and time (including future stamps), input checks with typed errors, email-only contact points and the permission evidence in the task text, the database-decided hourly cap, framing rules, the embed code and the owner page.
 
 ## Rollout
 
 - The public route `/enquire/<brand>/<key>` is mounted on the main web service only when `CREATIVE_STUDIO_ENABLED=true` and the portal's CRM command pool (`DATABASE_CRM_COMMAND_URL`, role `r72_crm_command`) is composed. No new secret: tokens use the existing portal session secret.
-- The hosted link and the embed code use the portal's configured public base URL.
+- The hosted link and the embed code need the portal's configured public base URL (`portalBaseUrl`); without it the Enquiries page says so instead of showing an unusable address.
+- The embed form may be framed only by the brand's own website and its confirmed conversion-page hosts (`frame-ancestors`); the hosted form cannot be framed.
+
+
+# Audit of the gap-closing work (typed-brief images, durable renders, enquiry capture)
+
+Six independent reviews (SQL security of 0144 sections 5–6, the typed-brief generation code, the durable render path, the public enquiry capture, routes/views/documentation accuracy, and test quality) produced 73 findings. Every finding was re-verified against the code before it was accepted. None was a cross-brand data leak or a second-charge path; the most serious were an attribution-integrity hole and a CRM record-pollution path in the new enquiry form. All confirmed findings are fixed except those recorded under *Accepted*.
+
+| Finding | Fix |
+|---|---|
+| **Enquiry form could re-attribute an existing customer.** Anyone knowing a customer’s email could submit the form through a campaign link; the outcome reader took the latest touch per contact and never checked that outcomes came after it, so that customer’s earlier purchase became this campaign’s "sale". | Outcomes count only when they occur at or after the touch; an enquiry touch is judged by the opportunity it created; "customer" for an enquiry touch needs the enquiry to have created the contact or its own opportunity to be won. Touches record `created_contact`. Proved on PostgreSQL with a real won opportunity. |
+| **Phone number as a CRM contact point** let a visitor attach their own email to someone else’s record by quoting that person’s phone number (the CRM de-duplicates on any supplied point). | Only the email is a contact point; the phone number is kept in the task text. |
+| **Hourly cap was read-then-compare** across two transactions, so a burst could exceed 50. | Admission is a database function under the capture row lock with its own admissions table; a refused admission creates nothing. Proved with seeded admissions. |
+| **Touches were dropped for a concept handed off on more than one channel** (only the oldest hand-off was examined). | Any hand-off this brand issued whose link carries exactly those campaign, content, source and medium values qualifies. Proved with Instagram and LinkedIn links. |
+| Touch insert raced with itself (23505 → 503 for the visitor). | Conflict-safe insert; replay reported. |
+| Same render command id with different content was silently "Saved". | The request content is digested into the job; a mismatch is a 409, as the inline path did. |
+| Invalid render requests were queued and failed minutes later as a blocked task. | The same validators run at submit time; the owner sees the message at once and keeps the form. |
+| A worker holding a render claim could create sets or append to any set of the brand. | SQL binds writes to the queued operation: a draft may only create its set; other operations may only append to their own set. Proved on PostgreSQL. |
+| Job rows stored the whole draft form, including the CSRF token. | Only creative request fields are stored, bounded. |
+| A lease that lapsed during a long render was written back as "blocked" with a permission message. | A lapsed lease is left for the next claim, which replays the idempotent command. |
+| A stopped render task had no retry; Tasks links went to the wrong page; "Cancel" was offered on a running paid image job. | Retry on the task page (render jobs only); Tasks links go to the task or brief; a running studio image job cannot be cancelled. |
+| Unexpected throws in the image worker escaped to the worker loop, leaving the batch leased and an attempt without a receipt. | The worker contains them: held as unknown after a call, re-admitted before one; the engine also fences the runner. |
+| A transient storage read failure after a paid call was final ("not a usable image"); recording failures were unhandled. | Read-back and recording are retried safely (a re-run finds the stored receipt and never calls again). |
+| Three "platform busy" holds blocked the job while its text said "try again shortly". | The final hold says so and asks for a new request. |
+| All 4xx provider refusals read as "change the brief". | Credential/access (401/403) and rate limit (429) refusals have their own text. |
+| Five SQL hold reasons had no owner text; an unconfirmed reservation was reported as "nothing was charged". | Every reason has text; unconfirmed reservations say what will happen. |
+| The prompt sent the free-text `summary` under the label "positioning". | It sends the confirmed `positioning` field only; an over-long brief plus guidance is refused up front. |
+| Generated-image lookups read the 60 newest rows, so older images 404ed. | Lookup by id. |
+| The estimate ignored unresolved earlier-month attempts that admission counts; "upper-bound hold" was not an upper bound; an unreadable policy read as "not enabled". | The estimate mirrors admission; the reservation is described as fixed and not a cap; an unreadable policy is reported as such. |
+| Creative form errors redirected to the studio overview, losing the page. | Errors return to the page the form was on. |
+| The "use one paid image" confirmation was client-side only. | Checked on the server too. |
+| Embed form could be framed by any origin; hosted link fell back to `http://localhost`; no key rotation. | `frame-ancestors` limited to the brand’s site and confirmed conversion hosts; no address shown without a configured base URL; "Issue a new form address". |
+| Standard pipeline slug could collide with an archived pipeline; first setup on an existing pipeline failed until stages were chosen. | Collision-safe slug; sensible default stages. |
+| `command_receipts` read grant broader than needed; PostgreSQL constraint text shown to owners; stale comments; hard-coded limit in copy; missing `<noscript>`; polling script froze silently on 401/404 or after 20 minutes. | Narrowed policy; fixed messages; comments corrected; constant used; fallback added; the script now explains and stops. |
+| Docs: "three replaced functions" (four); credential "worker-only" (web reads presence too, as for article images); base-URL fallback; test counts. | Corrected. |
+
+**Accepted (recorded, not changed):**
+
+- With a known email, the form can still tell an archived or deleted contact from others (503 vs 200). The phone-linkage oracle is gone. Low value, bounded by the cap.
+- Each accepted enquiry creates a permanent contact, opportunity and task (the investor form creates an activity only). They are marked `source=creative_studio_enquiry` and bounded by the cap and honeypot; there is no per-IP throttle because the client address is not reliable behind the proxy.
+- Lead-created activities are attributed to the capture owner as a user actor, as the Growth HQ inbox does; SQL re-verifies that the owner still manages the brand on every submission.
+- When the paid pixels already exist, the studio record step re-checks the claim and sponsor but not the operator policy or source (deliberate: recording is not a new charge).
+- The generation row stores the width and height the worker decoded from the real bytes; candidate assets carry no dimensions to cross-check.
+- Soft-deleted contacts keep their touch rows; the outcome reader excludes them.
+- The edits (reference image) request does not send `moderation` or `safety_identifier`; whether that endpoint accepts them is unverified against the provider’s documentation.
+- A worker started without `CREATIVE_STUDIO_ENABLED` blocks a studio job with a generic message even if an earlier worker had admitted an attempt; the attempt itself is untouched.
+- Deleting a CRM stage that the enquiry form maps fails until the mapping is changed (foreign key).
+
+Test gaps closed: the article request body and identity are pinned as literals; worker fakes assert the claim they are given and mirror SQL’s claim check; receipt envelopes are compared; the same claimed job run twice at once makes one call; the polling rule is checked against the emitted endpoint; every new POST is checked for CSRF; the status JSON is checked for leaks; preview and task routes are checked for strangers and other brands with exact 404s; the hourly cap, expired and future tokens, key rotation and embed framing are proved on PostgreSQL.
