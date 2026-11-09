@@ -36,7 +36,7 @@ test('real Chromium creates a webinar through the normal form without relaxing O
       await page.waitForURL(/\/portal\/webinars\/[0-9a-f-]{36}\?/);
       const stored = await harness.service.list(brand.owner, randomUUID());
       assert.equal(stored.webinars.length, 1);
-      assert.equal(stored.webinars[0]!.title, 'Browser-created private webinar');
+      assert.equal(stored.webinars[0]!.event.title, 'Browser-created private webinar');
     } finally {
       await browser?.close();
       await harness?.close();
