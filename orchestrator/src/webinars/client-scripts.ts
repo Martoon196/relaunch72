@@ -605,7 +605,10 @@ export const STUDIO_SCRIPT = String.raw`(function () {
       .then(function (r) { return r.text().then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var error = doc.querySelector('[role="alert"]');
-        if (!r.ok || error || new URL(r.url).searchParams.has('e')) throw new Error(error ? error.textContent : 'The session change was refused.');
+        if (!r.ok || error || new URL(r.url).searchParams.has('e')) {
+          var reason = error || doc.querySelector('.page-heading p');
+          throw new Error(reason ? reason.textContent : 'The session change was refused (' + r.status + ').');
+        }
         var fresh = doc.querySelector('[data-studio-session-controls]');
         var freshRoot = doc.querySelector('[data-studio]');
         if (!fresh || !freshRoot) throw new Error('Your session could not be confirmed. Keep the studio open and try again.');
