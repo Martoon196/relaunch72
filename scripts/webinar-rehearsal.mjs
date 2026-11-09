@@ -8,6 +8,8 @@ import { hashPassword } from '../orchestrator/src/portal/accounts.ts';
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from '../orchestrator/src/db/webinar-schema.ts';
 import { spawn } from 'node:child_process';
 import { redactIngest } from '../orchestrator/src/webinars/studio.ts';
+import { CloudflareStreamClient } from '../orchestrator/src/webinars/stream.ts';
+import { loadWebinarConfig } from '../orchestrator/src/webinars/config.ts';
 
 const DB_NAME = 'rl72_webinar_rehearsal_db_20261109';
 const DB_HOST = 'dpg-dbp2tpon74is73eqn260-a';
@@ -57,7 +59,7 @@ let stage = 'target guard';
 // One bounded synthetic provider probe, only on this guarded disposable DB.
 // Reuses an existing test input; never exposes its credentials or starts a webinar.
 async function probeExistingTestInput(client, env) {
-  const marker = 'synthetic-ingest-probe-20261109-v1';
+  const marker = 'synthetic-ingest-probe-20261109-v2';
   if ((await client.query('SELECT 1 FROM rehearsal_private.state WHERE key=$1', [marker])).rowCount) return;
   await client.query('BEGIN');
   await client.query('SET LOCAL ROLE r72_owner');
@@ -73,6 +75,8 @@ async function probeExistingTestInput(client, env) {
   };
   let child, timer, stderr='', target='', key='';
   try {
+    const config = loadWebinarConfig(env).stream; assert(config);
+    const adapter = new CloudflareStreamClient(config);
     const input = await api();
     assert.equal(input.rtmps?.url, 'rtmps://live.cloudflare.com:443/live/');
     key = input.rtmps.streamKey; assert(typeof key === 'string' && key.length > 10);
@@ -88,13 +92,27 @@ async function probeExistingTestInput(client, env) {
       await new Promise(resolve=>setTimeout(resolve,4000));
       const state=await api(); const raw=state.status;
       const text=v=>typeof v==='string'?v.slice(0,64):null;
-      report.observations.push({atSeconds:(i+1)*4,statusType:typeof raw,status:text(raw),state:text(raw?.state),currentState:text(raw?.current?.state)});
+      const normalized=(await adapter.getLiveInput(row.live_input_uid)).connection;
+      report.observations.push({atSeconds:(i+1)*4,statusType:typeof raw,status:text(raw),state:text(raw?.state),currentState:text(raw?.current?.state),normalized});
+      if(i===1) {
+        const token=adapter.signPlayback(row.live_input_uid,Date.now(),120).token;
+        const manifest=await fetch(adapter.hlsUrl(token),{headers:{Origin:env.RENDER_EXTERNAL_URL,Referer:env.RENDER_EXTERNAL_URL+'/'},signal:AbortSignal.timeout(10000)});
+        report.liveManifest={status:manifest.status,m3u8:(await manifest.text()).trimStart().startsWith('#EXTM3U')};
+      }
       if(ended)break;
     }
     await done;
     const videos=await api('/videos');
     report.videoCount=Array.isArray(videos)?videos.length:null;
     report.videoStates=Array.isArray(videos)?videos.map(v=>String(v.status?.state??'unknown').slice(0,40)):[];
+    const recordings=await adapter.recordingsFor(row.live_input_uid);
+    report.normalizedRecordingCount=recordings.length;
+    const ready=recordings.filter(v=>v.readyToStream && v.state==='ready').sort((a,b)=>(b.duration??0)-(a.duration??0))[0];
+    if(ready) {
+      const token=adapter.signPlayback(ready.uid,Date.now(),120).token;
+      const manifest=await fetch(adapter.hlsUrl(token),{headers:{Origin:env.RENDER_EXTERNAL_URL,Referer:env.RENDER_EXTERNAL_URL+'/'},signal:AbortSignal.timeout(10000)});
+      report.replayManifest={status:manifest.status,m3u8:(await manifest.text()).trimStart().startsWith('#EXTM3U'),seconds:ready.duration};
+    }
   } catch(error) { report.failure=redactIngest(String(error?.message??'probe failed'),[key,target,env.CLOUDFLARE_STREAM_API_TOKEN]).slice(0,200); }
   finally {
     if(timer)clearTimeout(timer); if(child && child.exitCode===null)child.kill('SIGKILL');

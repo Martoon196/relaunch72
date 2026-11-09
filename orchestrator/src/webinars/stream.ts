@@ -53,6 +53,13 @@ function b64url(input: Buffer | string): string {
 }
 
 export function liveConnection(status: unknown): LiveConnection {
+  // The real provider response uses status.current.state; SDK examples also
+  // advertise the legacy scalar shape. Unknown payloads must still fail closed.
+  if (status && typeof status === 'object' && !Array.isArray(status)) {
+    const current = (status as Record<string, unknown>).current;
+    status = current && typeof current === 'object' && !Array.isArray(current)
+      ? (current as Record<string, unknown>).state : undefined;
+  }
   switch (status) {
     case 'connected':
     case 'reconnected':
@@ -151,8 +158,11 @@ export class CloudflareStreamClient {
   /** Recordings for one live input, newest first. */
   async recordingsFor(liveInputUid: string): Promise<StreamVideo[]> {
     assertUid(liveInputUid);
-    const list = await this.api<Record<string, unknown>[]>('GET', '', undefined, { live_input_id: liveInputUid, limit: '50' });
-    return (Array.isArray(list) ? list : []).map(video).filter((v): v is StreamVideo => v !== null)
+    const list = await this.api<Record<string, unknown>[]>('GET', `/live_inputs/${liveInputUid}/videos`);
+    // The scoped endpoint can omit liveInput; retain an explicit foreign input
+    // so it is rejected rather than silently associating another brand's video.
+    return (Array.isArray(list) ? list : []).map(raw => video({ ...raw, liveInput: raw.liveInput ?? liveInputUid }))
+      .filter((v): v is StreamVideo => v !== null && v.liveInput === liveInputUid)
       .sort((a, b) => String(b.created).localeCompare(String(a.created)));
   }
 

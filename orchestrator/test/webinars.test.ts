@@ -279,3 +279,21 @@ test('attendee polls reuse one signed playback token until it nears expiry', () 
   const other = service.playback(event({ sessionState: 'ended', sessionEndedAt: '2026-11-25T20:00:00Z', recordingState: 'ready', recordingUid: UID_B }));
   assert.notEqual(other.hlsUrl, third.hlsUrl, 'tokens are per video');
 });
+
+test('actual Cloudflare nested live status and input-scoped recordings drive playback', async () => {
+  for (const state of ['connected', 'reconnected', 'reconnecting', 'client_disconnect', 'failed_to_connect']) {
+    assert.equal(liveConnection({ current: { state } }), liveConnection(state));
+  }
+  for (const status of [{}, { current: null }, { current: { state: 'new-unknown-state' } }, { connected: true }, []]) assert.equal(liveConnection(status), 'idle');
+  const {client,calls}=streamClient(url => {
+    if (url.pathname.endsWith('/live_inputs/'+UID_A)) return Response.json({success:true,result:{uid:UID_A,status:{current:{state:'connected'}},rtmps:{url:'rtmps://live.cloudflare.com:443/live/',streamKey:'synthetic-only-key'}}});
+    assert.equal(url.pathname.endsWith('/live_inputs/'+UID_A+'/videos'),true);
+    assert.equal(url.search,'');
+    return Response.json({success:true,result:[{uid:UID_B,status:{state:'ready'},readyToStream:true,duration:120},
+      {uid:'c'.repeat(32),liveInput:'d'.repeat(32),status:{state:'ready'},readyToStream:true,duration:999}]});
+  });
+  assert.equal((await client.getLiveInput(UID_A)).connection,'connected');
+  const recordings=await client.recordingsFor(UID_A);
+  assert.equal(recordings.length,1); assert.equal(recordings[0]!.liveInput,UID_A); assert.equal(recordings[0]!.uid,UID_B);
+  assert.equal(calls.length,2);
+});
