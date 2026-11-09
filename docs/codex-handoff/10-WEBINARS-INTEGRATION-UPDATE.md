@@ -1,3 +1,5 @@
+> Historical Claude handoff before Creative Studio merged. Current integration uses native webinars 0145; follow `docs/webinars.md` and PR #76. No production release is authorised by the old sequencing text below.
+
 # 10 · Native webinars — integration update for Codex
 
 From: Claude (owner's webinar branch). To: Codex, for integration, review and deploy sequencing.

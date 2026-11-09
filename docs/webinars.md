@@ -47,7 +47,7 @@ missing and what each enables. Nothing is faked and nothing 404s.
   records the session; after **End session** the worker finds the recording (`GET /stream?live_input_id=`),
   and the webhook or poll promotes it to the replay.
 * **Not used:** Cloudflare Stream's own WebRTC (WHIP/WHEP) ingest. In the API shapes reviewed it does not
-  record and cannot be played as signed HLS, so it would give no replay and no access control.
+  record and cannot be played as signed HLS, so it would give no replay and therefore cannot satisfy this recorded-HLS design.
 
 ### Browser studio: host with camera, microphone and screen share, no OBS
 
@@ -129,35 +129,62 @@ API shapes were checked against the official `cloudflare` SDK 7.3.0 typings (liv
 webhooks, `live_input_id` list filter, tus direct upload headers) because developers.cloudflare.com was not
 reachable from the build environment. Re-check against current docs during the live test.
 
-## Data and release
+## Data and release — current integration order
 
-* **Migration `0145_native_webinars.sql`** — additive only: `app.webinar_events`, `webinar_registrations`,
-  `webinar_signals`, `webinar_questions`, `webinar_jobs`, `webinar_provider_receipts`, FORCE RLS per
-  workspace (pattern from 0131), definer functions for the public/attendee paths, grants to the existing
-  `r72_content_command` only. SHA-256 `dea9e16c2743b58b5901f95be06abcfc39d2237dc087b1c949478eb17357f3af`
-  (pinned in `src/db/webinar-schema.ts`). Payment (0142) and inbox (0143) migrations are untouched.
-* **Number coordination:** the unmerged Creative Studio branch also uses 0145. Whichever merges second renames
-  its file to 0145, updates its schema constant, re-pins the checksum and the runtime-readiness clauses.
-* **Runtime readiness:** a 144 release is ready on the exact 143 ledger (0145 pending) and after 0145; the 143
-  release is ready after the exact reviewed 0145 (recovery clause). Any other ledger is refused.
+Creative Studio already owns **0144** on canonical. Native webinars is now
+**0145_native_webinars.sql**, with unchanged SQL SHA-256
+`dea9e16c2743b58b5901f95be06abcfc39d2237dc087b1c949478eb17357f3af`.
+Payment 0142, inbox 0143 and Creative Studio 0144 are preserved.
 
-### Deploy order
+The 145 application is ready on the exact applied 144 ledger with only its reviewed
+145 pending, and after 145. It is not deployable on a 143 database while Creative
+Studio 144 is also pending. Verify actual source/schema before starting a release.
 
-1. Deploy the capable release (this branch) to every consumer. With 0145 pending, the webinar service is not
-   composed (schema probe) and `/portal/webinars` shows the setup state.
-2. Run the migrator; verify `app_private.schema_migrations` shows 0145 with the checksum above and `/ready`.
-3. Restart or redeploy so the webinar service composes; set Cloudflare and email names when ready.
+**The currently released 143/144 binaries are not assumed to support rollback after
+145.** A separate prepared 144 recovery source is
+`ba05116ace7b4ac53bbb98bbb31eb6a38bfb3ed5`, tree
+`174d3f90aada3bd7e52b57bdbf9280135d28d285`. Its exact readiness bridge accepts
+only this additive 145; it does not contain the webinar routes or services.
 
-### Recovery
+### Before production
 
-* Roll back to the 143 release at any time after 0145: its readiness accepts the exact additive 0145; the
-  tables are simply unused. No down-migration.
-* Stop sending without a deploy: `WEBINAR_EMAIL_MODE=off` (jobs wait) or `WEBINAR_WORKER_ENABLED=false`.
-* Jobs left `unknown` after a crash are never retried automatically; the Reminders tab lists them.
-* An uncertain live-input creation is reconciled from the Broadcast tab (finds the input by job metadata)
-  rather than creating a duplicate.
+The owner Cloudflare rehearsal remains a release gate. Run it first on a local or
+separately approved isolated environment and disposable database, using the real
+candidate. Never label fixture media as live-provider proof. A need for a temporary
+Render rehearsal environment is a distinct setup/usage decision, not permission
+to deploy the shared production app before the gate. Production Render FFmpeg
+compatibility remains a post-rollout acceptance check; local proof cannot claim
+that exact host was checked.
 
-## Evidence (kept separate)
+### Controlled rollout, after review and owner rehearsal
+
+1. Confirm Creative Studio 144 is actually applied and the shared release window
+   is available. Preserve existing MHP/other brands' environment settings.
+2. Retain and prove the exact prepared 144 recovery artifact. Deploy the exact
+   capable 145 source to every strict schema consumer with new webinar mail and
+   worker disabled. Verify `/ready` and the honest setup state before migration.
+3. Apply only reviewed 145 with the migrator; verify the exact ledger/checksum and
+   `/ready` on every consumer. Restart the app so its schema-probed service composes.
+4. Verify the Webinars menu, owner permissions, actual Render FFmpeg checks and
+   the approved configuration. Activate only the bounded webinar mode reviewed
+   with the owner. Do not change Apollo, outreach or unrelated channels.
+
+### Recovery and pause
+
+Use the exact prepared 144 recovery release above; never assume an older binary
+accepts the advanced ledger. No down-migration or removal of recorded data.
+`WEBINAR_EMAIL_MODE=off` and `WEBINAR_WORKER_ENABLED=false` are startup configuration:
+after changing Render environment values the running process must be restarted or
+redeployed before they take effect. Saving environment values alone does not pause
+an already running worker. A provider call already in progress remains an uncertain
+or settled operation, not an automatically refunded/cancelled one.
+
+The worker never requeues a calling message after an exception; the existing lease
+reaper classifies it unknown. Recording polling stays within its original two-day
+deadline so a later longer segment can replace an early replay without a webhook.
+Recordings are not stitched; only the longest observed segment is selected.
+
+## Original Claude evidence (historical source; integrated gate is separate)
 
 | Kind | What | Result |
 |---|---|---|
@@ -246,4 +273,4 @@ applications, MHP marketing templates and `MHP_MARKETING_MODE`) is **not changed
   instances the effective limit multiplies. Room polling and signals are limited per registration (240 requests
   per minute each), so an office or campus behind one address is never throttled as a group; questions and
   signals are additionally bounded in the database.
-* Creative Studio migration-number collision must be resolved at merge time.
+* Integration preserves Creative Studio 0144 and uses native webinars 0145.

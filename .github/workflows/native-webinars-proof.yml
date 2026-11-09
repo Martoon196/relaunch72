@@ -30,7 +30,10 @@ jobs:
           node-version: 22.23.4
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Required local media runtime
-        run: ffmpeg -hide_banner -version
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+          ffmpeg -hide_banner -version
       - name: Install pinned renderer for actual artwork and video checks
         env:
           PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
