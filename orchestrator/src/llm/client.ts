@@ -12,6 +12,8 @@ export interface LlmRequest {
   messages: LlmMessage[];
   /** Adaptive thinking (default on). Large copy stages pass false — see StageDef.thinking. */
   thinking?: boolean;
+  /** Server-owned response grammar; callers still validate the full original contract. */
+  outputSchema?: Record<string, unknown>;
   /** Runner metadata (used by the mock client; ignored by the real one). */
   meta?: { stage: string; attempt: number };
 }
@@ -57,6 +59,7 @@ export class AnthropicClient implements LlmClient {
       system: req.system,
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
     };
+    if (req.outputSchema) params.output_config = { format: { type: 'json_schema', schema: providerJsonSchema(req.outputSchema) } };
     // Adaptive thinking is a 4.6+ feature; Haiku-class models reject it, and
     // large output-only stages disable it (req.thinking === false) so the token
     // budget goes to the deliverable, not to reasoning it doesn't need.
@@ -82,4 +85,24 @@ export class AnthropicClient implements LlmClient {
       model: resp.model,
     };
   }
+}
+
+/** Anthropic supports a subset of JSON Schema. Keep unsupported bounds as
+ * descriptions for generation; AJV and content checks retain the full bounds.
+ * Unlike the installed SDK transformer, preserve supported enum constraints. */
+export function providerJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const supported = new Set(['type', 'enum', 'const', 'required', 'description']);
+  const out: Record<string, unknown> = {};
+  const bounds: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (supported.has(key)) out[key] = structuredClone(value);
+    else if (key === 'properties') out.properties = Object.fromEntries(Object.entries(value as Record<string, Record<string, unknown>>).map(([k, v]) => [k, providerJsonSchema(v)]));
+    else if (key === 'items') out.items = providerJsonSchema(value as Record<string, unknown>);
+    else if (key === 'additionalProperties') continue;
+    else if (key === 'minItems' && (value === 0 || value === 1)) out[key] = value;
+    else bounds[key] = value;
+  }
+  if (schema.type === 'object') out.additionalProperties = false;
+  if (Object.keys(bounds).length) out.description = [out.description, 'Server validation constraints: ' + JSON.stringify(bounds)].filter(Boolean).join('\n');
+  return out;
 }

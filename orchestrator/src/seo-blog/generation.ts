@@ -79,6 +79,7 @@ export async function callJson<T>(llm: LlmClient, input: {
     try {
       response = await llm.complete({
         model, maxTokens: input.maxTokens, system: input.system ?? input.prompt.body, messages, thinking: false,
+        ...(methodRun?.structuredPlanning?{outputSchema:input.schema as Record<string,unknown>}:{}),
         meta: { stage: input.prompt.header.stage, attempt },
       });
     } catch (error) {
@@ -328,9 +329,9 @@ export async function proposeCluster(llm: LlmClient, input: {
       `Brand: ${input.brandName}`,
       dataBlock('brand_profile', profileForPrompt(input.profile)),
       dataBlock('website_inventory', input.inventory.filter((p) => p.fetchStatus === 'ok').slice(0, 120).map((p) => ({ url: p.canonical ?? p.url, title: p.title, headings: p.headings.slice(0, 6), editorial: p.editorial }))),
-      dataBlock('research_sources', researchForPrompt(short)),
+      ...(methodRunFor(llm)?.structuredPlanning?[]:[dataBlock('research_sources', researchForPrompt(short))]),
       dataBlock('owner_inputs', { focus: input.focus, excluded_subjects: input.excluded, source_article: input.sourceArticleUrl }),
-      `Server response schema (required; method sidecar is a separate sibling): ${JSON.stringify(PLAN_SCHEMA)}`,
+      ...(methodRunFor(llm)?.structuredPlanning?[]:[`Server response schema (required; method sidecar is a separate sibling): ${JSON.stringify(PLAN_SCHEMA)}`]),
     ].join('\n\n'),
     validate: (v) => {
       const problems: string[] = [];
