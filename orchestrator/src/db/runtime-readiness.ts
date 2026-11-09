@@ -1,5 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
+import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -239,9 +240,17 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
+  // The 142 recovery application can run against precisely its reviewed 143 successor.
+  if (migrations.length===142 && migrations[141]?.checksum===MHP_PAYMENTS_LIVE_CHECKSUM
+      && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) applied.delete(DIRECT_WA_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
+  // Roll out the 143 binary before advancing shared PostgreSQL. During that interval the
+  // reader retains the legacy signed projection and direct reply dispatch stays disabled.
+  if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
+      && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
   // receipt trigger. The production ACL was repaired before this source was
   // published; allow that exact 0122 ledger during the additive cutover.
