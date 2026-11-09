@@ -197,6 +197,7 @@ export async function writeArticleCampaignPromotions(llm: LlmClient, profile: Br
     if(!knownRecord)throw new GenerationUnavailableError('The social copy response did not include safe usage evidence. Its outcome needs review.');
     return {value:generated.value,record:generated.record};
   } catch(error) {
+    if(error instanceof GenerationRejectedError)throw new CampaignGenerationRejectedError(error.record);
     if(error instanceof SeoBlogError&&error.code==='generation_rejected'&&knownRecord)throw new CampaignGenerationRejectedError(knownRecord);
     throw error;
   }

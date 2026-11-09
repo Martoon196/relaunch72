@@ -7,6 +7,26 @@ import { randomUUID } from 'node:crypto';
 import { campaignFixture } from './seo-blog-campaign-fixtures.js';
 import { programmeSha } from '../src/seo-blog/programme.js';
 import { nativeIdentity,nativeSeoCall } from './seo-blog-native-request.js';
+import {MethodController} from '../src/seo-blog/method-packs.js';
+import {MemoryMethodStore} from '../src/seo-blog/method-store.js';
+import {upgradeSnapshot} from './rl72-upgrade-fixtures.js';
+
+test('private-method copy rejection saves the accepted article and fallback with exactly one existing method-cost debit',async()=>{
+ let methods:MemoryMethodStore;
+ const f=await websiteFixture('github_static',undefined,async(h,brandId)=>{
+  methods=new MemoryMethodStore();methods.snapshots.set(brandId,upgradeSnapshot(brandId,['production-core','social-repurposing']));
+  const save=methods.saveReceipt.bind(methods);
+  methods.saveReceipt=async r=>{await save(r);if(r.outcome!=='accepted')await h.store.recordUsage({brandId,kind:'model_tokens',amount:r.usage.tokensIn+r.usage.tokensOut,at:h.clock.now(),reference:'method-cost:'+r.id});};
+  const controller=new MethodController(methods,true);
+  (h.engine as any).deps.methods={store:methods,prepare:(llm:any,input:any)=>input.stage==='social'?controller.prepare(llm,input):Promise.resolve(llm)};
+ });
+ const detail=await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId);
+ assert.ok(detail.version);assert.equal(detail.article.campaign?.mode,'excerpt_fallback');assert.equal(detail.article.campaignGeneration!.receipt!.result.kind,'rejected');
+ const receipt=[...methods!.receipts.values()][0]!;assert.equal(receipt.outcome,'rejected');
+ const charges=(f.h.store as any).usage.filter((u:any)=>u.reference==='method-cost:'+receipt.id||u.reference===`promotion:${f.articleId}:${detail.version!.id}`);
+ assert.equal(charges.length,1);assert.equal(charges[0].amount,receipt.usage.tokensIn+receipt.usage.tokensOut);
+ assert.equal(f.h.llm.calls.filter(s=>s==='SEO_BLOG_SOCIAL').length,1);
+});
 
 test('known rejected campaign output debits exact usage once and applies labelled fallback after a DB-only receipt retry',async()=>{
   const f=await websiteFixture('github_static',undefined,async(h)=>{
