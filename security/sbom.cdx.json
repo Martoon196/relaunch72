@@ -1670,11 +1670,11 @@
       "version": "1.2.0"
     },
     {
-      "bom-ref": "npm:hls.js@1.6.19#node_modules/hls.js",
+      "bom-ref": "npm:hls.js@1.7.4#node_modules/hls.js",
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "A//aZeaAgM5rgUCbTURD4gkfyw5Uag2/4Jky7CfDOukL/DN+P5DjbgK2BYteyP3/KnCkPfkGVkbLxQG2T0AbUQ=="
+          "content": "3GlxGdPvT2YHvQYOt+yOzT/DEior/qJVNIylHA77kgeoBTdQQqi70GwefNEUmHQeNGyjC8U62+bruqW/Tpm+tg=="
         }
       ],
       "licenses": [
@@ -1692,12 +1692,12 @@
         },
         {
           "name": "relaunch72:resolved",
-          "value": "https://registry.npmjs.org/hls.js/-/hls.js-1.6.19.tgz"
+          "value": "https://registry.npmjs.org/hls.js/-/hls.js-1.7.4.tgz"
         }
       ],
       "scope": "required",
       "type": "library",
-      "version": "1.6.19"
+      "version": "1.7.4"
     },
     {
       "bom-ref": "npm:html-to-text@10.0.1#node_modules/html-to-text",
@@ -3695,7 +3695,7 @@
         "npm:@types/pg@8.23.1#node_modules/@types/pg",
         "npm:ajv@8.20.0#node_modules/ajv",
         "npm:dotenv@16.6.1#node_modules/dotenv",
-        "npm:hls.js@1.6.19#node_modules/hls.js",
+        "npm:hls.js@1.7.4#node_modules/hls.js",
         "npm:https-proxy-agent@9.1.0#node_modules/https-proxy-agent",
         "npm:imapflow@2.9.1#node_modules/imapflow",
         "npm:jpeg-js@0.4.4#node_modules/jpeg-js",
@@ -3878,7 +3878,7 @@
     },
     {
       "dependsOn": [],
-      "ref": "npm:hls.js@1.6.19#node_modules/hls.js"
+      "ref": "npm:hls.js@1.7.4#node_modules/hls.js"
     },
     {
       "dependsOn": [
@@ -4232,7 +4232,7 @@
       "properties": [
         {
           "name": "relaunch72:canonical-package-lock-sha256",
-          "value": "f560e95fb78615304c1a695fa748fbed0a114836f9b166a96ea816f59233164d"
+          "value": "07eb987a639fef684a3ae4fc5df5a041b06ef75993e5ff1039258ed4522d7b02"
         },
         {
           "name": "relaunch72:supply-chain-policy-version",
