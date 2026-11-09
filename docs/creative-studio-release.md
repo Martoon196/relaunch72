@@ -12,13 +12,14 @@ Feature detail lives in [creative-studio.md](creative-studio.md), in its last th
 ## 1. Work branch, head and tree
 
 - Branch: `claude/exciting-dirac-q38u2u` (Martoon196/relaunch72).
-- Source-bound receipts (section 6) were produced on head `20e425d562894066e6c7653b734eaefc77b74002`, tree `d92f07d2a238e3430dfc3fe611e97f1e4b93568f`, with a clean worktree.
-- The commit that adds this page changes only `docs/`, this page and `docs/evidence/creative-studio-release/`. No source or migration changes. Verify with:
+- The audited source is commit `ce19e27794421bb9b24d6078329a2fe552620e7c` (tree `f9a78af33a5244bbce7dc97cfaea14261dc8e1f3`). Every later commit on the branch touches only `docs/`, `docs/evidence/creative-studio-release/` and the manual walkthrough script under `orchestrator/test/`. Verify with:
 
   ```bash
-  git diff --stat 20e425d HEAD
+  git diff --stat ce19e27 HEAD -- orchestrator/src
   ```
+- Source-bound receipts (section 6) were produced on head `61dbfa04a9d87f854a07a970a41335ce4ad4e32f` (tree `42576e5879fb5b65da57750bfd4172d7940ccc94`), whose `orchestrator/src` is identical to `ce19e27`. Six evidence and documentation files were uncommitted at the start of that run; none is source.
 - The final head and tree are stated in the draft PR description.
+- An earlier receipt set exists for the pre-audit source (`20e425d`); it is superseded by section 6.
 
 ## 2. Canonical base and conflicts
 
@@ -75,13 +76,13 @@ Rollout order:
 2. Apply 0144 with the normal migration runner (it takes roughly seconds; `lock_timeout` is 5 s and `statement_timeout` 60 s).
 3. Readiness then reports no pending migrations everywhere.
 
-## 6. Source-bound test receipts (head `20e425d`, tree `d92f07d`)
+## 6. Source-bound test receipts (source `ce19e27`; receipts run at `61dbfa0`)
 
 Environment: Node v22.23.4 and PostgreSQL 16.15.
 
 - **Typecheck:** clean.
 - **Supply-chain gate:** passed for 117 external packages; the SBOM is current.
-- **Full suite (`npm test`):** 4352 tests, 4284 pass, **0 fail**, 68 skipped (database tests, which run separately below).
+- **Full suite (`npm test`):** 4365 tests, 4297 pass, **0 fail**, 68 skipped (database tests, which run separately below).
 
 PostgreSQL proofs: each ran on a freshly recreated dedicated disposable cluster (`r72proof`, port 5433, never `main`), as the actual least-privilege roles.
 
@@ -91,9 +92,9 @@ PostgreSQL proofs: each ran on a freshly recreated dedicated disposable cluster 
 | creative-studio-video-pg | 4 pass, 0 fail |
 | creative-studio-distribution-pg (Milestone 4, now proving the stage-id rule) | 5 pass, 0 fail |
 | creative-studio-learning-pg | 4 pass, 0 fail |
-| creative-studio-generation-pg (typed-brief images) | 9 pass, 0 fail |
-| creative-studio-render-jobs-pg (real headless Chromium) | 7 pass, 0 fail |
-| creative-studio-enquiry-pg (capture → CRM → reader) | 6 pass, 0 fail |
+| creative-studio-generation-pg (typed-brief images, incl. the same job run twice at once) | 10 pass, 0 fail |
+| creative-studio-render-jobs-pg (real headless Chromium, incl. set binding) | 7 pass, 0 fail |
+| creative-studio-enquiry-pg (capture → CRM → reader, incl. cap, multi-channel, existing customer, rotation, framing) | 8 pass, 0 fail |
 | acquisition-campaign-pg (Milestone 2 creator) | 5 pass, 0 fail |
 | seo-blog-media-storage (article images unchanged) | 2 pass, 0 fail |
 | seo-blog-media-engine (article images unchanged) | 1 pass, 0 fail |
