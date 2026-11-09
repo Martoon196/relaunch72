@@ -316,5 +316,84 @@ Six independent reviews (SQL security, Milestone 4 logic, Milestone 5 logic and 
 
 Accepted as-is: the 600 KB article-variant cap could reject a photo-heavy full-bleed render (the hand-off now reports it plainly and suggests download); the orphan candidate blob on a 409 is pre-existing behaviour of the owner-upload path; substring brand-term matching can over-refuse a pattern (the message names the term).
 
-Test gaps closed on real PostgreSQL: the internal outcome counter is not callable by the runtime role; foreign-host and concept-mismatch links refused; malformed ids refused; a non-managing (viewer) membership in another owner's brand reveals nothing; re-sharing a pattern id refused; patterns append-only. Current 0144 checksum: `57be028af152c523d5b2e4172636808bdbc52dffc62006b37a9d2bc7c225eb81`.
+Test gaps closed on real PostgreSQL: the internal outcome counter is not callable by the runtime role; foreign-host and concept-mismatch links refused; malformed ids refused; a non-managing (viewer) membership in another owner's brand reveals nothing; re-sharing a pattern id refused; patterns append-only. The 0144 checksum at that audit was `57be028a…`; the current pin is `CREATIVE_STUDIO_CHECKSUM` in `orchestrator/src/db/creative-studio-schema.ts`.
 
+
+# Typed-brief image generation (new images from a description)
+
+The owner types what a picture should show, reviews the cost and allowances, and asks for **one** paid image. A background worker makes the call; the image is stored privately as a candidate (never approved) and can be turned into branded artwork with the existing compositor, where the headline, price, logo and disclosure are added exactly.
+
+## Reuse check
+
+| Need | Reused | Added |
+|---|---|---|
+| Provider, credential, model, quality | The article image transport (`seo-blog/image-generation.ts`), `SEO_BLOG_IMAGE_API_KEY`, gpt-image-2 at **medium**. The article request body is byte-identical (tested). | A `size` option (the three documented sizes) and reference images through the documented edits endpoint (multipart `image[]`, at most 3). A bounded read of a 400 body recognises the documented `moderation_blocked` code; its text is never stored. No second provider, no model/quality fallback. |
+| Paid admission | 0137: operator policy singleton, `seo_image_reserve` (global epoch lock, concurrency, monthly cost, per-brand `budgets.imagesPerMonth`), immutable attempt rows, the deferred one-debit guard, receipts, candidate storage, holds. | A studio branch in `seo_image_reserve` keyed on the intent schema, ahead of the unchanged article branch; it adds the brand's **studio sub-allowance** (`settings.studioImages`). No article was created to pass article-only admission. |
+| Durable work | `app.seo_blog_jobs` (SKIP LOCKED claims, leases) and the existing worker tick. | A studio image job (`kind=write`, `stage=image`, creative intent schema) routed before the article paths. A worker without the studio runner blocks it: "Nothing was requested or charged". |
+| Storage and review | Private media assets and receipts of the article pipeline; the brand's private media store for previews. | `creative_studio_briefs` and `creative_studio_generations` (append-only, RLS, definer functions only). |
+
+## Safety order (worker)
+
+1. Load reference bytes (an unavailable reference stops before any reservation).
+2. Admission is acknowledged only after COMMIT (reservation, start projection, exactly one usage debit).
+3. Exactly one provider call per admission.
+4. The receipt (and any bytes) is saved; one retry with the same envelope, never another call.
+5. The stored pixels are decoded, and the generation is recorded with the job marked done in one transaction.
+
+An existing started attempt (unknown outcome, e.g. a timeout) is **held for reconciliation and counts against the allowance**; it is never re-sent. A refresh, double click or re-run returns the same job. Another image of the same brief version needs an explicit new intent naming the previous one. An intent made under an older operator policy is held (`operator_policy_changed`) and the owner must request again. Missing provider usage is recorded as unknown, never zero.
+
+## Prompt boundaries
+
+The provider receives only:
+
+- the brief text, with links, emails and phone numbers removed;
+- the confirmed profile summary (300 characters);
+- the active visual guidance, only when the owner ticks it.
+
+It never receives offers, prices, claims, conversion pages, audiences, contacts or credentials (unit-tested). The prompt forbids words, numbers, prices, logos, identifiable people, testimonials and claims in the picture, so "a modern kitchen background" cannot yield an invented headline or price.
+
+## Owner and operator steps
+
+1. **Operator** (database role `r72_owner` only): open `app_private.seo_image_operator_policy`. Set `enabled`, `maxConcurrency`, `monthlyMicrousd` and `perAttemptMicrousd` (the reservation shown to owners as an upper-bound hold, not a price). It is closed by default.
+2. **Owner**: SEO Blog → brand → **Publishing**. Set the brand image allowance (`imagesPerMonth`, shared with blog images).
+3. **Owner**: Creative studio → **Generate a new image** → **Allowances**. Tick *Allow paid images from typed briefs* and set *Studio images per UTC month*. It defaults to **off / 0**. A writing (model-token) allowance is not an image allowance.
+4. Write a brief → **Save brief and review the cost**. The page shows:
+   - one paid request;
+   - the model and quality;
+   - the size and reference count;
+   - the reserved hold;
+   - why the exact cost is unknown in advance;
+   - the remaining brand, studio and platform allowance.
+5. Tick the confirmation → **Generate image**. The page polls the job, and you can leave it. Once the image appears: **Create artwork from this image**.
+
+Configuration: `CREATIVE_STUDIO_ENABLED=true` on both the web service and the SEO worker, and `SEO_BLOG_IMAGE_API_KEY` on the worker (the existing secret name; the value is never logged).
+
+## Checks
+
+- **Real PostgreSQL** (`test/db/creative-studio-generation-pg.integration.test.ts`, 8 subtests, the real `r72_content_command` role with genuine owner sessions and a worker principal). The provider HTTP is scripted, so nothing is sent or charged. It proves:
+  - defaults are off;
+  - one durable job survives replay and double click;
+  - one call, one debit, an atomic record and the exact stored bytes;
+  - restart recovery makes no second call;
+  - a new-intent rule;
+  - an unknown outcome is held and never repeated;
+  - the transient concurrency hold is requeued;
+  - a policy change is held;
+  - the studio allowance is held;
+  - two jobs racing for the last image produce exactly one paid call;
+  - a reference reaches the provider as one multipart part;
+  - reference and brand isolation;
+  - no direct table access, and the tables are append-only.
+- **Unit** (`test/creative-studio-generation.test.ts`, 11 tests): brief rules, prompt boundaries, transport compatibility, the edits multipart, refusal classification, and the worker order with fakes. Also one service test for previews and backgrounds.
+- **Visual** (`test/manual-creative-generation-pg-demo.ts`): the production portal and worker compositions on a disposable database, driven in Chromium. Every screenshot is marked *SYNTHETIC PROVIDER RESPONSE*: the picture is a generated gradient, not a provider image. It found and fixed:
+  - generated previews were refused by the article-variant media route, so a dedicated brand-scoped, digest-checked preview route was added;
+  - loading generated images depended on article image review being configured;
+  - a stale banner after the polling reload;
+  - the cost list was cramped on phones.
+- **Live provider proof: not performed.** No authorised allowance or credential was available in this environment. The smallest real test is **one** 1024×1024 medium image from a short brief with no references on a test brand, with the studio allowance set to 1. Expected cost is a few US cents of output-image tokens at medium quality. Published per-token rates conflict, so read the stored usage on the attempt rather than estimating.
+
+## Limits
+
+- No automatic reconciliation of an unknown outcome. It stays held and counted until an operator resolves it with the existing reconciliation process.
+- The per-version edit form in *Compare* cannot yet swap in a generated image. Use the new-artwork form (*Create artwork from this image*).
+- Only the brand's own current private images can be references (generated studio images and article candidates). Arbitrary uploads are not sent to the provider.

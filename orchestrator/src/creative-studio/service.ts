@@ -20,6 +20,8 @@ import type { ArticleLocalImageProposal, LocalImageOrigin } from '../seo-blog/im
 import type { ArticleCampaign } from '../seo-blog/campaign.js';
 import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
   type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
+import { isCreativeStudioJob } from './generation.js';
+import { generationJobStatus } from './generation-service.js';
 import { buildLearning, findingsText, generalPatternIssues, type LearningSnapshot, type LearningStore, type PatternRow, type RecordedFinding } from './learning.js';
 import { mediaOf, variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
 import {
@@ -89,7 +91,7 @@ export interface DistributionReadPort {
   outcomes(brandId: string, utmCampaign: string): Promise<OutcomeRead>;
 }
 
-export type CreativeBrandPort = Pick<SeoBlogStore, 'getBrand' | 'canManage' | 'latestProfile' | 'listKnowledge' | 'putBlob' | 'getBlob' | 'getArticle' | 'getVersion' | 'listArticles'>;
+export type CreativeBrandPort = Pick<SeoBlogStore, 'getBrand' | 'canManage' | 'latestProfile' | 'listKnowledge' | 'putBlob' | 'getBlob' | 'getArticle' | 'getVersion' | 'listArticles' | 'getJob'>;
 
 /** Images already generated and receipted by the existing article-image pipeline. */
 export interface SavedGeneratedImage {
@@ -110,7 +112,15 @@ export type BackgroundChoice =
   | { readonly kind: 'neutral' }
   | { readonly kind: 'upload'; readonly bytes: Buffer }
   | { readonly kind: 'saved'; readonly assetId: string; readonly sha256: string }
+  /** A private image generated from one of this brand's typed briefs. */
+  | { readonly kind: 'generated'; readonly generationId: string }
   | { readonly kind: 'keep' };
+
+/** Images generated from typed briefs: located through the generation record, loaded as the exact stored pixels. */
+export interface GeneratedImagePort {
+  find(actorId: string, brandId: string, generationId: string): Promise<import('./generation-store.js').GenerationRecord | null>;
+  load(actorId: string, brandId: string, assetId: string, sha256: string): Promise<Buffer>;
+}
 
 export interface ConceptPatch {
   readonly hook?: string;
@@ -146,6 +156,9 @@ export class CreativeStudioService {
     /** Milestone 5: learning journal (append-only) and the existing brand guidance store for owner-chosen copies. */
     readonly learning?: LearningStore;
     readonly guidance?: GuidancePort;
+    /** Typed-brief image generation (0144 section 5) and the generated images it produced. */
+    readonly generation?: import('./generation-service.js').CreativeGeneration;
+    readonly generatedImages?: GeneratedImagePort;
     readonly now?: () => string;
     readonly newId?: () => string;
   }) {
@@ -288,6 +301,17 @@ export class CreativeStudioService {
     if (choice.kind === 'neutral') return { kind: 'neutral' };
     if (choice.kind === 'keep') { if (!keep) throw new SeoBlogError(400, 'Choose a background.'); return keep; }
     if (choice.kind === 'upload') return { kind: 'image', image: await this.storeImage(brandId, choice.bytes), origin: 'owner_upload', label: 'Owner-uploaded image', provenance: { source: 'owner_upload' } };
+    if (choice.kind === 'generated') {
+      const port = this.deps.generatedImages;
+      if (!port || !UUID.test(choice.generationId)) throw new SeoBlogError(409, 'Generated images are not available here.');
+      const g = await port.find(actorId, brandId, choice.generationId);
+      if (!g) throw new SeoBlogError(404, 'That generated image is not available for this brand.');
+      const bytes = await port.load(actorId, brandId, g.assetId, g.sha256);
+      if (sha(bytes) !== g.sha256) throw new SeoBlogError(409, 'The generated image failed its integrity check.');
+      return { kind: 'image', image: await this.storeImage(brandId, bytes), origin: 'generated_studio_image', label: `Generated from image brief (version ${g.briefVersion})`,
+        provenance: { source: 'creative_studio_generation', generationId: g.id, briefId: g.briefId, briefVersion: String(g.briefVersion), intentId: g.intentId, attemptId: g.attemptId,
+          candidateAssetId: g.assetId, candidateSha256: g.sha256, model: String(g.data.model ?? 'gpt-image-2') } };
+    }
     const port = this.deps.savedImages;
     if (!port) throw new SeoBlogError(409, 'Saved generated images are not available here.');
     const saved = (await port.list(actorId, brandId)).find((s) => s.assetId === choice.assetId && s.sha256 === choice.sha256);
@@ -691,6 +715,33 @@ export class CreativeStudioService {
     }
     const receipt = await this.deps.library.handoff(brandId, commandId, inputSha, handoff, this.inputs(context));
     return { replayed: receipt.replayed, handoff };
+  }
+
+  /** Typed-brief generation, when composed. */
+  generation(): import('./generation-service.js').CreativeGeneration {
+    if (!this.deps.generation) throw new SeoBlogError(404, 'Image generation from a brief is not enabled here.');
+    return this.deps.generation;
+  }
+  get generationAvailable(): boolean { return Boolean(this.deps.generation); }
+
+  /** Polling status for one of this brand's studio jobs only (generation or render); never another task's details. */
+  /** Private preview of one recorded studio generation of this brand: digest-checked and decoded as a JPEG before it is served. */
+  async generatedImage(actorId: string, brandId: string, generationId: string): Promise<{ bytes: Buffer; sha256: string }> {
+    await this.context(actorId, brandId);
+    const port = this.deps.generatedImages;
+    const g = port && UUID.test(generationId) ? await port.find(actorId, brandId, generationId) : null;
+    if (!port || !g) throw new SeoBlogError(404, 'That generated image is not available for this brand.');
+    const bytes = await port.load(actorId, brandId, g.assetId, g.sha256);
+    if (sha(bytes) !== g.sha256) throw new SeoBlogError(409, 'The generated image failed its integrity check.');
+    try { if (verifyCreativeImage(bytes).mime !== 'image/jpeg') throw new Error('not jpeg'); } catch { throw new SeoBlogError(409, 'The generated image is not a usable JPEG.'); }
+    return { bytes, sha256: g.sha256 };
+  }
+
+  async jobStatus(actorId: string, brandId: string, jobId: string) {
+    await this.context(actorId, brandId);
+    const job = UUID.test(jobId) ? await this.deps.brands.getJob(brandId, jobId) : null;
+    if (!job || job.brandId !== brandId || !isCreativeStudioJob(job)) throw new SeoBlogError(404, 'That task was not found.');
+    return generationJobStatus(job);
   }
 
   /** Milestone 5 learning operations over the same ports. */

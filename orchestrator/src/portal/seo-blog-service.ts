@@ -4,6 +4,8 @@
  * ready; otherwise the routes answer "not available" and nothing else changes.
  */
 
+import { createCreativeWorkerJobs } from './creative-studio-worker.js';
+import { creativeRenderRunner } from './creative-studio-composition.js';
 import type { Pool } from 'pg';
 import { MethodController } from '../seo-blog/method-packs.js';
 import { PgMethodStore } from '../seo-blog/method-store.js';
@@ -90,7 +92,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       if (env.CREATIVE_STUDIO_ENABLED !== 'true') return null;
       const creators = env.SEO_BLOG_METHOD_PACKS === 'true' && env.SEO_BLOG_CAMPAIGN_CREATORS === 'true'
         ? new PgCampaignCreatorStore(contentCommandPool, { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId }) : undefined;
-      return createCreativeStudio({ contentCommandPool, identity, requestId, engine, ...(creators ? { creators } : {}) });
+      return createCreativeStudio({ contentCommandPool, identity, requestId, engine, env, ...(creators ? { creators } : {}) });
     },
     async creativeSavedImages(identity, _requestId, engine, brandId) {
       return env.CREATIVE_STUDIO_ENABLED === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
@@ -118,10 +120,12 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
 
 export function createWorkerSeoBlogEngine(contentCommandPool: Pool, requestId: string, env: NodeJS.ProcessEnv = process.env): SeoBlogEngine {
   const runtime = seoBlogRuntime(env);
+  const creativeJobs = createCreativeWorkerJobs({ contentPool: contentCommandPool, requestId, env, ...creativeRenderRunner(contentCommandPool, requestId, env) });
   return new SeoBlogEngine({
     ...createSeoBlogMediaRuntime({ contentPool: contentCommandPool, principal: { kind: 'worker', requestId }, env }),
     ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'worker',requestId}),true)}:{}),
     llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport: new GuardedFetchTransport(),
     publishers: defaultPublishers(), vault: runtime.vault, batchLimit: Number(env.SEO_BLOG_WORKER_BATCH ?? 5),
+    ...(creativeJobs ? { creativeJobs } : {}),
   });
 }

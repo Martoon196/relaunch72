@@ -28,6 +28,8 @@ import { campaignPage, type CampaignActionResult } from './seo-blog-campaign-vie
 import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-controller.js';
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
+import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, generationPage, type ReferenceChoice } from './creative-generation-view.js';
+import { holdMessage } from '../creative-studio/generation.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
@@ -52,7 +54,8 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
 /** Bound for a creative render held inside one request: 30 s of real-time recording plus launches and the playback check. */
 const CREATIVE_RENDER_SOCKET_TIMEOUT_MS = 120_000;
-const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+// connect-src 'self' lets the same-origin status scripts poll (default-src 'none' otherwise blocks their fetch).
+const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
@@ -148,6 +151,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/creative-job-status.js`) return send(res, 200, CREATIVE_JOB_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
@@ -241,12 +245,49 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         res.writeHead(200, { 'content-type': found.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow' });
         res.end(method === 'HEAD' ? undefined : found.bytes); return;
       }
+      const generatedPreview = new RegExp(`^creative/generated/(${UUID})\\.jpg$`, 'i').exec(rest);
+      if (generatedPreview) {
+        const found = await studio.generatedImage(actor.userId, brandId, generatedPreview[1]!.toLowerCase());
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer' });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
         const otherPatterns = await studio.learning().otherBrandPatterns(actor.userId, brandId).catch(() => null);
-        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+        const generated = studio.generationAvailable ? await studio.generation().view(actor.userId, brandId).catch(() => null) : null;
+        const generatedImages = (generated?.state.generations ?? []).slice(0, 12).map((g) => ({ id: g.id, label: `Generated ${g.createdAt.slice(0, 10)} (${g.width}×${g.height})`,
+          previewUrl: generatedUrl(g.id) }));
+        const generation = { available: studio.generationAvailable, enabled: generated?.brand.settings.studioImages?.enabled === true, remaining: 0 };
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, generatedImages, generation, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+      }
+      // ── Typed-brief image generation ──
+      const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
+      const referenceChoices = async (state?: import('../creative-studio/generation-store.js').GenerationState): Promise<ReferenceChoice[]> => {
+        const saved = await savedWithPreview();
+        return [...(state?.generations ?? []).slice(0, 12).map((g) => ({ assetId: g.assetId, sha256: g.sha256, label: `Generated ${g.createdAt.slice(0, 10)}`, previewUrl: generatedUrl(g.id) })),
+          ...saved.slice(0, 12).map((x) => ({ assetId: x.assetId, sha256: x.sha256, label: x.articleTitle, previewUrl: x.previewAssetId ? media(x.previewAssetId, x.previewSha256!) : media(x.assetId, x.sha256) }))];
+      };
+      const jobRoute = new RegExp(`^creative/jobs/(${UUID})$`, 'i').exec(rest);
+      if (jobRoute) {
+        const status = await studio.jobStatus(actor.userId, brandId, jobRoute[1]!.toLowerCase());
+        return send(res, 200, JSON.stringify(status), 'application/json; charset=utf-8');
+      }
+      if (rest === 'creative/generate') {
+        const view = await studio.generation().view(actor.userId, brandId);
+        return send(res, 200, generationPage(shell('creative'), { brand: view.brand, state: view.state, policy: view.policy, providerConfigured: view.providerConfigured, references: await referenceChoices(view.state) }));
+      }
+      const briefRoute = new RegExp(`^creative/generate/(${UUID})$`, 'i').exec(rest);
+      if (briefRoute) {
+        const briefId = briefRoute[1]!.toLowerCase(), gen = studio.generation();
+        const [view, all] = await Promise.all([gen.view(actor.userId, brandId, briefId), gen.view(actor.userId, brandId)]);
+        const versions = view.state.briefs.filter((b) => b.id === briefId);
+        if (!versions.length) throw new SeoBlogError(404, 'That brief was not found.');
+        const current = [...versions].sort((a, b) => b.version - a.version)[0]!;
+        const estimate = gen.estimate(view.brand, all.state, view.policy, current.data);
+        return send(res, 200, briefPage(shell('creative'), { brand: view.brand, briefId, versions, state: view.state, estimate, references: await referenceChoices(all.state), previewUrl: generatedUrl }));
       }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
@@ -389,8 +430,29 @@ async function handlePost(
         if (kind === 'keep') return { kind: 'keep' };
         if (kind === 'upload') { if (!form.file?.data.length) throw new SeoBlogError(400, 'Choose an image file to upload.'); return { kind: 'upload', bytes: form.file.data }; }
         if (kind === 'saved') { const [assetId, sha] = (f('saved') ?? '').split(':'); return { kind: 'saved', assetId: assetId ?? '', sha256: sha ?? '' }; }
+        if (kind === 'generated') return { kind: 'generated', generationId: (f('generated') ?? '').toLowerCase() };
         return { kind: 'neutral' };
       };
+      if (parts[1] === 'generate') {
+        const gen = studio.generation();
+        if (parts[2] === 'settings') {
+          await gen.configure(actor.userId, brandId, rowVersion(), f('enabled') === '1', int(f('perMonth'), 'the studio image allowance'));
+          return ok(`${home}/generate#generation-settings`, 'Studio image allowance saved. Nothing was requested or charged.');
+        }
+        if (parts[2] === 'brief') {
+          const refs = form.fields.getAll('reference').map((v) => { const [assetId, sha256] = v.split(':'); return { assetId: assetId ?? '', sha256: sha256 ?? '' }; });
+          const saved = await gen.saveBrief(actor.userId, brandId, commandId, { title: f('title') ?? '', text: f('text') ?? '', size: f('size') ?? '', useVisualGuidance: f('useVisualGuidance') === '1', references: refs },
+            f('briefId') ? (f('briefId') ?? '').toLowerCase() : undefined);
+          return ok(`${home}/generate/${saved.briefId}`, saved.replayed ? 'This brief was already saved.' : `Brief saved (version ${saved.version}). Review the cost before generating. Nothing was charged.`);
+        }
+        if (parts[2] && parts[3] === 'request') {
+          const briefId = parts[2].toLowerCase();
+          const result = await gen.request(actor.userId, brandId, briefId, int(f('version'), 'the brief version'), commandId, f('confirmedNewIntent') === '1', f('replacesIntentId') || null);
+          if ('reason' in result) return ok(`${home}/generate/${briefId}`, result.reason === 'new_intent_confirmation_required' ? 'This brief version already has a paid image. Confirm that you want another paid request.' : holdMessage(result.reason));
+          return ok(`${home}/generate/${briefId}`, 'Image request saved. It runs on the server; you can leave this page. One paid request will be made when it starts.');
+        }
+        throw new SeoBlogError(404, 'That page was not found.');
+      }
       if (parts[1] === 'kit') {
         const action = f('logo_action') ?? 'keep';
         const logo = action === 'remove' ? { kind: 'remove' as const } : action === 'upload' && form.file?.data.length ? { kind: 'upload' as const, bytes: form.file.data, label: f('logo_label') ?? '' } : { kind: 'keep' as const };

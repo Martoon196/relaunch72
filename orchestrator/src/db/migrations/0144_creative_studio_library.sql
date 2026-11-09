@@ -1,6 +1,8 @@
 -- 0144 Creative Studio library: owner-only, append-only artwork, storyboard and video versions, exact approvals and
 -- draft campaign hand-offs for any programme brand. Additive only; 0001-0143 are unchanged (renumbered from 0143 after MHP took that number; never applied as 0143).
--- No provider call, paid-generation admission, scheduler, publishing, outreach or ad-spend capability.
+-- Sections 1-4 make no provider call. Section 5 adds typed-brief image generation only through the existing 0137 paid-image
+-- admission (operator policy, global lock, brand allowance, receipts), off with a zero studio allowance by default.
+-- No scheduler, publishing, outreach or ad-spend capability.
 -- Rendered bytes live in the existing workspace-scoped app.seo_blog_blobs.
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='60s';
@@ -667,3 +669,436 @@ RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
 
+
+
+-- ─── 0144 section 5: genuinely new images from a typed Creative Studio brief ───
+-- Reuses the existing paid article-image boundary (0137) instead of a second one: the same provider transport,
+-- seo_blog_image_attempts, operator policy and global admission lock, per-brand image allowance and usage debit,
+-- receipt recording, private candidate storage, uncertain-outcome holds and the existing worker job table.
+-- A brief is an immutable owner-written version bound to this brand; a generated image is a private candidate,
+-- never an approval. Studio generation is off with a zero allowance until a managing owner configures it.
+CREATE TABLE app.creative_studio_briefs(
+  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL, version integer NOT NULL CHECK(version BETWEEN 1 AND 1000),
+  data jsonb NOT NULL CHECK(jsonb_typeof(data)='object' AND octet_length(data::text)<=8192),
+  created_by uuid NOT NULL REFERENCES app.users(id), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id,version)
+);
+CREATE TABLE app.creative_studio_generations(
+  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL, brief_id uuid NOT NULL, brief_version integer NOT NULL,
+  job_id uuid NOT NULL, intent_id uuid NOT NULL, attempt_id uuid NOT NULL, candidate_asset_id uuid NOT NULL,
+  candidate_sha256 text NOT NULL CHECK(candidate_sha256 ~ '^[0-9a-f]{64}$'),
+  width integer NOT NULL CHECK(width BETWEEN 256 AND 4096), height integer NOT NULL CHECK(height BETWEEN 256 AND 4096),
+  data jsonb NOT NULL CHECK(jsonb_typeof(data)='object' AND octet_length(data::text)<=8192),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,attempt_id),
+  FOREIGN KEY(workspace_id,brief_id,brief_version) REFERENCES app.creative_studio_briefs(workspace_id,id,version),
+  FOREIGN KEY(workspace_id,candidate_asset_id) REFERENCES app.seo_blog_media_assets(workspace_id,id)
+);
+DO $generation$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['creative_studio_briefs','creative_studio_generations'] LOOP
+    EXECUTE format('ALTER TABLE app.%I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE app.%I FORCE ROW LEVEL SECURITY',t);
+    EXECUTE format('REVOKE ALL ON app.%I FROM PUBLIC,r72_content_command,r72_web,r72_worker',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_owner USING(true) WITH CHECK(true)',t||'_owner',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_seo_media_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_media',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id())',t||'_studio_read',t);
+    EXECUTE format('GRANT SELECT,INSERT ON app.%I TO r72_seo_media_definer',t);
+    EXECUTE format('GRANT SELECT ON app.%I TO r72_creative_studio_definer',t);
+    EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only()',t||'_immutable',t);
+    INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
+  END LOOP;
+END $generation$;
+-- Brief and generation commands reuse the studio command ledger for replay.
+GRANT SELECT,INSERT ON app.creative_studio_commands TO r72_seo_media_definer;
+CREATE POLICY creative_studio_commands_media ON app.creative_studio_commands FOR ALL TO r72_seo_media_definer
+  USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
+ALTER TABLE app.creative_studio_commands DROP CONSTRAINT creative_studio_commands_action_check;
+ALTER TABLE app.creative_studio_commands ADD CONSTRAINT creative_studio_commands_action_check
+  CHECK(action IN ('kit_save','set_create','versions_append','approve','handoff','finding_record','pattern_share','pattern_withdraw','brief_save','render_enqueue'));
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+GRANT CREATE ON SCHEMA app_private TO r72_seo_media_definer;
+SET LOCAL ROLE r72_seo_media_definer;
+
+-- The live source for one exact brief version: the same profile/knowledge evidence the article source uses, the brief,
+-- and its reference images re-validated as current, non-withdrawn private assets of this brand. NULL when unusable.
+CREATE FUNCTION app_private.creative_studio_brief_source(p_workspace uuid,p_brief uuid,p_version integer)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE profile jsonb; documents jsonb; visual jsonb; brief app.creative_studio_briefs%ROWTYPE; website text; brand_name text; snapshot jsonb; ref jsonb;
+BEGIN
+  SELECT * INTO brief FROM app.creative_studio_briefs WHERE workspace_id=p_workspace AND id=p_brief AND version=p_version;
+  IF brief.id IS NULL THEN RETURN NULL; END IF;
+  FOR ref IN SELECT x FROM jsonb_array_elements(coalesce(brief.data->'references','[]'::jsonb)) x LOOP
+    IF NOT EXISTS(SELECT 1 FROM app.seo_blog_media_assets m WHERE m.workspace_id=p_workspace AND m.id::text=ref->>'assetId'
+        AND encode(m.byte_sha256,'hex')=ref->>'sha256') OR app_private.seo_media_withdrawn(p_workspace,(ref->>'assetId')::uuid,NULL) THEN
+      RETURN NULL; END IF;
+  END LOOP;
+  SELECT data INTO profile FROM app.seo_blog_records WHERE workspace_id=p_workspace AND kind='profile' ORDER BY id DESC LIMIT 1;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.data->'id','version',d.data->'version','category',d.data->'category','title',d.data->'title',
+    'sha256',d.data->'sha256','blobId',d.data->'blobId','status',d.data->'status',
+    'hasText',length(coalesce(d.data->>'text',''))>0,'textSha256',encode(public.digest(coalesce(d.data->>'text',''),'sha256'),'hex')) ORDER BY d.data->>'id'),'[]') INTO documents FROM (
+    SELECT DISTINCT ON (r.data->>'id') r.data FROM app.seo_blog_records r
+    WHERE workspace_id=p_workspace AND kind='knowledge' ORDER BY r.data->>'id',(r.data->>'version')::integer DESC
+  ) d WHERE coalesce((d.data->>'active')::boolean,false);
+  SELECT b.website INTO website FROM app.seo_blog_brands b WHERE b.workspace_id=p_workspace;
+  SELECT app_private.seo_blog_brand(p_workspace)->>'name' INTO brand_name;
+  SELECT coalesce(jsonb_agg(d ORDER BY d->>'id'),'[]') INTO visual FROM jsonb_array_elements(documents) d WHERE d->>'category'='visual_guidance';
+  snapshot:=jsonb_build_object('recipe','creative-brief-source-v1','brandName',brand_name,'profile',profile,'knowledge',documents,'website',website,
+    'briefId',brief.id,'briefVersion',brief.version,'brief',brief.data,'briefCreatedBy',brief.created_by);
+  RETURN jsonb_build_object('recipe','creative-brief-source-v1','workspaceId',p_workspace,'briefId',brief.id,'briefVersion',brief.version,
+    'snapshot',snapshot,'sourceSha256',encode(public.digest(snapshot::text,'sha256'),'hex'),
+    'profileSha256',encode(public.digest(coalesce(profile,'null')::text,'sha256'),'hex'),
+    'visualSha256',encode(public.digest(visual::text,'sha256'),'hex'));
+END $f$;
+
+-- Studio holds: the studio's own switch (not the blog-image switch), the programme pause, a confirmed profile whose
+-- factual documents are unchanged, and a sponsor who can still manage this brand.
+CREATE FUNCTION app_private.creative_studio_image_hold(p_workspace uuid,p_source jsonb,p_sponsor uuid)
+RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE settings jsonb; profile jsonb:=p_source#>'{snapshot,profile}'; documents jsonb:=p_source#>'{snapshot,knowledge}'; current_refs jsonb; approved_refs jsonb;
+BEGIN
+  SELECT b.settings INTO settings FROM app.seo_blog_brands b WHERE b.workspace_id=p_workspace;
+  IF settings IS NULL OR p_source IS NULL THEN RETURN 'source_missing'; END IF;
+  IF settings#>'{studioImages,enabled}' IS DISTINCT FROM 'true'::jsonb THEN RETURN 'studio_generation_disabled'; END IF;
+  IF coalesce((settings->>'pauseAll')::boolean,false) THEN RETURN 'programme_paused'; END IF;
+  IF profile IS NULL OR profile->>'confirmedAt' IS NULL THEN RETURN 'profile_unconfirmed'; END IF;
+  IF p_sponsor IS NULL OR NOT app_private.can_manage_workspace(p_sponsor,p_workspace) THEN RETURN 'sponsor_ineligible'; END IF;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',d->>'id','sha',d->>'sha256') ORDER BY d->>'id'),'[]') INTO current_refs
+    FROM jsonb_array_elements(coalesce(documents,'[]')) d WHERE d->>'category'=ANY(ARRAY['product_facts','approved_claims','faqs','brand_guidelines','other'])
+      AND coalesce((d->>'hasText')::boolean,false);
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',d->>'documentId','sha',d->>'sha256') ORDER BY d->>'documentId'),'[]') INTO approved_refs
+    FROM jsonb_array_elements(coalesce(profile->'knowledge','[]')) d WHERE d->>'category'=ANY(ARRAY['product_facts','approved_claims','faqs','brand_guidelines','other']);
+  IF current_refs IS DISTINCT FROM approved_refs THEN RETURN 'profile_facts_changed'; END IF;
+  RETURN NULL;
+END $f$;
+
+CREATE OR REPLACE FUNCTION app_private.seo_image_reserve(p_workspace uuid,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE job app.seo_blog_jobs%ROWTYPE; image jsonb; source jsonb; existing app.seo_blog_image_attempts%ROWTYPE;
+  policy app_private.seo_image_operator_policy%ROWTYPE; reason text; sponsor uuid; attempt_id uuid:=gen_random_uuid();
+  nonce uuid:=(p_input->>'nonce')::uuid; this_period date:=(date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC'))::date;
+  active_count bigint; reserved numeric; brand_volume bigint; image_limit bigint; policy_result jsonb;
+  creative boolean; studio_volume bigint; studio_limit bigint;
+BEGIN
+  IF app_private.seo_media_private_actor(p_workspace,NULL) IS NOT NULL OR app_private.current_actor_kind()<>'worker'
+    OR nonce IS NULL THEN RAISE EXCEPTION 'Actual content worker required for image start' USING ERRCODE='42501'; END IF;
+  PERFORM app_private.seo_media_lock_brand(p_workspace);
+  SELECT * INTO job FROM app.seo_blog_jobs WHERE workspace_id=p_workspace AND id=(p_input->>'jobId')::uuid;
+  SELECT * INTO existing FROM app.seo_blog_image_attempts WHERE workspace_id=p_workspace AND job_id=job.id;
+  IF existing.id IS NOT NULL THEN
+    IF existing.intent_id IS DISTINCT FROM (p_input->>'intentId')::uuid
+      OR encode(existing.request_sha256,'hex') IS DISTINCT FROM p_input->>'requestSha256'
+      OR encode(existing.intent_sha256,'hex') IS DISTINCT FROM p_input->>'intentSha256' THEN
+      RAISE EXCEPTION 'Image start identity conflicts with durable attempt' USING ERRCODE='23505';
+    END IF;
+    IF existing.outcome='operator_resolved' THEN RETURN jsonb_build_object('kind','held','reason','attempt_resolved'); END IF;
+    IF jsonb_array_length(existing.receipts)>0 THEN
+      reason:=app_private.seo_image_apply_hold(p_workspace,existing.id,existing.start_nonce,p_input->>'leaseOwner',(p_input->>'leaseAttempt')::integer);
+      RETURN jsonb_build_object('kind','existing_receipt','attemptId',existing.id,'nonce',existing.start_nonce,
+        'receipt',existing.receipts->-1->'receipt','candidate',app_private.seo_media_asset_json(p_workspace,existing.candidate_asset_id),
+        'applyEligible',reason IS NULL,'hold',reason);
+    END IF;
+    RETURN jsonb_build_object('kind','existing_started','attemptId',existing.id,'nonce',existing.start_nonce,'reason','outcome_unknown');
+  END IF;
+  IF EXISTS(SELECT 1 FROM app.seo_blog_image_attempts a WHERE a.start_nonce=nonce) THEN
+    RAISE EXCEPTION 'Image start nonce already used' USING ERRCODE='23505';
+  END IF;
+  image:=job.data#>'{payload,image}';
+  -- 0144: a Creative Studio typed brief is a second, explicitly validated source kind. Everything after the
+  -- source check (operator policy, global lock, concurrency, cost and brand allowance) is shared and unchanged.
+  creative:=image->>'schema'='relaunch72.creative-image-intent/v1';
+  IF creative THEN
+    IF job.id IS NULL OR job.kind<>'write' OR job.data#>>'{payload,stage}' IS DISTINCT FROM 'image'
+      OR image->>'sourceSnapshotVersion' IS DISTINCT FROM 'creative-brief-source-v1'
+      OR job.state<>'running' OR job.lease_expires_at<=clock_timestamp() OR job.lease_expires_at IS NULL
+      OR job.data->>'leaseOwner' IS DISTINCT FROM p_input->>'leaseOwner'
+      OR job.data->>'attempts' IS DISTINCT FROM p_input->>'leaseAttempt'
+      OR image->>'intentId' IS DISTINCT FROM p_input->>'intentId'
+      OR image->>'intentSha256' IS DISTINCT FROM p_input->>'intentSha256'
+      OR image->>'requestSha256' IS DISTINCT FROM p_input->>'requestSha256'
+      OR image->>'sourceSha256' IS DISTINCT FROM p_input->>'sourceSha256' OR image->>'profileSha256' IS DISTINCT FROM p_input->>'profileSha256'
+      OR image->>'visualSha256' IS DISTINCT FROM p_input->>'visualSha256'
+      OR image->>'briefId' IS DISTINCT FROM p_input->>'briefId' OR image->>'briefVersion' IS DISTINCT FROM p_input->>'briefVersion'
+      OR image->>'sponsorUserId' IS DISTINCT FROM p_input->>'sponsorUserId'
+      OR image->>'sourceSnapshotVersion' IS DISTINCT FROM p_input->>'sourceSnapshotVersion' THEN
+      RETURN jsonb_build_object('kind','held','reason','claim_or_intent_changed');
+    END IF;
+    source:=app_private.creative_studio_brief_source(p_workspace,(image->>'briefId')::uuid,(image->>'briefVersion')::integer);
+    IF source IS DISTINCT FROM image->'source' OR source->'snapshot' IS DISTINCT FROM image->'sourceSnapshot'
+      OR source->>'sourceSha256' IS DISTINCT FROM image->>'sourceSha256' OR source->>'profileSha256' IS DISTINCT FROM image->>'profileSha256'
+      OR source->>'visualSha256' IS DISTINCT FROM image->>'visualSha256' THEN
+      RETURN jsonb_build_object('kind','held','reason','source_changed');
+    END IF;
+    sponsor:=(image->>'sponsorUserId')::uuid;
+    reason:=app_private.creative_studio_image_hold(p_workspace,source,sponsor);
+    IF reason IS NOT NULL THEN RETURN jsonb_build_object('kind','held','reason',reason); END IF;
+  ELSE
+  IF job.id IS NULL OR job.kind<>'write' OR job.data#>>'{payload,stage}' IS DISTINCT FROM 'image'
+    OR image->>'schema' IS DISTINCT FROM 'relaunch72.seo-image-intent/v1'
+    OR image->>'sourceSnapshotVersion' IS DISTINCT FROM 'seo-image-source-v1'
+    OR job.state<>'running' OR job.lease_expires_at<=clock_timestamp() OR job.lease_expires_at IS NULL
+    OR job.data->>'leaseOwner' IS DISTINCT FROM p_input->>'leaseOwner'
+    OR job.data->>'attempts' IS DISTINCT FROM p_input->>'leaseAttempt'
+    OR image->>'intentId' IS DISTINCT FROM p_input->>'intentId'
+    OR image->>'intentSha256' IS DISTINCT FROM p_input->>'intentSha256'
+    OR image->>'requestSha256' IS DISTINCT FROM p_input->>'requestSha256'
+    OR image->>'sourceSha256' IS DISTINCT FROM p_input->>'sourceSha256' OR image->>'profileSha256' IS DISTINCT FROM p_input->>'profileSha256'
+    OR image->>'visualSha256' IS DISTINCT FROM p_input->>'visualSha256' OR image->>'articleId' IS DISTINCT FROM p_input->>'articleId'
+    OR image->>'articleVersionId' IS DISTINCT FROM p_input->>'articleVersionId'
+    OR image->>'articleContentSha256' IS DISTINCT FROM p_input->>'articleContentSha256'
+    OR image->>'sponsorUserId' IS DISTINCT FROM p_input->>'sponsorUserId'
+    OR image->>'sourceSnapshotVersion' IS DISTINCT FROM p_input->>'sourceSnapshotVersion' THEN
+    RETURN jsonb_build_object('kind','held','reason','claim_or_intent_changed');
+  END IF;
+  -- Some existing article updates lock only their article row. Pin this own source before the global gate wait.
+  PERFORM 1 FROM app.seo_blog_articles WHERE workspace_id=p_workspace AND id=(image->>'articleId')::uuid FOR SHARE;
+  source:=app_private.seo_image_source(p_workspace,(image#>>'{source,articleId}')::uuid);
+  IF source IS DISTINCT FROM image->'source' OR source->'snapshot' IS DISTINCT FROM image->'sourceSnapshot'
+    OR source->>'sourceSha256' IS DISTINCT FROM image->>'sourceSha256' OR source->>'profileSha256' IS DISTINCT FROM image->>'profileSha256'
+    OR source->>'visualSha256' IS DISTINCT FROM image->>'visualSha256' OR source->>'articleId' IS DISTINCT FROM image->>'articleId'
+    OR source->>'articleVersionId' IS DISTINCT FROM image->>'articleVersionId'
+    OR source->>'articleContentSha256' IS DISTINCT FROM image->>'articleContentSha256' THEN
+    RETURN jsonb_build_object('kind','held','reason','source_changed');
+  END IF;
+  sponsor:=(image->>'sponsorUserId')::uuid;
+  reason:=app_private.seo_image_source_hold(p_workspace,source,sponsor,coalesce((image->>'automatic')::boolean,true));
+  IF reason IS NOT NULL THEN RETURN jsonb_build_object('kind','held','reason',reason); END IF;
+  END IF;
+  IF NOT coalesce((p_input->>'providerConfigured')::boolean,false) THEN RETURN jsonb_build_object('kind','held','reason','provider_unconfigured'); END IF;
+  -- The caller already owns its job row; aggregate other brands without row-locking them.
+  -- A real row UPDATE gives SERIALIZABLE snapshots a conflict even if the visible aggregate is stale.
+  UPDATE app_private.seo_image_operator_policy SET admission_epoch=admission_epoch+1 WHERE singleton RETURNING * INTO policy;
+  reason:=CASE WHEN creative THEN app_private.creative_studio_image_hold(p_workspace,source,sponsor)
+    ELSE app_private.seo_image_source_hold(p_workspace,source,sponsor,coalesce((image->>'automatic')::boolean,true)) END;
+  IF reason IS NOT NULL THEN RETURN jsonb_build_object('kind','held','reason',reason); END IF;
+  this_period:=date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC')::date;
+  IF policy.version IS DISTINCT FROM (p_input->>'expectedPolicyVersion')::bigint
+    OR encode(policy.sha256,'hex') IS DISTINCT FROM p_input->>'expectedPolicySha256'
+    OR image->>'expectedPolicyVersion' IS DISTINCT FROM p_input->>'expectedPolicyVersion'
+    OR image->>'expectedPolicySha256' IS DISTINCT FROM p_input->>'expectedPolicySha256' THEN
+    RETURN jsonb_build_object('kind','held','reason','operator_policy_changed');
+  END IF;
+  IF NOT coalesce((policy.config->>'enabled')::boolean,false)
+    OR coalesce((policy.config->>'maxConcurrency')::bigint,0)<=0
+    OR coalesce((policy.config->>'perAttemptMicrousd')::bigint,0)<=0
+    OR coalesce((policy.config->>'monthlyMicrousd')::bigint,0)<=0 THEN
+    RETURN jsonb_build_object('kind','held','reason','operator_policy_disabled');
+  END IF;
+  IF image->>'model' IS DISTINCT FROM policy.config->>'model' OR image->>'quality' IS DISTINCT FROM policy.config->>'quality' THEN
+    RETURN jsonb_build_object('kind','held','reason','operator_model_mismatch');
+  END IF;
+  SELECT count(*) FILTER(WHERE a.outcome IN ('started','outcome_unknown')),
+    coalesce(sum(a.reserved_microusd) FILTER(WHERE a.allowance_period=this_period OR a.outcome IN ('started','outcome_unknown')),0)
+    INTO active_count,reserved FROM app.seo_blog_image_attempts a;
+  IF active_count>=(policy.config->>'maxConcurrency')::bigint THEN RETURN jsonb_build_object('kind','held','reason','global_concurrency'); END IF;
+  IF reserved+(policy.config->>'perAttemptMicrousd')::numeric>(policy.config->>'monthlyMicrousd')::numeric THEN
+    RETURN jsonb_build_object('kind','held','reason','global_cost_reservation');
+  END IF;
+  SELECT coalesce((settings#>>'{budgets,imagesPerMonth}')::bigint,0) INTO image_limit FROM app.seo_blog_brands WHERE workspace_id=p_workspace;
+  SELECT coalesce(sum(u.amount),0)+(SELECT count(*) FROM app.seo_blog_image_attempts a WHERE a.workspace_id=p_workspace
+    AND a.allowance_period<this_period AND a.outcome IN ('started','outcome_unknown')) INTO brand_volume
+    FROM app.seo_blog_usage u WHERE u.workspace_id=p_workspace AND u.kind='images'
+      AND date_trunc('month',u.at AT TIME ZONE 'UTC')::date=this_period;
+  IF image_limit<=0 OR brand_volume>=image_limit THEN RETURN jsonb_build_object('kind','held','reason','brand_image_allowance'); END IF;
+  -- Studio briefs also need their own owner-set studio allowance (default zero); the brand image allowance above stays shared.
+  IF creative THEN
+    SELECT CASE WHEN settings#>'{studioImages,enabled}'='true'::jsonb AND jsonb_typeof(settings#>'{studioImages,perMonth}')='number'
+      THEN (settings#>>'{studioImages,perMonth}')::bigint ELSE 0 END INTO studio_limit FROM app.seo_blog_brands WHERE workspace_id=p_workspace;
+    SELECT count(*) INTO studio_volume FROM app.seo_blog_image_attempts a WHERE a.workspace_id=p_workspace
+      AND a.source_snapshot->>'recipe'='creative-brief-source-v1'
+      AND (a.allowance_period=this_period OR a.outcome IN ('started','outcome_unknown'));
+    IF studio_limit<=0 OR studio_volume>=studio_limit THEN RETURN jsonb_build_object('kind','held','reason','studio_image_allowance'); END IF;
+  END IF;
+  INSERT INTO app.seo_blog_image_attempts(id,workspace_id,job_id,intent_id,start_nonce,lease_owner,lease_attempt,intent_sha256,request_sha256,
+    source_sha256,visual_sha256,profile_sha256,source_snapshot,sponsor_user_id,model,quality,allowance_period,reserved_microusd,
+    policy_version,policy_sha256,policy_snapshot) VALUES(attempt_id,p_workspace,job.id,(image->>'intentId')::uuid,nonce,p_input->>'leaseOwner',
+      (p_input->>'leaseAttempt')::integer,decode(image->>'intentSha256','hex'),decode(image->>'requestSha256','hex'),
+      decode(source->>'sourceSha256','hex'),decode(source->>'visualSha256','hex'),decode(source->>'profileSha256','hex'),source,sponsor,
+      image->>'model',image->>'quality',this_period,(policy.config->>'perAttemptMicrousd')::bigint,policy.version,policy.sha256,policy.config);
+  policy_result:=policy.config||jsonb_build_object('version',policy.version,'sha256',encode(policy.sha256,'hex'),'admissionEpoch',policy.admission_epoch);
+  RETURN jsonb_build_object('kind','admitted','attemptId',attempt_id,'nonce',nonce,'policy',policy_result);
+END $f$;
+
+CREATE OR REPLACE FUNCTION app_private.seo_image_apply_hold(p_workspace uuid,p_attempt uuid,p_nonce uuid,p_lease_owner text,p_lease_attempt integer)
+RETURNS text LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE attempt app.seo_blog_image_attempts%ROWTYPE; job app.seo_blog_jobs%ROWTYPE; source jsonb; reason text;
+  policy app_private.seo_image_operator_policy%ROWTYPE;
+BEGIN
+  SELECT * INTO attempt FROM app.seo_blog_image_attempts WHERE workspace_id=p_workspace AND id=p_attempt AND start_nonce=p_nonce;
+  IF attempt.id IS NULL THEN RETURN 'attempt_missing'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_array_elements(attempt.receipts) r
+    WHERE r#>>'{receipt,requestSha256}' IS DISTINCT FROM encode(attempt.request_sha256,'hex')) THEN RETURN 'request_identity_mismatch'; END IF;
+  SELECT * INTO job FROM app.seo_blog_jobs WHERE workspace_id=p_workspace AND id=attempt.job_id;
+  IF job.state IS DISTINCT FROM 'running' OR job.lease_expires_at IS NULL OR job.lease_expires_at<=clock_timestamp()
+    OR job.data->>'leaseOwner' IS DISTINCT FROM p_lease_owner OR job.data->>'attempts' IS DISTINCT FROM p_lease_attempt::text
+    OR job.data#>>'{payload,image,intentId}' IS DISTINCT FROM attempt.intent_id::text
+    OR job.data#>>'{payload,image,requestSha256}' IS DISTINCT FROM encode(attempt.request_sha256,'hex') THEN RETURN 'claim_changed'; END IF;
+  IF attempt.outcome IS DISTINCT FROM 'candidate_received' THEN RETURN 'candidate_unavailable'; END IF;
+  -- 0144: a paid studio image is recorded privately (never approved or published) once its sponsor can still manage the
+  -- brand; later brief, profile or policy changes do not discard pixels that were already paid for.
+  IF attempt.source_snapshot->>'recipe'='creative-brief-source-v1' THEN
+    IF job.data#>>'{payload,image,schema}' IS DISTINCT FROM 'relaunch72.creative-image-intent/v1' THEN RETURN 'claim_changed'; END IF;
+    IF NOT app_private.can_manage_workspace(attempt.sponsor_user_id,p_workspace) THEN RETURN 'sponsor_ineligible'; END IF;
+    RETURN NULL;
+  END IF;
+  source:=app_private.seo_image_source(p_workspace,(attempt.source_snapshot->>'articleId')::uuid);
+  IF source IS DISTINCT FROM attempt.source_snapshot THEN RETURN 'source_changed'; END IF;
+  reason:=app_private.seo_image_source_hold(p_workspace,source,attempt.sponsor_user_id,coalesce((job.data#>>'{payload,image,automatic}')::boolean,true));
+  IF reason IS NOT NULL THEN RETURN reason; END IF;
+  SELECT * INTO policy FROM app_private.seo_image_operator_policy WHERE singleton FOR SHARE;
+  IF NOT coalesce((policy.config->>'enabled')::boolean,false) THEN RETURN 'operator_policy_disabled'; END IF;
+  IF policy.version IS DISTINCT FROM attempt.policy_version OR policy.sha256 IS DISTINCT FROM attempt.policy_sha256 THEN RETURN 'operator_policy_changed'; END IF;
+  RETURN NULL;
+END $f$;
+
+-- Owner or worker read of one brief version's live source (as seo_image_read_source does for an article).
+CREATE FUNCTION app_private.creative_studio_read_brief_source(p_workspace uuid,p_session bytea,p_brief uuid,p_version integer)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  PERFORM app_private.seo_media_private_actor(p_workspace,p_session);
+  PERFORM app_private.seo_media_lock_brand(p_workspace);
+  RETURN app_private.creative_studio_brief_source(p_workspace,p_brief,p_version);
+END $f$;
+
+-- Owner command: save one immutable brief version. The brief describes only the picture; headlines, prices,
+-- logos and disclosures are composited exactly later and are never sent to the image provider.
+CREATE FUNCTION app_private.creative_studio_save_brief(p_workspace uuid,p_session bytea,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; cmd app.creative_studio_commands; b jsonb:=p_input->'brief'; next_version integer; ref jsonb; refs integer;
+BEGIN
+  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  IF coalesce(p_input->>'commandId','') !~ '^[0-9a-f-]{36}$' OR coalesce(p_input->>'inputSha','') !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Invalid brief command' USING ERRCODE='22023'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('r72-creative-studio:'||p_workspace::text,0));
+  SELECT * INTO cmd FROM app.creative_studio_commands WHERE workspace_id=p_workspace AND id=(p_input->>'commandId')::uuid;
+  IF cmd.id IS NOT NULL THEN
+    IF cmd.input_sha256 IS DISTINCT FROM p_input->>'inputSha' OR cmd.action<>'brief_save' THEN RAISE EXCEPTION 'This request was already used for different content' USING ERRCODE='40001'; END IF;
+    RETURN jsonb_build_object('replayed',true,'id',cmd.result_id);
+  END IF;
+  refs:=jsonb_array_length(coalesce(b->'references','[]'::jsonb));
+  IF jsonb_typeof(b) IS DISTINCT FROM 'object' OR coalesce(b->>'id','') !~ '^[0-9a-f-]{36}$'
+    OR EXISTS(SELECT 1 FROM jsonb_object_keys(b) k WHERE k<>ALL(ARRAY['id','text','size','references','useVisualGuidance','title']))
+    OR length(coalesce(b->>'text','')) NOT BETWEEN 10 AND 1500 OR b->>'text' ~* '(https?:|www[.]|@)' OR b->>'text' ~ '[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]'
+    OR length(coalesce(b->>'title','')) NOT BETWEEN 1 AND 80
+    OR coalesce(b->>'size','') NOT IN ('1536x1024','1024x1024','1024x1536')
+    OR jsonb_typeof(b->'useVisualGuidance') IS DISTINCT FROM 'boolean'
+    OR jsonb_typeof(coalesce(b->'references','[]'::jsonb))<>'array' OR refs>3 THEN
+    RAISE EXCEPTION 'Check the image brief: describe the picture in 10 to 1500 characters without links, and choose a supported size.' USING ERRCODE='22023';
+  END IF;
+  FOR ref IN SELECT x FROM jsonb_array_elements(coalesce(b->'references','[]'::jsonb)) x LOOP
+    IF jsonb_typeof(ref)<>'object' OR (SELECT count(*) FROM jsonb_object_keys(ref))<>2 OR coalesce(ref->>'assetId','') !~ '^[0-9a-f-]{36}$' OR coalesce(ref->>'sha256','') !~ '^[0-9a-f]{64}$'
+      OR NOT EXISTS(SELECT 1 FROM app.seo_blog_media_assets m WHERE m.workspace_id=p_workspace AND m.id::text=ref->>'assetId' AND encode(m.byte_sha256,'hex')=ref->>'sha256')
+      OR app_private.seo_media_withdrawn(p_workspace,(ref->>'assetId')::uuid,NULL) THEN
+      RAISE EXCEPTION 'A reference image is not a current private image of this brand.' USING ERRCODE='22023'; END IF;
+  END LOOP;
+  SELECT coalesce(max(version),0)+1 INTO next_version FROM app.creative_studio_briefs WHERE workspace_id=p_workspace AND id=(b->>'id')::uuid;
+  INSERT INTO app.creative_studio_briefs(workspace_id,id,version,data,created_by) VALUES(p_workspace,(b->>'id')::uuid,next_version,b-'id',actor);
+  INSERT INTO app.creative_studio_commands(workspace_id,id,action,input_sha256,result_id,actor_user_id)
+    VALUES(p_workspace,(p_input->>'commandId')::uuid,'brief_save',p_input->>'inputSha',(b->>'id')||':'||next_version,actor);
+  RETURN jsonb_build_object('replayed',false,'id',(b->>'id')||':'||next_version);
+END $f$;
+
+-- Owner intent check (mirrors seo_image_check_intent for a brief): active work for the same exact brief version wins,
+-- and once that version has a paid attempt, another paid generation needs an explicit new intent naming the last one.
+CREATE FUNCTION app_private.creative_studio_check_image_intent(p_workspace uuid,p_session bytea,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; sponsor uuid:=(p_input->>'sponsorUserId')::uuid; source jsonb; reason text; retained app.seo_blog_jobs%ROWTYPE; prior app.seo_blog_image_attempts%ROWTYPE;
+BEGIN
+  actor:=app_private.seo_media_private_actor(p_workspace,p_session);
+  IF actor IS NULL OR actor IS DISTINCT FROM sponsor THEN RAISE EXCEPTION 'Studio image intent requires the genuine requesting owner' USING ERRCODE='42501'; END IF;
+  PERFORM app_private.seo_media_lock_brand(p_workspace);
+  SELECT * INTO retained FROM app.seo_blog_jobs j WHERE j.workspace_id=p_workspace AND j.kind='write'
+    AND j.data#>>'{payload,stage}'='image' AND j.data#>>'{payload,image,schema}'='relaunch72.creative-image-intent/v1'
+    AND j.data#>>'{payload,image,briefId}'=p_input#>>'{source,briefId}' AND j.data#>>'{payload,image,briefVersion}'=p_input#>>'{source,briefVersion}'
+    AND j.state IN ('queued','running') ORDER BY j.created_at,j.id LIMIT 1;
+  IF retained.id IS NOT NULL THEN RETURN jsonb_build_object('kind','existing_job','job',retained.data||jsonb_build_object('state',retained.state,'rowVersion',retained.row_version)); END IF;
+  SELECT * INTO prior FROM app.seo_blog_image_attempts a WHERE a.workspace_id=p_workspace AND a.source_snapshot->>'recipe'='creative-brief-source-v1'
+    AND a.source_snapshot->>'briefId'=p_input#>>'{source,briefId}' AND a.source_snapshot->>'briefVersion'=p_input#>>'{source,briefVersion}'
+    ORDER BY a.created_at DESC,a.id DESC LIMIT 1;
+  IF prior.id IS NOT NULL AND (p_input->'confirmedNewIntent' IS DISTINCT FROM 'true'::jsonb OR p_input->>'replacesIntentId' IS DISTINCT FROM prior.intent_id::text) THEN
+    RETURN jsonb_build_object('kind','held','reason','new_intent_confirmation_required','replacesIntentId',prior.intent_id);
+  END IF;
+  source:=app_private.creative_studio_brief_source(p_workspace,(p_input#>>'{source,briefId}')::uuid,(p_input#>>'{source,briefVersion}')::integer);
+  IF source IS NULL OR source IS DISTINCT FROM p_input->'source' THEN RETURN jsonb_build_object('kind','held','reason','source_changed'); END IF;
+  reason:=app_private.creative_studio_image_hold(p_workspace,source,sponsor);
+  IF reason IS NOT NULL THEN RETURN jsonb_build_object('kind','held','reason',reason); END IF;
+  RETURN jsonb_build_object('kind','ready','source',source);
+END $f$;
+
+-- Owner reads: brief versions, generation jobs and results, and this month's studio and brand image usage.
+CREATE FUNCTION app_private.creative_studio_generation_state(p_workspace uuid,p_session bytea,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; this_period date:=(date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC'))::date; brief_filter uuid;
+BEGIN
+  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  brief_filter:=CASE WHEN coalesce(p_input->>'briefId','') ~ '^[0-9a-f-]{36}$' THEN (p_input->>'briefId')::uuid END;
+  RETURN jsonb_build_object(
+    'briefs',coalesce((SELECT jsonb_agg(jsonb_build_object('id',b.id,'version',b.version,'data',b.data,'createdBy',b.created_by,'createdAt',b.created_at) ORDER BY b.created_at DESC)
+      FROM (SELECT * FROM app.creative_studio_briefs WHERE workspace_id=p_workspace AND (brief_filter IS NULL OR id=brief_filter) ORDER BY created_at DESC LIMIT 60) b),'[]'::jsonb),
+    'generations',coalesce((SELECT jsonb_agg(jsonb_build_object('id',g.id,'briefId',g.brief_id,'briefVersion',g.brief_version,'jobId',g.job_id,'intentId',g.intent_id,
+        'attemptId',g.attempt_id,'assetId',g.candidate_asset_id,'sha256',g.candidate_sha256,'width',g.width,'height',g.height,'data',g.data,'createdAt',g.created_at) ORDER BY g.created_at DESC)
+      FROM (SELECT * FROM app.creative_studio_generations WHERE workspace_id=p_workspace AND (brief_filter IS NULL OR brief_id=brief_filter) ORDER BY created_at DESC LIMIT 60) g),'[]'::jsonb),
+    'jobs',coalesce((SELECT jsonb_agg(jsonb_build_object('id',j.id,'state',j.state,'briefId',j.data#>>'{payload,image,briefId}','briefVersion',(j.data#>>'{payload,image,briefVersion}')::integer,
+        'intentId',j.data#>>'{payload,image,intentId}','progress',j.data->>'progress','error',j.data->>'error','result',j.data#>'{payload,image,result}',
+        'paidAttemptStarted',j.data#>'{payload,image,start,nonce}' IS NOT NULL,'createdAt',j.created_at,'updatedAt',j.updated_at) ORDER BY j.created_at DESC)
+      FROM (SELECT * FROM app.seo_blog_jobs WHERE workspace_id=p_workspace AND kind='write' AND data#>>'{payload,stage}'='image'
+        AND data#>>'{payload,image,schema}'='relaunch72.creative-image-intent/v1'
+        AND (brief_filter IS NULL OR data#>>'{payload,image,briefId}'=brief_filter::text) ORDER BY created_at DESC LIMIT 60) j),'[]'::jsonb),
+    'attempts',coalesce((SELECT jsonb_agg(jsonb_build_object('jobId',a.job_id,'intentId',a.intent_id,'outcome',a.outcome,'reservedMicrousd',a.reserved_microusd,
+        'usage',a.receipts->-1#>'{receipt,usage}','createdAt',a.created_at) ORDER BY a.created_at DESC)
+      FROM (SELECT * FROM app.seo_blog_image_attempts WHERE workspace_id=p_workspace AND source_snapshot->>'recipe'='creative-brief-source-v1'
+        AND (brief_filter IS NULL OR source_snapshot->>'briefId'=brief_filter::text) ORDER BY created_at DESC LIMIT 60) a),'[]'::jsonb),
+    'usage',jsonb_build_object(
+      'brandImagesThisMonth',(SELECT coalesce(sum(u.amount),0) FROM app.seo_blog_usage u WHERE u.workspace_id=p_workspace AND u.kind='images'
+        AND date_trunc('month',u.at AT TIME ZONE 'UTC')::date=this_period),
+      'studioImagesCounted',(SELECT count(*) FROM app.seo_blog_image_attempts a WHERE a.workspace_id=p_workspace AND a.source_snapshot->>'recipe'='creative-brief-source-v1'
+        AND (a.allowance_period=this_period OR a.outcome IN ('started','outcome_unknown'))),
+      'studioUnresolved',(SELECT count(*) FROM app.seo_blog_image_attempts a WHERE a.workspace_id=p_workspace AND a.source_snapshot->>'recipe'='creative-brief-source-v1'
+        AND a.outcome IN ('started','outcome_unknown')),
+      'period',this_period));
+END $f$;
+
+-- Worker boundary: record a received studio candidate as a private generated image of its brief, bound to the exact
+-- admitted attempt and current claim. Idempotent per attempt. The caller marks its job done in the same transaction.
+CREATE FUNCTION app_private.creative_studio_record_generation(p_workspace uuid,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE attempt app.seo_blog_image_attempts%ROWTYPE; job app.seo_blog_jobs%ROWTYPE; reason text; existing app.creative_studio_generations%ROWTYPE; gid uuid;
+BEGIN
+  IF app_private.seo_media_private_actor(p_workspace,NULL) IS NOT NULL OR app_private.current_actor_kind()<>'worker' THEN
+    RAISE EXCEPTION 'Actual content worker required' USING ERRCODE='42501'; END IF;
+  PERFORM app_private.seo_media_lock_brand(p_workspace);
+  SELECT * INTO attempt FROM app.seo_blog_image_attempts WHERE workspace_id=p_workspace AND id=(p_input->>'attemptId')::uuid AND start_nonce=(p_input->>'nonce')::uuid;
+  IF attempt.id IS NULL OR attempt.source_snapshot->>'recipe' IS DISTINCT FROM 'creative-brief-source-v1' THEN RETURN jsonb_build_object('recorded',false,'hold','attempt_missing'); END IF;
+  SELECT * INTO existing FROM app.creative_studio_generations WHERE workspace_id=p_workspace AND attempt_id=attempt.id;
+  IF existing.id IS NOT NULL THEN RETURN jsonb_build_object('recorded',true,'replayed',true,'id',existing.id); END IF;
+  reason:=app_private.seo_image_apply_hold(p_workspace,attempt.id,attempt.start_nonce,p_input->>'leaseOwner',(p_input->>'leaseAttempt')::integer);
+  IF reason IS NOT NULL THEN RETURN jsonb_build_object('recorded',false,'hold',reason); END IF;
+  SELECT * INTO job FROM app.seo_blog_jobs WHERE workspace_id=p_workspace AND id=attempt.job_id;
+  IF attempt.candidate_asset_id IS NULL OR NOT EXISTS(SELECT 1 FROM app.seo_blog_media_assets m WHERE m.workspace_id=p_workspace AND m.id=attempt.candidate_asset_id
+      AND encode(m.byte_sha256,'hex')=p_input->>'candidateSha256' AND m.asset_kind='candidate')
+    OR coalesce((p_input->>'width')::integer,0) NOT BETWEEN 256 AND 4096 OR coalesce((p_input->>'height')::integer,0) NOT BETWEEN 256 AND 4096 THEN
+    RETURN jsonb_build_object('recorded',false,'hold','candidate_unverified'); END IF;
+  gid:=gen_random_uuid();
+  INSERT INTO app.creative_studio_generations(workspace_id,id,brief_id,brief_version,job_id,intent_id,attempt_id,candidate_asset_id,candidate_sha256,width,height,data)
+    VALUES(p_workspace,gid,(attempt.source_snapshot->>'briefId')::uuid,(attempt.source_snapshot->>'briefVersion')::integer,job.id,attempt.intent_id,attempt.id,
+      attempt.candidate_asset_id,p_input->>'candidateSha256',(p_input->>'width')::integer,(p_input->>'height')::integer,
+      jsonb_build_object('model',attempt.model,'quality',attempt.quality,'size',job.data#>>'{payload,image,size}','references',jsonb_array_length(coalesce(attempt.source_snapshot#>'{brief,references}','[]'::jsonb)),
+        'sponsorUserId',attempt.sponsor_user_id,'reservedMicrousd',attempt.reserved_microusd,'usage',attempt.receipts->-1#>'{receipt,usage}'));
+  RETURN jsonb_build_object('recorded',true,'replayed',false,'id',gid);
+END $f$;
+
+REVOKE ALL ON FUNCTION app_private.creative_studio_brief_source(uuid,uuid,integer),app_private.creative_studio_image_hold(uuid,jsonb,uuid),
+  app_private.creative_studio_read_brief_source(uuid,bytea,uuid,integer),
+  app_private.creative_studio_save_brief(uuid,bytea,jsonb),app_private.creative_studio_check_image_intent(uuid,bytea,jsonb),
+  app_private.creative_studio_generation_state(uuid,bytea,jsonb),app_private.creative_studio_record_generation(uuid,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_studio_save_brief(uuid,bytea,jsonb),app_private.creative_studio_check_image_intent(uuid,bytea,jsonb),
+  app_private.creative_studio_read_brief_source(uuid,bytea,uuid,integer),
+  app_private.creative_studio_generation_state(uuid,bytea,jsonb),app_private.creative_studio_record_generation(uuid,jsonb) TO r72_content_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_seo_media_definer;

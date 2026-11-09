@@ -333,3 +333,22 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
   assert.ok(foreignApprove.status === 404 || new URL(foreignApprove.headers.location ?? '/?e=1', 'https://x').searchParams.has('e'));
   assert.equal((await call(service, stranger, 'GET', `/portal/seo-blog/b/${queue.brand.id}/creative`)).status, 200, 'the stranger has their own studio');
 });
+
+test('typed-brief generated images: previews and backgrounds come only from this brand’s recorded generations, digest-checked', async () => {
+  const h = harness(); const hearth = await creativeBrand(h, HEARTH); const queue = await creativeBrand(h, QUEUE);
+  const bytes = syntheticLandscapeJpeg(400, 260); const sha = createHash('sha256').update(bytes).digest('hex');
+  const g = { id: randomUUID(), briefId: randomUUID(), briefVersion: 2, jobId: randomUUID(), intentId: randomUUID(), attemptId: randomUUID(), assetId: randomUUID(), sha256: sha,
+    width: 400, height: 260, data: { model: 'gpt-image-2' }, createdAt: '2026-11-09T00:00:00.000Z' };
+  let served = bytes;
+  const studio = new CreativeStudioService({ library: new MemoryCreativeLibraryStore(), brands: h.store, renderer: new StubRenderer(),
+    generatedImages: { find: async (_a, brandId, id) => (brandId === hearth.brand.id && id === g.id ? g : null), load: async () => served } });
+  assert.deepEqual((await studio.generatedImage(OWNER.userId, hearth.brand.id, g.id)).sha256, sha);
+  await assert.rejects(studio.generatedImage(OWNER.userId, queue.brand.id, g.id), /not available/u, 'another brand cannot read it');
+  await assert.rejects(studio.generatedImage(STRANGER.userId, hearth.brand.id, g.id), (e: Error) => !/integrity/u.test(e.message), 'a non-manager is refused first');
+  const set = await studio.draft(OWNER.userId, hearth.brand.id, randomUUID(), offerForm('Annual boiler service', HEARTH.pages[0]!.url, { concepts: '1', placements: 'square' }), { kind: 'generated', generationId: g.id });
+  const bg = (await studio.getSet(OWNER.userId, hearth.brand.id, set.setId)).view.concepts[0]!.variants[0]!.version.concept.background;
+  assert.equal(bg.kind, 'image');
+  if (bg.kind === 'image') { assert.equal(bg.origin, 'generated_studio_image'); assert.equal(bg.provenance.attemptId, g.attemptId); assert.equal(bg.provenance.briefVersion, '2'); }
+  served = syntheticLandscapeJpeg(400, 261);
+  await assert.rejects(studio.generatedImage(OWNER.userId, hearth.brand.id, g.id), /integrity/u);
+});

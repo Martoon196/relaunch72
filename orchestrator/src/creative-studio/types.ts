@@ -76,7 +76,7 @@ export interface CreativeRequest {
 
 export type BackgroundComponent =
   | { readonly kind: 'neutral' }
-  | { readonly kind: 'image'; readonly image: StoredImageRef; readonly origin: 'owner_upload' | 'generated_article_image';
+  | { readonly kind: 'image'; readonly image: StoredImageRef; readonly origin: 'owner_upload' | 'generated_article_image' | 'generated_studio_image';
       readonly label: string; readonly provenance: Readonly<Record<string, string>> };
 
 /** Concept-level components shared by every placement and card of one concept. */

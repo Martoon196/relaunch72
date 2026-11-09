@@ -10,6 +10,11 @@ import { PgCreativeDistributionReader, PgCreativeLearningStore, PgCreativeLibrar
 import type { CampaignCreatorStore } from '../seo-blog/campaign-creator.js';
 import { ChromiumArtworkRenderer } from '../creative-studio/renderer.js';
 import { PgSeoBlogStore } from '../seo-blog/pg-store.js';
+import { PgSeoBlogMediaStore } from '../seo-blog/media-store.js';
+import { CreativeGeneration } from '../creative-studio/generation-service.js';
+import { PgCreativeGenerationStore } from '../creative-studio/generation-store.js';
+import { imageProviderKey } from './creative-studio-worker.js';
+import type { Job } from '../seo-blog/types.js';
 import type { SeoBlogEngine } from '../seo-blog/engine.js';
 import type { PortalSessionIdentity } from './auth-service.js';
 
@@ -41,11 +46,14 @@ export function engineSavedImages(engine: SeoBlogEngine): { list(actorId: string
 }
 
 export function createCreativeStudio(input: { readonly contentCommandPool: Pool; readonly identity: PortalSessionIdentity; readonly requestId: string; readonly engine: SeoBlogEngine;
-  readonly creators?: Pick<CampaignCreatorStore, 'get' | 'list'> }): CreativeStudioService {
+  readonly creators?: Pick<CampaignCreatorStore, 'get' | 'list'>; readonly env?: NodeJS.ProcessEnv }): CreativeStudioService {
   const principal = { kind: 'user' as const, userId: input.identity.userId, requestId: input.requestId, sessionToken: input.identity.sessionToken, selectedWorkspaceId: input.identity.workspaceId };
+  const media = new PgSeoBlogMediaStore(input.contentCommandPool, principal, { publicOrigin: 'https://app.relaunch72.com' });
+  const brands = new PgSeoBlogStore(input.contentCommandPool, principal, media);
+  const generationStore = new PgCreativeGenerationStore(input.contentCommandPool, principal);
   return new CreativeStudioService({
     library: new PgCreativeLibraryStore(input.contentCommandPool, principal),
-    brands: new PgSeoBlogStore(input.contentCommandPool, principal),
+    brands,
     renderer: creativeRenderer(),
     savedImages: engineSavedImages(input.engine),
     // Milestone 4: the existing article media path, existing acquisition proposals and read-only receipts/CRM outcomes.
@@ -55,5 +63,20 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
     // Milestone 5: append-only learning journal; brand guidance copies go through the existing knowledge upload.
     learning: new PgCreativeLearningStore(input.contentCommandPool, principal),
     guidance: { saveAudienceNote: async (actorId, brandId, title, text) => ({ documentId: (await input.engine.uploadKnowledge({ userId: actorId }, brandId, { category: 'audience_notes', title, pastedText: text })).id }) },
+    // Typed-brief generation through the existing article-image admission, provider credential and private storage.
+    generation: new CreativeGeneration({ store: generationStore, brands, policy: () => media.readImagePolicy(), providerConfigured: imageProviderKey(input.env ?? {}).configured,
+      settings: { async configure(actorId, brandId, rowVersion, value) {
+        await input.engine.updateSettings({ userId: actorId }, brandId, rowVersion, { studioImages: { ...value, authorizedBy: actorId, authorizedAt: new Date().toISOString() } });
+      } } }),
+    generatedImages: {
+      async find(_actorId, brandId, generationId) { return (await generationStore.state(brandId)).generations.find((g) => g.id === generationId) ?? null; },
+      // The brand's private media store (owner session, workspace RLS, digest-checked); independent of article image review.
+      async load(_actorId, brandId, assetId, sha256) { return (await media.loadPrivateAsset(brandId, assetId, sha256)).bytes; },
+    },
   });
+}
+
+/** Durable local render runner for the worker (filled in by the render-job work; absent until then). */
+export function creativeRenderRunner(_pool: Pool, _requestId: string, _env: NodeJS.ProcessEnv): { render?: (job: Job) => Promise<Job> } {
+  return {};
 }

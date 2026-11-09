@@ -101,7 +101,7 @@ export function draftConcepts(input: {
     seen.add(built.headline.toLowerCase());
     const cards = request.purpose === 'carousel' ? carouselCards(built, request.cardCount, { claims, article, offer: offer ? { description: offer.description } : null, ctaLabel }) : [];
     concepts.push(Object.freeze({ angle: angle.label, ...built, background: input.background,
-      illustrativeTag: input.background.kind === 'image' && input.background.origin === 'generated_article_image', cards: Object.freeze(cards) }));
+      illustrativeTag: input.background.kind === 'image' && (input.background.origin === 'generated_article_image' || input.background.origin === 'generated_studio_image'), cards: Object.freeze(cards) }));
   }
   const note = concepts.length < request.conceptCount
     ? `Only ${concepts.length} distinct concept${concepts.length === 1 ? '' : 's'} can be drafted from the approved facts for this source. Add approved claims or positioning to unlock more angles; nothing was invented to fill the gap.`

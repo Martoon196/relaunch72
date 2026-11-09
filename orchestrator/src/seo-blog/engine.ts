@@ -42,6 +42,7 @@ import {
 import type { SeoBlogCredentialVault } from './vault.js';
 import { linkedPromotionFor, OBSERVATION_CREATE_WINDOW_MS, OBSERVATION_TTL_MS, promotionPublicationHold, type ArticlePromotionApproval, type PromotionNetwork } from './promotions.js';
 import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOverview, type SocialRegistry } from './social.js';
+import { isCreativeStudioJob } from '../creative-studio/generation.js';
 import { automaticImageCommandId, imageJobDto, isArticleWriteJob, isImageJob, type ArticleImageService, type ArticleImageRequestResult } from './image-campaign.js';
 import { createArticleCampaign, fallbackCampaignDrafts, type CampaignDraft } from './campaign.js';
 import { SeoBlogCampaignService, type CampaignReviewPorts, type CampaignSelection } from './campaign-service.js';
@@ -91,6 +92,8 @@ export interface EngineDeps {
   readonly campaignReview?: CampaignReviewPorts;
   readonly mediaReview?: ArticleMediaReviewService;
   readonly campaignQueue?: SeoBlogCampaignQueueService;
+  /** Creative Studio worker jobs (typed-brief images, durable renders). Absent: such jobs are held, never run by the article paths. */
+  readonly creativeJobs?: { handles(job: Job): boolean; run(job: Job): Promise<Job> };
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
@@ -2448,6 +2451,12 @@ export class SeoBlogEngine {
       }
       return this.deps.campaignQueue.run(job);
     }
+    if (this.deps.creativeJobs?.handles(job)) return this.deps.creativeJobs.run(job);
+    if (isCreativeStudioJob(job)) {
+      const fresh = await this.store.getJob(job.brandId, job.id);
+      if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+      return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: 'Creative Studio work is unavailable on this worker.', error: 'The Creative Studio worker must be configured before this task can run. Nothing was requested or charged.', updatedAt: this.now() });
+    }
     if (isImageJob(job)) {
       if (this.deps.images) return this.deps.images.run(job);
       const fresh = await this.store.getJob(job.brandId, job.id);
@@ -2625,6 +2634,8 @@ export function normaliseWebsite(raw: string): string {
 
 function validateSettings(s: BrandSettings): void {
   if (s.media && typeof s.media.imageGenerationEnabled !== 'boolean') throw new SeoBlogError(400, 'Invalid image generation toggle.');
+  if (s.studioImages && (typeof s.studioImages.enabled !== 'boolean' || !Number.isInteger(s.studioImages.perMonth) || s.studioImages.perMonth < 0 || s.studioImages.perMonth > 1000))
+    throw new SeoBlogError(400, 'Studio image allowance must be a whole number from 0 to 1000.');
   validateCadence(s.cadence);
   if (!Number.isInteger(s.planningHorizonDays) || s.planningHorizonDays < 7 || s.planningHorizonDays > 120) throw new SeoBlogError(400, 'Planning horizon must be 7–120 days.');
   if (!Number.isInteger(s.backlogCeiling) || s.backlogCeiling < 0 || s.backlogCeiling > 50) throw new SeoBlogError(400, 'Backlog ceiling must be 0–50 articles.');
