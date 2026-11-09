@@ -247,6 +247,7 @@ export interface MetaWhatsAppLiveTransport {
   readonly contract: typeof META_WHATSAPP_LIVE_CONTRACT;
   readonly executionMode: 'owned_template_live';
   sendTemplate(input: MetaWhatsAppTemplateDispatch): Promise<MetaWhatsAppDispatchResult>;
+  sendManualReply?(input: {recipient: string; body: string}): Promise<MetaWhatsAppDispatchResult>;
 }
 
 async function boundedResponse(response: Response): Promise<string> {
@@ -289,19 +290,9 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
     fail('invalid_configuration');
   }
   const now = options.now ?? (() => new Date());
-  return Object.freeze({
-    contract: META_WHATSAPP_LIVE_CONTRACT,
-    executionMode: 'owned_template_live' as const,
-    async sendTemplate(input: MetaWhatsAppTemplateDispatch): Promise<MetaWhatsAppDispatchResult> {
-      if (JSON.stringify(snapshotBinding(input.binding)) !== JSON.stringify(bound)
-          || !E164.test(input.recipient) || !TEMPLATE.test(input.templateName)
-          || !LANGUAGE.test(input.languageCode) || !UUID.test(input.operationId)
-          || !SHA256.test(input.requestSha256)) fail('invalid_request');
+  async function send(input:{recipient:string}, payload: Record<string,unknown>):Promise<MetaWhatsAppDispatchResult> {
       const url = `${GRAPH_ORIGIN}/${bound.graphApiVersion}/${bound.phoneNumberId}/messages`;
-      const body = JSON.stringify({
-        messaging_product: 'whatsapp', to: input.recipient, type: 'template',
-        template: { name: input.templateName, language: { code: input.languageCode } },
-      });
+      const body = JSON.stringify({ messaging_product:'whatsapp',to:input.recipient,...payload });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let status: number;
@@ -358,6 +349,21 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
           : ambiguous ? `meta_http_${status}_unknown` : `meta_http_${status}`,
         occurredAt: now().toISOString(),
       });
+  }
+  return Object.freeze({
+    contract: META_WHATSAPP_LIVE_CONTRACT,
+    executionMode: 'owned_template_live' as const,
+    async sendTemplate(input: MetaWhatsAppTemplateDispatch): Promise<MetaWhatsAppDispatchResult> {
+      if (JSON.stringify(snapshotBinding(input.binding)) !== JSON.stringify(bound)
+          || !E164.test(input.recipient) || !TEMPLATE.test(input.templateName)
+          || !LANGUAGE.test(input.languageCode) || !UUID.test(input.operationId)
+          || !SHA256.test(input.requestSha256)) fail('invalid_request');
+      return send(input,{type:'template',template:{name:input.templateName,language:{code:input.languageCode}}});
+    },
+    async sendManualReply(input:{recipient:string;body:string}):Promise<MetaWhatsAppDispatchResult> {
+      if (bound.workspaceId !== '2789228d-55a6-4688-b1e8-2f70abca990b' || !E164.test(input.recipient)
+          || typeof input.body!=='string' || !input.body.trim() || Buffer.byteLength(input.body)>4096) fail('invalid_request');
+      return send(input,{type:'text',text:{preview_url:false,body:input.body}});
     },
   });
 }

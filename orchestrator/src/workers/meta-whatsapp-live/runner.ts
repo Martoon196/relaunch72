@@ -342,7 +342,8 @@ export async function startMetaWhatsAppLiveWorker(
         // Dedicated MHP event mode never enters the legacy owner-action rail, even when idle or failing.
         const observeNow = Date.now() - lastObservation >= 300_000;
         const event = await (dependencies.runEventCycle ?? runMhpEventWhatsAppOnce)({ repository: eventRepository, encryptionKey: config.encryptionKey,
-          encryptionKeyVersion: config.encryptionKeyVersion, leaseToken: Buffer.from(token), fetch: globalThis.fetch, createTransport, observeNow });
+          encryptionKeyVersion: config.encryptionKeyVersion, leaseToken: Buffer.from(token), fetch: globalThis.fetch, createTransport, observeNow,
+          manualReplies:env.MHP_WHATSAPP_MANUAL_REPLIES==='enabled' });
         if (observeNow) lastObservation = Date.now();
         return event;
       }

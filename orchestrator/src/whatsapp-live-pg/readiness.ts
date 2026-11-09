@@ -1,4 +1,5 @@
 import type { Pool, QueryResultRow } from 'pg';
+import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from '../db/mhp-wa-direct-schema.js';
 
 export const META_WHATSAPP_LIVE_COMMAND_DATABASE_ROLE =
   'r72_whatsapp_live_command' as const;
@@ -70,10 +71,15 @@ async function assertBoundaryReady(
   pool: Pick<Pool, 'query'>,
   kind: BoundaryKind,
 ): Promise<void> {
-  const allowed = ALLOWED[kind];
-  const placeholders = allowed.map((_, index) => `$${index + 2}::regprocedure`);
   let rows: readonly BoundaryRow[];
   try {
+    let allowed=ALLOWED[kind];
+    if (kind==='worker') {
+      const {rows:ledger}=await pool.query<{checksum:string}>('SELECT checksum FROM app_private.runtime_schema_migrations() WHERE filename=$1',[DIRECT_WA_MIGRATION]);
+      if (ledger.length && ledger[0]?.checksum===DIRECT_WA_CHECKSUM) allowed=[...allowed,
+        'app_private.mhp_wa_direct_begin(uuid,uuid,uuid)','app_private.mhp_wa_direct_finish(uuid,uuid,uuid,text,text)'];
+    }
+    const placeholders = allowed.map((_, index) => `$${index + 2}::regprocedure`);
     const result = await pool.query<BoundaryRow>(
       `/* meta-whatsapp-live.${kind}-runtime-boundary */
        SELECT

@@ -11,7 +11,7 @@ import { readOwnerWhatsapp } from './whatsapp-reader.js';
 
 export const GROUP_HQ_INBOX_CRM_PATH = '/api/group-hq/inbox/crm';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const BRAND = /^(pp|mhp|kp|hnh|ordris|group)$/u;
+const BRAND = /^(pp|mhp|kp|piuk|hnh|ordris|group)$/u;
 const CHANNEL = /^(facebook|instagram|linkedin|twitter|whatsapp|youtube|tiktok|email|sms)$/u;
 const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -31,14 +31,14 @@ export interface InboxCrmScope {
   label: string; workspaceId: string; organizationId: string; ownerUserId: string;
   pipelineId: string; stageId: string; actorEmails: readonly string[]; whatsappOwnerIds?: Readonly<Record<string,string>>;
 }
-export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>>; mhpWhatsappInboxId?: string }
+export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>>; mhpWhatsappInboxId?: string; mhpWhatsappManualReplies?: boolean }
 export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | undefined {
   const raw = env.R72_GROUP_HQ_INBOX_SCOPES?.trim() ?? '';
   const secret = env.R72_GROUP_HQ_INBOX_SECRET?.trim() ?? '';
   if (!raw && !secret) return undefined;
   if (secret.length < 32 || secret.length > 256) throw new Error('Inbox command credential is incomplete');
   const parsed: unknown = JSON.parse(raw);
-  if (!record(parsed) || !Object.keys(parsed).length || Object.keys(parsed).length > 6) throw new Error('Inbox scope configuration is invalid');
+  if (!record(parsed) || !Object.keys(parsed).length || Object.keys(parsed).length > 7) throw new Error('Inbox scope configuration is invalid');
   const scopes: Record<string, InboxCrmScope> = {};
   const workspaces = new Set<string>();
   for (const [brand, value] of Object.entries(parsed)) {
@@ -64,7 +64,8 @@ export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | und
     }
   }
   const binding = env.GHQ_MHP_WHATSAPP_INBOX_ID?.trim();
-  return binding && UUID.test(binding) ? { secret, scopes, mhpWhatsappInboxId: binding.toLowerCase() } : {secret, scopes};
+  return binding && UUID.test(binding) ? { secret, scopes, mhpWhatsappInboxId: binding.toLowerCase(),
+    ...(env.MHP_WHATSAPP_MANUAL_REPLIES==='enabled'?{mhpWhatsappManualReplies:true}:{}) } : {secret, scopes};
 }
 
 export function inboxSignature(secret: string, timestamp: string, method: string, path: string, body: Buffer): string {
@@ -116,17 +117,28 @@ export class GroupHqInboxCrmService {
     const requestId = uuid(input.requestId);
     const brand = text(input.brand, 12);
     const { context, scope } = await this.context(actorEmail, brand, requestId);
-    if (input.action === 'whatsappThreads' || input.action === 'whatsappMessages') {
+    if (input.action === 'whatsappThreads' || input.action === 'whatsappMessages' || input.action === 'whatsappReply') {
       const inboxId = this.config.mhpWhatsappInboxId;
       if (brand !== 'mhp' || scope.workspaceId !== MHP_MARKETING_WORKSPACE_ID || !inboxId || input.accountId !== inboxId) {
         throw new InboxCrmError(403,'forbidden_scope');
       }
-      const thread = input.action === 'whatsappMessages' ? uuid(input.threadId) : undefined;
+      const thread = input.action === 'whatsappThreads' ? undefined : uuid(input.threadId);
       const cursor = thread && input.cursor != null ? uuid(input.cursor) : undefined;
       const actorId=scope.whatsappOwnerIds?.[actorEmail] ?? scope.ownerUserId;
       const ownerContext=requestDatabaseContext({workspaceId:scope.workspaceId,userId:actorId,requestId});
       const result = await readOwnerWhatsapp(this.readPool, ownerContext, actorEmail, inboxId, thread, cursor);
       if (!result) throw new InboxCrmError(404,'conversation_unavailable');
+      if (input.action === 'whatsappReply') {
+        if (!this.config.mhpWhatsappManualReplies) throw new InboxCrmError(409,'reply_unavailable');
+        const body=text(input.body,4096);
+        if (Buffer.byteLength(body)>4096) throw new InboxCrmError(400,'invalid_request');
+        const state=await this.runner.run(ownerContext,async tx=>{
+          const {rows}=await tx.query<{state:string}>('SELECT app_private.mhp_wa_direct_queue($1,$2,$3,$4) AS state',[requestId,inboxId,thread,body]);
+          return rows[0]?.state;
+        });
+        if (!state || state==='refused' || state==='conflict') throw new InboxCrmError(409,state==='conflict'?'request_conflict':'reply_unavailable');
+        return {brand,accountId:inboxId,threadId:thread,requestId,state};
+      }
       return result;
     }
     if (input.action === 'contact') {

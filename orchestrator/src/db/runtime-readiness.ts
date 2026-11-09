@@ -1,5 +1,7 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
+import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
+import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -51,8 +53,6 @@ const MHP_EVENT_WHATSAPP_MIGRATION = '0141_mhp_event_whatsapp_programme.sql';
 const MHP_EVENT_WHATSAPP_CHECKSUM = 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c';
 const MHP_PAYMENTS_LIVE_MIGRATION = '0142_mhp_payments_live.sql';
 const MHP_PAYMENTS_LIVE_CHECKSUM = '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d';
-const CREATIVE_STUDIO_MIGRATION = '0143_creative_studio_library.sql';
-const CREATIVE_STUDIO_CHECKSUM = '57be028af152c523d5b2e4172636808bdbc52dffc62006b37a9d2bc7c225eb81';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -241,9 +241,17 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
+  // The 142 recovery application can run against precisely its reviewed 143 successor.
+  if (migrations.length===142 && migrations[141]?.checksum===MHP_PAYMENTS_LIVE_CHECKSUM
+      && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) applied.delete(DIRECT_WA_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
+  // Roll out the 143 binary before advancing shared PostgreSQL. During that interval the
+  // reader retains the legacy signed projection and direct reply dispatch stays disabled.
+  if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
+      && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
   // receipt trigger. The production ACL was repaired before this source was
   // published; allow that exact 0122 ledger during the additive cutover.
@@ -269,15 +277,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_EVENT_WHATSAPP_MIGRATION) === MHP_EVENT_WHATSAPP_CHECKSUM) {
     return;
   }
-  // A release bundling the additive 0143 creative studio library is deployed to every
-  // consumer BEFORE 0143 is applied, and only on top of the exact applied 0142 ledger
-  // (never during the 0142 payments cut-over). Until 0143 is applied the studio stays
-  // unmounted (CREATIVE_STUDIO_ENABLED is off), so nothing reads the new tables.
+  // A release bundling the additive 0144 Creative Studio library is deployed to every
+  // consumer BEFORE 0144 is applied, and only on top of the exact applied MHP 0143 ledger
+  // (never during the 0142 payments or 0143 inbox cut-overs). Until 0144 is applied the
+  // studio stays unmounted (CREATIVE_STUDIO_ENABLED is off), so nothing reads its tables.
   if (pending.length === 1
-      && migrations.length === 143
-      && migrations[142]?.filename === CREATIVE_STUDIO_MIGRATION
+      && migrations.length === 144
+      && migrations[143]?.filename === CREATIVE_STUDIO_MIGRATION
       && pending[0]?.filename === CREATIVE_STUDIO_MIGRATION
       && pending[0]?.checksum === CREATIVE_STUDIO_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION) === DIRECT_WA_CHECKSUM
       && applied.get(MHP_PAYMENTS_LIVE_MIGRATION) === MHP_PAYMENTS_LIVE_CHECKSUM) {
     return;
   }

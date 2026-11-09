@@ -1,5 +1,5 @@
--- 0143 Creative Studio library: owner-only, append-only artwork, storyboard and video versions, exact approvals and
--- draft campaign hand-offs for any programme brand. Additive only; 0001-0142 are unchanged.
+-- 0144 Creative Studio library: owner-only, append-only artwork, storyboard and video versions, exact approvals and
+-- draft campaign hand-offs for any programme brand. Additive only; 0001-0143 are unchanged (renumbered from 0143 after MHP took that number; never applied as 0143).
 -- No provider call, paid-generation admission, scheduler, publishing, outreach or ad-spend capability.
 -- Rendered bytes live in the existing workspace-scoped app.seo_blog_blobs.
 SET LOCAL lock_timeout='5s';

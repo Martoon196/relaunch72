@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { CREATIVE_STUDIO_CHECKSUM, CREATIVE_STUDIO_MIGRATION } from '../../src/db/creative-studio-schema.js';
+import { DIRECT_WA_CHECKSUM, DIRECT_WA_MIGRATION } from '../../src/db/mhp-wa-direct-schema.js';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -456,17 +458,13 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0142_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
 
-/** The exact 142-file release bundle the payments cut-over shipped, reconstructed from today's source. */
-async function payments142Bundle(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'r72-bundle-142-'));
-  for (const m of (await discoverMigrations()).slice(0, 142)) await writeFile(path.join(dir, m.filename), m.sql);
-  return dir;
-}
 
 test('payments142 release is ready before and after its exact additive 0142, and strict otherwise', async () => {
-  const dir = await payments142Bundle();
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, dir, {});
-  const rows=(await discoverMigrations(dir)).map(({filename,checksum})=>({filename,checksum}));
+  const prefix=(await discoverMigrations()).slice(0,142);
+  const directory=await mkdtemp(path.join(tmpdir(),'r72-payments142-'));
+  await Promise.all(prefix.map(m=>writeFile(path.join(directory,m.filename),m.sql,'utf8')));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, directory, {});
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,142);
   assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
@@ -484,22 +482,39 @@ test('payments142 release is ready before and after its exact additive 0142, and
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
 
-test('creative143 release is ready only on the exact applied 0142 ledger with 0143 pending, never during the 0142 cut-over', async () => {
+test('MHP inbox 143 cutover and recovery accept only the exact adjacent ledgers', async()=>{
+  // The exact 143-file release the MHP inbox shipped, reconstructed from today's source (later files are a separate release).
+  const shipped=(await discoverMigrations()).slice(0,143);
+  const bundle=await mkdtemp(path.join(tmpdir(),'r72-mhp143-'));
+  await Promise.all(shipped.map(m=>writeFile(path.join(bundle,m.filename),m.sql,'utf8')));
+  const rows=shipped.slice(0,142).map(({filename,checksum})=>({filename,checksum}));
+  const successor={filename:'0143_mhp_whatsapp_direct_inbox.sql',checksum:'69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e'};
+  const check=(dbRows:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(dbRows),bundle,{});
+  await check(rows);
+  await check([...rows,successor]);
+  await assert.rejects(check([...rows,{...successor,checksum:'a'.repeat(64)}]));
+  await assert.rejects(check([...rows.slice(0,-1),successor]));
+  await assert.rejects(check([...rows,successor,{filename:'0144_unreviewed.sql',checksum:'a'.repeat(64)}]));
+});
+
+test('creative144 release is ready only on the exact applied MHP 0143 ledger with 0144 pending, never during the 0143 cut-over', async () => {
   const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
   const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
-  assert.equal(rows.length,143);
+  assert.equal(rows.length,144);
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
-  assert.deepEqual(rows[142],{filename:'0143_creative_studio_library.sql',checksum:'57be028af152c523d5b2e4172636808bdbc52dffc62006b37a9d2bc7c225eb81'});
-  // Deployed to every consumer before 0143 is applied: exact 0142 ledger, only 0143 pending.
-  await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows.slice(0,142))));
+  assert.deepEqual(rows[142],{filename:DIRECT_WA_MIGRATION,checksum:DIRECT_WA_CHECKSUM});
+  assert.deepEqual(rows[143],{filename:CREATIVE_STUDIO_MIGRATION,checksum:CREATIVE_STUDIO_CHECKSUM});
+  // Deployed to every consumer before 0144 is applied: exact 0143 ledger, only 0144 pending.
+  await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows.slice(0,143))));
   await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows)));
-  // Not a substitute for the payments cut-over: 0142 must already be applied.
-  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,141))),/schema is behind by 2 migration/);
-  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows.slice(0,141),{...rows[141]!,checksum:'0'.repeat(64)}])),/checksum changed/);
-  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows.slice(0,142),{...rows[142]!,checksum:'0'.repeat(64)}])),/checksum changed|migration not present/);
-  for (const at of [0,120,136,140,141]) {
-    const changed=rows.slice(0,142).map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
+  // Not a substitute for the MHP inbox cut-over: 0143 must already be applied (and 0142 before it).
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,142))),/schema is behind by 2 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,141))),/schema is behind by 3 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows.slice(0,142),{...rows[142]!,checksum:'0'.repeat(64)}])),/checksum changed/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows.slice(0,143),{...rows[143]!,checksum:'0'.repeat(64)}])),/checksum changed|migration not present/);
+  for (const at of [0,120,136,140,141,142]) {
+    const changed=rows.slice(0,143).map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
-  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0144_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0145_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
