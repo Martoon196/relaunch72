@@ -83,7 +83,7 @@ test('typed evidence persists the selected format, actual provenance metadata an
  const f=await upgradedBlog();const r=await f.store.receipt(f.brand.id,f.out.record.methodReceiptId!);
  assert.equal((r!.sidecar!.decisions as any).formatDecision.formatId,'checklist');
  assert.match(f.model.requests[0]!.messages[0]!.content,/<method_context>/);assert.match(f.model.requests[0]!.messages[0]!.content,/retrievedAt/);
- assert.equal(r!.promptHash,methodHash(JSON.stringify({system:f.model.requests[0]!.system,messages:f.model.requests[0]!.messages})));
+ assert.equal(r!.promptHash,methodHash(JSON.stringify({system:f.model.requests[0]!.system,messages:f.model.requests[0]!.messages,outputSchema:f.model.requests[0]!.outputSchema})));
  assert(!('_method_sidecar' in f.out.value));assert.equal(r!.approvalState,'draft');
  const projected=researchForPrompt(shortSourceIds([{...f.sources[0]!,publishedAt:'2026-10-02T00:00:00Z',observedPeriod:'2025 calendar year',confidence:'medium'}])) as any[];
  assert.equal(projected[0].observedPeriod,'2025 calendar year');assert.equal(projected[0].confidence,'medium');assert(projected[0].retrievedAt);

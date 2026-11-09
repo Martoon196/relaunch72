@@ -32,13 +32,21 @@ export function planningOutputSchema(asset: Schema, profile: BrandProfile, input
     formatPerArticle: { ...list(object({ slug: str, formatId: { type: 'string', enum: selectionCatalogue(packs)!.formats.filter(f => f.requires.every(r => context.availableInputs.includes(r))).map(f => f.id) }, rationale: str }), 7), minItems: 7 },
     planningNotes: { type: 'string', maxLength: 2500, description: 'Concise candidate-question, pillar/runner-up and editorial-mix decisions required by the selected packs. No hidden reasoning or invented capabilities.' },
   });
+  return methodOutputSchema(asset,decisions,profile,inputs,packs,'planJson');
+}
+
+/** Same compact review envelope; stage-specific decisions still run their original server checks. */
+export function methodOutputSchema(asset:Schema,decisions:Schema,profile:BrandProfile,inputs:MethodEvidenceInputs,packs:readonly RulePack[],field:'planJson'|'articleJson'):Schema {
+  const context=methodEvidenceContext(profile,inputs);
+  const refs=[...context.factReferences.map(f=>f.id),...context.research.flatMap(s=>[s.id,s.shortId])];
+  const reference={type:'string',...(refs.length?{enum:refs}:{})};
   const sidecar = object({
     audience: str, selectedFormat: str, angle: str, evidenceReferences: list(reference),
     primaryNextAction: { type: ['string', 'null'] }, omittedUnsupportedClaims: list(str), decisions,
     qualityFindings: { ...list(object({
       ruleId: { type: 'string', enum: packs.flatMap(p => p.qualityChecks.map(q => q.id)) },
       status: { type: 'string', enum: ['pass', 'fail', 'not_assessed'] }, detail: str,
-      evidence: { ...list({ type: 'string', description: 'Concrete /asset/... or /decisions/... JSON pointer. Claim evidence may point at /decisions/claimLedger/0/assetPointer; canonical text is also available after server resolution.' }), minItems: 1 },
+      evidence: { ...list({ type: 'string', description: field==='planJson'?'Concrete /asset/... or /decisions/... JSON pointer. Claim evidence may point at /decisions/claimLedger/0/assetPointer; canonical text is also available after server resolution.':'Concrete JSON pointer into this returned article, e.g. /asset/intro, /asset/sections/0/body, or /decisions/claimLedger/0/text. Whole bounded article sections are valid quality evidence. Use substantive nonempty content; empty lists are allowed only for the verified owner-decision and no-supplied-assets absence checks.' }), minItems: 1 },
     }), packs.reduce((n, p) => n + p.qualityChecks.length, 0)), minItems: packs.reduce((n, p) => n + p.qualityChecks.length, 0) },
   });
   // Compiling both the complete plan and all nested decisions exceeded the
@@ -49,25 +57,25 @@ export function planningOutputSchema(asset: Schema, profile: BrandProfile, input
   delete wireSidecar.properties.decisions;
   wireSidecar.properties.decisionsJson={type:'string',maxLength:30000,description:'JSON text for the original decisions object, validated by the server: '+JSON.stringify(decisions)};
   wireSidecar.required=wireSidecar.required.map(k=>k==='decisions'?'decisionsJson':k);
-  return object({planJson:{type:'string',maxLength:64000,description:'JSON text for the original plan, validated by the server: '+JSON.stringify(asset)},_method_sidecar:wireSidecar});
+  return object({[field]:{type:'string',maxLength:64000,description:'JSON text for the original '+(field==='planJson'?'plan':'article')+', validated by the server: '+JSON.stringify(asset)},_method_sidecar:wireSidecar});
 }
 
 export const PLANNING_POINTER_CONTRACT = '\nPrivate planning wire override: return {planJson: JSON-encoded stage plan object, _method_sidecar: {audience,selectedFormat,angle,evidenceReferences,primaryNextAction,omittedUnsupportedClaims,decisionsJson: JSON-encoded decisions object,qualityFindings}}. Do not put a sidecar inside planJson. The native schema descriptions contain the FULL original plan and decisions contracts; the server parses both strings and validates those original contracts before acceptance. Within decoded decisions, claimLedger entries use {assetPointer,references}, not copied text. Point to one short factual string in the decoded plan (/asset/pillar/key_points/0 or /asset/supporting/0/angle); the server resolves and records its exact text before checking supporting evidence. Keep each factual string focused on evidence its references support. Reference IDs belong in the sidecar, not asset prose. All qualityFindings require detail AND evidence. Record concise pack decisions in decisions.planningNotes. Preserve actual nulls and exact supplied metadata inside the JSON strings. Evidence pointers address the decoded /asset and /decisions. Never omit required stage fields or change the article count.';
 
 /** A transport codec only: never repairs fields, evidence or review outcomes.
  * Existing canonical receipts remain readable without a wire envelope. */
-export function decodePlanningOutput(raw:Record<string,unknown>):{value:Record<string,unknown>;problems:string[]} {
+export function decodePlanningOutput(raw:Record<string,unknown>,field:'planJson'|'articleJson'='planJson'):{value:Record<string,unknown>;problems:string[]} {
   let value=structuredClone(raw);
   const parseObject=(text:unknown,limit:number):Record<string,unknown>|null=>{
     if(typeof text!=='string'||text.length>limit)return null;
     const parsed=extractJson(text);
     return 'value' in parsed&&parsed.value&&typeof parsed.value==='object'&&!Array.isArray(parsed.value)?parsed.value as Record<string,unknown>:null;
   };
-  if(Object.hasOwn(value,'planJson')){
-    const plan=parseObject(value.planJson,64000);
-    if(!plan)return {value:{},problems:['planJson must contain a parseable JSON plan object within 64000 characters.']};
-    if(Object.hasOwn(plan,'_method_sidecar'))return {value:{},problems:['Keep _method_sidecar outside planJson; planJson contains only the stage plan.']};
-    if(Object.keys(value).some(k=>k!=='planJson'&&k!=='_method_sidecar'))return {value:{},problems:['The planning envelope contains only planJson and _method_sidecar.']};
+  if(Object.hasOwn(value,field)){
+    const plan=parseObject(value[field],64000),label=field==='planJson'?'plan':'article';
+    if(!plan)return {value:{},problems:[`${field} must contain a parseable JSON ${label} object within 64000 characters.`]};
+    if(Object.hasOwn(plan,'_method_sidecar'))return {value:{},problems:[`Keep _method_sidecar outside ${field}; ${field} contains only the stage ${label}.`]};
+    if(Object.keys(value).some(k=>k!==field&&k!=='_method_sidecar'))return {value:{},problems:[`The ${label==='plan'?'planning':'article'} envelope contains only ${field} and _method_sidecar.`]};
     value={...plan,_method_sidecar:value._method_sidecar};
   }
   const sidecar=value._method_sidecar;

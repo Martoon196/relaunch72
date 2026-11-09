@@ -101,8 +101,14 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
     if(finding.status!=='pass'||!text(finding.detail)||!array(finding.evidence)||!finding.evidence.length||!finding.evidence.every((p:unknown)=>{
       const value=pointer({asset,decisions:d},p);
       if(finding.ruleId==='core.check-owner-decision-surfaced'&&p==='/decisions/ownerDecisionsNeeded'&&Array.isArray(value)&&value.length===0)return true;
-      return typeof value==='string'?text(value):Array.isArray(value)?value.length>0:record(value)?Object.keys(value).length>0:false;
-    }))problems.push('Every quality check must pass with concrete asset or decision evidence.');
+      if(stage==='blog'&&finding.ruleId==='visual.check-assets-exist'&&p==='/decisions/visualDecision/assetIds'&&Array.isArray(value)&&value.length===0
+        &&context.visual.assets.length===0&&d.visualDecision?.evidenceClass==='illustrative'&&d.visualDecision.placement===context.visual.placement
+        &&array(d.visualDecision.styleReferences)&&d.visualDecision.styleReferences.every((id:string)=>context.visual.guidance.some(g=>g.id===id)))return true;
+      // Article prose fields have their own 12k stage bound. A quality pointer
+      // can inspect the whole field; the 1600-character claim-span limit still
+      // applies to claimLedger.text and mechanismMap.recommendation above/below.
+      return typeof value==='string'?(stage==='blog'&&typeof p==='string'&&p.startsWith('/asset/')?value.trim().length>2&&value.length<=12000:text(value)):Array.isArray(value)?value.length>0:record(value)?Object.keys(value).length>0:false;
+    }))problems.push(`Every quality check must pass with concrete asset or decision evidence: ${finding.ruleId}. Its evidence pointers must resolve to substantive content; only the explicitly verified owner/asset absence checks may cite an empty list.`);
   }
   const formats=catalogue?.formats??[];
   const validFormat=(f:any)=>record(f)&&text(f.rationale)&&formats.some(c=>c.id===f.formatId&&c.requires.every(r=>context.availableInputs.includes(r)));
@@ -112,7 +118,7 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
   }
   if(stage==='blog'||stage==='revision'){
     if(!validFormat(d.formatDecision)||inputs.editorialFormat&&d.formatDecision.formatId!==inputs.editorialFormat.formatId)problems.push('Preserve the planned eligible article format.');
-    if(!array(d.mechanismMap)||!d.mechanismMap.length||!d.mechanismMap.every((m:any)=>record(m)&&text(m.recommendation)&&prose.includes(JSON.stringify(m.recommendation).slice(1,-1))&&text(m.reason)))problems.push('Explain concrete recommendations in the mechanism map.');
+    if(!array(d.mechanismMap)||!d.mechanismMap.length||!d.mechanismMap.every((m:any)=>record(m)&&text(m.recommendation)&&prose.includes(JSON.stringify(m.recommendation).slice(1,-1))&&text(m.reason)))problems.push('Explain concrete recommendations in the mechanism map. Each recommendation must be a short VERBATIM substring of this returned asset, with a meaningful reason; do not paraphrase it.');
   }
   if(packs.some(p=>p.packId==='conversion-copy')){
     if(!record(d.structureDecision)||!catalogue?.structures.some(s=>s.id===d.structureDecision.structureId)||!text(d.structureDecision.rationale)||!array(d.hookOptions)||d.hookOptions.length!==3||!d.hookOptions.every(text)||new Set(d.hookOptions.map((s:string)=>s.trim().toLowerCase())).size!==3||!record(d.proofSelection)||!text(d.proofSelection.reason)||!array(d.proofSelection.references)||!d.proofSelection.references.every((r:string)=>references.has(r)))problems.push('Copy needs a chosen structure, three distinct openings and an evidence-based proof decision.');
