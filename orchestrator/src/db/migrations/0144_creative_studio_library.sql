@@ -2,6 +2,7 @@
 -- draft campaign hand-offs for any programme brand. Additive only; 0001-0143 are unchanged (renumbered from 0143 after MHP took that number; never applied as 0143).
 -- Sections 1-4 make no provider call. Section 5 adds typed-brief image generation only through the existing 0137 paid-image
 -- admission (operator policy, global lock, brand allowance, receipts), off with a zero studio allowance by default.
+-- Section 6 adds brand enquiry capture through the existing CRM lead command, with validated campaign touches.
 -- No scheduler, publishing, outreach or ad-spend capability.
 -- Rendered bytes live in the existing workspace-scoped app.seo_blog_blobs.
 SET LOCAL lock_timeout='5s';
@@ -485,18 +486,23 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalo
 BEGIN
   IF app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Workspace mismatch' USING ERRCODE='42501'; END IF;
     -- One bucket per contact (its latest matching touch), so no contact is counted twice. Exact UTM match only.
-    RETURN (WITH touches AS (
+    -- Qualified: the owner's mapped stage (by id) or a later non-lost stage of that pipeline, or a won opportunity.
+    -- Without a mapping only won opportunities count, and the read says so (no slug is trusted).
+    RETURN (WITH cap AS (SELECT c.pipeline_id,s.position AS qpos FROM app.creative_studio_capture c JOIN app.pipeline_stages s
+          ON s.workspace_id=c.workspace_id AND s.id=c.qualified_stage_id WHERE c.workspace_id=p_workspace),
+      reached AS (SELECT s.id FROM app.pipeline_stages s JOIN cap ON s.pipeline_id=cap.pipeline_id WHERE s.workspace_id=p_workspace AND s.position>=cap.qpos AND s.stage_type<>'lost'),
+      touches AS (
         SELECT contact_id,utm_content,attributed_at FROM app.contact_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign
         UNION ALL
-        SELECT contact_id,utm_content,attributed_at FROM app.contact_import_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign),
+        SELECT contact_id,utm_content,attributed_at FROM app.contact_import_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign
+        UNION ALL
+        SELECT contact_id,utm_content,captured_at FROM app.creative_studio_lead_touches WHERE workspace_id=p_workspace AND utm_campaign=campaign),
       latest AS (SELECT DISTINCT ON (t.contact_id) t.contact_id,coalesce(t.utm_content,'') AS content,t.attributed_at
         FROM touches t JOIN app.contacts c ON c.workspace_id=p_workspace AND c.id=t.contact_id AND c.deleted_at IS NULL
         ORDER BY t.contact_id,t.attributed_at DESC),
       facts AS (SELECT l.content,l.contact_id,l.attributed_at,
-        EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND (o.status='won' OR EXISTS(
-          SELECT 1 FROM app.opportunity_stage_history h JOIN app.pipeline_stages s ON s.workspace_id=h.workspace_id AND s.id=h.to_stage_id
-          WHERE h.workspace_id=p_workspace AND h.opportunity_id=o.id AND s.slug='qualified')
-          OR EXISTS(SELECT 1 FROM app.pipeline_stages s WHERE s.workspace_id=p_workspace AND s.id=o.stage_id AND s.slug='qualified'))) AS qualified,
+        EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND (o.status='won' OR o.stage_id IN (SELECT id FROM reached)
+          OR EXISTS(SELECT 1 FROM app.opportunity_stage_history h WHERE h.workspace_id=p_workspace AND h.opportunity_id=o.id AND h.to_stage_id IN (SELECT id FROM reached)))) AS qualified,
         EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='appointment') AS booked,
         EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='payment_collected')
           OR EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='sale')
@@ -542,7 +548,8 @@ BEGIN
   IF p_action='outcomes' THEN
     campaign:=p_input->>'utmCampaign';
     IF campaign IS NULL OR campaign !~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$' THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
-    RETURN jsonb_build_object('utmCampaign',campaign,'readAt',clock_timestamp(),'buckets',app_private.creative_studio_outcome_buckets(p_workspace,campaign));
+    RETURN jsonb_build_object('utmCampaign',campaign,'readAt',clock_timestamp(),'buckets',app_private.creative_studio_outcome_buckets(p_workspace,campaign),
+      'qualifiedMapped',EXISTS(SELECT 1 FROM app.creative_studio_capture WHERE workspace_id=p_workspace));
   END IF;
   RAISE EXCEPTION 'Unknown distribution read' USING ERRCODE='22023';
 END $f$;
@@ -1127,3 +1134,169 @@ GRANT EXECUTE ON FUNCTION app_private.creative_studio_save_brief(uuid,bytea,json
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_seo_media_definer;
+
+
+-- ─── Section 6: campaign enquiries into the existing CRM, and an explicit qualified-stage mapping ───
+-- A brand-scoped public enquiry form (hosted, or embedded on the brand's own page) creates the lead through the existing
+-- CRM command (crm.createLead, acting as the owner who switched capture on, as the Growth HQ inbox does). A campaign
+-- touch is stored only when the untrusted UTM values match a tracked link this brand actually issued for its own
+-- acquisition campaign; malformed or other-brand references are not stored. The affiliate attribution tables are not
+-- touched. "Qualified" is read from the owner's mapped stage id (and later non-lost stages of that pipeline), never a slug.
+GRANT SELECT,INSERT ON app.pipelines,app.pipeline_stages TO r72_creative_studio_definer;
+GRANT SELECT ON app.command_receipts,app.seo_blog_brands,app.workspaces TO r72_creative_studio_definer;
+CREATE POLICY seo_blog_brands_creative_read ON app.seo_blog_brands FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
+CREATE POLICY workspaces_creative_read ON app.workspaces FOR SELECT TO r72_creative_studio_definer USING(id=app_private.current_workspace_id());
+CREATE POLICY pipelines_creative_studio ON app.pipelines FOR ALL TO r72_creative_studio_definer
+  USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
+CREATE POLICY pipeline_stages_creative_studio_write ON app.pipeline_stages FOR INSERT TO r72_creative_studio_definer
+  WITH CHECK(workspace_id=app_private.current_workspace_id());
+CREATE POLICY command_receipts_creative_read ON app.command_receipts FOR SELECT TO r72_creative_studio_definer
+  USING(workspace_id=app_private.current_workspace_id());
+
+CREATE TABLE app.creative_studio_capture(
+  workspace_id uuid PRIMARY KEY REFERENCES app.seo_blog_brands(workspace_id),
+  public_key text NOT NULL UNIQUE CHECK(public_key ~ '^[a-f0-9]{24}$'),
+  enabled boolean NOT NULL DEFAULT false,
+  owner_user_id uuid NOT NULL REFERENCES app.users(id),
+  pipeline_id uuid NOT NULL, new_stage_id uuid NOT NULL, qualified_stage_id uuid NOT NULL,
+  privacy_url text CHECK(privacy_url IS NULL OR (privacy_url ~ '^https://[^[:space:]<>"]+$' AND length(privacy_url) BETWEEN 12 AND 500)),
+  row_version integer NOT NULL DEFAULT 1 CHECK(row_version>0),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY(workspace_id,pipeline_id,new_stage_id) REFERENCES app.pipeline_stages(workspace_id,pipeline_id,id),
+  FOREIGN KEY(workspace_id,pipeline_id,qualified_stage_id) REFERENCES app.pipeline_stages(workspace_id,pipeline_id,id),
+  CHECK(NOT enabled OR privacy_url IS NOT NULL), CHECK(new_stage_id<>qualified_stage_id)
+);
+CREATE TABLE app.creative_studio_lead_touches(
+  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL DEFAULT gen_random_uuid(),
+  crm_command_key text NOT NULL CHECK(crm_command_key ~ '^creative\.enquiry\.[0-9a-f]{64}$'),
+  contact_id uuid NOT NULL, opportunity_id uuid NOT NULL, campaign_id uuid NOT NULL, handoff_id uuid NOT NULL,
+  utm_source text NOT NULL CHECK(utm_source ~ '^[a-z0-9_-]{1,40}$'), utm_medium text NOT NULL CHECK(utm_medium ~ '^[a-z0-9_-]{1,40}$'),
+  utm_campaign text NOT NULL CHECK(utm_campaign ~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$'), utm_content text NOT NULL CHECK(utm_content ~ '^concept-[0-9]{1,2}-cs[0-9a-f]{8}$'),
+  captured_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,crm_command_key),
+  -- Contact erasure removes the touch with the contact; touches are otherwise never edited.
+  FOREIGN KEY(workspace_id,contact_id) REFERENCES app.contacts(workspace_id,id) ON DELETE CASCADE,
+  FOREIGN KEY(workspace_id,opportunity_id,contact_id) REFERENCES app.opportunities(workspace_id,id,contact_id) ON DELETE CASCADE,
+  FOREIGN KEY(workspace_id,campaign_id) REFERENCES app.seo_blog_creator_campaigns(workspace_id,id),
+  FOREIGN KEY(workspace_id,handoff_id) REFERENCES app.creative_studio_handoffs(workspace_id,id)
+);
+CREATE INDEX creative_studio_lead_touches_campaign ON app.creative_studio_lead_touches(workspace_id,utm_campaign);
+DO $capture$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['creative_studio_capture','creative_studio_lead_touches'] LOOP
+    EXECUTE format('ALTER TABLE app.%I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE app.%I FORCE ROW LEVEL SECURITY',t);
+    EXECUTE format('REVOKE ALL ON app.%I FROM PUBLIC,r72_content_command,r72_web,r72_worker',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_owner USING(true) WITH CHECK(true)',t||'_owner',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_scope',t);
+    INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
+  END LOOP;
+END $capture$;
+GRANT SELECT,INSERT,UPDATE ON app.creative_studio_capture TO r72_creative_studio_definer;
+GRANT SELECT,INSERT ON app.creative_studio_lead_touches TO r72_creative_studio_definer;
+CREATE TRIGGER creative_studio_lead_touches_immutable BEFORE UPDATE ON app.creative_studio_lead_touches FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
+
+GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
+SET LOCAL ROLE r72_creative_studio_definer;
+
+-- Owner settings: read, or save (switch on/off, privacy notice, stage mapping). A brand with no CRM pipeline gets the
+-- standard "Enquiries" pipeline; an existing default pipeline is used as it is, with stages the owner chooses.
+CREATE FUNCTION app_private.creative_studio_capture_setup(p_workspace uuid,p_session bytea,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; cap app.creative_studio_capture; pipe uuid; new_s uuid; qual_s uuid; new_pos integer; qual_pos integer; stages jsonb;
+BEGIN
+  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  SELECT * INTO cap FROM app.creative_studio_capture WHERE workspace_id=p_workspace FOR UPDATE;
+  pipe:=coalesce(cap.pipeline_id,(SELECT id FROM app.pipelines WHERE workspace_id=p_workspace AND is_default AND status='active'));
+  IF p_input->>'action'='save' THEN
+    IF (p_input->>'expectedVersion')::integer IS DISTINCT FROM coalesce(cap.row_version,0) THEN RAISE EXCEPTION 'Enquiry settings changed. Refresh and try again.' USING ERRCODE='40001'; END IF;
+    IF pipe IS NULL THEN
+      INSERT INTO app.pipelines(workspace_id,name,slug,is_default) VALUES(p_workspace,'Enquiries','enquiries',true) RETURNING id INTO pipe;
+      INSERT INTO app.pipeline_stages(workspace_id,pipeline_id,name,slug,position,stage_type,is_terminal)
+        SELECT p_workspace,pipe,label,slug,position,kind,kind IN ('won','lost') FROM (VALUES ('New enquiry','new',10,'open'),('Contacted','contacted',20,'open'),
+          ('Qualified','qualified',30,'open'),('Won','won',40,'won'),('Not proceeding','not-proceeding',50,'lost')) AS s(label,slug,position,kind);
+      SELECT id INTO new_s FROM app.pipeline_stages WHERE workspace_id=p_workspace AND pipeline_id=pipe AND position=10;
+      SELECT id INTO qual_s FROM app.pipeline_stages WHERE workspace_id=p_workspace AND pipeline_id=pipe AND position=30;
+    ELSE
+      new_s:=coalesce(nullif(p_input->>'newStageId','')::uuid,cap.new_stage_id); qual_s:=coalesce(nullif(p_input->>'qualifiedStageId','')::uuid,cap.qualified_stage_id);
+    END IF;
+    SELECT position INTO new_pos FROM app.pipeline_stages WHERE workspace_id=p_workspace AND pipeline_id=pipe AND id=new_s AND stage_type='open' AND NOT is_terminal;
+    SELECT position INTO qual_pos FROM app.pipeline_stages WHERE workspace_id=p_workspace AND pipeline_id=pipe AND id=qual_s AND stage_type='open';
+    IF new_pos IS NULL OR qual_pos IS NULL OR qual_pos<=new_pos THEN
+      RAISE EXCEPTION 'Choose an open first stage for new enquiries and a later open stage that means qualified.' USING ERRCODE='22023'; END IF;
+    IF coalesce((p_input->>'enabled')::boolean,false) AND (coalesce(p_input->>'privacyUrl','') !~ '^https://[^[:space:]<>"]+$' OR length(p_input->>'privacyUrl') NOT BETWEEN 12 AND 500) THEN
+      RAISE EXCEPTION 'Add the https link to the brand''s privacy notice before switching enquiries on.' USING ERRCODE='22023'; END IF;
+    IF cap.workspace_id IS NULL THEN
+      INSERT INTO app.creative_studio_capture(workspace_id,public_key,enabled,owner_user_id,pipeline_id,new_stage_id,qualified_stage_id,privacy_url)
+        VALUES(p_workspace,left(md5(gen_random_uuid()::text||clock_timestamp()::text),24),coalesce((p_input->>'enabled')::boolean,false),actor,pipe,new_s,qual_s,nullif(p_input->>'privacyUrl',''));
+    ELSE
+      UPDATE app.creative_studio_capture SET enabled=coalesce((p_input->>'enabled')::boolean,false),owner_user_id=actor,pipeline_id=pipe,new_stage_id=new_s,
+        qualified_stage_id=qual_s,privacy_url=nullif(p_input->>'privacyUrl',''),row_version=row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
+    END IF;
+    SELECT * INTO cap FROM app.creative_studio_capture WHERE workspace_id=p_workspace;
+  ELSIF p_input->>'action' IS DISTINCT FROM 'read' THEN RAISE EXCEPTION 'Unknown enquiry setting' USING ERRCODE='22023';
+  END IF;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'name',name,'type',stage_type,'position',position) ORDER BY position),'[]') INTO stages
+    FROM app.pipeline_stages WHERE workspace_id=p_workspace AND pipeline_id=pipe;
+  RETURN jsonb_build_object('configured',cap.workspace_id IS NOT NULL,'enabled',coalesce(cap.enabled,false),'publicKey',cap.public_key,'privacyUrl',cap.privacy_url,
+    'ownerUserId',cap.owner_user_id,'pipelineId',pipe,'pipelineName',(SELECT name FROM app.pipelines WHERE workspace_id=p_workspace AND id=pipe),
+    'newStageId',cap.new_stage_id,'qualifiedStageId',cap.qualified_stage_id,'rowVersion',coalesce(cap.row_version,0),'stages',stages,
+    'touches',(SELECT count(*) FROM app.creative_studio_lead_touches WHERE workspace_id=p_workspace));
+END $f$;
+
+-- Public ingress (actor kind webhook, no session): the form's target, only while the owner keeps it on and still
+-- manages the brand, the brand is not paused, and fewer than 50 enquiries arrived in the last hour.
+CREATE FUNCTION app_private.creative_studio_capture_target(p_workspace uuid,p_key text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE cap app.creative_studio_capture; brand_name text; settings jsonb;
+BEGIN
+  IF app_private.current_actor_kind()<>'webhook' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace OR coalesce(p_key,'') !~ '^[a-f0-9]{24}$' THEN RETURN NULL; END IF;
+  SELECT * INTO cap FROM app.creative_studio_capture WHERE workspace_id=p_workspace AND public_key=p_key AND enabled;
+  SELECT w.name,b.settings INTO brand_name,settings FROM app.seo_blog_brands b JOIN app.workspaces w ON w.id=b.workspace_id WHERE b.workspace_id=p_workspace AND w.status='active';
+  IF cap.workspace_id IS NULL OR brand_name IS NULL OR coalesce((settings->>'pauseAll')::boolean,false)
+    OR NOT app_private.can_manage_workspace(cap.owner_user_id,p_workspace) THEN RETURN NULL; END IF;
+  RETURN jsonb_build_object('brandName',brand_name,'privacyUrl',cap.privacy_url,'ownerUserId',cap.owner_user_id,'pipelineId',cap.pipeline_id,'stageId',cap.new_stage_id,
+    'recentHour',(SELECT count(*) FROM app.command_receipts r WHERE r.workspace_id=p_workspace AND r.command_name='crm.createLead'
+      AND r.idempotency_key LIKE 'creative.enquiry.%' AND r.created_at>clock_timestamp()-interval '1 hour'));
+END $f$;
+
+-- After crm.createLead succeeded for this enquiry (as the capture owner), store the campaign touch if, and only if,
+-- the UTM values are exactly a tracked link this brand issued for its own acquisition campaign.
+CREATE FUNCTION app_private.creative_studio_record_touch(p_workspace uuid,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE cap app.creative_studio_capture; receipt app.command_receipts; h app.creative_studio_handoffs; camp text:=p_input->>'utmCampaign'; content text:=p_input->>'utmContent';
+  src text:=p_input->>'utmSource'; med text:=p_input->>'utmMedium'; url text;
+BEGIN
+  SELECT * INTO cap FROM app.creative_studio_capture WHERE workspace_id=p_workspace AND enabled;
+  IF cap.workspace_id IS NULL OR app_private.current_actor_kind()<>'user' OR app_private.current_user_id() IS DISTINCT FROM cap.owner_user_id
+    OR NOT app_private.can_manage_workspace(cap.owner_user_id,p_workspace) THEN RAISE EXCEPTION 'Enquiry capture is not active for this brand' USING ERRCODE='42501'; END IF;
+  IF coalesce(p_input->>'commandKey','') !~ '^creative\.enquiry\.[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Invalid enquiry' USING ERRCODE='22023'; END IF;
+  SELECT * INTO receipt FROM app.command_receipts WHERE workspace_id=p_workspace AND actor_user_id=cap.owner_user_id AND command_name='crm.createLead'
+    AND idempotency_key=p_input->>'commandKey' AND status='succeeded';
+  IF receipt.id IS NULL THEN RAISE EXCEPTION 'The enquiry was not recorded in the CRM' USING ERRCODE='55000'; END IF;
+  IF EXISTS(SELECT 1 FROM app.creative_studio_lead_touches WHERE workspace_id=p_workspace AND crm_command_key=receipt.idempotency_key) THEN
+    RETURN jsonb_build_object('recorded',true,'replayed',true); END IF;
+  IF coalesce(camp,'') !~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$' OR coalesce(content,'') !~ '^concept-[0-9]{1,2}-cs[0-9a-f]{8}$'
+    OR coalesce(src,'') !~ '^[a-z0-9_-]{1,40}$' OR coalesce(med,'') !~ '^[a-z0-9_-]{1,40}$' THEN
+    RETURN jsonb_build_object('recorded',false,'reason','no_campaign_reference'); END IF;
+  SELECT x.* INTO h FROM app.creative_studio_handoffs x JOIN app.seo_blog_creator_campaigns c ON c.workspace_id=x.workspace_id AND c.id::text=x.data#>>'{target,campaignId}'
+    WHERE x.workspace_id=p_workspace AND x.data->>'route'='tracked_link' AND x.data#>>'{trackedLink,utmCampaign}'=camp AND x.data#>>'{trackedLink,utmContent}'=content
+      AND right(camp,8)=left(replace(c.id::text,'-',''),8) ORDER BY x.created_at LIMIT 1;
+  url:=h.data#>>'{trackedLink,url}';
+  IF h.id IS NULL OR position('utm_source='||src||'&' IN url||'&')=0 OR position('utm_medium='||med||'&' IN url||'&')=0 THEN
+    RETURN jsonb_build_object('recorded',false,'reason','unknown_or_other_brand_reference'); END IF;
+  INSERT INTO app.creative_studio_lead_touches(workspace_id,crm_command_key,contact_id,opportunity_id,campaign_id,handoff_id,utm_source,utm_medium,utm_campaign,utm_content)
+    VALUES(p_workspace,receipt.idempotency_key,(receipt.result->>'contactId')::uuid,(receipt.result->>'opportunityId')::uuid,(h.data#>>'{target,campaignId}')::uuid,h.id,src,med,camp,content);
+  RETURN jsonb_build_object('recorded',true,'replayed',false,'campaignId',h.data#>>'{target,campaignId}');
+END $f$;
+
+REVOKE ALL ON FUNCTION app_private.creative_studio_capture_setup(uuid,bytea,jsonb),app_private.creative_studio_capture_target(uuid,text),
+  app_private.creative_studio_record_touch(uuid,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_studio_capture_setup(uuid,bytea,jsonb),app_private.creative_studio_capture_target(uuid,text),
+  app_private.creative_studio_record_touch(uuid,jsonb) TO r72_content_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;

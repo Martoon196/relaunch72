@@ -169,8 +169,14 @@ test('Milestone 4 on real PostgreSQL: verified hand-off routes, receipt-derived 
         VALUES($1,$2,$3,$4,$5,'appointment','event','propertypredator','sales.appointment.booked:synthetic','webhook',now())`, [a.brand.id, randomUUID(), c2, randomUUID(), randomUUID()]);
       await seed(`INSERT INTO app.conversion_commerce_facts(workspace_id,enrollment_id,contact_id,source_system,source_event_id,source_payload_sha256,fact_type,external_order_id,product_key,amount_minor,currency,actor_kind,occurred_at)
         VALUES($1,$2,$3,'stripe','evt_synthetic',$4,'payment_collected','ord_synthetic','synthetic',4900,'GBP','webhook',now())`, [a.brand.id, randomUUID(), c3, createHash('sha256').update('p').digest()]);
+      // A stage merely slugged "qualified" is not trusted: without the owner's mapping only won opportunities count.
+      const unmapped = await a.reader.outcomes(a.brand.id, utmCampaign);
+      assert.equal(unmapped.qualifiedMapped, false);
+      assert.deepEqual(unmapped.buckets.map((x) => x.qualified), [0]);
+      await seed(`INSERT INTO app.creative_studio_capture(workspace_id,public_key,enabled,owner_user_id,pipeline_id,new_stage_id,qualified_stage_id)
+        VALUES($1,$2,false,$3,$4,$5,$6)`, [a.brand.id, 'c'.repeat(24), a.actor, pipeline, open, qualified]);
       const read = await a.reader.outcomes(a.brand.id, utmCampaign);
-      assert.equal(read.utmCampaign, utmCampaign);
+      assert.equal(read.utmCampaign, utmCampaign); assert.equal(read.qualifiedMapped, true);
       assert.deepEqual(read.buckets.map((x) => ({ c: x.utmContent, leads: x.leads, q: x.qualified, b: x.booked, s: x.sold, cu: x.customers })),
         [{ c: tag, leads: 3, q: 1, b: 1, s: 1, cu: 1 }], 'c4 (other campaign), c5 (other brand) and c6 (deleted) are excluded; c2 counted once');
       assert.equal(read.buckets[0]!.firstAt, '2026-11-03T09:00:00.000Z');

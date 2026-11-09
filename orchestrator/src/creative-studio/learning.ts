@@ -100,8 +100,11 @@ export function buildLearning(read: OutcomeRead, proposal: AcquisitionProposal |
   ];
   // Comparisons use only arms with enough tagged leads; smaller arms are named as excluded rather than blocking everything.
   const small = arms.filter((b) => b.leads < MIN_ARM_LEADS);
+  // Without an owner-mapped qualified stage, "qualified" means won only, so it is not compared as a qualification rate.
+  const metrics = ([['qualified', 'qualified rate'], ['booked', 'booking rate'], ['sold', 'sale rate']] as const).filter(([m]) => m !== 'qualified' || read.qualifiedMapped !== false);
+  if (read.qualifiedMapped === false && arms.length) notCompared.push('Qualified rates are not compared: no stage is mapped as qualified for this brand (Creative studio → Enquiries), so only won opportunities are counted as qualified.');
   if (arms.length >= 2) {
-    for (const [metric, label] of [['qualified', 'qualified rate'], ['booked', 'booking rate'], ['sold', 'sale rate']] as const) {
+    for (const [metric, label] of metrics) {
       const rated = arms.map((b) => ({ b, w: wilson(b[metric], b.leads) })).sort((x, y) => y.w.rate - x.w.rate);
       const compared = rated.filter((r) => r.b.leads >= MIN_ARM_LEADS);
       const describe = (r: typeof rated[number]) => `${armLabel(r.b.utmContent, proposal)} ${pct(r.w.rate)} (95% range ${pct(r.w.low)}–${pct(r.w.high)}, ${r.b[metric]}/${r.b.leads})`;

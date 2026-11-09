@@ -21,6 +21,7 @@ import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
 import { handleInvestorPublicSite,INVESTOR_SITES_ROUTE } from '../portal/investor-site.js';
+import { ENQUIRY_ROUTE, handleEnquiryPublic } from '../creative-studio/enquiry-capture.js';
 import { entitlementForOrder, type BuildEntitlement } from './entitlements.js';
 import { oneOffCheckoutBlockers, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
@@ -375,6 +376,18 @@ export function createApp(deps: AppDeps) {
       if(activePortalRequests>=portalMaxConcurrentRequests){sendPortalRuntimeStatus(res,429);return;}
       activePortalRequests+=1;
       try {await handleInvestorPublicSite(req,res,deps.portal.investors,deps.portal.sessionSecret);}
+      finally {activePortalRequests-=1;}
+      return;
+    }
+
+    // Brand enquiry forms for Creative Studio campaigns (public; leads go through the existing CRM command).
+    if (url.pathname.startsWith(ENQUIRY_ROUTE+'/')) {
+      const enquiries = deps.portal?.kind==='postgres' ? deps.portal.seoBlog?.creativeEnquiries : undefined;
+      if(!enquiries||deps.portal?.kind!=='postgres'){send(res,404,{error:'not found'});return;}
+      if(activePortalRequests>=portalMaxConcurrentRequests){sendPortalRuntimeStatus(res,429);return;}
+      activePortalRequests+=1;
+      try {await handleEnquiryPublic(req,res,enquiries,deps.portal.sessionSecret,`enquiry-${crypto.randomUUID()}`);}
+      catch {if(!res.headersSent)send(res,500,SAFE_ERROR.internal);}
       finally {activePortalRequests-=1;}
       return;
     }

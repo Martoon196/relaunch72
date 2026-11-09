@@ -73,7 +73,11 @@ export interface OutcomeBucket {
   readonly leads: number; readonly qualified: number; readonly booked: number; readonly sold: number; readonly customers: number;
   readonly subscriptionsCancelled: number; readonly firstAt: string | null; readonly lastAt: string | null;
 }
-export interface OutcomeRead { readonly utmCampaign: string; readonly readAt: string; readonly buckets: readonly OutcomeBucket[] }
+export interface OutcomeRead {
+  readonly utmCampaign: string; readonly readAt: string; readonly buckets: readonly OutcomeBucket[];
+  /** True when the owner mapped a qualified stage (by id); otherwise "qualified" counts won opportunities only. */
+  readonly qualifiedMapped?: boolean;
+}
 
 const NO_MESSAGE_DELIVERY = 'Delivery receipts exist for messages (email, SMS, WhatsApp). Social networks and websites report publication only, so this state does not apply.';
 
@@ -154,9 +158,9 @@ export function exportLadder(handoff: CreativeHandoff): StageEvidence[] {
 /** Stated with every outcome read so nobody mistakes counts for causal results. */
 export const ATTRIBUTION_LIMITS: readonly string[] = Object.freeze([
   'Only exact utm_campaign/utm_content values stored on CRM contacts are counted. Contacts without campaign tags are not counted here.',
-  'Today no live lead form records campaign tags on new contacts; only imported contacts carry them. Until a capture path stores them, live leads will show as zero here even when they exist.',
+  'Live leads carry campaign tags only when they arrive through this brand’s enquiry form (Creative studio → Enquiries), hosted or embedded on the tracked link’s page, and the tags match a tracked link this brand issued. Leads entered any other way are not counted here.',
   'Each contact is counted once, under its latest tagged touch. Earlier touches by other campaigns are not shared out.',
-  'Qualified means the contact reached the CRM pipeline stage whose slug is “qualified” (the seeded stage) or a won opportunity. Booked means an appointment milestone. Sold means a recorded payment, sale milestone or won opportunity.',
+  'Qualified means the contact reached the stage the owner mapped as qualified (by its stage id, in Creative studio → Enquiries), a later open stage of that pipeline, or a won opportunity. Without a mapping only won opportunities count. Booked means an appointment milestone. Sold means a recorded payment, sale milestone or won opportunity.',
   'Subscription starts are not recorded against CRM contacts in the outcome tables (only payments and cancellations are; MHP purchase records are separate and not contact-linked). No revenue, return on ad spend, cost per acquisition or “winner” is calculated.',
   'Counts are observations, not proof that the artwork caused them.',
 ]);

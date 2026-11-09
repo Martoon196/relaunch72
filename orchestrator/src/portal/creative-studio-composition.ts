@@ -6,7 +6,7 @@
  */
 import type { Pool } from 'pg';
 import { CreativeStudioService, type SavedGeneratedImage, type SavedImagePort } from '../creative-studio/service.js';
-import { PgCreativeDistributionReader, PgCreativeLearningStore, PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
+import { PgCreativeDistributionReader, PgCreativeEnquirySettings, PgCreativeLearningStore, PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
 import type { CampaignCreatorStore } from '../seo-blog/campaign-creator.js';
 import { ChromiumArtworkRenderer } from '../creative-studio/renderer.js';
 import { PgSeoBlogStore } from '../seo-blog/pg-store.js';
@@ -70,6 +70,7 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
         await input.engine.updateSettings({ userId: actorId }, brandId, rowVersion, { studioImages: { ...value, authorizedBy: actorId, authorizedAt: new Date().toISOString() } });
       } } }),
     renderJobs: brands,
+    enquirySettings: new PgCreativeEnquirySettings(input.contentCommandPool, principal),
     generatedImages: {
       async find(_actorId, brandId, generationId) { return (await generationStore.state(brandId)).generations.find((g) => g.id === generationId) ?? null; },
       // The brand's private media store (owner session, workspace RLS, digest-checked); independent of article image review.

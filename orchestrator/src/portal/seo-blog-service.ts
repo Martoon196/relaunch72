@@ -26,6 +26,9 @@ import type { PromotionNetwork } from '../seo-blog/types.js';
 import { createSeoBlogMediaRuntime } from './seo-blog-media-service.js';
 import { createCreativeStudio, engineSavedImages, type SavedImageWithPreview } from './creative-studio-composition.js';
 import type { CreativeStudioService } from '../creative-studio/service.js';
+import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
+import { CrmCommandService } from '../crm-pg/commands.js';
+import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
 export interface PortalSeoBlogService {
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
@@ -39,6 +42,8 @@ export interface PortalSeoBlogService {
   creativeFor?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine): CreativeStudioService | null;
   /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
   creativeSavedImages?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine, brandId: string): Promise<SavedImageWithPreview[]>;
+  /** Public brand enquiry capture into the existing CRM (studio enabled and a CRM command pool composed). */
+  readonly creativeEnquiries?: PgEnquiryCapture;
   /**
    * Completes a brand's provider OAuth callback when the profile id belongs to
    * a registered brand rather than Property Predator. Returns null when no
@@ -72,7 +77,8 @@ export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRun
   return { llm, search: configuredSearchProvider(env), keywords, vault: SeoBlogCredentialVault.fromEnv(env) };
 }
 
-export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool, socialPools?: PortalSeoBlogSocialPools): PortalSeoBlogService {
+export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool, socialPools?: PortalSeoBlogSocialPools,
+  crmCommandPool?: Pool): PortalSeoBlogService {
   const runtime = seoBlogRuntime(env);
   const transport = new GuardedFetchTransport();
   const publishers = defaultPublishers();
@@ -88,6 +94,8 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',
     creativeEnabled: env.CREATIVE_STUDIO_ENABLED === 'true',
+    ...(env.CREATIVE_STUDIO_ENABLED === 'true' && crmCommandPool
+      ? { creativeEnquiries: new PgEnquiryCapture({ contentPool: contentCommandPool, crm: new CrmCommandService({ transactionRunner: createPgCrmTransactionRunner(crmCommandPool) }) }) } : {}),
     creativeFor(identity, requestId, engine) {
       if (env.CREATIVE_STUDIO_ENABLED !== 'true') return null;
       const creators = env.SEO_BLOG_METHOD_PACKS === 'true' && env.SEO_BLOG_CAMPAIGN_CREATORS === 'true'

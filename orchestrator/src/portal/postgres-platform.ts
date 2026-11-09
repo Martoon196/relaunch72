@@ -1278,7 +1278,7 @@ export async function buildPgPortalPlatform(
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
     const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
-      ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined)
+      ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined, commandPool)
       : undefined;
     // Registered brands' signed account-lifecycle receipts route by provider profile; PP's own path is untouched.
     const seoBlogZernioWebhook = seoBlog?.social === 'live' && zernioSocialReadinessPool ? createSeoBlogZernioWebhookBrands(zernioSocialReadinessPool) : undefined;

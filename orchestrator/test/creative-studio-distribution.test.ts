@@ -147,7 +147,7 @@ test('acquisition hand-off issues a tracked link carrying campaign and artwork i
   const summary = await studio.campaignOutcomes(OWNER.userId, f.brand.id, campaignId);
   assert.equal(summary!.utmCampaign, utmCampaign);
   assert.equal(summary!.limits, ATTRIBUTION_LIMITS);
-  assert.ok(summary!.limits.some((l) => /no live lead form records campaign tags/i.test(l)), 'the capture gap is stated');
+  assert.ok(summary!.limits.some((l) => /enquiry form .*Leads entered any other way are not counted/i.test(l)), 'the capture scope is stated');
   assert.ok(summary!.limits.some((l) => /No revenue, return on ad spend, cost per acquisition or “winner”/u.test(l)));
 });
 

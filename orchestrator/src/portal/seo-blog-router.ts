@@ -28,7 +28,7 @@ import { campaignPage, type CampaignActionResult } from './seo-blog-campaign-vie
 import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-controller.js';
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
-import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, generationPage, renderTaskPage, type ReferenceChoice } from './creative-generation-view.js';
+import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, creativeEnquiriesPage, generationPage, renderTaskPage, type ReferenceChoice } from './creative-generation-view.js';
 import { holdMessage } from '../creative-studio/generation.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
@@ -45,6 +45,8 @@ export interface SeoBlogRouteInput {
   readonly sessionSecret: string;
   readonly vaultReady: boolean;
   readonly applicationName?: string;
+  /** Public origin of this portal (for brand enquiry form links). */
+  readonly publicOrigin?: string;
   /** Whether provider OAuth callbacks return to this host; connection starts only where they complete. */
   readonly socialConnectHere?: boolean;
   readonly socialConnectHost?: string;
@@ -294,6 +296,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const estimate = gen.estimate(view.brand, all.state, view.policy, current.data);
         return send(res, 200, briefPage(shell('creative'), { brand: view.brand, briefId, versions, state: view.state, estimate, references: await referenceChoices(all.state), previewUrl: generatedUrl }));
       }
+      if (rest === 'creative/enquiries') {
+        const settings = await studio.enquiries(actor.userId, brandId);
+        return send(res, 200, creativeEnquiriesPage(shell('creative'), { settings, brandId, origin: input.publicOrigin ?? url.origin, live: Boolean(input.service.creativeEnquiries) }));
+      }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
         return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID() }));
@@ -460,6 +466,11 @@ async function handlePost(
           return ok(`${home}/generate/${briefId}`, 'Image request saved. It runs on the server; you can leave this page. One paid request will be made when it starts.');
         }
         throw new SeoBlogError(404, 'That page was not found.');
+      }
+      if (parts[1] === 'enquiries') {
+        const saved = await studio.saveEnquiries(actor.userId, brandId, { enabled: f('enabled') === '1', privacyUrl: (f('privacyUrl') ?? '').trim(),
+          newStageId: f('newStageId') ?? '', qualifiedStageId: f('qualifiedStageId') ?? '', expectedVersion: int(f('rowVersion'), 'the settings version') });
+        return ok(`${home}/enquiries`, saved.enabled ? 'Enquiry form saved and switched on. Add it to the page your tracked links open.' : 'Enquiry settings saved. The form is off.');
       }
       if (parts[1] === 'kit') {
         const action = f('logo_action') ?? 'keep';

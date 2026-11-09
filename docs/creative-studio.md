@@ -434,3 +434,60 @@ The job is keyed by the form's command id, so a refresh or double click returns 
   - Unit tests cover the job shape and the runner's stop and retry rules.
   - Route test: no render inside the request, task page, a double submit returns the same job, another owner cannot follow the task, and the result opens when done.
   - Visual walkthrough (`test/manual-creative-generation-pg-demo.ts`): the artwork request returned in about 0.4 s. The worker recorded and playback-checked a 1080×1920, 10.5 s video in about 15 s, and it played in Chromium. No console errors.
+
+# Campaign enquiries into the existing CRM (real attribution capture)
+
+Until now only imported contacts carried campaign tags, so live campaign leads always showed as zero. Brands now have an **enquiry form**. When a visitor arrives from a tracked link and sends it, the lead enters this brand's CRM through the existing `crm.createLead` command, and the campaign is recorded only when its tags are genuine for this brand.
+
+## Reuse check
+
+| Need | Reused | Added |
+|---|---|---|
+| Lead creation, de-duplication, opportunity, task, command receipts | `CrmCommandService.createLead` as the `r72_crm_command` role. It acts as the owner who switched the form on, as the Growth HQ inbox does with its configured owner. | Nothing in the CRM itself. |
+| Public form safety | The investor-site pattern: hosted page or iframe embed, a signed one-hour form token, a honeypot, a no-referrer and strict CSP page, and an hourly cap. | The token also signs the exact UTM values, so tags cannot be altered at submit. |
+| Pipelines | Existing `app.pipelines` and `app.pipeline_stages`. A brand that already has a default pipeline uses it as it is. | A brand with no pipeline gets the standard "Enquiries" pipeline (New enquiry, Contacted, Qualified, Won, Not proceeding) when the owner first saves, in the same shape as existing provisioning. |
+| Attribution | Not `contact_attribution_facts`: it stays affiliate-only and untouched. The legacy import table is not used either. | `app.creative_studio_lead_touches`. It is append-only and holds one row per CRM command. It references the contact, opportunity, campaign and the exact tracked-link hand-off. Contact erasure removes the row. |
+
+## Rules
+
+- **Tags are untrusted.**
+  - The page keeps only `utm_source`, `utm_medium`, `utm_campaign` and `utm_content`, each with a conservative shape.
+  - A touch is stored only when SQL finds a tracked link this brand issued for its own acquisition campaign with exactly that campaign and content, and whose link carries the same source and medium.
+  - Malformed, unknown, altered and other-brand references still create the lead, but with no campaign touch (proved).
+  - No personal data is ever placed in a URL: name, email, phone and message travel only in the POST body.
+- **Qualified.** The owner maps the stage that means "qualified" by its **stage id** (Creative studio → Enquiry form). Results count a lead as qualified when it reaches that stage or a later open stage of the same pipeline, or when it is won. Renaming the stage or changing its slug keeps the meaning (proved). Without a mapping, only won opportunities count, the read says `qualifiedMapped: false`, and qualified rates are not compared. A stage merely slugged `qualified` is no longer trusted.
+- **Switching on.** The form is off until the owner saves a privacy-notice link and switches it on. It stops when switched off, when the owner no longer manages the brand, or when the brand is paused. It accepts at most 50 enquiries per hour per brand.
+- **Idempotency.** A double submit replays the same CRM command, so there is one lead and one touch. A honeypot hit creates nothing.
+- **Not done.** Nothing is emailed, published or spent. No revenue, cost per acquisition, return on ad spend or winner is calculated.
+
+## Owner steps
+
+1. Creative studio → **Enquiry form**: choose the first stage and the "qualified" stage (or accept the standard pipeline), add the privacy notice link, tick *Accept enquiries*, then **Save**.
+2. Paste the embed code on the page the tracked links open (recommended). It forwards only the four tags from that page's address into the form. Alternatively, link to the hosted page.
+3. Campaign results then show tagged leads, qualified, booked and sold for each concept and artwork.
+
+## Checks
+
+- **Real PostgreSQL** (`test/db/creative-studio-enquiry-pg.integration.test.ts`). The upstream acquisition campaign row is seeded, because generating it needs a model. Everything else is real:
+  - the hand-off SQL issues the tracked link;
+  - the public handler serves and receives the form;
+  - `crm.createLead` runs as `r72_crm_command`;
+  - the touch function and the existing outcome reader run as `r72_content_command`.
+
+  It proves:
+  - the off-by-default and privacy-notice rules;
+  - the standard pipeline and the mapping by id;
+  - a key works only for its own brand;
+  - one lead and one touch after a double submit, placed in the owner's pipeline and first stage, with source `creative_studio_enquiry`;
+  - the reader attributes the lead to the exact campaign and artwork;
+  - a real `crm.moveOpportunityStage` to the mapped stage counts as qualified, including after renaming the stage;
+  - unknown, altered-source, malformed and cross-brand tags create the lead but no touch;
+  - tampered tags, a missing consent tick and a switched-off form are refused, and a honeypot hit creates nothing;
+  - the runtime role has no table access.
+- The Milestone 4 proof now shows that a stage slugged "qualified" is not counted until it is mapped.
+- Unit tests cover the UTM filter, tokens bound to brand, key, tags and time, input checks, the embed code and the owner page.
+
+## Rollout
+
+- The public route `/enquire/<brand>/<key>` is mounted on the main web service only when `CREATIVE_STUDIO_ENABLED=true` and the portal's CRM command pool (`DATABASE_CRM_COMMAND_URL`, role `r72_crm_command`) is composed. No new secret: tokens use the existing portal session secret.
+- The hosted link and the embed code use the portal's configured public base URL.

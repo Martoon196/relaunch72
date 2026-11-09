@@ -16,6 +16,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { chromium } from 'playwright-core';
 import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
+import { ENQUIRY_ROUTE, handleEnquiryPublic } from '../src/creative-studio/enquiry-capture.js';
 import { createPortalSeoBlogService, createWorkerSeoBlogEngine } from '../src/portal/seo-blog-service.js';
 import { PgSeoBlogMediaStore } from '../src/seo-blog/media-store.js';
 import { PgSeoBlogStore } from '../src/seo-blog/pg-store.js';
@@ -61,11 +62,16 @@ await new PgSeoBlogStore(pool, principal, new PgSeoBlogMediaStore(pool, principa
 // Operator step (r72_owner only in production): open the shared paid-image policy with artificial proof amounts.
 await admin.query('UPDATE app_private.seo_image_operator_policy SET version=version+1,config=config||$1::jsonb', [JSON.stringify({ enabled: true, maxConcurrency: 2, monthlyMicrousd: 5_000_000, perAttemptMicrousd: 250_000 })]);
 
-const service = createPortalSeoBlogService(pool, env);
+await admin.query("ALTER ROLE r72_crm_command PASSWORD 'local-crm-test-only'");
+const c = new URL(raw); c.username = 'r72_crm_command'; c.password = 'local-crm-test-only';
+const crmPool = new pg.Pool({ connectionString: c.toString(), max: 3 });
+const service = createPortalSeoBlogService(pool, env, undefined, undefined, crmPool);
 const worker = createWorkerSeoBlogEngine(pool, 'demo-worker', env);
 const SECRET = 's'.repeat(48);
 const identity = { sessionToken: token, userId: actor, workspaceId: f.brand.id, userEmail: 'owner@example.test' };
-const server = createServer((req, res) => { void handleSeoBlog(req, res, new URL(req.url!, 'http://127.0.0.1'), { service, identity, requestId: 'demo-' + randomUUID(), sessionSecret: SECRET, vaultReady: true } as never); });
+const server = createServer((req, res) => {
+  if (req.url?.startsWith(ENQUIRY_ROUTE + '/')) { void handleEnquiryPublic(req, res, service.creativeEnquiries!, SECRET, 'demo-enquiry'); return; }
+  void handleSeoBlog(req, res, new URL(req.url!, 'http://127.0.0.1'), { service, identity, requestId: 'demo-' + randomUUID(), sessionSecret: SECRET, vaultReady: true } as never); });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 const files = path.join(out, 'inputs'); mkdirSync(files, { recursive: true });
@@ -140,6 +146,19 @@ try {
   });
   summary.notice = await page.locator('[role=status], .notice, .flash').first().textContent().catch(() => null);
   await shot('07b-video-rendered-and-checked');
+  // Enquiry form: owner switches it on; a visitor from a campaign link sends an enquiry into the CRM.
+  await page.goto(`${base}/enquiries`); await shot('09a-enquiries-off');
+  await page.fill('#enq-privacy', 'https://hearth.example/privacy'); await page.check('input[name=enabled]');
+  await Promise.all([page.waitForLoadState('load'), page.click('form[action$="/enquiries"] button[type=submit]')]);
+  await shot('09b-enquiries-on-with-embed');
+  const hosted = await page.locator('a[href*="/enquire/"]').first().getAttribute('href');
+  const visitor = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  await visitor.goto(hosted!.replace(/^https?:\/\/[^/]+/u, origin) + '?utm_source=instagram&utm_medium=social&utm_campaign=spring-plan-00000000&utm_content=concept-1-cs00000000');
+  await visitor.fill('#q-name', 'Fictional Visitor'); await visitor.fill('#q-email', 'visitor@example.test'); await visitor.fill('#q-msg', 'Please call me about a boiler check.');
+  await visitor.check('input[name=consent]'); await visitor.screenshot({ path: path.join(out, '09c-public-form-mobile.png'), fullPage: true });
+  await Promise.all([visitor.waitForLoadState('load'), visitor.click('button[type=submit]')]);
+  await visitor.screenshot({ path: path.join(out, '09d-public-form-sent.png'), fullPage: true });
+  summary.enquiry = (await admin.query("SELECT (SELECT count(*)::int FROM app.contacts WHERE workspace_id=$1) contacts,(SELECT count(*)::int FROM app.opportunities WHERE workspace_id=$1) opportunities,(SELECT count(*)::int FROM app.creative_studio_lead_touches WHERE workspace_id=$1) touches", [f.brand.id])).rows[0];
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(`${base}/generate`); await page.click('table a');
   for (const img of await page.locator('img').all()) await img.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => [...document.images].every((i) => i.complete)); await page.evaluate(() => window.scrollTo(0, 0)); await shot('08-brief-mobile');
@@ -149,4 +168,4 @@ try {
   summary.jobs = (await admin.query('SELECT state,data->>\'progress\' progress FROM app.seo_blog_jobs WHERE workspace_id=$1', [f.brand.id])).rows;
   writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
-} finally { await browser.close(); server.close(); await pool.end(); await admin.end(); }
+} finally { await browser.close(); server.close(); await pool.end(); await crmPool.end(); await admin.end(); }

@@ -94,6 +94,36 @@ export class PgCreativeDistributionReader implements DistributionReadPort {
   }
 }
 
+/** Owner enquiry-capture settings through app_private.creative_studio_capture_setup (0144 section 6). */
+export interface EnquirySettings {
+  readonly configured: boolean; readonly enabled: boolean; readonly publicKey: string | null; readonly privacyUrl: string | null; readonly ownerUserId: string | null;
+  readonly pipelineId: string | null; readonly pipelineName: string | null; readonly newStageId: string | null; readonly qualifiedStageId: string | null; readonly rowVersion: number;
+  readonly stages: readonly { id: string; name: string; type: 'open' | 'won' | 'lost'; position: number }[]; readonly touches: number;
+}
+export class PgCreativeEnquirySettings {
+  private readonly sessionHash: Buffer | null;
+  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal) {
+    this.sessionHash = principal.kind === 'user' ? createHash('sha256').update(principal.sessionToken).digest() : null;
+  }
+  async call(brandId: string, input: Record<string, unknown>): Promise<EnquirySettings> {
+    const p = this.principal;
+    if (p.kind !== 'user') throw new SeoBlogError(403, 'Enquiry settings require a signed-in owner.');
+    try {
+      return await withTransaction(this.pool, { actorKind: 'user', workspaceId: brandId, userId: p.userId, requestId: p.requestId }, async (t) => {
+        const guard = await t.query<{ ok: boolean }>('SELECT app_private.lock_active_portal_session($1,$2,$3) AS ok', [this.sessionHash, p.userId, p.selectedWorkspaceId]);
+        if (guard.rows[0]?.ok !== true) throw new SeoBlogError(401, 'Sign in again to continue.');
+        return (await t.query<{ value: EnquirySettings }>('SELECT app_private.creative_studio_capture_setup($1,$2,$3) AS value', [brandId, this.sessionHash, JSON.stringify(input)])).rows[0]!.value;
+      });
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
+      if (code === '40001') throw new SeoBlogError(409, 'Enquiry settings changed. Refresh and try again.');
+      if (code === '22023' || code === '22P02' || code === '23514') throw new SeoBlogError(400, (e as Error).message.slice(0, 200));
+      throw e;
+    }
+  }
+}
+
 /** Learning journal and authorised patterns through app_private.creative_studio_learning (0143). */
 export class PgCreativeLearningStore implements LearningStore {
   private readonly sessionHash: Buffer | null;

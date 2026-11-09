@@ -8,6 +8,8 @@ import type { GenerationEstimate } from '../creative-studio/generation-service.j
 import type { BriefVersion, GenerationState } from '../creative-studio/generation-store.js';
 import { base, STYLE } from './creative-studio-view.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
+import type { EnquirySettings } from '../creative-studio/pg-store.js';
+import { ENQUIRY_ROUTE, enquiryEmbedSnippet } from '../creative-studio/enquiry-capture.js';
 
 const e = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, (c) => `&#${c.charCodeAt(0)};`);
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro % 10_000 ? 4 : 2)}`;
@@ -87,6 +89,32 @@ ${lastIntent ? `<input type="hidden" name="replacesIntentId" value="${e(lastInte
 <section class="card"><h2>Generated images</h2>${results}</section>
 <section class="card"><h2>Edit the brief</h2><p class="small muted">Saving creates a new version. Earlier versions and their images are kept.</p>${briefForm(shell, data.briefId, data.references, brief)}</section>
 <script src="${SEO_BLOG_BASE}/creative-job-status.js" defer></script>`);
+}
+
+/** Brand enquiry form: where campaign leads enter the existing CRM, which stage means "qualified", and the embed code. */
+export function creativeEnquiriesPage(shell: Shell, data: { settings: EnquirySettings; brandId: string; origin: string; live: boolean }): string {
+  const s = data.settings, open = s.stages.filter((x) => x.type === 'open');
+  const select = (name: string, id: string, chosen: string | null, label: string, help: string) => s.stages.length
+    ? `<label for="${id}">${label}</label><select id="${id}" name="${name}">${open.map((x) => `<option value="${e(x.id)}"${x.id === chosen ? ' selected' : ''}>${e(x.name)}</option>`).join('')}</select><p class="small muted">${help}</p>` : '';
+  const hosted = s.publicKey ? `${data.origin}${ENQUIRY_ROUTE}/${data.brandId}/${s.publicKey}` : null;
+  const ready = s.enabled && hosted && data.live;
+  return layout(shell, 'Enquiries', `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><h1>Enquiry form</h1>
+<p class="muted">Leads from your tracked campaign links arrive here: a short form that creates the contact and opportunity in this brand’s CRM pipeline, and keeps the campaign tags only when they match a tracked link this brand issued. Nothing is published, emailed or spent.</p>
+<section class="card"><h2>Settings</h2>
+<ul class="small"><li><strong>Status:</strong> ${s.enabled ? 'on' : 'off'}${data.live ? '' : ' (the public form is not available on this server)'}.</li>
+<li><strong>Pipeline:</strong> ${s.pipelineName ? e(s.pipelineName) : 'none yet — saving creates the standard “Enquiries” pipeline (New enquiry, Contacted, Qualified, Won, Not proceeding)'}.</li>
+<li><strong>Campaign-tagged leads so far:</strong> ${s.touches}.</li></ul>
+<form method="post" action="${base(shell)}/enquiries" class="cs-form">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${s.rowVersion}">
+${select('newStageId', 'enq-new', s.newStageId, 'Stage for new enquiries', 'New leads start here.')}
+${select('qualifiedStageId', 'enq-qual', s.qualifiedStageId, 'Stage that means “qualified”', 'Results count a lead as qualified when it reaches this stage (or a later open stage, or is won). Stored by stage id, so renaming the stage keeps the meaning.')}
+<label for="enq-privacy">Privacy notice (https link)</label><input id="enq-privacy" name="privacyUrl" type="url" maxlength="500" value="${e(s.privacyUrl ?? '')}" placeholder="https://your-site.example/privacy">
+<label><input type="checkbox" name="enabled" value="1"${s.enabled ? ' checked' : ''} style="width:auto"> Accept enquiries through this form</label>
+<button type="submit">Save</button></form></section>
+${ready ? `<section class="card"><h2>Put the form where your links land</h2>
+<p class="small">Embed it on the page your tracked links open (recommended — the tracked link stays on your own site):</p>
+<textarea readonly rows="6" class="small" aria-label="Embed code">${e(enquiryEmbedSnippet(data.origin, data.brandId, s.publicKey!))}</textarea>
+<p class="small">Or use the hosted form: <a href="${e(hosted!)}" rel="noopener" target="_blank">${e(hosted!)}</a></p>
+<p class="small muted">The embed passes only the campaign tags (utm_source, utm_medium, utm_campaign, utm_content) from the page address. Names, emails and messages are sent in the form, never in a link. Up to ${50} enquiries per hour are accepted.</p></section>` : ''}`);
 }
 
 /** One durable render task: follows the job, explains a stop, and is replaced by the result page once it is done. */

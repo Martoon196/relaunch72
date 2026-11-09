@@ -21,6 +21,7 @@ import type { ArticleCampaign } from '../seo-blog/campaign.js';
 import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
   type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
 import { isCreativeStudioJob } from './generation.js';
+import type { EnquirySettings } from './pg-store.js';
 import { isCreativeRenderJob, newRenderJob, RENDER_LABEL, type PreparedBackground, type RenderOperation, type RenderPayload, type RenderResult } from './render-jobs.js';
 import { generationJobStatus } from './generation-service.js';
 import { buildLearning, findingsText, generalPatternIssues, type LearningSnapshot, type LearningStore, type PatternRow, type RecordedFinding } from './learning.js';
@@ -164,6 +165,8 @@ export class CreativeStudioService {
     readonly generatedImages?: GeneratedImagePort;
     /** Durable render jobs (the existing SEO job table); absent means renders cannot be requested here. */
     readonly renderJobs?: { enqueueJob(job: Job): Promise<{ job: Job; created: boolean }> };
+    /** Enquiry capture settings (0144 section 6), owner session only. */
+    readonly enquirySettings?: { call(brandId: string, input: Record<string, unknown>): Promise<EnquirySettings> };
     readonly now?: () => string;
     readonly newId?: () => string;
   }) {
@@ -761,6 +764,21 @@ export class CreativeStudioService {
     }
     const { job } = await this.deps.renderJobs.enqueueJob(newRenderJob(brandId, actorId, commandId, op, this.now()));
     return job;
+  }
+
+  /** Enquiry form settings: stage mapping (by stage id), privacy notice and the on/off switch. */
+  async enquiries(actorId: string, brandId: string): Promise<EnquirySettings> {
+    await this.context(actorId, brandId);
+    if (!this.deps.enquirySettings) throw new SeoBlogError(503, 'Enquiry capture is not available here.');
+    return this.deps.enquirySettings.call(brandId, { action: 'read' });
+  }
+  async saveEnquiries(actorId: string, brandId: string, input: { enabled: boolean; privacyUrl: string; newStageId: string; qualifiedStageId: string; expectedVersion: number }): Promise<EnquirySettings> {
+    await this.context(actorId, brandId);
+    if (!this.deps.enquirySettings) throw new SeoBlogError(503, 'Enquiry capture is not available here.');
+    const uuidOrEmpty = (v: string) => (v === '' || UUID.test(v) ? v : (() => { throw new SeoBlogError(400, 'Choose the stages from the list.'); })());
+    if (input.privacyUrl && !/^https:\/\/[^\s<>"]{4,500}$/u.test(input.privacyUrl)) throw new SeoBlogError(400, 'The privacy notice must be an https link.');
+    return this.deps.enquirySettings.call(brandId, { action: 'save', enabled: input.enabled, privacyUrl: input.privacyUrl, newStageId: uuidOrEmpty(input.newStageId),
+      qualifiedStageId: uuidOrEmpty(input.qualifiedStageId), expectedVersion: input.expectedVersion });
   }
 
   /** Owner view of one render task of this brand (no inputs or bytes). */
