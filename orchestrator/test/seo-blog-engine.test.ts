@@ -57,6 +57,22 @@ test('a known article validation rejection holds after its bounded correction in
  assert.equal((await h.store.getJob(brand.id,job.id))!.state,'blocked');
 });
 
+test('finished checks verify an approved CTA missing from the crawl and keep unavailable or unapproved links blocked',async()=>{
+ const h=harness(),brand=await readyBrand(h,'Harbour Lettings','https://harbour.example','lettings');
+ const {articles}=await planAndWrite(h,brand,1);const article=articles[0]!.article;
+ const profile=(await h.store.latestProfile(brand.id))!,cta=profile.conversionPages[0]!;
+ const inventory=(await h.store.getInventory(brand.id))!;
+ await h.store.saveInventory({...inventory,pages:inventory.pages.filter(p=>p.url!==cta.url&&p.canonical!==cta.url)});
+ h.web.set(cta.url,'<html><head><title>Confirmed next step</title></head><body>Published destination</body></html>');
+ let editCount=0;
+ const edit=async(url:string)=>{const current=await h.engine.getArticle(OWNER,brand.id,article.id);await h.engine.editArticle(OWNER,brand.id,article.id,current.version!.id,{cta,conclusion:`${'Recheck the details. '.repeat(editCount++)}Review the evidence, then [take the next step](${url}).`});return (await h.engine.getArticle(OWNER,brand.id,article.id)).article.checks!;};
+ const live=await edit(cta.url);assert.equal(live.issues.some(i=>i.code==='links.broken_internal'),false);
+ h.web.set(cta.url,{status:404,body:'Not found'});const missing=await edit(cta.url);assert.ok(missing.issues.some(i=>i.code==='links.broken_internal'));
+ const unapproved='https://harbour.example/not-an-approved-cta';h.web.set(unapproved,'<html>A live but unapproved URL</html>');
+ const unknown=await edit(unapproved);assert.ok(unknown.issues.some(i=>i.code==='links.broken_internal'));
+ assert.equal(h.web.requests.includes(unapproved),false);
+});
+
 test('A1: Add brand creates separate workspaces; a retried command does not duplicate; strangers cannot see them', async () => {
   const h = harness();
   const command = randomUUID();

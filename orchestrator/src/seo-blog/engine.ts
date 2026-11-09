@@ -15,7 +15,7 @@ import {
   extractProfile, GenerationUnavailableError, GenerationRejectedError, CampaignGenerationRejectedError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
   type PlannedArticle, type PlannedCluster, type JsonCallResult,
 } from './generation.js';
-import { buildInventory, linkableUrls } from './inventory.js';
+import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import { cleanText, extractKnowledge } from './knowledge.js';
 import { approvalIsCurrent, articleStatusLabel, checksAreCurrent, evaluatePublication } from './policy.js';
 import { publisherFor, type PublisherRegistry } from './publishers/registry.js';
@@ -1455,6 +1455,17 @@ export class SeoBlogEngine {
     const [inventory, articles, plan] = await Promise.all([this.store.getInventory(brand.id), this.store.listArticles(brand.id), this.store.getPlan(brand.id, version.planId)]);
     const linkable = linkableUrls(inventory);
     for (const a of articles) if (a.delivery === 'published' && a.publishedUrl) linkable.add(a.publishedUrl);
+    // A bounded crawl may omit the current, owner-confirmed conversion page.
+    // Establish actual public availability; profile approval alone is not proof.
+    const cta=version.body.cta,website=brand.website;
+    if(cta&&profile.confirmedAt&&website&&sameSite(cta.url,website)&&profile.conversionPages.some(p=>p.url===cta.url)&&!linkable.has(cta.url)){
+      try {
+        const url=validatePublicUrl(cta.url).toString();
+        let page=await this.deps.transport.fetch(url,{method:'HEAD',maxBytes:65536,timeoutMs:5000});
+        if(page.status===405)page=await this.deps.transport.fetch(url,{method:'GET',maxBytes:2_000_000,timeoutMs:5000});
+        if(page.status===200&&sameSite(page.finalUrl,website))linkable.add(cta.url);
+      } catch { /* Retain the existing broken-link finding on unavailable/blocked verification. */ }
+    }
     const sources = new Map((plan?.sources ?? []).map((s) => [s.id, s]));
     for (const c of version.body.citations) if (!sources.has(c.sourceId)) sources.set(c.sourceId, { id: c.sourceId, url: c.url, title: c.title, retrievedAt: c.retrievedAt,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,passage: c.passage, provider: 'recorded', primary: false, query: '' });
     const others = [
