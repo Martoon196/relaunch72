@@ -94,7 +94,7 @@ export function resolvePlanningClaims(sidecar: Record<string, any>, asset: Recor
     let value: unknown = { asset };
     for (const key of path.slice(1).split('/')) value = value && typeof value === 'object' && Object.hasOwn(value, key) ? (value as Record<string, unknown>)[key] : undefined;
     if (typeof value !== 'string' || value.trim().length < 3 || value.length > 1600 || (Object.hasOwn(row, 'text') && row.text !== value)) {
-      problems.push(`claimLedger[${i}] points to missing, oversized or mismatched claim text.`); continue;
+      problems.push(`claimLedger[${i}] points to missing, oversized or mismatched claim text at ${path}. Arrays use zero-based indices; choose an existing field in this draft or omit a claim that is not asserted. Never invent text to fill the pointer.`); continue;
     }
     row.text = value;
   }
