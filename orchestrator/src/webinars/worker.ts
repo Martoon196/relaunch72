@@ -14,7 +14,7 @@ import type { Pool, PoolClient } from 'pg';
 import { workerDatabaseContext } from '../db/rls.js';
 import { withTransaction } from '../db/transaction.js';
 import { issueAccessToken } from './access.js';
-import { publicOriginFor, type WebinarConfig } from './config.js';
+import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js';
 import { composeMessage, deliveryDecision, type MessagePurpose, type WebinarMailer } from './messages.js';
 import { applyVideoState, readProfile, runProvisionJob, settleJob } from './service.js';
 import type { CloudflareStreamClient } from './stream.js';
@@ -203,7 +203,7 @@ export class WebinarWorker {
       if (v?.readyToStream) {
         await applyVideoState(tx, job.event_id, 'ready', v.duration, null);
         await settleJob(tx, job.id, 'done', null, { duration: v.duration });
-        await this.deps.stream!.protectVideo(uid, this.origins(workspaceId)).catch(() => undefined);
+        await this.deps.stream!.protectVideo(uid, playbackHosts(this.deps.config, workspaceId)).catch(() => undefined);
         return 'video_ready';
       }
       if (v?.state === 'error') {
@@ -215,12 +215,6 @@ export class WebinarWorker {
       await settleJob(tx, job.id, 'queued', v ? `Cloudflare state: ${v.state}` : 'Upload not visible at Cloudflare yet.', {}, new Date(this.now() + 60_000).toISOString());
       return 'video_pending';
     });
-  }
-
-  private origins(workspaceId: string): string[] {
-    const hosts = new Set<string>();
-    for (const o of [publicOriginFor(this.deps.config, workspaceId), this.deps.config.defaultPublicOrigin]) if (o) hosts.add(new URL(o).hostname);
-    return [...hosts];
   }
 
   /**
@@ -245,7 +239,8 @@ export class WebinarWorker {
       if (ready) {
         await tx.query(`UPDATE app.webinar_events SET recording_uid = $2, recording_state = 'ready', recording_duration_seconds = $3,
             row_version = row_version + 1, updated_at = clock_timestamp()
-          WHERE workspace_id = app_private.current_workspace_id() AND id = $1 AND recording_state <> 'ready'`, [event.id, ready.uid, ready.duration]);
+          WHERE workspace_id = app_private.current_workspace_id() AND id = $1
+            AND (recording_state <> 'ready' OR coalesce(recording_duration_seconds, 0) < coalesce($3::numeric, 0))`, [event.id, ready.uid, ready.duration]);
         if (event.settings.replay.enabled && event.status === 'published') {
           await tx.query(`INSERT INTO app.webinar_jobs (workspace_id, event_id, registration_id, kind, purpose, dedupe_key, schedule_version, run_after, expires_at)
             SELECT r.workspace_id, r.event_id, r.id, 'message', 'replay_available', 'msg:' || r.id::text || ':replay_available', $2, $3::timestamptz, $3::timestamptz + interval '7 days'

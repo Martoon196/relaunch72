@@ -255,3 +255,22 @@ test('studio probe uses the ffmpeg on PATH and names each missing capability', {
   assert.deepEqual([absent.available, absent.detail], [false, 'ffmpeg was not found on PATH.']);
   assert.equal((await probeFfmpeg('/nonexistent/ffmpeg')).detail, 'ffmpeg was not found at /nonexistent/ffmpeg.');
 });
+
+test('studio channel reassembles a large frame delivered in many small TCP chunks', async () => {
+  const { WebSocketConnection } = await import('../src/webinars/websocket.js');
+  const { PassThrough } = await import('node:stream');
+  const socket = new PassThrough();
+  const got: Buffer[] = [];
+  const conn = new WebSocketConnection(socket, { maxFrame: 4 * 1024 * 1024, maxMessage: 8 * 1024 * 1024 }, { onMessage: (d) => got.push(d), onClose: () => undefined });
+  const payload = randomBytes(300 * 1024);
+  const frame = encodeFrame(0x2, payload, randomBytes(4));
+  for (let i = 0; i < frame.length; i += 1024) socket.write(frame.subarray(i, i + 1024));
+  const text = encodeFrame(0x1, Buffer.from('{"type":"stop"}'), randomBytes(4));
+  socket.write(Buffer.concat([text.subarray(0, 3), Buffer.alloc(0)]));
+  socket.write(text.subarray(3));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(got.length, 2);
+  assert.ok(got[0]!.equals(payload), 'binary payload intact after chunked delivery');
+  assert.equal(got[1]!.toString(), '{"type":"stop"}');
+  assert.equal(conn.isOpen, true);
+});

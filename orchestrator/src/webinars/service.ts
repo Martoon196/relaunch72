@@ -15,7 +15,7 @@ import { requestDatabaseContext, workerDatabaseContext, type DatabaseRequestCont
 import { withTransaction } from '../db/transaction.js';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import { issueAccessToken, type AccessClaim } from './access.js';
-import { publicOriginFor, type WebinarConfig } from './config.js';
+import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js';
 import { computeRoomState, isValidTimezone, zonedToUtc, type RoomState } from './schedule.js';
 import { StreamError, type CloudflareStreamClient, type LiveInputCredentials } from './stream.js';
 import { readSettings, toEvent, type WebinarBrand, type WebinarEvent, type WebinarKind, type WebinarSettings } from './types.js';
@@ -147,6 +147,8 @@ function slugify(s: string): string {
 
 export class PgWebinarService {
   private readonly now: () => number;
+  /** Signed playback tokens by uid; reused while they have ample life left, so a poll is not an RSA signature. */
+  private readonly signed = new Map<string, { token: string; expiresAt: string; expMs: number }>();
 
   constructor(private readonly deps: WebinarServiceDependencies) {
     this.now = deps.now ?? Date.now;
@@ -383,11 +385,7 @@ export class PgWebinarService {
   }
 
   playbackOrigins(workspaceId: string): string[] {
-    const hosts = new Set<string>();
-    for (const o of [publicOriginFor(this.deps.config, workspaceId), this.deps.config.defaultPublicOrigin]) {
-      if (o) hosts.add(new URL(o).hostname);
-    }
-    return [...hosts];
+    return playbackHosts(this.deps.config, workspaceId);
   }
 
   // ── video: live input ─────────────────────────────────────────────────────
@@ -634,16 +632,16 @@ export class PgWebinarService {
   /**
    * Sends up to `batch` unlinked registrants to the existing CRM through its
    * established command boundary. Idempotent per registration: the CRM command
-   * key is fixed, so a retry replays rather than duplicating. Registration does not
-   * grant marketing permission, so contact points are recorded with consent unknown.
+   * key is fixed, so a retry replays rather than duplicating. Registration alone does
+   * not grant marketing permission; only the form's explicit opt-in is passed as consent.
    */
   async sendToCrm(identity: PortalSessionIdentity, requestId: string, id: string, batch = 25): Promise<{ linked: number; replayed: number; failed: number; remaining: number }> {
     const crm = this.deps.crm;
     if (!crm) throw new WebinarError(503, 'The CRM command identity is not configured on this deployment.');
     const { event } = await this.get(identity, requestId, id);
-    const pending = await this.managed(identity, requestId, async (tx) => (await tx.query(`SELECT id, email, name FROM app.webinar_registrations
+    const pending = await this.managed(identity, requestId, async (tx) => (await tx.query(`SELECT id, email, name, marketing_consent FROM app.webinar_registrations
       WHERE workspace_id = app_private.current_workspace_id() AND event_id = $1 AND status = 'registered' AND crm_contact_id IS NULL
-      ORDER BY created_at LIMIT $2`, [id, batch])).rows as { id: string; email: string; name: string }[]);
+      ORDER BY created_at LIMIT $2`, [id, batch])).rows as { id: string; email: string; name: string; marketing_consent: boolean }[]);
     const context = this.context(identity, requestId);
     const stage = await withTransaction(crm.pool, context, async (tx) => {
       const r = await tx.query(`/* webinars.crm-new-stage */ SELECT p.id AS "pipelineId", s.id AS "stageId"
@@ -661,7 +659,8 @@ export class PgWebinarService {
           displayName: reg.name.slice(0, 200) || reg.email,
           ownerUserId: identity.userId,
           source: `webinar:${event.publicKey}:${reg.id}`,
-          contactPoints: [{ kind: 'email', value: reg.email, isPrimary: true, consentStatus: 'unknown' }],
+          // The registration form's explicit opt-in is the only evidence that travels; without it, consent stays unknown.
+          contactPoints: [{ kind: 'email', value: reg.email, isPrimary: true, consentStatus: reg.marketing_consent === true ? 'opted_in' : 'unknown' }],
           pipelineId: stage.pipelineId, stageId: stage.stageId,
           opportunityName: `${event.settings.crmOpportunityPrefix}: ${event.title} · ${reg.name}`.slice(0, 200),
           valueMinor: 0, currency: 'GBP',
@@ -738,7 +737,7 @@ export class PgWebinarService {
     const room = computeRoomState({ event, nowMs, providerConfigured: this.deps.stream !== null });
     let hlsUrl: string | null = null, expiresAt: string | null = null;
     if (room.playUid && this.deps.stream) {
-      const signed = this.deps.stream.signPlayback(room.playUid, nowMs, 3600);
+      const signed = this.signedPlayback(this.deps.stream, room.playUid, nowMs);
       hlsUrl = this.deps.stream.hlsUrl(signed.token);
       expiresAt = signed.expiresAt;
     }
@@ -747,6 +746,17 @@ export class PgWebinarService {
     const released = c !== null && (c.mode === 'manual' ? event.ctaRevealedAt !== null : c.atSeconds !== null);
     const cta = c && released ? { label: c.label, url: c.url, body: c.body, atSeconds: c.mode === 'timed' ? c.atSeconds : null, visible: true } : null;
     return Object.freeze({ room, hlsUrl, expiresAt, cta, serverNow: new Date(nowMs).toISOString() });
+  }
+
+  /** One-hour tokens, re-signed only once fewer than 20 minutes remain (the room swaps sources at 10). */
+  private signedPlayback(stream: CloudflareStreamClient, uid: string, nowMs: number): { token: string; expiresAt: string } {
+    const cached = this.signed.get(uid);
+    if (cached && cached.expMs - nowMs > 20 * 60_000) return cached;
+    if (this.signed.size > 2000) this.signed.clear();
+    const fresh = stream.signPlayback(uid, nowMs, 3600);
+    const entry = { ...fresh, expMs: Date.parse(fresh.expiresAt) };
+    this.signed.set(uid, entry);
+    return entry;
   }
 
   async signal(publicKey: string, claim: AccessClaim, kind: string, mode: string, from: number | null, to: number | null): Promise<boolean> {
@@ -837,10 +847,8 @@ export async function runProvisionJob(pool: Pool, stream: CloudflareStreamClient
     return r.rowCount === 1 ? String(r.rows[0].event_id) : null;
   });
   if (!claimed) return;
-  const origins = new Set<string>();
-  for (const o of [publicOriginFor(config, workspaceId), config.defaultPublicOrigin]) if (o) origins.add(new URL(o).hostname);
   try {
-    const li = await stream.createLiveInput({ webinarJob: jobId, webinarEvent: claimed, workspace: workspaceId, name: `webinar ${claimed}` }, [...origins], config.limits.recordingRetentionDays);
+    const li = await stream.createLiveInput({ webinarJob: jobId, webinarEvent: claimed, workspace: workspaceId, name: `webinar ${claimed}` }, playbackHosts(config, workspaceId), config.limits.recordingRetentionDays);
     await withTransaction(pool, ctx, async (tx) => {
       await bindLiveInput(tx, claimed, li.uid);
       await settleJob(tx, jobId, 'done', null, { liveInputUid: li.uid });

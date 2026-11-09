@@ -121,13 +121,13 @@ export function messagePage(event: WebinarEvent, brand: WebinarBrand, title: str
 ${action ? `<p><a class="btn" href="${e(action.href)}">${e(action.label)}</a></p>` : ''}</div>`);
 }
 
-export function confirmationPage(input: { event: WebinarEvent; brand: WebinarBrand; roomPath: string; calendarPath: string | null; emailMode: 'off' | 'test' | 'live'; nowMs: number }): string {
+export function confirmationPage(input: { event: WebinarEvent; brand: WebinarBrand; roomPath: string; calendarPath: string | null; /** True only when this brand can actually deliver the link by email right now. */ emailed: boolean; nowMs: number }): string {
   const ev = input.event;
   const soon = ev.kind === 'on_demand' || (ev.startsAt !== null && Date.parse(ev.startsAt) - ev.settings.roomOpensMinutesBefore * 60_000 <= input.nowMs);
   return shell("You're registered", ev, input.brand, `<div class="card" style="max-width:680px;margin:20px auto">
 <span class="kicker">${e(KIND_LABEL[ev.kind])}</span><h1>You're registered</h1>
 <p><strong>${e(ev.title)}</strong>${ev.startsAt && ev.kind !== 'on_demand' ? ` · <time datetime="${e(ev.startsAt)}" data-local-time>${e(formatInZone(ev.startsAt, ev.timezone))}</time>` : ''}</p>
-<p>${input.emailMode === 'live' ? "We've emailed your personal link. Keep it — it's how you get back into the room on any device." : 'Bookmark this page: this browser can open the room. Your personal link will also be emailed when email delivery is on.'}</p>
+<p>${input.emailed ? "We've emailed your personal link. Keep it — it's how you get back into the room on any device." : 'Bookmark this page: this browser can open the room. If you lose it, use "Get your link again" on the webinar page.'}</p>
 <p style="display:flex;gap:10px;flex-wrap:wrap"><a class="btn" href="${e(input.roomPath)}">${soon ? 'Enter the room now' : 'Open the waiting room'}</a>${input.calendarPath ? `<a class="btn secondary" href="${e(input.calendarPath)}">Add to calendar</a>` : ''}</p></div>`, { script: true });
 }
 

@@ -50,6 +50,7 @@ class Limiter {
 
 const registerLimiter = new Limiter(10, 10 * 60_000);
 const linkLimiter = new Limiter(5, 10 * 60_000);
+/** Room polls and signals: keyed per registration (so a NAT'd audience is never throttled as one), per IP when anonymous. */
 const jsonLimiter = new Limiter(240, 60_000);
 
 export interface WebinarPublicInput {
@@ -140,19 +141,56 @@ export async function handleWebinarPublic(req: IncomingMessage, res: ServerRespo
   const svc = input.service;
   const client = input.clientKey?.(req) ?? String(req.socket.remoteAddress ?? 'unknown');
   const secret = svc.config.accessSecret;
+  const cookieName = accessCookieName(key);
+  const claimFromCookie = (): AccessClaim | null => (secret ? readAccessToken(secret, key, cookies(req).get(cookieName)) : null);
+  const attendee = async () => {
+    const claim = claimFromCookie();
+    if (!claim) return null;
+    const a = await svc.attendee(key, claim);
+    return a ? { claim, ...a } : null;
+  };
 
   try {
+    // ── room JSON (hot path: one database round trip, limited per registration) ──
+    if (sub === 'state' || sub === 'signal' || sub === 'questions') {
+      const claim = claimFromCookie();
+      if (!claim) { sendJson(res, 401, { error: 'registration_required' }); return true; }
+      if (!jsonLimiter.allow(`${key}:${claim.registrationId}`, now())) { sendJson(res, 429, { error: 'slow_down' }); return true; }
+      if (sub === 'state' && method === 'GET') {
+        const a = await svc.attendee(key, claim);
+        if (!a) { sendJson(res, 401, { error: 'registration_required' }); return true; }
+        const pb = svc.playback(a.event.event);
+        sendJson(res, 200, {
+          state: pb.room.state, label: pb.room.label, message: pb.room.message, playMode: pb.room.playMode, seekable: pb.room.seekable,
+          offsetSeconds: pb.room.offsetSeconds, opensAt: pb.room.opensAt, startsAt: pb.room.startsAt, endsAt: pb.room.endsAt, replayUntil: pb.room.replayUntil,
+          sessionStartedAt: a.event.event.sessionStartedAt, hlsUrl: pb.hlsUrl, expiresAt: pb.expiresAt, cta: pb.cta, serverNow: pb.serverNow,
+        });
+        return true;
+      }
+      if (sub === 'signal' && method === 'POST') {
+        if (!sameOrigin(req)) { sendJson(res, 403, { error: 'cross_site' }); return true; }
+        let payload: Record<string, unknown> = {};
+        try { payload = JSON.parse(await body(req, 1024)) as Record<string, unknown>; } catch { /* invalid */ }
+        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null);
+        const ok = await svc.signal(key, claim, String(payload.kind ?? ''), String(payload.mode ?? ''), num(payload.from), num(payload.to));
+        sendJson(res, 200, { recorded: ok });
+        return true;
+      }
+      if (sub === 'questions' && method === 'GET') { sendJson(res, 200, { questions: await svc.publicQuestions(key, claim) }); return true; }
+      if (sub === 'questions' && method === 'POST') {
+        if (!sameOrigin(req)) { sendJson(res, 403, { error: 'cross_site' }); return true; }
+        let payload: Record<string, unknown> = {};
+        try { payload = JSON.parse(await body(req, 4096)) as Record<string, unknown>; } catch { /* invalid */ }
+        const outcome = await svc.ask(key, claim, String(payload.body ?? ''));
+        sendJson(res, outcome === 'accepted' ? 200 : outcome === 'rate_limited' ? 429 : 400, { outcome });
+        return true;
+      }
+      return false;
+    }
+
     const loaded = await svc.publicEvent(key);
     if (!loaded) { sendHtml(res, 404, '<!doctype html><title>Not found</title><p>This webinar link is not available.</p>'); return true; }
     const { event, brand } = loaded;
-    const cookieName = accessCookieName(key);
-    const claimFromCookie = (): AccessClaim | null => (secret ? readAccessToken(secret, key, cookies(req).get(cookieName)) : null);
-    const attendee = async () => {
-      const claim = claimFromCookie();
-      if (!claim) return null;
-      const a = await svc.attendee(key, claim);
-      return a ? { claim, ...a } : null;
-    };
 
     // ── registration ──
     if (sub === '' && method === 'GET') {
@@ -212,7 +250,7 @@ export async function handleWebinarPublic(req: IncomingMessage, res: ServerRespo
       const a = await attendee();
       if (!a) { redirect(res, `/w/${key}`); return true; }
       sendHtml(res, 200, confirmationPage({ event, brand, roomPath: `/w/${key}/room`, calendarPath: event.startsAt && event.kind !== 'on_demand' ? `/w/${key}/calendar.ics` : null,
-        emailMode: svc.config.emailMode, nowMs: now() }));
+        emailed: svc.config.emailMode === 'live' && svc.config.senders.has(event.workspaceId.toLowerCase()), nowMs: now() }));
       return true;
     }
     if (sub === 'link') {
@@ -248,43 +286,6 @@ export async function handleWebinarPublic(req: IncomingMessage, res: ServerRespo
       await svc.signal(key, a.claim, 'room_accessed', 'waiting', null, null).catch(() => false);
       sendHtml(res, 200, roomPage({ event, brand, attendeeName: a.name }));
       return true;
-    }
-    if (sub === 'state' && method === 'GET') {
-      if (!jsonLimiter.allow(`${client}:state`, now())) { sendJson(res, 429, { error: 'slow_down' }); return true; }
-      const a = await attendee();
-      if (!a) { sendJson(res, 401, { error: 'registration_required' }); return true; }
-      const pb = svc.playback(a.event.event);
-      sendJson(res, 200, {
-        state: pb.room.state, label: pb.room.label, message: pb.room.message, playMode: pb.room.playMode, seekable: pb.room.seekable,
-        offsetSeconds: pb.room.offsetSeconds, opensAt: pb.room.opensAt, startsAt: pb.room.startsAt, endsAt: pb.room.endsAt, replayUntil: pb.room.replayUntil,
-        sessionStartedAt: a.event.event.sessionStartedAt, hlsUrl: pb.hlsUrl, expiresAt: pb.expiresAt, cta: pb.cta, serverNow: pb.serverNow,
-      });
-      return true;
-    }
-    if (sub === 'signal' && method === 'POST') {
-      if (!sameOrigin(req)) { sendJson(res, 403, { error: 'cross_site' }); return true; }
-      if (!jsonLimiter.allow(`${client}:signal`, now())) { sendJson(res, 429, { error: 'slow_down' }); return true; }
-      const a = claimFromCookie();
-      if (!a) { sendJson(res, 401, { error: 'registration_required' }); return true; }
-      let payload: Record<string, unknown> = {};
-      try { payload = JSON.parse(await body(req, 1024)) as Record<string, unknown>; } catch { /* invalid */ }
-      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null);
-      const ok = await svc.signal(key, a, String(payload.kind ?? ''), String(payload.mode ?? ''), num(payload.from), num(payload.to));
-      sendJson(res, 200, { recorded: ok });
-      return true;
-    }
-    if (sub === 'questions') {
-      const a = claimFromCookie();
-      if (!a) { sendJson(res, 401, { error: 'registration_required' }); return true; }
-      if (method === 'GET') { sendJson(res, 200, { questions: await svc.publicQuestions(key, a) }); return true; }
-      if (method === 'POST') {
-        if (!sameOrigin(req)) { sendJson(res, 403, { error: 'cross_site' }); return true; }
-        let payload: Record<string, unknown> = {};
-        try { payload = JSON.parse(await body(req, 4096)) as Record<string, unknown>; } catch { /* invalid */ }
-        const outcome = await svc.ask(key, a, String(payload.body ?? ''));
-        sendJson(res, outcome === 'accepted' ? 200 : outcome === 'rate_limited' ? 429 : 400, { outcome });
-        return true;
-      }
     }
     if (sub === 'calendar.ics' && method === 'GET') {
       const token = url.searchParams.get('t');

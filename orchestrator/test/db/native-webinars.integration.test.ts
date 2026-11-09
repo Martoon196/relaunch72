@@ -204,6 +204,35 @@ test('0144 native webinars: brand isolation, registration, reminders, signals, Q
     // ── access token is bound to the event key ──
     const token = issueAccessToken(config.accessSecret!, key, claim1);
     assert.ok(token.startsWith(r1.registrationId!));
+
+    // ── a longer recording for the same live input replaces a shorter fragment, never the reverse ──
+    const longer = randomUUID().replace(/-/g, '');
+    assert.equal(await svc.streamNotification(createHash('sha256').update(`rec-long-${longer}`).digest(), { uid: longer, liveInput: withInput.liveInputUid, state: 'ready', readyToStream: true, duration: 3550, errorReason: null }), 'applied');
+    assert.equal((await svc.get(a.owner, req(), id)).event.recordingUid, longer, 'the longer recording became the replay');
+    const shorter = randomUUID().replace(/-/g, '');
+    assert.equal(await svc.streamNotification(createHash('sha256').update(`rec-short-${shorter}`).digest(), { uid: shorter, liveInput: withInput.liveInputUid, state: 'ready', readyToStream: true, duration: 120, errorReason: null }), 'applied');
+    assert.equal((await svc.get(a.owner, req(), id)).event.recordingUid, longer, 'a shorter fragment does not displace it');
+    assert.equal((await jobs()).filter((j) => j.purpose === 'replay_available').length, 3, 'replay notices are not re-queued by the replacement');
+
+    // ── registering for the replay after the event still queues a sendable confirmation ──
+    await admin.query('UPDATE app.webinar_events SET capacity = NULL WHERE id = $1', [id]);
+    const late = await svc.register(key, { email: 'allowed@example.test'.replace('allowed', 'late-allowed'), name: 'Late Lou', answers: {}, marketing: true, consent, attribution: {} });
+    assert.equal(late.outcome, 'created');
+    const lateJob = (await admin.query("SELECT state, expires_at FROM app.webinar_jobs WHERE registration_id = $1 AND purpose = 'confirmation'", [late.registrationId])).rows[0];
+    assert.equal(lateJob.state, 'queued');
+    assert.ok(Date.parse(lateJob.expires_at.toISOString()) > clock + 24 * 3600_000, 'confirmation outlives the event end');
+    await worker.tick();
+    assert.equal((await admin.query("SELECT state FROM app.webinar_jobs WHERE registration_id = $1 AND purpose = 'confirmation'", [late.registrationId])).rows[0].state, 'blocked',
+      'test mode blocks the unlisted recipient; it was not expired before it could be considered');
+
+    // ── CRM handoff carries the explicit marketing opt-in and nothing more ──
+    const crmAfter = await svc.sendToCrm(a.owner, req(), id);
+    assert.equal(crmAfter.linked, 1);
+    const consentRows = await admin.query(`SELECT r.marketing_consent, cp.consent_status FROM app.webinar_registrations r
+      JOIN app.contact_points cp ON cp.workspace_id = r.workspace_id AND cp.contact_id = r.crm_contact_id AND cp.kind = 'email'
+      WHERE r.event_id = $1 ORDER BY r.created_at`, [id]);
+    assert.deepEqual(consentRows.rows.map((r) => [r.marketing_consent, r.consent_status]),
+      [[false, 'unknown'], [true, 'opted_in'], [false, 'unknown'], [true, 'opted_in']], 'opt-in travels; anything else stays unknown');
   } finally {
     await content.end();
     await crmPool.end();

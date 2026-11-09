@@ -253,8 +253,8 @@ BEGIN
     INSERT INTO app.webinar_jobs (workspace_id, event_id, registration_id, kind, purpose, dedupe_key, schedule_version, run_after, expires_at)
     VALUES (p_workspace, p_event, p_registration, 'message', 'confirmation',
       'msg:' || p_registration::text || ':confirmation', e.schedule_version, p_now,
-      CASE WHEN e.starts_at IS NULL THEN p_now + interval '2 days'
-           ELSE e.starts_at + make_interval(mins => e.duration_minutes) END)
+      -- Someone registering for the replay after the event still gets their link.
+      GREATEST(p_now + interval '2 days', coalesce(e.starts_at + make_interval(mins => e.duration_minutes), p_now)))
     ON CONFLICT (workspace_id, dedupe_key) DO NOTHING;
     GET DIAGNOSTICS inserted = ROW_COUNT; n := n + inserted;
   END IF;
@@ -500,7 +500,8 @@ BEGIN
   END IF;
 
   -- Recording of a live input bound to a webinar. A recording only becomes the replay
-  -- once the host has ended the session; a mid-session reconnect produces a partial file.
+  -- once the host has ended the session; a mid-session reconnect produces a partial file,
+  -- so a longer ready recording for the same input always replaces a shorter one.
   IF p_live_input_uid IS NULL THEN RETURN jsonb_build_object('outcome', 'unbound'); END IF;
   SELECT * INTO e FROM app.webinar_events WHERE live_input_uid = p_live_input_uid FOR UPDATE;
   IF NOT FOUND THEN RETURN jsonb_build_object('outcome', 'unbound'); END IF;
@@ -512,7 +513,8 @@ BEGIN
     recording_duration_seconds = CASE WHEN p_ready AND p_duration >= 0 THEN p_duration ELSE recording_duration_seconds END,
     row_version = row_version + 1, updated_at = clock_timestamp()
    WHERE workspace_id = e.workspace_id AND id = e.id
-     AND (recording_uid IS NULL OR recording_uid = p_video_uid OR recording_state <> 'ready');
+     AND (recording_uid IS NULL OR recording_uid = p_video_uid OR recording_state <> 'ready'
+          OR (p_ready AND p_duration > coalesce(recording_duration_seconds, 0)));
   IF became_ready AND e.status = 'published' AND coalesce((e.settings -> 'replay' ->> 'enabled')::boolean, false) THEN
     FOR r IN SELECT id FROM app.webinar_registrations WHERE workspace_id = e.workspace_id AND event_id = e.id AND status = 'registered' LOOP
       INSERT INTO app.webinar_jobs (workspace_id, event_id, registration_id, kind, purpose, dedupe_key, schedule_version, run_after, expires_at)

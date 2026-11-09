@@ -7,6 +7,7 @@ import { composeMessage, deliveryDecision } from '../src/webinars/messages.js';
 import { computeRoomState, utcToLocalInput, zonedToUtc } from '../src/webinars/schedule.js';
 import { CloudflareStreamClient, liveConnection, verifyStreamWebhook, StreamError } from '../src/webinars/stream.js';
 import { DEFAULT_SETTINGS, readSettings, toEvent, type WebinarEvent, type WebinarSettings } from '../src/webinars/types.js';
+import { PgWebinarService } from '../src/webinars/service.js';
 
 const UID_A = 'a'.repeat(32);
 const UID_B = 'b'.repeat(32);
@@ -257,4 +258,24 @@ test('brand accents produce WCAG AA text and button colours, however bright the 
   }
   assert.equal(accentPalette('#00e5cc').onAccent, '#111827', 'dark text on bright teal');
   assert.equal(accentPalette('#00e5cc').accent, '#00e5cc', 'the brand colour itself is unchanged');
+});
+
+test('attendee polls reuse one signed playback token until it nears expiry', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const stream = new CloudflareStreamClient({ accountId: 'f'.repeat(32), apiToken: 'synthetic', customerCode: 'synthetic01', signingKeyId: 'kid1',
+    signingJwk: privateKey.export({ format: 'jwk' }) as JsonWebKey, webhookSecret: null }, (async () => Response.json({})) as typeof fetch);
+  let clock = Date.parse('2026-11-25T19:05:00Z');
+  const service = new PgWebinarService({ pool: {} as never, config: loadWebinarConfig({}), stream, now: () => clock });
+  const live = event({ sessionState: 'live', liveState: 'connected' });
+  const first = service.playback(live);
+  clock += 5 * 60_000;
+  const second = service.playback(live);
+  assert.equal(second.hlsUrl, first.hlsUrl, 'five minutes later the same token is served');
+  assert.equal(second.expiresAt, first.expiresAt);
+  clock += 36 * 60_000; // 41 minutes in: fewer than 20 remain
+  const third = service.playback(live);
+  assert.notEqual(third.hlsUrl, first.hlsUrl, 'a fresh token once fewer than 20 minutes remain');
+  assert.ok(Date.parse(third.expiresAt!) > Date.parse(first.expiresAt!));
+  const other = service.playback(event({ sessionState: 'ended', sessionEndedAt: '2026-11-25T20:00:00Z', recordingState: 'ready', recordingUid: UID_B }));
+  assert.notEqual(other.hlsUrl, third.hlsUrl, 'tokens are per video');
 });

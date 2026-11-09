@@ -210,3 +210,10 @@ export function loadWebinarConfig(env: NodeJS.ProcessEnv = process.env): Webinar
 export function publicOriginFor(config: WebinarConfig, workspaceId: string): string | null {
   return config.workspaceOrigins.get(workspaceId.toLowerCase()) ?? config.defaultPublicOrigin;
 }
+
+/** Hostnames our playback pages are served from for a brand; used for Stream allowedOrigins. */
+export function playbackHosts(config: WebinarConfig, workspaceId: string): string[] {
+  const hosts = new Set<string>();
+  for (const o of [publicOriginFor(config, workspaceId), config.defaultPublicOrigin]) if (o) hosts.add(new URL(o).hostname);
+  return [...hosts];
+}

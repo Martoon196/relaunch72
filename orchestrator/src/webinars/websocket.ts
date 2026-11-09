@@ -53,7 +53,9 @@ export function encodeFrame(opcode: number, payload: Buffer, mask?: Buffer): Buf
 }
 
 export class WebSocketConnection {
-  private buffer: Buffer = Buffer.alloc(0);
+  /** Received bytes not yet parsed; joined only when a whole frame is present (linear, not quadratic). */
+  private chunks: Buffer[] = [];
+  private pending = 0;
   private fragments: Buffer[] = [];
   private fragmentOpcode = 0;
   private fragmentSize = 0;
@@ -99,7 +101,8 @@ export class WebSocketConnection {
   private finish(code: number, reason: string): void {
     if (this.closed) return;
     this.closed = true;
-    this.buffer = Buffer.alloc(0);
+    this.chunks = [];
+    this.pending = 0;
     this.fragments = [];
     this.handlers.onClose(code, reason);
     setTimeout(() => this.socket.destroy(), 1000).unref();
@@ -109,31 +112,50 @@ export class WebSocketConnection {
     this.close(code, reason);
   }
 
+  /** The first `n` pending bytes as one buffer (joins chunks only when the first one is too short). */
+  private head(n: number): Buffer {
+    if (this.chunks[0]!.length >= n || this.chunks.length === 1) return this.chunks[0]!;
+    const joined = Buffer.concat(this.chunks);
+    this.chunks = [joined];
+    return joined;
+  }
+
+  /** Removes and returns the first `n` pending bytes. */
+  private take(n: number): Buffer {
+    const joined = this.head(n);
+    this.pending -= n;
+    if (joined.length === n) { this.chunks.shift(); return joined; }
+    this.chunks[0] = joined.subarray(n);
+    return joined.subarray(0, n);
+  }
+
   private receive(chunk: Buffer): void {
-    if (this.closed) return;
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
+    if (this.closed || chunk.length === 0) return;
+    this.chunks.push(chunk);
+    this.pending += chunk.length;
     for (;;) {
-      if (this.buffer.length < 2) return;
-      const b0 = this.buffer[0]!, b1 = this.buffer[1]!;
+      if (this.pending < 2) return;
+      const h = this.head(Math.min(14, this.pending));
+      const b0 = h[0]!, b1 = h[1]!;
       const fin = (b0 & 0x80) !== 0, opcode = b0 & 0x0f, masked = (b1 & 0x80) !== 0;
       if (b0 & 0x70) return this.fail(1002, 'reserved bits set');
       if (!masked) return this.fail(1002, 'client frames must be masked');
       let len = b1 & 0x7f, offset = 2;
       if (len === 126) {
-        if (this.buffer.length < 4) return;
-        len = this.buffer.readUInt16BE(2); offset = 4;
+        if (this.pending < 4) return;
+        len = h.readUInt16BE(2); offset = 4;
       } else if (len === 127) {
-        if (this.buffer.length < 10) return;
-        const big = this.buffer.readBigUInt64BE(2);
+        if (this.pending < 10) return;
+        const big = h.readBigUInt64BE(2);
         if (big > BigInt(this.limits.maxFrame)) return this.fail(1009, 'frame too large');
         len = Number(big); offset = 10;
       }
       if (len > this.limits.maxFrame) return this.fail(1009, 'frame too large');
-      if (this.buffer.length < offset + 4 + len) return;
-      const mask = this.buffer.subarray(offset, offset + 4);
-      const payload = Buffer.from(this.buffer.subarray(offset + 4, offset + 4 + len));
+      if (this.pending < offset + 4 + len) return;
+      const frame = this.take(offset + 4 + len);
+      const mask = frame.subarray(offset, offset + 4);
+      const payload = Buffer.from(frame.subarray(offset + 4, offset + 4 + len));
       for (let i = 0; i < payload.length; i++) payload[i] = payload[i]! ^ mask[i % 4]!;
-      this.buffer = this.buffer.subarray(offset + 4 + len);
       if (opcode >= 0x8) {
         if (!fin || len > 125) return this.fail(1002, 'invalid control frame');
         if (opcode === 0x8) {

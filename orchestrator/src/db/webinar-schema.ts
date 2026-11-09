@@ -5,4 +5,4 @@
  * WEBINARS_MIGRATION, re-pin WEBINARS_CHECKSUM and re-run the migration contract tests.
  */
 export const WEBINARS_MIGRATION = '0144_native_webinars.sql';
-export const WEBINARS_CHECKSUM = '291934db5265d9e6d74cd336598f8731130a2b4869819067aac87ae96de01159';
+export const WEBINARS_CHECKSUM = 'dea9e16c2743b58b5901f95be06abcfc39d2237dc087b1c949478eb17357f3af';

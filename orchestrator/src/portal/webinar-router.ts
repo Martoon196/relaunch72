@@ -336,7 +336,8 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
       return true;
     }
     if (method === 'POST' && sub === 'upload') {
-      const body = JSON.parse(await readBody(req, 4096)) as { bytes?: unknown; name?: unknown };
+      let body: { bytes?: unknown; name?: unknown };
+      try { body = JSON.parse(await readBody(req, 4096)) as typeof body; } catch { throw new WebinarError(400, 'The upload request was not readable. Reload the page and try again.'); }
       json(res, 200, await service.beginUpload(identity, input.requestId, id, Number(body.bytes), String(body.name ?? 'video')));
       return true;
     }

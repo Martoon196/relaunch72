@@ -147,6 +147,10 @@ test('0144 native webinars over HTTP: menu, management, brand isolation, attende
     assert.equal(repeat.setCookie.length, 0, 'typing a registered address never grants that attendee access');
     assert.match(repeat.text, /already registered/);
 
+    const confirmation = await ann.go(`/w/${publicKey}/registered`);
+    assert.match(confirmation.text, /Get your link again/);
+    assert.doesNotMatch(confirmation.text, /We've emailed your personal link/, 'test mode never claims a delivery');
+
     // ── room: honest waiting state, nothing secret ──
     const room = await ann.go(`/w/${publicKey}/room`);
     assert.equal(room.status, 200);
@@ -155,6 +159,13 @@ test('0144 native webinars over HTTP: menu, management, brand isolation, attende
     assert.deepEqual([state.state, state.hlsUrl, state.cta], ['not_started', null, null]);
     assert.equal((await anon.go(`/w/${publicKey}/state`)).status, 401);
     assert.equal((await anon.go(`/w/${publicKey}/room`)).status, 401);
+
+    // Polling is limited per registration, so one office NAT never starves the room.
+    const burst = await Promise.all(Array.from({ length: 245 }, () => ann.go(`/w/${publicKey}/state`)));
+    assert.ok(burst.some((r) => r.status === 429), 'one registration hammering the endpoint is slowed');
+    const carol = new Browser(h.origin);
+    await carol.go(`/w/${publicKey}/register`, { form: { name: 'Carol', email: 'carol@example.test' } });
+    assert.equal((await carol.go(`/w/${publicKey}/state`)).status, 200, 'another registration from the same address is unaffected');
 
     // A cookie for one webinar opens nothing else: create Bravo's webinar and present Ann's cookie there.
     const bravoCreated = await other.go('/portal/webinars', { form: { ...form, title: 'Bravo briefing', _csrf: csrf(bravo.owner.sessionToken) } });
