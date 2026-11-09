@@ -123,7 +123,8 @@ export class GroupHqInboxCrmService {
         throw new InboxCrmError(403,'forbidden_scope');
       }
       const thread = input.action === 'whatsappThreads' ? undefined : uuid(input.threadId);
-      const cursor = thread && input.cursor != null ? uuid(input.cursor) : undefined;
+      const cursor = input.cursor == null ? undefined :
+        input.action === 'whatsappThreads' ? text(input.cursor,180) : uuid(input.cursor);
       const actorId=scope.whatsappOwnerIds?.[actorEmail] ?? scope.ownerUserId;
       const ownerContext=requestDatabaseContext({workspaceId:scope.workspaceId,userId:actorId,requestId});
       const result = await readOwnerWhatsapp(this.readPool, ownerContext, actorEmail, inboxId, thread, cursor);

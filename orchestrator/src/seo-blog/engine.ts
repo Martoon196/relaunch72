@@ -1160,7 +1160,10 @@ export class SeoBlogEngine {
           const m=s.article.campaignGeneration;
           if(!m||m.nonce!==receipt.nonce||!m.startedAt)throw new SeoBlogError(409,'Copy receipt identity changed.');
           if(m.receipt)return {article:s.article};
-          return {article:{...s.article,campaignGeneration:{...m,receipt}},usage:{brandId:brand.id,kind:'model_tokens',amount:receipt.record.tokensIn+receipt.record.tokensOut,at:receipt.at,reference:`promotion:${s.article.id}:${m.plannedVersionId}`}};
+          // 0139 meters rejected private-method receipts atomically. Preserve
+          // that actual usage without charging it again in this boundary.
+          const alreadyMetered=receipt.result.kind==='rejected'&&!!receipt.record.methodReceiptId;
+          return {article:{...s.article,campaignGeneration:{...m,receipt}},...(alreadyMetered?{}:{usage:{brandId:brand.id,kind:'model_tokens' as const,amount:receipt.record.tokensIn+receipt.record.tokensOut,at:receipt.at,reference:`promotion:${s.article.id}:${m.plannedVersionId}`}})};
         });
         // Retry persistence only, using the same known result. Never repeat LLM work.
         try{article=await save();}catch{article=await save();}

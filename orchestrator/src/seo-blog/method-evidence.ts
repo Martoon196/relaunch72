@@ -70,7 +70,7 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
   const context=methodEvidenceContext(profile,inputs),catalogue=selectionCatalogue(packs);
   const references=new Map(context.factReferences.map(r=>[r.id,r.text]));
   for(const s of context.research){references.set(s.id,s.passage);references.set(s.shortId,s.passage);}
-  const prose=JSON.stringify(asset),ledger=array(d.claimLedger)?d.claimLedger:[];
+  const prose=JSON.stringify(asset),ledger=array(d.claimLedger)?d.claimLedger:[],unsupportedNumbers:{index:number;numbers:string[]}[]=[];
   if(!array(d.claimLedger))problems.push('A concrete claim ledger is required.');
   else for(const [index,row] of d.claimLedger.entries()){
     if(!record(row)||!text(row.text)||!prose.includes(JSON.stringify(row.text).slice(1,-1))||!array(row.references)||!row.references.length||!row.references.every((r:unknown)=>typeof r==='string'&&references.has(r))){
@@ -79,12 +79,14 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
     }
     const evidence=row.references.map((r:string)=>references.get(r)).join(' ');
     const numbers=row.text.match(/\b\d+(?:[.,]\d+)*(?:%|\b)/g)??[];
-    if(numbers.some((n:string)=>!evidence.includes(n)))problems.push('A numerical claim is not present in its referenced evidence.');
+    const unsupported=numbers.filter((n:string)=>!evidence.includes(n));
+    if(unsupported.length)unsupportedNumbers.push({index,numbers:[...new Set<string>(unsupported)].slice(0,8)});
   }
+  if(unsupportedNumbers.length)problems.push(`A numerical claim is not present in its referenced evidence at these claimLedger rows: ${JSON.stringify(unsupportedNumbers.slice(0,8))}. Remove unsupported figures, including illustrative examples; private reference IDs belong only in the sidecar.`);
   // Numeric claims need ledger coverage; ignore URL identifiers and structural field names.
   const visible=JSON.stringify(asset,(_k,v)=>typeof v==='string'?v.replace(/https?:\/\/\S+/g,''):v);
-  for(const number of visible.match(/(?:£|\$|€)\s*\d[\d,.]*|\b\d+(?:\.\d+)?%/g)??[])
-    if(!ledger.some((r:any)=>typeof r?.text==='string'&&r.text.includes(number)))problems.push('A monetary or percentage claim has no ledger entry.');
+  const uncovered=(visible.match(/(?:£|\$|€)\s*\d[\d,.]*|\b\d+(?:\.\d+)?%/g)??[]).filter(number=>!ledger.some((r:any)=>typeof r?.text==='string'&&r.text.includes(number)));
+  if(uncovered.length)problems.push(`A monetary or percentage claim has no ledger entry: ${JSON.stringify([...new Set(uncovered)].slice(0,12))}. Omit unsupported figures rather than inventing support.`);
   if(!array(d.sourceAssessments))problems.push('Source assessments are required, even if empty.');
   else {
     for(const assessment of d.sourceAssessments){

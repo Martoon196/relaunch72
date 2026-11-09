@@ -47,12 +47,12 @@ test('MHP direct inbox: signed first contact, real owner reply, once-only worker
    } catch(e) {await client.query('ROLLBACK');throw e;} finally {client.release();}
   }
   const receivedAt=new Date(Date.now()-2000),payload=randomBytes(32),signature=randomBytes(32);
-  function incoming(id:string,body:string,phone=sender,isStop=false) {
+  function incoming(id:string,body:string,phone=sender,isStop=false,occurredAt:Date|string=receivedAt) {
    const ext='whatsapp-message:'+id,shaSender=digest(phone),shaBody=digest(body);
    const identity=digest([ext,id,shaSender.toString('hex'),shaBody.toString('hex'),payload.toString('hex'),signature.toString('hex')].join('\x1f'));
    const fn=isStop?'mhp_record_event_whatsapp_inbound':'record_whatsapp_live_inbound_projection';
    return call(0,'SELECT * FROM app_private.'+fn+'($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-    [workspace,binding,ext,id,phone,body,shaSender,shaBody,payload,signature,identity,receivedAt]);
+    [workspace,binding,ext,id,phone,body,shaSender,shaBody,payload,signature,identity,occurredAt]);
   }
   const firstId='wamid.'+randomUUID();
   const [first]=await incoming(firstId,'MHP test from unlinked number');
@@ -97,6 +97,27 @@ test('MHP direct inbox: signed first contact, real owner reply, once-only worker
   assert.equal((await ownerRead())?.canReply,false);
   assert.deepEqual(await begin(),[]);
   assert.equal((await history()).at(-1)?.reply_state,'expired');
+  // All 103 arrivals share one sub-millisecond timestamp. Every tie must survive the page boundary.
+  const at=receivedAt.toISOString().replace('Z','777Z');
+  const created=new Set<string>([thread]);
+  for(let i=0;i<103;i++) {
+    const [event]=await incoming('wamid.'+randomUUID(),'Archive fixture','44770091'+String(i).padStart(4,'0'),false,at);
+    created.add(event.conversation_id);
+  }
+  const list=(cursor?:string)=>readOwnerWhatsapp(pools[1]!,ctx,'martin.howard1984@gmail.com',inbox,undefined,cursor);
+  const firstPage=await list();
+  assert.equal(firstPage?.threads?.length,100);
+  assert.equal(firstPage?.hasMore,true);
+  assert.equal(typeof firstPage?.nextCursor,'string');
+  const position=firstPage!.nextCursor!;
+  const secondPage=await list(position);
+  assert.equal(secondPage?.hasMore,false);
+  assert.equal(secondPage?.nextCursor,null);
+  const ids=[...firstPage!.threads!,...secondPage!.threads!].map(r=>r.id);
+  assert.equal(ids.length,new Set(ids).size);
+  for(const id of created) assert.ok(ids.includes(id));
+  const foreign=Buffer.from(Buffer.from(position,'base64url').toString('utf8').replace(inbox,randomUUID())).toString('base64url');
+  assert.equal(await list(foreign),null);
  } finally {
   await Promise.all(pools.map(p=>p.end()));
   try {for(const role of roles) await owner.query('ALTER ROLE '+role+' PASSWORD NULL');} finally {await owner.end();}
