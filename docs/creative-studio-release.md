@@ -50,7 +50,7 @@ Only one migration is added. All applied migrations 0001–0143 are byte-identic
 | File | SHA-256 | State |
 |---|---|---|
 | `0143_mhp_whatsapp_direct_inbox.sql` (canonical, unchanged) | `69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e` | applied in canonical |
-| `0144_creative_studio_library.sql` | `79f92a7d7091cc98d6b63235c57e8cdfac2951afeb131ec4226f5e07adb5a535` | **unapplied**; pinned as `CREATIVE_STUDIO_CHECKSUM` in `orchestrator/src/db/creative-studio-schema.ts` |
+| `0144_creative_studio_library.sql` | `175ab07846ded391e5fc36bf39d1bd1fd64f905e210508daf39f837ed15e2fe3` | **unapplied**; pinned as `CREATIVE_STUDIO_CHECKSUM` in `orchestrator/src/db/creative-studio-schema.ts` |
 
 0144 is additive: new tables, functions, grants and policies. It replaces four functions in place:
 
@@ -115,10 +115,12 @@ A fresh full bootstrap at this head applies 144 migrations, the last being `0144
 
 - exactly one (synthetic) provider call, made only after the worker picked up the job;
 - one usage debit;
-- the render request returned in about 0.4 s;
+- the render request returned in about 0.35 s;
 - the worker recorded and playback-checked a 1080×1920, 10.5 s MP4 in about 15 s, and it played in the browser;
 - an enquiry created one contact and one opportunity, and no touch (its tags matched no issued link);
 - no console errors.
+
+The walkthrough was re-run after the audit fixes (head `ce19e27`'s source); the screens below are from that run.
 
 **Screens:**
 

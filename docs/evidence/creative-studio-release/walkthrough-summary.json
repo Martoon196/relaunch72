@@ -10,7 +10,7 @@
     "bytes": 347791
   },
   "generatedBackgroundChecked": true,
-  "renderRequestMs": 349,
+  "renderRequestMs": 351,
   "renderTick": {
     "jobs": 1,
     "brands": 0
@@ -19,13 +19,13 @@
     "jobs": 1,
     "brands": 0
   },
-  "videoWorkerMs": 15359,
+  "videoWorkerMs": 15444,
   "video": {
-    "duration": 10.470567,
+    "duration": 10.470133,
     "width": 1080,
     "height": 1920,
     "played": true,
-    "src": "f3313a597198210d37e86f5540b9af06251be92bf207a217a907605102a7d844.mp4"
+    "src": "9c392364192f08c00fce2730421805df2e5ca68ded9b1fd49d8cc2b824dcb2d4.mp4"
   },
   "notice": "Video rendered and verified as playable. Review it before approving.",
   "enquiry": {
@@ -51,15 +51,15 @@
   "jobs": [
     {
       "state": "done",
-      "progress": "Storyboard drafted from this concept. It is a plan, not a video; review the scenes, then render."
-    },
-    {
-      "state": "done",
       "progress": "New image generated and saved privately. Review it and create artwork from it."
     },
     {
       "state": "done",
       "progress": "Images created for review."
+    },
+    {
+      "state": "done",
+      "progress": "Storyboard drafted from this concept. It is a plan, not a video; review the scenes, then render."
     },
     {
       "state": "done",
