@@ -24,6 +24,26 @@ function uuid(value: unknown): string {
   if (!UUID.test(parsed)) throw new InboxCrmError(400, 'invalid_request');
   return parsed;
 }
+const LEADS_PAGE_MAX = 200;
+const CURSOR_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/u;
+interface LeadCursor { updatedAt: string; id: string }
+/** Keyset position in a brand's contacts, newest change first. Opaque to Growth HQ; refused unless well formed. */
+function leadCursor(value: unknown): LeadCursor {
+  const raw = text(value, 256);
+  if (!/^[A-Za-z0-9_-]{4,256}$/u.test(raw)) throw new InboxCrmError(400, 'invalid_cursor');
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')); } catch { throw new InboxCrmError(400, 'invalid_cursor'); }
+  if (!record(parsed) || typeof parsed.updatedAt !== 'string' || !CURSOR_TIME.test(parsed.updatedAt)
+      || !Number.isFinite(Date.parse(parsed.updatedAt)) || typeof parsed.id !== 'string' || !UUID.test(parsed.id)) {
+    throw new InboxCrmError(400, 'invalid_cursor');
+  }
+  return { updatedAt: parsed.updatedAt, id: parsed.id.toLowerCase() };
+}
+interface LeadRow extends Record<string, unknown> {
+  id: string; name: string; source: string | null; lifecycle: string; created_at: Date; updated_at: Date; cursor_updated_at: string;
+  opportunity_status: string | null; stage_name: string | null; stage_position: number | null; value_minor: string | number | null;
+  currency: string | null; closed_at: Date | null; stage_changed_at: Date | null;
+}
 export class InboxCrmError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
@@ -162,6 +182,43 @@ export class GroupHqInboxCrmService {
            AND deleted_at IS NULL AND lifecycle_status<>'archived' AND position(lower($1) in lower(display_name))>0
           ORDER BY display_name,id LIMIT 20`, [query]);
         return { contacts: result.rows, workspaceId: scope.workspaceId };
+      });
+    }
+    if (input.action === 'leads') {
+      // Read only: every contact of this brand's workspace with where its latest opportunity stands, so the
+      // Growth HQ sales board can place it. An open opportunity is preferred over a closed one. No contact
+      // points, notes or message text leave the CRM here.
+      const cursor = input.cursor == null ? null : leadCursor(input.cursor);
+      const limit = input.limit == null ? LEADS_PAGE_MAX : input.limit;
+      if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > LEADS_PAGE_MAX) throw new InboxCrmError(400, 'invalid_request');
+      return this.runner.run(context, async tx => {
+        const result = await tx.query<LeadRow>(`/* group-hq.inbox.leads */
+          SELECT c.id, c.display_name AS name, c.source, c.lifecycle_status AS lifecycle, c.created_at, c.updated_at,
+            to_char(c.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_updated_at,
+            o.status AS opportunity_status, o.stage_name, o.stage_position, o.value_minor, o.currency, o.closed_at,
+            o.stage_changed_at
+          FROM app.contacts c
+          LEFT JOIN LATERAL (
+            SELECT op.status, s.name AS stage_name, s.position AS stage_position, op.value_minor, op.currency, op.closed_at,
+              COALESCE((SELECT max(h.changed_at) FROM app.opportunity_stage_history h
+                WHERE h.workspace_id=op.workspace_id AND h.opportunity_id=op.id), op.created_at) AS stage_changed_at
+            FROM app.opportunities op JOIN app.pipeline_stages s ON s.workspace_id=op.workspace_id AND s.id=op.stage_id
+            WHERE op.workspace_id=c.workspace_id AND op.contact_id=c.id
+            ORDER BY (op.status='open') DESC, op.updated_at DESC, op.id DESC LIMIT 1) o ON true
+          WHERE c.workspace_id=app_private.current_workspace_id() AND c.deleted_at IS NULL
+            AND ($1::timestamptz IS NULL OR (c.updated_at,c.id)<($1::timestamptz,$2::uuid))
+          ORDER BY c.updated_at DESC, c.id DESC LIMIT $3`, [cursor?.updatedAt ?? null, cursor?.id ?? null, limit + 1]);
+        const rows = result.rows.slice(0, limit);
+        const last = rows.at(-1);
+        const iso = (value: Date | null): string | null => value instanceof Date ? value.toISOString() : null;
+        return { brand, workspaceId: scope.workspaceId,
+          leads: rows.map(row => ({ id: row.id, name: row.name, source: row.source, lifecycle: row.lifecycle,
+            createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+            opportunity: row.opportunity_status === null ? null : { status: row.opportunity_status, stage: row.stage_name,
+              stagePosition: row.stage_position, valueMinor: Number(row.value_minor ?? 0), currency: row.currency,
+              stageChangedAt: iso(row.stage_changed_at), closedAt: iso(row.closed_at) } })),
+          nextCursor: result.rows.length > limit && last
+            ? Buffer.from(JSON.stringify({ updatedAt: last.cursor_updated_at, id: last.id })).toString('base64url') : null };
       });
     }
     const origin = source(input.source);

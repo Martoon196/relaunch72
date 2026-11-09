@@ -97,6 +97,33 @@ test('search stays in the selected native workspace and treats wildcard input li
   const result=await new GroupHqInboxCrmService(pool(),runner,config).execute({...input,action:'search',query:'%_'}) as {contacts:unknown[]};
   assert.equal(result.contacts.length,1);assert.match(JSON.stringify(seen),/current_workspace_id/);assert.match(JSON.stringify(seen),/%_/);
 });
+test('leads lists one workspace by keyset, prefers the open opportunity and leaks no contact points',async()=>{
+  const seen:{sql:string;values?:readonly unknown[]}[]=[];
+  const at=new Date('2026-11-01T10:00:00.123Z');
+  const row=(n:string,extra:Record<string,unknown>={})=>({id:ID(n),name:'Lead '+n,source:'webinar',lifecycle:'lead',created_at:at,updated_at:at,
+    cursor_updated_at:'2026-11-01T10:00:00.123456Z',opportunity_status:'open',stage_name:'Qualified',stage_position:2,value_minor:'250000',
+    currency:'GBP',closed_at:null,stage_changed_at:at,...extra});
+  const rows=[row('7'),row('8',{opportunity_status:null,stage_name:null,stage_position:null,value_minor:null,currency:null,stage_changed_at:null}),row('9')];
+  const runner:CrmTransactionRunner={async run(context,operation){
+    assert.equal(context.workspaceId,scope.workspaceId);assert.equal(context.userId,scope.ownerUserId);
+    return operation({async query(sql,values){seen.push({sql,values});return {rows:rows.slice(0,Number(values![2])) as never,rowCount:rows.length};}});
+  }};
+  const service=new GroupHqInboxCrmService(pool(),runner,config);
+  const page=await service.execute({...input,action:'leads',limit:2}) as {brand:string;workspaceId:string;leads:Record<string,unknown>[];nextCursor:string|null};
+  assert.equal(page.brand,'kp');assert.equal(page.workspaceId,scope.workspaceId);assert.equal(page.leads.length,2);
+  assert.deepEqual(page.leads[0],{id:ID('7'),name:'Lead 7',source:'webinar',lifecycle:'lead',createdAt:at.toISOString(),updatedAt:at.toISOString(),
+    opportunity:{status:'open',stage:'Qualified',stagePosition:2,valueMinor:250000,currency:'GBP',stageChangedAt:at.toISOString(),closedAt:null}});
+  assert.equal(page.leads[1]!.opportunity,null);
+  assert.deepEqual(seen[0]!.values,[null,null,3]);
+  assert.match(seen[0]!.sql,/current_workspace_id\(\)/u);assert.match(seen[0]!.sql,/deleted_at IS NULL/u);
+  assert.doesNotMatch(seen[0]!.sql,/contact_points|activities|INSERT|UPDATE|DELETE/u);
+  assert.deepEqual(JSON.parse(Buffer.from(page.nextCursor!,'base64url').toString('utf8')),{updatedAt:'2026-11-01T10:00:00.123456Z',id:ID('8')});
+  const next=await service.execute({...input,action:'leads',cursor:page.nextCursor}) as typeof page;
+  assert.deepEqual(seen[1]!.values,['2026-11-01T10:00:00.123456Z',ID('8'),201]);assert.equal(next.nextCursor,null);
+  for(const bad of [{cursor:'not a cursor'},{cursor:Buffer.from('{"updatedAt":"yesterday","id":"x"}').toString('base64url')},{limit:0},{limit:201},{limit:'5'}])
+    await assert.rejects(service.execute({...input,action:'leads',...bad}),e=>e instanceof InboxCrmError&&e.status===400);
+  await assert.rejects(service.execute({...input,action:'leads',actorEmail:'another@example.test'}),e=>e instanceof InboxCrmError&&e.status===403);
+});
 test('HTTP mount rejects unsigned, stale and wrong-route requests before DB access',async()=>{
   const mount=createGroupHqInboxCrmMount(pool(),pool(),config);
   for(const path of [GROUP_HQ_INBOX_CRM_PATH,GROUP_HQ_INBOX_CRM_PATH+'?brand=kp']) {

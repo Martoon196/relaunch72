@@ -1,7 +1,7 @@
 name: Growth HQ inbox CRM exact-source gate
 on:
   push:
-    branches: [codex/ghq-inbox-crm-20261106, codex/r72-ghq-wa-004-integration, 'codex/mhp-wa-inbox-005a-*']
+    branches: [codex/ghq-inbox-crm-20261106, codex/r72-ghq-wa-004-integration, 'codex/mhp-wa-inbox-005a-*', claude/serene-brahmagupta-h1m8yc, codex/webinars-ghq-leads-20261109]
 permissions:
   contents: read
 jobs:
