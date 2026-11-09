@@ -2,6 +2,20 @@ import type { Pool } from 'pg';
 import { withTransaction } from '../../db/transaction.js';
 import type { DatabaseRequestContext } from '../../db/rls.js';
 
+// Keep Postgres' six fractional digits: JS Date truncation can skip threads within the same millisecond.
+function threadPosition(cursor: string, inboxId: string) {
+  if (cursor.length > 180 || !/^[\w-]+$/u.test(cursor)) return null;
+  const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+  const [account, timestamp, id, extra] = raw.split('|');
+  if (account !== inboxId || !timestamp || !id || extra !== undefined ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(timestamp) ||
+      !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/u.test(id)) return null;
+  const milliseconds = timestamp.slice(0, 23) + 'Z';
+  const instant = new Date(milliseconds);
+  if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== milliseconds) return null;
+  return { timestamp, id };
+}
+
 // The 0062 provenance function is the web role's approved read boundary for signed webhook receipts.
 const projected = `
   FROM app.messages m
@@ -52,13 +66,21 @@ export async function readOwnerWhatsapp(pool: Pick<Pool, 'connect'>, context: Da
       AND NOT EXISTS(SELECT 1 FROM direct d WHERE d.id=m.id)
     )`;
     if (!threadId) {
+      const after = beforeId ? threadPosition(beforeId, inboxId) : null;
+      if (beforeId && !after) return null;
       const result = await tx.query(`${history}
-        SELECT * FROM (
+        SELECT threads.*,to_char("updatedAt" AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorAt" FROM (
           SELECT DISTINCT ON (thread_id) thread_id AS id,participant_id AS "participantId",
             contact_id AS "contactId",name,left(body,180) AS preview,occurred_at AS "updatedAt"
           FROM transcript ORDER BY thread_id,occurred_at DESC,id DESC
-        ) threads ORDER BY "updatedAt" DESC,id DESC LIMIT 101`, [inboxId,null]);
-      return {brand:'mhp', accountId:inboxId, threads:result.rows.slice(0,100), hasMore:result.rows.length>100};
+        ) threads WHERE $3::timestamptz IS NULL OR ("updatedAt",id)<($3::timestamptz,$4::uuid)
+        ORDER BY "updatedAt" DESC,id DESC LIMIT 101`, [inboxId,null,after?.timestamp ?? null,after?.id ?? null]);
+      const page = result.rows.slice(0,100);
+      const hasMore = result.rows.length > 100;
+      const last = page.at(-1);
+      const nextCursor = hasMore && last
+        ? Buffer.from([inboxId,last.cursorAt,last.id].join('|')).toString('base64url') : null;
+      return {brand:'mhp', accountId:inboxId, threads:page.map(({cursorAt, ...thread}) => thread), hasMore, nextCursor};
     }
     const result = await tx.query(`${history}
       SELECT m.id,m.participant_id AS "participantId",m.contact_id AS "contactId",m.body,m.name,m.direction,

@@ -61,7 +61,8 @@ test('signed WhatsApp path binds MHP, owner identity and exact inbox, with only 
   const loaded=loadInboxCrmConfig({R72_GROUP_HQ_INBOX_SECRET:config.secret,R72_GROUP_HQ_INBOX_SCOPES:JSON.stringify({mhp:{...scope,workspaceId:MHP_MARKETING_WORKSPACE_ID}}),
     GHQ_MHP_WHATSAPP_OWNER_IDS:JSON.stringify({[email]:actorId}), GHQ_MHP_WHATSAPP_INBOX_ID:inboxId});
   assert.deepEqual(loaded?.scopes.mhp?.whatsappOwnerIds,{[email]:actorId});
-  assert.deepEqual(await service.execute(request),{brand:'mhp',accountId:inboxId,threads:[],hasMore:false});
+  assert.deepEqual(await service.execute(request),{brand:'mhp',accountId:inboxId,threads:[],hasMore:false,nextCursor:null});
+  await assert.rejects(service.execute({...request,cursor:'malformed'}),e=>e instanceof InboxCrmError && e.status===404);
   assert.ok(statements.some(s=>s.includes('operational_inbox_live_message_provenance')));
   assert.ok(statements.filter(s=>s.startsWith('BEGIN')).every(s=>s.endsWith('READ ONLY')));
   for (const mismatch of [{brand:'kp'},{accountId:ID('2')},{actorEmail:'stranger@example.test'}]) {
