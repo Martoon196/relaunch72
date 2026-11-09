@@ -2,6 +2,7 @@ import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
 import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
+import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -245,11 +246,23 @@ export async function assertRuntimeSchemaCurrent(
   if (migrations.length===142 && migrations[141]?.checksum===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) applied.delete(DIRECT_WA_MIGRATION);
+  // A separately prepared exact 0144 recovery build admits only the reviewed
+  // additive native-webinar 0145. Existing 0143/Creative Studio bridges stay intact.
+  if (migrations.length===144 && migrations[143]?.filename===CREATIVE_STUDIO_MIGRATION
+      && migrations[143]?.checksum===CREATIVE_STUDIO_CHECKSUM
+      && applied.get(CREATIVE_STUDIO_MIGRATION)===CREATIVE_STUDIO_CHECKSUM
+      && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM) applied.delete(WEBINARS_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
   // Roll out the 143 binary before advancing shared PostgreSQL. During that interval the
   // reader retains the legacy signed projection and direct reply dispatch stays disabled.
+  // Roll out the 0145 binary only after Creative Studio 0144 is applied.
+  // Until 0145 is applied the webinar service remains uncomposed and shows setup.
+  if (migrations.length===145 && migrations[144]?.filename===WEBINARS_MIGRATION && pending.length===1
+      && pending[0]?.filename===WEBINARS_MIGRATION && pending[0]?.checksum===WEBINARS_CHECKSUM
+      && applied.get(CREATIVE_STUDIO_MIGRATION)===CREATIVE_STUDIO_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
