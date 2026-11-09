@@ -82,9 +82,17 @@ Behaviour and limits:
   per broadcast (default 240), 16 MB server-side backlog and 32 MB browser backlog before it stops with a plain
   "your upload cannot keep up" message, 4 MB frame and 8 MB message limits on the channel.
 * Latency is HLS latency (roughly 10–20 s), as with an encoder.
-* **Server requirement:** ffmpeg with RTMPS output and an AAC encoder. The server checks this at start-up and
-  the setup panel, Broadcast setup and Studio tabs say exactly what is missing. Without it everything else
-  works and encoders remain available.
+* **Server requirement: the ffmpeg already on Render.** Render's native runtimes include FFmpeg at build time
+  and at runtime (Render docs, *Native runtimes → Tools and utilities*, confirmed by Codex; render.com was not
+  reachable from the build environment). The web service stays on `runtime: node`; no npm binary and no Docker.
+  At start-up the server finds `ffmpeg` on PATH (or `WEBINAR_STUDIO_FFMPEG`, an optional override) and checks:
+  pipe input, RTMPS output, WebM/Matroska and MP4 demuxers, FLV muxer, Opus and AAC decoders, AAC encoder,
+  then a bounded local smoke test that pushes a Chrome-shaped and a Safari-shaped one-second clip through the
+  relay's exact ffmpeg arguments to stdout and reads the FLV back (H.264 + AAC). No network and no provider are
+  involved; it takes about half a second. The setup panel lists every check with its result, and the studio
+  turns on only when all required checks pass (Safari's are reported separately).
+* **What the probe cannot prove:** the RTMPS connection to Cloudflare and Cloudflare's recording of a studio
+  broadcast. That is part of the live test below.
 * Cloudflare's separate real-time products (Realtime SFU / RealtimeKit) would be a new paid product and were not used.
 
 ## Configuration (names only — never commit values)
@@ -156,6 +164,7 @@ reachable from the build environment. Re-check against current docs during the l
 | Source | `npm run typecheck`; unit tests `test/webinars.test.ts` (DST, room state machine, access tokens, config blockers, sender isolation, settings sanitising, Stream request shapes, error classes, tus host check, JWT verification, webhook HMAC window, contrast) | pass |
 | Integration | `test/db/native-webinars.integration.test.ts` (service + worker on real roles/RLS) and `test/db/native-webinars-http.integration.test.ts` (real routers over HTTP: menu, CSRF, cross-site refusal, viewer/other-brand refusal, credential exposure, cookie scoping, live → replay, webhook replay, Q&A, CTA, CSV) on a disposable PostgreSQL | pass |
 | Studio relay | `test/webinars-studio.test.ts`: real ffmpeg relays browser-style H.264/Opus WebM over the WebSocket into a local RTMP receiver standing in for Cloudflare; output is H.264 + AAC; the key never appears in messages or logs; tickets are single-use and same-origin; Cloudflare-only ingest; unmasked/oversized frames refused. HTTP: owner-only tickets, other brand and viewer refused, no ingest address or key in the page or JSON, honest page when ffmpeg is missing. | pass |
+| Studio ffmpeg probe | `test/webinars-studio.test.ts`: the probe resolves ffmpeg from PATH (local: ffmpeg 6.1.1 at /usr/bin/ffmpeg, every check passing), and wrapper executables hiding one capability prove it names the exact failure: no RTMPS → unavailable; no MP4 demuxer → Chrome/Edge only; executable present but pipeline broken → unavailable. | pass |
 | Studio in a real browser | Chromium (fake camera/mic, screen share) → Studio → Start sending → relay → local RTMP receiver: 14 s received as H.264 1280×720 + AAC, keyframes every ~2 s, no frame gap while the tab was in the background, Stop in ~0.3 s, no stream key in the page. Manual run (`test/manual-webinars-preview.ts --studio-ingest …`). | pass |
 | Visual | `test/manual-webinars-preview.ts` + Playwright screenshots (nav, host screen, mobile live room, replay, setup-required state). Video in screenshots is a local labelled mock intercepted at the Stream hostname. | captured |
 | Live provider | Real Cloudflare account | **not run** |
@@ -180,6 +189,7 @@ Synthetic data on a disposable database; the video is a local mock labelled as s
 | Mobile, autoplay refused (honest play button) | ![](webinars-screenshots/16-mobile-autoplay-refused.jpg) |
 | Mobile replay (second brand, contrast-safe teal) | ![](webinars-screenshots/15-mobile-replay.jpg) |
 | Mobile, provider unavailable (no fake play button) | ![](webinars-screenshots/19-mobile-provider-unavailable.jpg) |
+| Setup status with the studio's compatibility checks (local ffmpeg) | ![](webinars-screenshots/22-setup-studio-checks.jpg) |
 | Browser studio, sending (screen + camera inset; Chromium fake devices; Cloudflare state from the fake) | ![](webinars-screenshots/21-studio-sending.jpg) |
 
 ## Smallest live test (needs the owner)
@@ -191,11 +201,15 @@ Bounded: one live input, one 5-minute private rehearsal, one owner-only registra
    `WEBINAR_EMAIL_TEST_RECIPIENTS`.
 3. Broadcast setup → Create live input. Then either stream from OBS (Show encoder settings), or open the
    **Studio**, turn on camera and microphone, share a screen and press Start sending, for 5 minutes. Check
-   *Encoder connected* and the private preview. (The studio needs ffmpeg on the server; the setup panel says
-   whether it is there.)
+   *Encoder connected* and the private preview. Before the studio run, confirm Setup status → Browser studio
+   shows every compatibility check passing on Render.
 4. Go live, open the attendee link on a phone, confirm signed playback; reveal the CTA; ask and answer a question.
 5. End session; confirm the replay appears (webhook or poll) and plays on the phone.
-6. Delete the live input and test video in Cloudflare afterwards if not needed. Expected cost: pennies of
+6. **Studio proof (separately recorded evidence):** repeat steps 3–5 from the Studio in Chrome with camera,
+   microphone and a shared screen: Cloudflare shows *Encoder connected* while sending, attendees see the
+   composite live, and the replay contains the studio picture and audio. This is the only proof of the
+   RTMPS → Cloudflare → recording path for the studio.
+7. Delete the live input and test video in Cloudflare afterwards if not needed. Expected cost: pennies of
    stored/delivered minutes.
 
 ## MHP: reversible cutover plan
@@ -217,11 +231,12 @@ applications, MHP marketing templates and `MHP_MARKETING_MODE`) is **not changed
 ## Known gaps
 
 * Live Cloudflare acceptance (above). API shapes verified against SDK typings, not live responses.
-* **ffmpeg on Render (owner decision):** the web service runs on Render's native Node runtime, and whether that
-  image ships ffmpeg with RTMPS is unverified. The setup panel will say. If it does not, choose one: switch the
-  web service to Render's Docker runtime with `apt-get install ffmpeg`, or supply a reviewed static ffmpeg and
-  point `WEBINAR_STUDIO_FFMPEG` at it. The `@ffmpeg-installer` npm packages were rejected (ffmpeg 4.1 from 2018
-  and an install script the supply-chain gate forbids).
+* **Render's ffmpeg is verified only by the probe after deploy.** Locally (ffmpeg 6.1.1) every check passes.
+  After the capable release is deployed, open Webinars → Setup status → *Compatibility checks on this server*.
+  Contingency only if a required check fails there: report the failing check to Codex; the smallest
+  reproducible alternative is Render's Docker runtime with `apt-get install -y ffmpeg` (Debian/Ubuntu ffmpeg
+  builds pass every check), reviewed before any runtime change. `@ffmpeg-installer` npm binaries were rejected
+  (ffmpeg 4.1 from 2018, install script forbidden by the supply-chain gate).
 * The studio relay lives in the web process that issued the ticket. This is correct for the current single
   instance; running more web instances would need sticky sessions for `/api/webinars/studio`.
 * A studio reconnect mid-session splits Cloudflare's recording; the replay keeps the longest part. Joining the
