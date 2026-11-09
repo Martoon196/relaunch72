@@ -9,7 +9,7 @@ services:
     plan: free
     autoDeployTrigger: "off"
     healthCheckPath: /ready
-    buildCommand: npm ci --ignore-scripts --no-audit --no-fund && node --import tsx --test scripts/webinar-rehearsal.test.mjs && npm run typecheck
+    buildCommand: npm ci --include=dev --ignore-scripts --no-audit --no-fund && node --import tsx --test scripts/webinar-rehearsal.test.mjs && npm run typecheck
     startCommand: node --import tsx scripts/webinar-rehearsal.mjs
     envVars:
       - key: NODE_VERSION
