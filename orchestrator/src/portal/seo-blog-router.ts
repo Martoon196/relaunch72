@@ -522,7 +522,7 @@ async function handlePost(
         const action = f('logo_action') ?? 'keep';
         const logo = action === 'remove' ? { kind: 'remove' as const } : action === 'upload' && form.file?.data.length ? { kind: 'upload' as const, bytes: form.file.data, label: f('logo_label') ?? '' } : { kind: 'keep' as const };
         const kit = await studio.saveKit(actor.userId, brandId, commandId, { palette: { primary: f('primary') ?? '', accent: f('accent') ?? '', dark: f('dark') ?? '', light: f('light') ?? '' },
-          disclosure: f('disclosure') ?? '', restricted: f('restricted') ?? '', logo, expectedVersion: int(f('expectedVersion'), 'the kit version') });
+          typography: f('typography') ?? undefined, disclosure: f('disclosure') ?? '', restricted: f('restricted') ?? '', logo, expectedVersion: int(f('expectedVersion'), 'the kit version') });
         return ok(home, `Creative kit version ${kit.version} saved. Earlier image approvals for this brand now need a refresh.`);
       }
       if (parts[1] === 'draft') {

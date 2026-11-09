@@ -28,6 +28,8 @@ export const PURPOSE_LABELS: Readonly<Record<CreativePurpose, string>> = Object.
   product_promotion: 'Product promotion', carousel: 'Carousel',
 });
 
+export type CreativeTypography = 'inter' | 'website_sans';
+
 export interface Palette {
   readonly primary: string;
   readonly accent: string;
@@ -48,6 +50,8 @@ export interface BrandKit {
   readonly brandId: string;
   readonly version: number;
   readonly palette: Palette;
+  /** Absent on earlier kits: retain Inter. Website sans embeds Arimo, an Arial-compatible OFL font. */
+  readonly typography?: CreativeTypography;
   readonly logo: (StoredImageRef & { readonly label: string }) | null;
   /** Required disclosure applied to every artwork for this brand, rendered deterministically. */
   readonly disclosure: string | null;

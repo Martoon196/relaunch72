@@ -211,7 +211,7 @@ export class CreativeStudioService {
 
   // ─── Brand kit ────────────────────────────────────────────────────────────
   async saveKit(actorId: string, brandId: string, commandId: string, input: {
-    readonly palette: Palette; readonly disclosure: string; readonly restricted: string;
+    readonly palette: Palette; readonly typography?: string; readonly disclosure: string; readonly restricted: string;
     readonly logo: { kind: 'keep' } | { kind: 'remove' } | { kind: 'upload'; bytes: Buffer; label: string };
     readonly expectedVersion: number;
   }): Promise<BrandKit> {
@@ -228,7 +228,9 @@ export class CreativeStudioService {
     if (input.logo.kind === 'upload') logo = { ...(await this.storeImage(brandId, input.logo.bytes)), label: text(input.logo.label, 80) || 'Approved logo' };
     const restrictedPhrases = input.restricted.split(/\r?\n/u).map((l) => clip(l, 80)).filter((l) => l.length >= 3).slice(0, 30);
     const disclosure = text(input.disclosure, COPY_LIMITS.disclosure) || null;
-    const body = { palette, logo: logo ? { sha256: logo.sha256, mime: logo.mime, width: logo.width, height: logo.height, label: logo.label } : null, disclosure, restrictedPhrases };
+    const typography = input.typography ?? current?.typography ?? 'inter';
+    if (typography !== 'inter' && typography !== 'website_sans') throw new SeoBlogError(400, 'Choose a supported font style.');
+    const body = { palette, typography: typography as 'inter' | 'website_sans', logo: logo ? { sha256: logo.sha256, mime: logo.mime, width: logo.width, height: logo.height, label: logo.label } : null, disclosure, restrictedPhrases };
     const kit: BrandKit = Object.freeze({ brandId, version: input.expectedVersion + 1, ...body, logo, sha256: sha(canonical(body)), createdBy: actorId, createdAt: this.now() });
     await this.deps.library.saveKit(brandId, commandId, sha(canonical({ ...body, version: kit.version })), kit);
     return kit;
@@ -360,7 +362,7 @@ export class CreativeStudioService {
     for (const s of specs) {
       const c = s.concept, cards = c.cards, total = cards.length, card = s.card > 0 ? cards[s.card - 1] : null;
       const article = s.purpose === 'article_image';
-      artwork.push({ placement: PLACEMENTS[s.placement], palette: context.palette, brandName: context.brandName, logo,
+      artwork.push({ placement: PLACEMENTS[s.placement], palette: context.palette, typography: context.typography, brandName: context.brandName, logo,
         background: c.background.kind === 'image' ? await image(c.background.image) : null, focal: s.focal,
         hook: card ? (s.card === 1 ? c.hook || null : null) : c.hook || null,
         headline: card ? card.headline : c.headline,
@@ -443,7 +445,7 @@ export class CreativeStudioService {
   // ─── Storyboards and video ────────────────────────────────────────────────
   private sceneArtwork(context: CreativeBrandContext, logo: VerifiedImage | null, background: VerifiedImage | null, concept: ConceptComponents, scenes: readonly StoryboardScene[],
     placement: PlacementId, focal: { x: number; y: number }, overlay: boolean): ArtworkInput[] {
-    return scenes.map((scene, i) => ({ placement: PLACEMENTS[placement], palette: context.palette, brandName: context.brandName, logo, background, focal,
+    return scenes.map((scene, i) => ({ placement: PLACEMENTS[placement], palette: context.palette, typography: context.typography, brandName: context.brandName, logo, background, focal,
       hook: i === 0 ? concept.hook || null : null, headline: scene.headline, body: scene.body || null, cta: scene.showCta ? concept.cta || null : null,
       disclosure: context.disclosure, illustrativeTag: concept.illustrativeTag, card: null, captureOverlay: overlay }));
   }

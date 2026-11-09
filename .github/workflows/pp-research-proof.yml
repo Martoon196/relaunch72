@@ -1,7 +1,7 @@
 name: Content research query exact-source gate
 on:
   push:
-    branches: [codex/creative-studio-limits-20261109, codex/creative-studio-live-20261109, codex/pp-rl72-research-20261106, codex/pp-rl72-standard-research-20261106, codex/pp-rl72-plan-contract-20261106, codex/pp-rl72-content-workbench-20261106, codex/pp-rl72-evidence-rebase-20261106, codex/pp-rl72-structured-plan-20261109, codex/pp-rl72-article-finish-20261109, codex/pp-rl72-article-quotes-20261109, codex/pp-rl72-article-quotes-v2-20261109, codex/pp-rl72-article-quotes-v3-20261109, codex/pp-rl72-article-faq-20261109]
+    branches: [codex/creative-studio-brand-20261109, codex/creative-studio-limits-20261109, codex/creative-studio-live-20261109, codex/pp-rl72-research-20261106, codex/pp-rl72-standard-research-20261106, codex/pp-rl72-plan-contract-20261106, codex/pp-rl72-content-workbench-20261106, codex/pp-rl72-evidence-rebase-20261106, codex/pp-rl72-structured-plan-20261109, codex/pp-rl72-article-finish-20261109, codex/pp-rl72-article-quotes-20261109, codex/pp-rl72-article-quotes-v2-20261109, codex/pp-rl72-article-quotes-v3-20261109, codex/pp-rl72-article-faq-20261109]
 permissions:
   contents: read
 jobs:

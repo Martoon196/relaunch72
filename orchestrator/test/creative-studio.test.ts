@@ -92,6 +92,21 @@ test('brand context resolves each brand from its own rows, labels fallbacks and 
 });
 function await_(_h: unknown, _id: string): never { throw new Error('Profile belongs to another brand.'); }
 
+test('font selection is brand-scoped, versioned, validated and passed to artwork without changing another brand', async()=>{
+ const {h,hearth,queue,studio,library,renderer}=await twoBrands();
+ const common={palette:NEUTRAL_PALETTE,disclosure:'',restricted:'',logo:{kind:'keep' as const},expectedVersion:0};
+ await assert.rejects(studio.saveKit(OWNER.userId,hearth.brand.id,randomUUID(),{...common,typography:'url(https://example.test/font)'}),/supported font/);
+ const kit=await studio.saveKit(OWNER.userId,hearth.brand.id,randomUUID(),{...common,typography:'website_sans'});
+ assert.equal(kit.typography,'website_sans');
+ assert.equal(await library.latestKit(queue.brand.id),null);
+ await studio.draft(OWNER.userId,hearth.brand.id,randomUUID(),offerForm('Annual boiler service',HEARTH.pages[0]!.url),{kind:'neutral'});
+ assert.ok(renderer.inputs.length>0);assert.ok(renderer.inputs.every(i=>i.typography==='website_sans'));
+ const next=await studio.saveKit(OWNER.userId,hearth.brand.id,randomUUID(),{...common,expectedVersion:1,typography:'inter'});
+ assert.notEqual(next.sha256,kit.sha256);assert.equal(kit.typography,'website_sans');
+ const preserved=await studio.saveKit(OWNER.userId,hearth.brand.id,randomUUID(),{...common,expectedVersion:2});
+ assert.equal(preserved.typography,'inter');
+});
+
 test('concepts are drafted only from approved facts: distinct angles, exact price, no invented figures, honest shortfall', async () => {
   const { h, hearth, queue } = await twoBrands();
   const ctx = resolveCreativeContext({ brand: hearth.brand, profile: await h.store.latestProfile(hearth.brand.id), knowledge: await h.store.listKnowledge(hearth.brand.id), kit: null });
@@ -252,6 +267,8 @@ test('real Chromium renders exact-size JPEG artwork with the real logo, measured
   const palette = { primary: '#0f766e', accent: '#fbbf24', dark: '#0b1f1d', light: '#ffffff' };
   const base = { palette, brandName: 'Fictional Hearth Maintenance', logo, background: bg, focal: { x: 0.5, y: 0.5 }, hook: 'For homeowners in Leeds', headline: 'Annual boiler service — £89',
     body: 'A yearly safety check and service of a domestic gas boiler by a registered engineer.', cta: 'Book a service', disclosure: 'Fictional fixture brand.', illustrativeTag: true, card: null };
+  const [normalFont, websiteFont] = await renderer.renderBatch([{...base,placement:PLACEMENTS.square},{...base,placement:PLACEMENTS.square,typography:'website_sans'}]);
+  assert.deepEqual(websiteFont!.issues,[]);assert.notEqual(normalFont!.sha256,websiteFont!.sha256,'embedded website font changes the real rendered pixels');
   const [square, vertical, overflow, unreadable, headlineOnly] = await renderer.renderBatch([
     { ...base, placement: PLACEMENTS.square },
     { ...base, placement: PLACEMENTS.vertical },

@@ -10,7 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { Brand, BrandProfile, KnowledgeDocument, ProfileOffer } from '../seo-blog/types.js';
-import type { BrandKit, CreativePurpose, CreativeSource, Palette } from './types.js';
+import type { BrandKit, CreativePurpose, CreativeSource, Palette, CreativeTypography } from './types.js';
 
 export const NEUTRAL_PALETTE: Palette = Object.freeze({ primary: '#3a4a63', accent: '#f4f6f8', dark: '#121820', light: '#ffffff' });
 
@@ -36,6 +36,7 @@ export interface CreativeBrandContext {
   readonly restricted: readonly string[];
   readonly destinations: readonly Readonly<{ url: string; label: string }>[];
   readonly palette: Palette;
+  readonly typography?: CreativeTypography;
   readonly paletteSource: 'brand_kit' | 'neutral_fallback';
   readonly logo: BrandKit['logo'];
   readonly disclosure: string | null;
@@ -86,6 +87,7 @@ export function resolveCreativeContext(input: {
     audiences: profile?.audiences ?? [], offers: profile?.offers ?? [], approvedClaims: profile?.approvedClaims ?? [],
     restricted: Object.freeze([...(profile?.exclusions ?? []), ...(kit?.restrictedPhrases ?? [])]),
     destinations: profile?.conversionPages ?? [],
+    typography: kit?.typography ?? 'inter',
     palette: kit?.palette ?? NEUTRAL_PALETTE, paletteSource: kit ? 'brand_kit' : 'neutral_fallback',
     logo: kit?.logo ?? null, disclosure: kit?.disclosure ?? null, kitVersion: kit?.version ?? 0,
     suggestedColours: Object.freeze(suggestedColours), visualGuidance: visual ? visual.slice(0, 1200) : null,
