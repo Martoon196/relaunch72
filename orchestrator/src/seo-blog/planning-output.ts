@@ -40,10 +40,40 @@ export function planningOutputSchema(asset: Schema, profile: BrandProfile, input
       evidence: { ...list({ type: 'string', description: 'Concrete /asset/... or /decisions/... JSON pointer. Claim evidence may point at /decisions/claimLedger/0/assetPointer; canonical text is also available after server resolution.' }), minItems: 1 },
     }), packs.reduce((n, p) => n + p.qualityChecks.length, 0)), minItems: packs.reduce((n, p) => n + p.qualityChecks.length, 0) },
   });
-  return { ...asset, additionalProperties: false, required: [...asset.required as string[], '_method_sidecar'], properties: { ...asset.properties as Record<string, Schema>, _method_sidecar: sidecar } };
+  // Compiling both the complete plan and all nested decisions exceeded the
+  // provider grammar limit. Constrain the review fields natively and carry
+  // the two existing JSON objects as bounded text; the server decodes them
+  // and still validates their full original contracts before accepting them.
+  const wireSidecar=structuredClone(sidecar) as {properties:Record<string,Schema>;required:string[]};
+  delete wireSidecar.properties.decisions;
+  wireSidecar.properties.decisionsJson={type:'string',maxLength:30000,description:'JSON text for the original decisions object, validated by the server: '+JSON.stringify(decisions)};
+  wireSidecar.required=wireSidecar.required.map(k=>k==='decisions'?'decisionsJson':k);
+  return object({planJson:{type:'string',maxLength:64000,description:'JSON text for the original plan, validated by the server: '+JSON.stringify(asset)},_method_sidecar:wireSidecar});
 }
 
-export const PLANNING_POINTER_CONTRACT = '\nPrivate planning wire override: claimLedger entries use {assetPointer,references}, not copied text. Point to a single short factual string in the plan (/asset/pillar/key_points/0 or /asset/supporting/0/angle); the server resolves and records its exact text before checking supporting evidence. Keep each factual string focused on evidence its references actually support. Reference IDs belong in the sidecar, not asset prose. All required qualityFindings fields include detail AND evidence. Record concise additional pack decisions in decisions.planningNotes. The native response schema is authoritative for shape; the server still validates all facts, sources, dates, decisions, formats and content.';
+export const PLANNING_POINTER_CONTRACT = '\nPrivate planning wire override: return {planJson: JSON-encoded stage plan object, _method_sidecar: {audience,selectedFormat,angle,evidenceReferences,primaryNextAction,omittedUnsupportedClaims,decisionsJson: JSON-encoded decisions object,qualityFindings}}. Do not put a sidecar inside planJson. The native schema descriptions contain the FULL original plan and decisions contracts; the server parses both strings and validates those original contracts before acceptance. Within decoded decisions, claimLedger entries use {assetPointer,references}, not copied text. Point to one short factual string in the decoded plan (/asset/pillar/key_points/0 or /asset/supporting/0/angle); the server resolves and records its exact text before checking supporting evidence. Keep each factual string focused on evidence its references support. Reference IDs belong in the sidecar, not asset prose. All qualityFindings require detail AND evidence. Record concise pack decisions in decisions.planningNotes. Preserve actual nulls and exact supplied metadata inside the JSON strings. Evidence pointers address the decoded /asset and /decisions. Never omit required stage fields or change the article count.';
+
+/** A transport codec only: never repairs fields, evidence or review outcomes.
+ * Existing canonical receipts remain readable without a wire envelope. */
+export function decodePlanningOutput(raw:Record<string,unknown>):{value:Record<string,unknown>;problems:string[]} {
+  let value=structuredClone(raw);
+  const parseObject=(text:unknown,limit:number):Record<string,unknown>|null=>{
+    if(typeof text!=='string'||text.length>limit)return null;
+    try {const parsed:unknown=JSON.parse(text);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed as Record<string,unknown>:null;}catch{return null;}
+  };
+  if(Object.hasOwn(value,'planJson')){
+    const plan=parseObject(value.planJson,64000);
+    if(!plan||Object.hasOwn(plan,'_method_sidecar')||Object.keys(value).some(k=>k!=='planJson'&&k!=='_method_sidecar'))return {value:{},problems:['planJson must encode only the original plan object within its size limit.']};
+    value={...plan,_method_sidecar:value._method_sidecar};
+  }
+  const sidecar=value._method_sidecar;
+  if(sidecar&&typeof sidecar==='object'&&!Array.isArray(sidecar)&&Object.hasOwn(sidecar,'decisionsJson')){
+    const s=sidecar as Record<string,unknown>,decisions=parseObject(s.decisionsJson,30000);
+    if(!decisions||Object.hasOwn(s,'decisions'))return {value,problems:['decisionsJson must encode one original decisions object within its size limit.']};
+    const {decisionsJson:_wire,...rest}=s;value._method_sidecar={...rest,decisions};
+  }
+  return {value,problems:[]};
+}
 
 /** Only actual planning prose can become a claim; never metadata or prototypes. */
 export function resolvePlanningClaims(sidecar: Record<string, any>, asset: Record<string, unknown>): string[] {

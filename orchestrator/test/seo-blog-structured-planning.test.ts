@@ -7,9 +7,11 @@ import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
 import { PLAN_SCHEMA, proposeCluster } from '../src/seo-blog/generation.js';
 import { fixtureBrand } from './rl72-method-fixtures.js';
 import { UpgradeFixtureModel, upgradeSnapshot } from './rl72-upgrade-fixtures.js';
+import { decodePlanningOutput } from '../src/seo-blog/planning-output.js';
 
 async function plan(mutate?: (v:any,request:LlmRequest)=>void) {
   const f=fixtureBrand(),store=new MemoryMethodStore(),model=new UpgradeFixtureModel();
+  let wire:any;
   store.snapshots.set(f.brand.id,upgradeSnapshot(f.brand.id,['production-core','editorial-planning']));
   model.mutate=(v,request)=>{
     const d=v._method_sidecar.decisions;
@@ -17,15 +19,18 @@ async function plan(mutate?: (v:any,request:LlmRequest)=>void) {
     v._method_sidecar.evidenceReferences=['profile:1:claim:0'];
     v._method_sidecar.decisions={claimLedger:[{assetPointer:'/asset/pillar/key_points/0',references:['profile:1:claim:0']}],sourceAssessments:[],ownerDecisionsNeeded:[],formatPerArticle:d.formatPerArticle,planningNotes:'The practical checks serve the supplied audience without an invented outcome.'};
     mutate?.(v,request);
+    const {_method_sidecar:sidecar,...asset}=structuredClone(v),{decisions,...review}=sidecar;
+    for(const key of Object.keys(v))delete v[key];
+    Object.assign(v,{planJson:JSON.stringify(asset),_method_sidecar:{...review,decisionsJson:JSON.stringify(decisions)}});
+    wire=structuredClone(v);
   };
   const llm=await new MethodController(store,true).prepare(model,{...f,stage:'planning',stages:['planning'],assetRef:'plan:test',sources:['S1','fixture-source'],baselineTokens:16000,evidence:{research:f.sources}});
   const run=()=>proposeCluster(llm,{brandName:f.brand.name,profile:f.profile,inventory:[],sources:f.sources,focus:null,excluded:[],sourceArticleUrl:null});
-  return {f,store,model,run};
+  return {f,store,model,run,wire:()=>wire};
 }
 
 test('native planning request carries the full wire grammar once and persists exactly resolved claim text',async()=>{
-  let wire:any;
-  const f=await plan(v=>{wire=structuredClone(v);});const out=await f.run();const req=f.model.requests[0]!;
+  const f=await plan();const out=await f.run();const req=f.model.requests[0]!;const wire=f.wire();
   assert.ok(req.outputSchema);assert.equal(req.maxTokens,20000);
   assert.doesNotMatch(req.messages[0]!.content,/<research_sources>|Server response schema/);
   assert.match(req.messages[0]!.content,/<method_context>/);
@@ -64,6 +69,30 @@ test('provider grammar keeps enums, required fields and closed objects while ful
   assert.equal(schema.additionalProperties,false);assert.deepEqual(p.name.enum,['alpha','beta']);assert.equal(p.name.minLength,undefined);assert.match(p.name.description,/minLength/);
   assert.equal(p.values.minItems,undefined);assert.match(p.values.description,/minItems/);
   const original=new Ajv({strict:false}).compile(PLAN_SCHEMA);assert.equal(original({}),false);
+});
+
+test('large ID catalogues stay in guidance instead of expanding the native grammar; server schema still rejects foreign IDs',()=>{
+  const ids=Array.from({length:70},(_,i)=>'profile:12:claim:'+i);
+  const original={type:'object',required:['reference','status'],properties:{reference:{type:'string',enum:ids},status:{type:'string',enum:['pass','fail']}}};
+  const projected=providerJsonSchema(original),p=projected.properties as any;
+  assert.equal(p.reference.enum,undefined);assert.match(p.reference.description,/profile:12:claim:69/);
+  assert.deepEqual(p.status.enum,['pass','fail']);assert.deepEqual(projected.required,['reference','status']);assert.equal(projected.additionalProperties,false);
+  assert.equal(new Ajv({strict:false}).compile(original)({reference:'foreign',status:'pass'}),false);
+});
+
+test('the planning envelope preserves actual nulls and exact metadata without inferring or repairing values',async()=>{
+  const f=await plan(v=>{v.money_page.url=null;v.pillar.cta_url=null;v._method_sidecar.primaryNextAction=null;v._method_sidecar.decisions.sourceAssessments=[{sourceId:'S1',publishedAt:null,observedPeriod:null,confidence:'unknown',freshness:'evergreen',reason:'The supplied source has unknown publication metadata.'}];});
+  const out=await f.run();const receipt=await f.store.receipt(f.f.brand.id,out.record.methodReceiptId!);
+  assert.equal(out.value.money_page.url,null);assert.equal(out.value.pillar.cta_url,null);assert.equal(receipt!.sidecar!.primaryNextAction,null);
+  assert.equal((receipt!.sidecar!.decisions as any).sourceAssessments[0].publishedAt,null);
+  assert.equal(JSON.parse(f.wire().planJson).pillar.cta_url,null);
+});
+
+test('wire decoding rejects malformed, oversized, conflicting or non-object JSON; it never manufactures a valid plan',()=>{
+  for(const raw of [{planJson:'{'},{planJson:'[]'},{planJson:'x'.repeat(64001)},{planJson:'{"_method_sidecar":{}}'},{planJson:'{}',extra:true},{_method_sidecar:{decisionsJson:'{' }},{_method_sidecar:{decisionsJson:'[]'}},{_method_sidecar:{decisionsJson:'{}',decisions:{}}}])assert.ok(decodePlanningOutput(raw).problems.length);
+  const raw={planJson:'{"topic":"An unchanged topic"}',_method_sidecar:{decisionsJson:'{"ownerDecisionsNeeded":[]}'}};
+  assert.deepEqual(decodePlanningOutput(raw),{value:{topic:'An unchanged topic',_method_sidecar:{decisions:{ownerDecisionsNeeded:[]}}},problems:[]});
+  assert.equal(raw.planJson,'{"topic":"An unchanged topic"}');
 });
 
 test('Anthropic serializes native output_config only when requested; streaming and usage are preserved',async()=>{

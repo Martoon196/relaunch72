@@ -95,7 +95,11 @@ export function providerJsonSchema(schema: Record<string, unknown>): Record<stri
   const out: Record<string, unknown> = {};
   const bounds: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(schema)) {
-    if (supported.has(key)) out[key] = structuredClone(value);
+    // Large ID catalogues multiply the compiled grammar (the live planning
+    // schema hit the provider's internal limit). They remain supplied guidance
+    // here and are enforced by the original server contract after generation.
+    if (key === 'enum' && Array.isArray(value) && (value.length > 8 || JSON.stringify(value).length > 200)) bounds[key] = value;
+    else if (supported.has(key)) out[key] = structuredClone(value);
     else if (key === 'properties') out.properties = Object.fromEntries(Object.entries(value as Record<string, Record<string, unknown>>).map(([k, v]) => [k, providerJsonSchema(v)]));
     else if (key === 'items') out.items = providerJsonSchema(value as Record<string, unknown>);
     else if (key === 'additionalProperties') continue;

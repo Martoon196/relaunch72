@@ -9,7 +9,7 @@ import type { LlmClient } from '../llm/client.js';
 import type { Brand, BrandProfile, GenerationRecord } from './types.js';
 import { SeoBlogError } from './types.js';
 import { EVIDENCE_CONTRACT, methodEvidenceContext, validateMethodEvidence, type MethodEvidenceInputs } from './method-evidence.js';
-import { planningOutputSchema, PLANNING_POINTER_CONTRACT, resolvePlanningClaims } from './planning-output.js';
+import { planningOutputSchema, PLANNING_POINTER_CONTRACT, resolvePlanningClaims, decodePlanningOutput } from './planning-output.js';
 
 export const METHOD_FLAG = 'SEO_BLOG_METHOD_PACKS';
 export const SUPPORTED_METHODS = ['production-core','editorial-planning','blog-writing','conversion-copy','social-repurposing','visual-briefing','email-writing','advocacy-and-referral'] as const;
@@ -161,7 +161,9 @@ export class MethodRun {
   }
   unpack(raw:unknown):{value:unknown;problems:string[]} {
     if(!raw||typeof raw!=='object'||Array.isArray(raw))return {value:raw,problems:['Method output must be an object.']};
-    const {_method_sidecar:s,...value}=raw as Record<string,unknown>;
+    const decoded=this.structuredPlanning?decodePlanningOutput(raw as Record<string,unknown>):{value:raw as Record<string,unknown>,problems:[]};
+    if(decoded.problems.length)return decoded;
+    const {_method_sidecar:s,...value}=decoded.value;
     const problems:string[]=[];
     if(!s||typeof s!=='object'||Array.isArray(s))return {value,problems:['Missing internal method sidecar.']};
     const c=structuredClone(s) as MethodSidecar;
