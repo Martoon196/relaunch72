@@ -245,7 +245,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
-        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+        const otherPatterns = await studio.learning().otherBrandPatterns(actor.userId, brandId).catch(() => []);
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
@@ -275,8 +276,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return send(res,200,format==='json'?json:creatorTextExport(record,JSON.parse(json).content),format==='json'?'application/json; charset=utf-8':'text/plain; charset=utf-8',{'content-disposition':`attachment; filename="campaign.${format}"`});
       }
       const studio=record.brief.kind==='acquisition'?input.service.creativeFor?.(identity,input.requestId,engine)??null:null;
-      const outcomes=studio?await studio.campaignOutcomes(actor.userId,brandId,record.id).catch(()=>null):null;
-      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId),outcomes));
+      const learning=studio?await studio.learning().view(actor.userId,brandId,record.id).catch(()=>null):null;
+      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId),learning));
     }
     if (rest === 'authority') {
       if (input.applicationName !== 'Relaunch72 Content') throw new SeoBlogError(404, 'That page was not found.');
@@ -491,6 +492,16 @@ async function handlePost(
         const record=await creator.get(actor.userId,brandId,id);
         await creator.edit(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',creatorContentFromForm(record,form.fields));
         return ok(back('campaigns/'+id),'New draft version saved. Review it before export.');
+      }
+      if(['findings','pattern','pattern-withdraw','guidance'].includes(parts[2]??'')){
+        const learning=input.service.creativeFor?.(input.identity!,input.requestId,engine)?.learning();
+        if(!learning)throw new SeoBlogError(404,'The learning journal is not enabled for this brand.');
+        const here=back('campaigns/'+id)+'#learning';
+        if(parts[2]==='findings'){const r=await learning.record(actor.userId,brandId,id,f('commandId')??'');return ok(here,r.replayed?'These findings were already recorded.':'Findings recorded with today’s date and the exact outcomes they cite. Nothing was changed or started.');}
+        if(parts[2]==='pattern'){await learning.sharePattern(actor.userId,brandId,f('findingId')??'',f('statement')??'',f('commandId')??'');return ok(here,'General pattern shared with your other brands. It carries no figures, names or offers, and you can withdraw it.');}
+        if(parts[2]==='pattern-withdraw'){await learning.withdrawPattern(actor.userId,brandId,f('patternId')??'',f('commandId')??'');return ok(here,'Pattern withdrawn. Your other brands no longer see it.');}
+        await learning.copyToGuidance(actor.userId,brandId,id,f('findingId')??'',f('acknowledge')==='1');
+        return ok(back('setup'),'Findings saved to brand guidance as audience notes. Refresh and confirm the brand profile before they are used in new campaigns.');
       }
       if(parts[2]==='approve'){
         await creator.approve(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',f('reviewed')==='1');

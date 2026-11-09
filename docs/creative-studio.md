@@ -1,4 +1,4 @@
-# Creative Studio — Milestones 1–4 (brand-aware creative; campaign intelligence; video and rich media; distribution and attribution)
+# Creative Studio — Milestones 1–5 (brand-aware creative; campaign intelligence; video and rich media; distribution and attribution; learning)
 
 **Status, stated separately:**
 
@@ -221,7 +221,7 @@ Approved creative now reaches the **existing** integrations, and the studio repo
 
 ## Database (still inside unreleased 0143)
 
-Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies for the existing NOLOGIN `r72_creative_studio_definer` on the existing media, calendar-job, CRM, journey and commerce tables, and one `STABLE SECURITY DEFINER` function, `app_private.creative_studio_distribution(workspace, session, 'delivery'|'outcomes', input)`, executable only by `r72_content_command` with a genuine managing-owner session. The hand-off branch of `creative_studio_command` gained the route checks above. New checksum: `3dce5386ddb3b41896842557e1f59f7381c87adb1ec1620a3295a0421610a9ec`.
+Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies for the existing NOLOGIN `r72_creative_studio_definer` on the existing media, calendar-job, CRM, journey and commerce tables, and one `STABLE SECURITY DEFINER` function, `app_private.creative_studio_distribution(workspace, session, 'delivery'|'outcomes', input)`, executable only by `r72_content_command` with a genuine managing-owner session. The hand-off branch of `creative_studio_command` gained the route checks above. (Checksum superseded by Milestone 5, below.)
 
 ## Checks
 
@@ -238,4 +238,52 @@ Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies
 - Video has no connected social path for these brands; videos hand off as exports.
 - Long renders still run in-request (D-070 stop-gap); the durable render job is not part of this milestone.
 - Release: 0143 still waits for the 0142 payments cut-over and must be renumbered if the stopped Apollo branch's `0143_apollo_private_discovery` lands first.
+
+# Milestone 5 — Learning and optimisation
+
+The studio now turns real outcomes into dated, evidence-linked findings, compares concepts and artwork with stated
+uncertainty, and suggests the next test. It never computes revenue, ROAS, CAC or a winner, never suggests a budget
+and never starts, funds or schedules anything.
+
+## Reuse check and where findings live
+
+| Need | Existing piece | Decision |
+| --- | --- | --- |
+| Outcomes to learn from | Milestone 4's read of the existing CRM, journey and commerce rows | Reused unchanged. The SQL outcome query was moved into one internal function so the journal can recompute exactly the same counts. |
+| Brand memory | Brand guidance documents (`seo_blog_records` knowledge) feed proposals as confirmed audience notes | **Not written automatically.** Any new guidance document unconfirms the brand profile for the creative studio and campaign creators (both require the profile to cover exactly the active documents), which needs a paid profile extraction and makes approved artwork stale. Findings therefore go to an append-only per-brand journal; the owner can explicitly **copy a recorded finding set into brand guidance** as an audience note, with that consequence stated and acknowledged. Once the profile is refreshed and confirmed, the note is cited by the next acquisition proposal through the existing Milestone 2 evidence pack. |
+| Activity and approvals | Existing owner session, command replay and append-only patterns | Reused. |
+| Cross-brand reuse | None existed | Owner-written general patterns only (below). |
+
+## Behaviour
+
+- **What we learned** on each acquisition proposal (below *Actual results*):
+  - one observation per concept/artwork tag (counts and dates);
+  - gaps for missing or unrecognised tags;
+  - comparisons of qualified, booking and sale rates with 95% Wilson ranges. A comparison is drawn only when every arm has at least 20 tagged leads: *Not enough data*, *No clear difference* (ranges overlap), or *Observed difference — not proof*. Lead volumes are never compared, because reach and spend per link are not recorded.
+- **Suggested next tests** (at most three) each change one thing against a control, with what stays the same, the measure, the review date (from the proposal) and *“No budget is suggested… nothing here authorises it.”* Rules: confirm tag capture; use artwork-tagged links; add a second variant; iterate on the stronger concept; try a more distinct angle; keep running until there is enough data.
+- **Record these findings** saves the statements, the exact outcome read and the server date. SQL recomputes the outcome counts in the same transaction and refuses the record if the CRM changed, if any finding cites counts that were not observed (exact, ordered comparison), if the campaign is another brand's, or if the recorder is not the session owner.
+- **Share a general pattern** (from a recorded finding): owner-written, 20–300 characters, refused if it contains numbers, links, emails, colours, currency or percent signs, tracking tags, or this brand's name, website or offer names (checked in TypeScript and again in SQL). Shared patterns appear only in **the same person's other managed brands** (Creative studio overview → *Patterns from your other brands*), labelled “not evidence for this brand”, never added to proposals automatically, and can be withdrawn (history kept).
+
+## Database (still inside unreleased 0143)
+
+Section 4 adds two append-only, workspace-scoped tables, `app.creative_studio_findings` and `app.creative_studio_patterns`, owned by the existing NOLOGIN definer, with no runtime table privilege. It also adds one owner command boundary, `app_private.creative_studio_learning`, and extends the command action list. Pattern reads across brands are limited by `app_private.can_manage_workspace` for the current person and to rows whose latest state is *shared*. New 0143 checksum: `f731c8ee8d06337c3ef1b0f360a89c789aa56fc0d8f069c8d0e7ccfe60d83e12`.
+
+## Checks
+
+- `test/creative-studio-learning.test.ts` (4): Wilson ranges; findings with dates and evidence; comparison thresholds and strengths; next-test rules; no budget, ROAS, CAC or winner wording; pattern guard; the real router journey (record, stale evidence refused, brand name refused, share, explicit acknowledgement before copying into guidance, withdraw). The learning forms sit outside the proposal edit form.
+- `test/db/creative-studio-learning-pg.integration.test.ts` (3 subtests, real PostgreSQL 16, `r72_content_command`, genuine sessions):
+  - SQL stores its own evidence read;
+  - inflated, swapped, stale and foreign evidence is refused, as is recording on behalf of someone else;
+  - rows are append-only and there is no direct table access;
+  - patterns with figures, the brand name or an offer name are refused;
+  - a pattern is visible to the same owner's other brand and invisible to a different owner, and disappears when withdrawn.
+- Visual evidence: `creative-studio-evidence/m5-what-we-learned-synthetic-crm.png`. **The counts are synthetic fixture rows.**
+- Full suite: 4,289 tests, 0 failures, 64 skipped. Creative, acquisition, distribution and learning PostgreSQL tests: 26/26. Supply-chain gate passed.
+
+## Limits
+
+- Learning is only as good as the tags: until a live lead form stores campaign tags (Milestone 4 limit), live leads are invisible here.
+- Findings are observations from tagged contacts; overlapping ranges, small samples and unrecorded reach mean most early campaigns will honestly show *Not enough data*.
+- Patterns travel only between brands the same person manages; there is no organisation-wide or cross-customer sharing.
+- Copying findings into brand guidance is deliberately manual because of the profile re-confirmation it causes.
 

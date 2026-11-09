@@ -881,7 +881,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===136)?.checksum, '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139');
   assert.equal(tail.find(m=>m.version===137)?.checksum, 'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255');
   assert.equal(tail.find(m=>m.version===142)?.checksum, '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d');
-  assert.equal(tail.find(m=>m.version===143)?.checksum, '3dce5386ddb3b41896842557e1f59f7381c87adb1ec1620a3295a0421610a9ec');
+  assert.equal(tail.find(m=>m.version===143)?.checksum, 'f731c8ee8d06337c3ef1b0f360a89c789aa56fc0d8f069c8d0e7ccfe60d83e12');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

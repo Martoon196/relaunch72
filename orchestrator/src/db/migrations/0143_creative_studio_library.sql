@@ -72,7 +72,7 @@ CREATE TABLE app.creative_studio_handoffs(
 );
 CREATE TABLE app.creative_studio_commands(
   workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL,
-  action text NOT NULL CHECK(action IN ('kit_save','set_create','versions_append','approve','handoff')),
+  action text NOT NULL CHECK(action IN ('kit_save','set_create','versions_append','approve','handoff','finding_record','pattern_share','pattern_withdraw')),
   input_sha256 text NOT NULL CHECK(input_sha256 ~ '^[0-9a-f]{64}$'), result_id text NOT NULL CHECK(length(result_id) BETWEEN 1 AND 80),
   actor_user_id uuid NOT NULL REFERENCES app.users(id), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY(workspace_id,id)
@@ -450,6 +450,37 @@ SET LOCAL ROLE r72_owner;
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 
+CREATE FUNCTION app_private.creative_studio_outcome_buckets(p_workspace uuid,campaign text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  IF app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Workspace mismatch' USING ERRCODE='42501'; END IF;
+    -- One bucket per contact (its latest matching touch), so no contact is counted twice. Exact UTM match only.
+    RETURN (WITH touches AS (
+        SELECT contact_id,utm_content,attributed_at FROM app.contact_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign
+        UNION ALL
+        SELECT contact_id,utm_content,attributed_at FROM app.contact_import_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign),
+      latest AS (SELECT DISTINCT ON (t.contact_id) t.contact_id,coalesce(t.utm_content,'') AS content,t.attributed_at
+        FROM touches t JOIN app.contacts c ON c.workspace_id=p_workspace AND c.id=t.contact_id AND c.deleted_at IS NULL
+        ORDER BY t.contact_id,t.attributed_at DESC),
+      facts AS (SELECT l.content,l.contact_id,l.attributed_at,
+        EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND (o.status='won' OR EXISTS(
+          SELECT 1 FROM app.opportunity_stage_history h JOIN app.pipeline_stages s ON s.workspace_id=h.workspace_id AND s.id=h.to_stage_id
+          WHERE h.workspace_id=p_workspace AND h.opportunity_id=o.id AND s.slug='qualified')
+          OR EXISTS(SELECT 1 FROM app.pipeline_stages s WHERE s.workspace_id=p_workspace AND s.id=o.stage_id AND s.slug='qualified'))) AS qualified,
+        EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='appointment') AS booked,
+        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='payment_collected')
+          OR EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='sale')
+          OR EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND o.status='won') AS sold,
+        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='subscription_cancelled') AS cancelled,
+        (SELECT c.lifecycle_status='customer' FROM app.contacts c WHERE c.workspace_id=p_workspace AND c.id=l.contact_id) AS customer
+        FROM latest l)
+      SELECT coalesce(jsonb_agg(jsonb_build_object('utmContent',b.content,'leads',b.leads,
+        'qualified',b.qualified,'booked',b.booked,'sold',b.sold,'customers',b.customers,'subscriptionsCancelled',b.cancelled,'firstAt',b.first_at,'lastAt',b.last_at) ORDER BY b.content),'[]'::jsonb)
+      FROM (SELECT content,count(*) AS leads,count(*) FILTER (WHERE qualified) AS qualified,count(*) FILTER (WHERE booked) AS booked,count(*) FILTER (WHERE sold) AS sold,
+        count(*) FILTER (WHERE customer) AS customers,count(*) FILTER (WHERE cancelled) AS cancelled,min(attributed_at) AS first_at,max(attributed_at) AS last_at FROM facts GROUP BY content) b);
+END $f$;
+REVOKE ALL ON FUNCTION app_private.creative_studio_outcome_buckets(uuid,text) FROM PUBLIC;
+
 CREATE FUNCTION app_private.creative_studio_distribution(p_workspace uuid,p_session bytea,p_action text,p_input jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; campaign text; queues uuid[];
@@ -477,30 +508,7 @@ BEGIN
   IF p_action='outcomes' THEN
     campaign:=p_input->>'utmCampaign';
     IF campaign IS NULL OR campaign !~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$' THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
-    -- One bucket per contact (its latest matching touch), so no contact is counted twice. Exact UTM match only.
-    RETURN (WITH touches AS (
-        SELECT contact_id,utm_content,attributed_at FROM app.contact_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign
-        UNION ALL
-        SELECT contact_id,utm_content,attributed_at FROM app.contact_import_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign),
-      latest AS (SELECT DISTINCT ON (t.contact_id) t.contact_id,coalesce(t.utm_content,'') AS content,t.attributed_at
-        FROM touches t JOIN app.contacts c ON c.workspace_id=p_workspace AND c.id=t.contact_id AND c.deleted_at IS NULL
-        ORDER BY t.contact_id,t.attributed_at DESC),
-      facts AS (SELECT l.content,l.contact_id,l.attributed_at,
-        EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND (o.status='won' OR EXISTS(
-          SELECT 1 FROM app.opportunity_stage_history h JOIN app.pipeline_stages s ON s.workspace_id=h.workspace_id AND s.id=h.to_stage_id
-          WHERE h.workspace_id=p_workspace AND h.opportunity_id=o.id AND s.slug='qualified')
-          OR EXISTS(SELECT 1 FROM app.pipeline_stages s WHERE s.workspace_id=p_workspace AND s.id=o.stage_id AND s.slug='qualified'))) AS qualified,
-        EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='appointment') AS booked,
-        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='payment_collected')
-          OR EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='sale')
-          OR EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND o.status='won') AS sold,
-        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='subscription_cancelled') AS cancelled,
-        (SELECT c.lifecycle_status='customer' FROM app.contacts c WHERE c.workspace_id=p_workspace AND c.id=l.contact_id) AS customer
-        FROM latest l)
-      SELECT jsonb_build_object('utmCampaign',campaign,'readAt',clock_timestamp(),'buckets',coalesce(jsonb_agg(jsonb_build_object('utmContent',b.content,'leads',b.leads,
-        'qualified',b.qualified,'booked',b.booked,'sold',b.sold,'customers',b.customers,'subscriptionsCancelled',b.cancelled,'firstAt',b.first_at,'lastAt',b.last_at) ORDER BY b.content),'[]'::jsonb))
-      FROM (SELECT content,count(*) AS leads,count(*) FILTER (WHERE qualified) AS qualified,count(*) FILTER (WHERE booked) AS booked,count(*) FILTER (WHERE sold) AS sold,
-        count(*) FILTER (WHERE customer) AS customers,count(*) FILTER (WHERE cancelled) AS cancelled,min(attributed_at) AS first_at,max(attributed_at) AS last_at FROM facts GROUP BY content) b);
+    RETURN jsonb_build_object('utmCampaign',campaign,'readAt',clock_timestamp(),'buckets',app_private.creative_studio_outcome_buckets(p_workspace,campaign));
   END IF;
   RAISE EXCEPTION 'Unknown distribution read' USING ERRCODE='22023';
 END $f$;
@@ -511,3 +519,139 @@ GRANT EXECUTE ON FUNCTION app_private.creative_studio_distribution(uuid,bytea,te
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
+
+-- ─── Milestone 5: learning journal and owner-authorised general patterns ───
+-- Findings are recorded only by the managing owner and only with evidence this boundary recomputes itself from
+-- the existing CRM outcome rows, so a finding cannot cite counts that were never observed. Patterns are short,
+-- owner-written generalisations with no figures, links, colours, brand names or offer names; they are visible only
+-- to the same person's other managed brands, are labelled as patterns (not evidence) and can be withdrawn.
+CREATE TABLE app.creative_studio_findings(
+  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL, campaign_id uuid NOT NULL,
+  utm_campaign text NOT NULL CHECK(utm_campaign ~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$'),
+  evidence jsonb NOT NULL CHECK(jsonb_typeof(evidence)='array' AND octet_length(evidence::text)<=65536),
+  data jsonb NOT NULL CHECK(jsonb_typeof(data)='object' AND octet_length(data::text)<=65536),
+  recorded_by uuid NOT NULL REFERENCES app.users(id), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id)
+);
+CREATE TABLE app.creative_studio_patterns(
+  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), id uuid NOT NULL, pattern_id uuid NOT NULL, finding_id uuid NOT NULL,
+  state text NOT NULL CHECK(state IN ('shared','withdrawn')),
+  statement text NOT NULL CHECK(length(statement) BETWEEN 20 AND 300 AND statement !~ '[0-9]' AND statement !~* '(https?:|www[.]|@|#[0-9a-f]{3}|[£$€%]|utm_)'),
+  decided_by uuid NOT NULL REFERENCES app.users(id), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id),
+  FOREIGN KEY(workspace_id,finding_id) REFERENCES app.creative_studio_findings(workspace_id,id)
+);
+DO $learning$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['creative_studio_findings','creative_studio_patterns'] LOOP
+    EXECUTE format('ALTER TABLE app.%I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE app.%I FORCE ROW LEVEL SECURITY',t);
+    EXECUTE format('REVOKE ALL ON app.%I FROM PUBLIC,r72_content_command,r72_web,r72_worker',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_owner USING(true) WITH CHECK(true)',t||'_owner',t);
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR INSERT TO r72_creative_studio_definer WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_insert',t);
+    EXECUTE format('GRANT SELECT,INSERT ON app.%I TO r72_creative_studio_definer',t);
+    EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only()',t||'_immutable',t);
+    INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
+  END LOOP;
+END $learning$;
+CREATE POLICY creative_studio_findings_scope ON app.creative_studio_findings FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
+-- Cross-brand reads reach only brands the current person also manages; the function below further limits them to shared rows.
+CREATE POLICY creative_studio_patterns_scope ON app.creative_studio_patterns FOR SELECT TO r72_creative_studio_definer
+  USING(workspace_id=app_private.current_workspace_id() OR app_private.can_manage_workspace(app_private.current_user_id(),workspace_id));
+GRANT EXECUTE ON FUNCTION app_private.can_manage_workspace(uuid,uuid) TO r72_creative_studio_definer;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
+SET LOCAL ROLE r72_creative_studio_definer;
+
+CREATE FUNCTION app_private.creative_studio_learning(p_workspace uuid,p_session bytea,p_action text,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; cmd app.creative_studio_commands; a jsonb; computed jsonb; brand jsonb; prof jsonb; term text; latest app.creative_studio_patterns;
+  canon_computed jsonb; canon_claimed jsonb; e jsonb; rid text;
+BEGIN
+  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  brand:=app_private.seo_blog_brand(p_workspace);
+  IF brand IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  IF p_input IS NULL OR jsonb_typeof(p_input)<>'object' OR octet_length(p_input::text)>131072 THEN RAISE EXCEPTION 'Invalid learning command' USING ERRCODE='22023'; END IF;
+  IF p_action='finding_list' THEN
+    RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('id',f.id,'campaignId',f.campaign_id,'utmCampaign',f.utm_campaign,'evidence',f.evidence,'data',f.data,'recordedBy',f.recorded_by,'recordedAt',f.created_at) ORDER BY f.created_at DESC)
+      FROM (SELECT * FROM app.creative_studio_findings WHERE workspace_id=p_workspace AND (p_input->>'campaignId' IS NULL OR campaign_id::text=p_input->>'campaignId') ORDER BY created_at DESC LIMIT 50) f),'[]'::jsonb);
+  END IF;
+  IF p_action IN ('patterns_mine','patterns_other') THEN
+    RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('patternId',x.pattern_id,'findingId',x.finding_id,'statement',x.statement,'state',x.state,'decidedAt',x.created_at,
+        'own',x.workspace_id=p_workspace) ORDER BY x.created_at DESC)
+      FROM (SELECT DISTINCT ON (pt.workspace_id,pt.pattern_id) pt.* FROM app.creative_studio_patterns pt
+        WHERE CASE WHEN p_action='patterns_mine' THEN pt.workspace_id=p_workspace
+          ELSE pt.workspace_id<>p_workspace AND app_private.can_manage_workspace(actor,pt.workspace_id) END
+        ORDER BY pt.workspace_id,pt.pattern_id,pt.created_at DESC,pt.id DESC) x
+      WHERE p_action='patterns_mine' OR x.state='shared'),'[]'::jsonb);
+  END IF;
+  IF p_action NOT IN ('finding_record','pattern_share','pattern_withdraw') THEN RAISE EXCEPTION 'Unknown learning command' USING ERRCODE='22023'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('r72-creative-studio:'||p_workspace::text,0));
+  SELECT * INTO cmd FROM app.creative_studio_commands WHERE workspace_id=p_workspace AND id=(p_input->>'commandId')::uuid;
+  IF cmd.id IS NOT NULL THEN
+    IF cmd.input_sha256 IS DISTINCT FROM p_input->>'inputSha' OR cmd.action<>p_action THEN RAISE EXCEPTION 'This request was already used for different content' USING ERRCODE='40001'; END IF;
+    RETURN jsonb_build_object('replayed',true,'id',cmd.result_id);
+  END IF;
+  IF coalesce(p_input->>'commandId','') !~ '^[0-9a-f-]{36}$' OR coalesce(p_input->>'inputSha','') !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Invalid learning command' USING ERRCODE='22023'; END IF;
+
+  IF p_action='finding_record' THEN
+    a:=p_input->'finding';
+    IF a->>'recordedBy' IS DISTINCT FROM actor::text OR coalesce(a->>'id','') !~ '^[0-9a-f-]{36}$'
+      OR NOT EXISTS(SELECT 1 FROM app.seo_blog_creator_campaigns c WHERE c.workspace_id=p_workspace AND c.id::text=a->>'campaignId' AND c.kind='acquisition')
+      OR coalesce(a->>'utmCampaign','') !~ ('^[a-z0-9-]{1,40}-'||left(replace(a->>'campaignId','-',''),8)||'$')
+      OR jsonb_typeof(a#>'{snapshot,findings}') IS DISTINCT FROM 'array' OR jsonb_array_length(a#>'{snapshot,findings}') NOT BETWEEN 1 AND 40 THEN
+      RAISE EXCEPTION 'Record findings for one of this brand''s acquisition campaigns.' USING ERRCODE='22023'; END IF;
+    -- Evidence is recomputed here from the existing CRM rows; the claimed read must match it exactly.
+    computed:=app_private.creative_studio_outcome_buckets(p_workspace,a->>'utmCampaign');
+    SELECT coalesce(jsonb_agg(jsonb_build_array(b->>'utmContent',(b->>'leads')::int,(b->>'qualified')::int,(b->>'booked')::int,(b->>'sold')::int,(b->>'customers')::int) ORDER BY b->>'utmContent'),'[]'::jsonb)
+      INTO canon_computed FROM jsonb_array_elements(computed) b;
+    SELECT coalesce(jsonb_agg(jsonb_build_array(b->>'utmContent',(b->>'leads')::int,(b->>'qualified')::int,(b->>'booked')::int,(b->>'sold')::int,(b->>'customers')::int) ORDER BY b->>'utmContent'),'[]'::jsonb)
+      INTO canon_claimed FROM jsonb_array_elements(coalesce(a#>'{read,buckets}','[]'::jsonb)) b;
+    IF canon_claimed IS DISTINCT FROM canon_computed THEN RAISE EXCEPTION 'Outcomes changed since these findings were prepared. Refresh and review them again.' USING ERRCODE='55000'; END IF;
+    FOR e IN SELECT x FROM jsonb_array_elements(a#>'{snapshot,findings}') f, jsonb_array_elements(coalesce(f->'evidence','[]'::jsonb)) x LOOP
+      -- Exact ordered equality (jsonb array containment would ignore order and could accept swapped counts).
+      IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(canon_computed) c
+          WHERE c=jsonb_build_array(e->>'utmContent',(e->>'leads')::int,(e->>'qualified')::int,(e->>'booked')::int,(e->>'sold')::int,(e->>'customers')::int))
+        OR e->>'utmCampaign' IS DISTINCT FROM a->>'utmCampaign' THEN
+        RAISE EXCEPTION 'A finding cites outcomes that were not observed.' USING ERRCODE='55000'; END IF;
+    END LOOP;
+    INSERT INTO app.creative_studio_findings(workspace_id,id,campaign_id,utm_campaign,evidence,data,recorded_by)
+      VALUES(p_workspace,(a->>'id')::uuid,(a->>'campaignId')::uuid,a->>'utmCampaign',computed,a,actor);
+    rid:=a->>'id';
+  ELSE
+    a:=p_input->'pattern';
+    IF a->>'decidedBy' IS DISTINCT FROM actor::text OR coalesce(a->>'id','') !~ '^[0-9a-f-]{36}$' OR coalesce(a->>'patternId','') !~ '^[0-9a-f-]{36}$' THEN
+      RAISE EXCEPTION 'Invalid pattern decision' USING ERRCODE='22023'; END IF;
+    SELECT * INTO latest FROM app.creative_studio_patterns WHERE workspace_id=p_workspace AND pattern_id=(a->>'patternId')::uuid ORDER BY created_at DESC,id DESC LIMIT 1;
+    IF p_action='pattern_withdraw' THEN
+      IF latest.id IS NULL OR latest.state<>'shared' THEN RAISE EXCEPTION 'Only a currently shared pattern can be withdrawn.' USING ERRCODE='55000'; END IF;
+      INSERT INTO app.creative_studio_patterns(workspace_id,id,pattern_id,finding_id,state,statement,decided_by) VALUES(p_workspace,(a->>'id')::uuid,latest.pattern_id,latest.finding_id,'withdrawn',latest.statement,actor);
+    ELSE
+      IF latest.id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM app.creative_studio_findings WHERE workspace_id=p_workspace AND id::text=a->>'findingId') THEN
+        RAISE EXCEPTION 'Share a pattern from one of this brand''s recorded findings.' USING ERRCODE='22023'; END IF;
+      -- Nothing brand-specific may travel: brand name, website host and offer names are refused here as well as in the form.
+      prof:=app_private.seo_creator_profile(p_workspace);
+      FOR term IN SELECT brand->>'name' UNION ALL SELECT regexp_replace(coalesce(brand->>'website',''),'^https?://(www[.])?([^/]+).*$','\2')
+        UNION ALL SELECT o->>'name' FROM jsonb_array_elements(coalesce(prof->'offers','[]'::jsonb)) o LOOP
+        IF length(coalesce(term,''))>=3 AND position(lower(term) IN lower(a->>'statement'))>0 THEN
+          RAISE EXCEPTION 'A shared pattern cannot name this brand, its website or its offers.' USING ERRCODE='22023'; END IF;
+      END LOOP;
+      INSERT INTO app.creative_studio_patterns(workspace_id,id,pattern_id,finding_id,state,statement,decided_by)
+        VALUES(p_workspace,(a->>'id')::uuid,(a->>'patternId')::uuid,(a->>'findingId')::uuid,'shared',btrim(a->>'statement'),actor);
+    END IF;
+    rid:=a->>'id';
+  END IF;
+  INSERT INTO app.creative_studio_commands(workspace_id,id,action,input_sha256,result_id,actor_user_id) VALUES(p_workspace,(p_input->>'commandId')::uuid,p_action,p_input->>'inputSha',rid,actor);
+  RETURN jsonb_build_object('replayed',false,'id',rid);
+END $f$;
+
+REVOKE ALL ON FUNCTION app_private.creative_studio_learning(uuid,bytea,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_studio_learning(uuid,bytea,text,jsonb) TO r72_content_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
+

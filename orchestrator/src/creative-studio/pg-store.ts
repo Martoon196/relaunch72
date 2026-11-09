@@ -7,6 +7,7 @@ import { SeoBlogError } from '../seo-blog/types.js';
 import type { CommandReceipt, CreativeLibraryStore, CreativeSetRecord, CreativeSetSummary } from './store.js';
 import type { DeliveryRecord, OutcomeRead } from './distribution.js';
 import type { DistributionReadPort } from './service.js';
+import type { LearningStore, PatternDecision, PatternRow, RecordedFinding } from './learning.js';
 import type { BrandKit, ContextInputs, CreativeApproval, CreativeHandoff, CreativeSet, CreativeVersion } from './types.js';
 
 export class PgCreativeLibraryStore implements CreativeLibraryStore {
@@ -71,5 +72,43 @@ export class PgCreativeDistributionReader implements DistributionReadPort {
     const read = await this.read<OutcomeRead>(brandId, 'outcomes', { utmCampaign });
     const iso = (v: string | null) => (v ? new Date(v).toISOString() : null);
     return { ...read, readAt: iso(read.readAt)!, buckets: read.buckets.map((b) => ({ ...b, firstAt: iso(b.firstAt), lastAt: iso(b.lastAt) })) };
+  }
+}
+
+/** Learning journal and authorised patterns through app_private.creative_studio_learning (0143). */
+export class PgCreativeLearningStore implements LearningStore {
+  private readonly sessionHash: Buffer | null;
+  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal) {
+    this.sessionHash = principal.kind === 'user' ? createHash('sha256').update(principal.sessionToken).digest() : null;
+  }
+  private async call<T>(brandId: string, action: string, input: Record<string, unknown>): Promise<T> {
+    const p = this.principal;
+    if (p.kind !== 'user') throw new SeoBlogError(403, 'Learning records require a signed-in owner.');
+    try {
+      return await withTransaction(this.pool, { actorKind: 'user', workspaceId: brandId, userId: p.userId, requestId: p.requestId }, async (t) => {
+        const guard = await t.query<{ ok: boolean }>('SELECT app_private.lock_active_portal_session($1,$2,$3) AS ok', [this.sessionHash, p.userId, p.selectedWorkspaceId]);
+        if (guard.rows[0]?.ok !== true) throw new SeoBlogError(401, 'Sign in again to continue.');
+        return (await t.query<{ value: T }>('SELECT app_private.creative_studio_learning($1,$2,$3,$4) AS value', [brandId, this.sessionHash, action, JSON.stringify(input)])).rows[0]!.value;
+      });
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === '40001' || code === '23505') throw new SeoBlogError(409, 'This request was already used for something else. Refresh and try again.');
+      if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
+      if (code === '22023' || code === '23514' || code === '22P02') throw new SeoBlogError(400, (e as Error).message.slice(0, 300));
+      if (code === '55000') throw new SeoBlogError(409, (e as Error).message.slice(0, 300));
+      throw e;
+    }
+  }
+  recordFinding(brandId: string, commandId: string, inputSha: string, finding: RecordedFinding) { return this.call<{ replayed: boolean; id: string }>(brandId, 'finding_record', { commandId, inputSha, finding }); }
+  async listFindings(brandId: string, campaignId?: string): Promise<RecordedFinding[]> {
+    const rows = await this.call<{ data: RecordedFinding; recordedAt: string }[]>(brandId, 'finding_list', campaignId ? { campaignId } : {});
+    return rows.map((r) => ({ ...r.data, recordedAt: new Date(r.recordedAt).toISOString() }));
+  }
+  decidePattern(brandId: string, commandId: string, inputSha: string, decision: PatternDecision) {
+    return this.call<{ replayed: boolean; id: string }>(brandId, decision.state === 'shared' ? 'pattern_share' : 'pattern_withdraw', { commandId, inputSha, pattern: decision });
+  }
+  async patterns(brandId: string, scope: 'mine' | 'other'): Promise<PatternRow[]> {
+    const rows = await this.call<PatternRow[]>(brandId, scope === 'mine' ? 'patterns_mine' : 'patterns_other', {});
+    return rows.map((r) => ({ ...r, decidedAt: new Date(r.decidedAt).toISOString() }));
   }
 }

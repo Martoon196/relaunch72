@@ -56,6 +56,8 @@ export function creativeOverviewPage(shell: Shell, data: {
   readonly savedImages: readonly (SavedGeneratedImage & { previewUrl: string | null })[]; readonly rendererReady: boolean; readonly commandId: string;
   /** Optional pre-fill from an approved campaign proposal concept; the owner still reviews and submits. */
   readonly prefill?: URLSearchParams;
+  /** Milestone 5: general patterns the same person shared from their other brands (never evidence for this brand). */
+  readonly otherPatterns?: readonly import('../creative-studio/learning.js').PatternRow[];
 }): string {
   const c = data.context, pre = data.prefill ?? new URLSearchParams();
   const radios = (name: string, options: [string, string][], checked: string) => options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${e(v)}"${v === checked ? ' checked' : ''}> ${e(l)}</label>`).join('');
@@ -80,7 +82,7 @@ ${data.savedImages.length ? `<p class="small muted">Images already generated and
     const r = s.set.request; const src = r.source.kind === 'offer' ? `Offer: ${r.source.name}` : r.source.kind === 'article' ? `Article: ${r.source.title}` : `Brief: ${r.source.text.slice(0, 60)}`;
     return `<tr><td><a href="${base(shell)}/s/${e(s.set.id)}">${e(s.set.createdAt.slice(0, 16).replace('T', ' '))}</a></td><td>${e(PURPOSE_LABELS[r.purpose])}</td><td>${e(src)}</td><td>${r.placements.map((p) => e(PLACEMENTS[p].label)).join(', ')}</td><td>${s.versionCount}</td><td>${s.approvedCount}</td></tr>`;
   }).join('')}</tbody></table>` : '<p class="muted">No artwork yet.</p>'}</section>`;
-  return layout(shell, 'Creative studio', `${STYLE}<div class="cs-hero"><div><h1>Creative studio</h1><p class="muted">Brand-aware images and ad creative for ${e(c.brandName)}. Drafts only — nothing is published, scheduled or spent.</p><ol class="cs-steps"><li>Create images</li><li>Compare</li><li>Edit</li><li>Approve</li><li>Download / add to campaign</li></ol></div></div>${kitSummary(shell, c, data.kit)}${form}${library}`);
+  return layout(shell, 'Creative studio', `${STYLE}<div class="cs-hero"><div><h1>Creative studio</h1><p class="muted">Brand-aware images and ad creative for ${e(c.brandName)}. Drafts only — nothing is published, scheduled or spent.</p><ol class="cs-steps"><li>Create images</li><li>Compare</li><li>Edit</li><li>Approve</li><li>Download / add to campaign</li></ol></div></div>${kitSummary(shell, c, data.kit)}${form}${library}${data.otherPatterns?.length ? `<section class="card" aria-labelledby="pat-h"><h2 id="pat-h">Patterns from your other brands</h2><p class="small muted">Shared by you from another brand you manage. They carry no figures, names, offers or colours, and they are <strong>not evidence for ${e(c.brandName)}</strong>: test them here before relying on them. They are never added to proposals automatically.</p><ul>${data.otherPatterns.map((p) => `<li>${e(p.statement)} <span class="small muted">· shared ${e(p.decidedAt.slice(0, 10))}</span></li>`).join('')}</ul></section>` : ''}`);
 }
 
 export function creativeKitPage(shell: Shell, data: { readonly context: CreativeBrandContext; readonly kit: BrandKit | null; readonly commandId: string }): string {

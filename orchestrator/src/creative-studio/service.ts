@@ -19,6 +19,7 @@ import type { AcquisitionChannel, AcquisitionProposal, CampaignCreatorStore, Cre
 import type { ArticleLocalImageProposal, LocalImageOrigin } from '../seo-blog/image-campaign.js';
 import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
   type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
+import { buildLearning, findingsText, generalPatternIssues, type LearningSnapshot, type LearningStore, type PatternRow, type RecordedFinding } from './learning.js';
 import { mediaOf, variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
 import {
   CREATIVE_PURPOSES, type BackgroundComponent, type BrandKit, type ConceptComponents, type ContextInputs, type CreativeApproval,
@@ -76,6 +77,10 @@ export function videoEstimate(storyboard: Pick<Storyboard, 'scenes'>) {
 /** The existing article media path (owner upload → exact preparation → review → use → post → posting plan). */
 export interface ArticleMediaPort {
   importApproved(actorId: string, brandId: string, articleId: string, commandId: string, bytes: Buffer, profile: 'blog' | 'instagram' | 'linkedin', origin: LocalImageOrigin): Promise<ArticleLocalImageProposal>;
+}
+/** The existing brand guidance (knowledge) store. Saving changes brand memory and needs the profile re-confirmed. */
+export interface GuidancePort {
+  saveAudienceNote(actorId: string, brandId: string, title: string, text: string): Promise<{ documentId: string }>;
 }
 /** Read-only views of existing delivery receipts and CRM outcomes (SQL boundary in 0143). */
 export interface DistributionReadPort {
@@ -137,6 +142,9 @@ export class CreativeStudioService {
     readonly articleMedia?: ArticleMediaPort;
     readonly creators?: Pick<CampaignCreatorStore, 'get' | 'list'>;
     readonly distribution?: DistributionReadPort;
+    /** Milestone 5: learning journal (append-only) and the existing brand guidance store for owner-chosen copies. */
+    readonly learning?: LearningStore;
+    readonly guidance?: GuidancePort;
     readonly now?: () => string;
     readonly newId?: () => string;
   }) {
@@ -670,6 +678,12 @@ export class CreativeStudioService {
     return { replayed: receipt.replayed, handoff };
   }
 
+  /** Milestone 5 learning operations over the same ports. */
+  learning(): CreativeLearning {
+    return new CreativeLearning(this, { ...(this.deps.creators ? { creators: this.deps.creators } : {}), ...(this.deps.distribution ? { distribution: this.deps.distribution } : {}),
+      ...(this.deps.learning ? { learning: this.deps.learning } : {}), ...(this.deps.guidance ? { guidance: this.deps.guidance } : {}), brands: this.deps.brands, now: this.now, newId: this.newId });
+  }
+
   /** Acquisition proposals this brand can attach artwork to, with their concepts and channels. */
   async acquisitionTargets(actorId: string, brandId: string): Promise<{ id: string; name: string; concepts: { index: number; name: string; channels: AcquisitionChannel[] }[] }[]> {
     await this.context(actorId, brandId);
@@ -720,6 +734,81 @@ export class CreativeStudioService {
     const utmCampaign = campaignUtm(record.brief, record.id);
     const read = this.deps.distribution ? await this.deps.distribution.outcomes(brandId, utmCampaign).catch(() => null) : null;
     return { utmCampaign, read, limits: ATTRIBUTION_LIMITS };
+  }
+}
+
+export interface LearningView {
+  readonly utmCampaign: string;
+  readonly read: OutcomeRead | null;
+  readonly snapshot: LearningSnapshot | null;
+  readonly recorded: readonly RecordedFinding[];
+  readonly patterns: readonly PatternRow[];
+  readonly limits: readonly string[];
+  readonly guidanceAvailable: boolean;
+}
+
+export class CreativeLearning {
+  constructor(private readonly studio: CreativeStudioService, private readonly deps: { creators?: Pick<CampaignCreatorStore, 'get' | 'list'>; distribution?: DistributionReadPort; learning?: LearningStore; guidance?: GuidancePort; brands: CreativeBrandPort; now: () => string; newId: () => string }) {}
+  private async campaign(actorId: string, brandId: string, campaignId: string) {
+    await this.studio.context(actorId, brandId);
+    const record = this.deps.creators && UUID.test(campaignId) ? await this.deps.creators.get(brandId, campaignId) : null;
+    const proposal = acquisitionProposal(record);
+    if (!record || !proposal) throw new SeoBlogError(404, 'That acquisition campaign proposal was not found.');
+    return { record, proposal, utmCampaign: campaignUtm(record.brief, record.id) };
+  }
+  /** Current findings computed from a fresh outcome read, the dated journal and this brand's shared patterns. Read-only. */
+  async view(actorId: string, brandId: string, campaignId: string): Promise<LearningView> {
+    const { proposal, utmCampaign } = await this.campaign(actorId, brandId, campaignId);
+    const read = this.deps.distribution ? await this.deps.distribution.outcomes(brandId, utmCampaign).catch(() => null) : null;
+    const [recorded, patterns] = this.deps.learning ? await Promise.all([this.deps.learning.listFindings(brandId, campaignId).catch(() => []), this.deps.learning.patterns(brandId, 'mine').catch(() => [])]) : [[], []];
+    return { utmCampaign, read, snapshot: read ? buildLearning(read, proposal) : null, recorded, patterns, limits: ATTRIBUTION_LIMITS, guidanceAvailable: Boolean(this.deps.guidance) };
+  }
+  /** Record today's findings with the exact evidence read. SQL recomputes the evidence and refuses anything not observed. */
+  async record(actorId: string, brandId: string, campaignId: string, commandId: string): Promise<{ replayed: boolean; id: string }> {
+    if (!this.deps.learning || !this.deps.distribution) throw new SeoBlogError(503, 'The learning journal is not configured here. Nothing was recorded.');
+    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const { proposal, utmCampaign } = await this.campaign(actorId, brandId, campaignId);
+    const read = await this.deps.distribution.outcomes(brandId, utmCampaign);
+    const snapshot = buildLearning(read, proposal);
+    const finding: RecordedFinding = { id: this.deps.newId(), campaignId, utmCampaign, read, snapshot, recordedBy: actorId, recordedAt: this.deps.now() };
+    // One record per owner command; the evidence counts identify what was recorded.
+    return this.deps.learning.recordFinding(brandId, commandId, sha(canonical({ campaignId, buckets: read.buckets.map((b) => [b.utmContent, b.leads, b.qualified, b.booked, b.sold, b.customers]) })), finding);
+  }
+  /** Share one owner-written general pattern with the same person's other brands. Brand-specific content is refused. */
+  async sharePattern(actorId: string, brandId: string, findingId: string, statement: string, commandId: string): Promise<{ replayed: boolean; id: string }> {
+    if (!this.deps.learning) throw new SeoBlogError(503, 'The learning journal is not configured here.');
+    const { context } = await this.studio.context(actorId, brandId);
+    const brand = await this.deps.brands.getBrand(brandId);
+    const profile = await this.deps.brands.latestProfile(brandId);
+    const host = brand?.website ? new URL(brand.website).hostname.replace(/^www\./u, '') : '';
+    const issues = generalPatternIssues(statement, [context.brandName, brand?.name ?? '', host, ...(profile?.offers ?? []).map((o) => o.name)]);
+    if (issues.length) throw new SeoBlogError(400, issues.join(' '));
+    if (!UUID.test(commandId) || !UUID.test(findingId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const decision = { id: this.deps.newId(), patternId: this.deps.newId(), findingId, statement: statement.trim(), state: 'shared' as const, decidedBy: actorId, decidedAt: this.deps.now() };
+    return this.deps.learning.decidePattern(brandId, commandId, sha(canonical({ findingId, statement: decision.statement })), decision);
+  }
+  async withdrawPattern(actorId: string, brandId: string, patternId: string, commandId: string): Promise<{ replayed: boolean; id: string }> {
+    if (!this.deps.learning) throw new SeoBlogError(503, 'The learning journal is not configured here.');
+    await this.studio.context(actorId, brandId);
+    if (!UUID.test(commandId) || !UUID.test(patternId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const current = (await this.deps.learning.patterns(brandId, 'mine')).find((p) => p.patternId === patternId);
+    if (!current || current.state !== 'shared') throw new SeoBlogError(409, 'Only a currently shared pattern can be withdrawn.');
+    return this.deps.learning.decidePattern(brandId, commandId, sha(canonical({ withdraw: patternId })),
+      { id: this.deps.newId(), patternId, findingId: current.findingId, statement: current.statement, state: 'withdrawn', decidedBy: actorId, decidedAt: this.deps.now() });
+  }
+  /** Patterns the same person shared from their other brands. Labelled as patterns, never evidence for this brand. */
+  async otherBrandPatterns(actorId: string, brandId: string): Promise<PatternRow[]> {
+    await this.studio.context(actorId, brandId);
+    return this.deps.learning ? this.deps.learning.patterns(brandId, 'other').catch(() => []) : [];
+  }
+  /** Owner-chosen copy of one recorded finding set into the existing brand guidance as audience notes. */
+  async copyToGuidance(actorId: string, brandId: string, campaignId: string, findingId: string, acknowledged: boolean): Promise<{ documentId: string }> {
+    if (!this.deps.guidance || !this.deps.learning) throw new SeoBlogError(503, 'Brand guidance is not available here.');
+    if (!acknowledged) throw new SeoBlogError(400, 'Confirm that you understand the brand profile must be refreshed and confirmed again.');
+    const { record } = await this.campaign(actorId, brandId, campaignId);
+    const finding = (await this.deps.learning.listFindings(brandId, campaignId)).find((f) => f.id === findingId);
+    if (!finding) throw new SeoBlogError(404, 'That recorded finding was not found.');
+    return this.deps.guidance.saveAudienceNote(actorId, brandId, `Campaign findings · ${record.brief.name} · ${finding.recordedAt.slice(0, 10)}`.slice(0, 160), findingsText(finding.snapshot, finding.recordedAt, record.brief.name));
   }
 }
 

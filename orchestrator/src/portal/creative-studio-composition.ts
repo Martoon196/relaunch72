@@ -6,7 +6,7 @@
  */
 import type { Pool } from 'pg';
 import { CreativeStudioService, type SavedGeneratedImage, type SavedImagePort } from '../creative-studio/service.js';
-import { PgCreativeDistributionReader, PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
+import { PgCreativeDistributionReader, PgCreativeLearningStore, PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
 import type { CampaignCreatorStore } from '../seo-blog/campaign-creator.js';
 import { ChromiumArtworkRenderer } from '../creative-studio/renderer.js';
 import { PgSeoBlogStore } from '../seo-blog/pg-store.js';
@@ -52,5 +52,8 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
     articleMedia: { importApproved: (actorId, brandId, articleId, commandId, bytes, profile, origin) => input.engine.importCreativeImage({ userId: actorId }, brandId, articleId, commandId, bytes, profile, origin) },
     ...(input.creators ? { creators: input.creators } : {}),
     distribution: new PgCreativeDistributionReader(input.contentCommandPool, principal),
+    // Milestone 5: append-only learning journal; brand guidance copies go through the existing knowledge upload.
+    learning: new PgCreativeLearningStore(input.contentCommandPool, principal),
+    guidance: { saveAudienceNote: async (actorId, brandId, title, text) => ({ documentId: (await input.engine.uploadKnowledge({ userId: actorId }, brandId, { category: 'audience_notes', title, pastedText: text })).id }) },
   });
 }
