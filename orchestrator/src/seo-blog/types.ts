@@ -43,6 +43,8 @@ export interface BrandAuthor {
 }
 
 export interface BrandSettings {
+  /** Operator-managed ceilings. JSON null explicitly means Unlimited; normal owner saves cannot change them. */
+  readonly operatorLimits?: import('./limits.js').OperatorLimits;
   /** Explicit owner opt-in; absence is OFF, independent of the image-attempt allowance. */
   readonly media?: { readonly imageGenerationEnabled: boolean; readonly authorizedBy: string; readonly authorizedAt: IsoInstant };
   /**

@@ -7,6 +7,7 @@
 import { createCreativeWorkerJobs } from './creative-studio-worker.js';
 import { creativeRenderRunner } from './creative-studio-composition.js';
 import type { Pool } from 'pg';
+import { PgSeoLimitsService, type SeoLimitsService } from './seo-blog-limits-service.js';
 import { MethodController } from '../seo-blog/method-packs.js';
 import { PgMethodStore } from '../seo-blog/method-store.js';
 import { PgCampaignCreatorStore } from '../seo-blog/campaign-creator-store.js';
@@ -31,6 +32,7 @@ import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
 export interface PortalSeoBlogService {
+  limitsFor?(identity: PortalSessionIdentity, requestId: string): SeoLimitsService;
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
   engineFor(identity: PortalSessionIdentity, requestId: string): SeoBlogEngine;
   readonly generation: 'live' | 'unavailable';
@@ -90,6 +92,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     ? createPgSeoBlogSocialRegistry({ zernioPool: socialPools.zernioPool, contentCommandPool, contentAdapterPool, identity, requestId, zernioApiKey, reservedProfileIds })
     : undefined;
   const service: PortalSeoBlogService = {
+    limitsFor: (identity, requestId) => new PgSeoLimitsService(contentCommandPool, identity, requestId),
     generation: runtime.llm ? 'live' : 'unavailable',
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',

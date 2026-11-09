@@ -1,3 +1,4 @@
+import { SEO_LIMITS_MIGRATION, SEO_LIMITS_CHECKSUM } from './seo-limits-schema.js';
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
@@ -288,6 +289,16 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.checksum === CREATIVE_STUDIO_CHECKSUM
       && applied.get(DIRECT_WA_MIGRATION) === DIRECT_WA_CHECKSUM
       && applied.get(MHP_PAYMENTS_LIVE_MIGRATION) === MHP_PAYMENTS_LIVE_CHECKSUM) {
+    return;
+  }
+  // Roll out every consumer on the exact 0144 ledger before applying 0145.
+  // The private limits UI checks function availability and stays hidden until cutover.
+  if (pending.length === 1
+      && migrations.length === 145
+      && migrations[144]?.filename === SEO_LIMITS_MIGRATION
+      && pending[0]?.filename === SEO_LIMITS_MIGRATION
+      && pending[0]?.checksum === SEO_LIMITS_CHECKSUM
+      && applied.get(CREATIVE_STUDIO_MIGRATION) === CREATIVE_STUDIO_CHECKSUM) {
     return;
   }
   if (pending.length > 0) {

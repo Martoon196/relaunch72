@@ -1,3 +1,4 @@
+import { SEO_LIMITS_CHECKSUM } from '../../src/db/seo-limits-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -148,6 +149,7 @@ const migration140Url = new URL('../../src/db/migrations/0140_private_method_aut
 const migration141Url = new URL('../../src/db/migrations/0141_mhp_event_whatsapp_programme.sql', import.meta.url);
 const migration142Url = new URL('../../src/db/migrations/0142_mhp_payments_live.sql', import.meta.url);
 const migration143Url = new URL('../../src/db/migrations/0143_mhp_whatsapp_direct_inbox.sql', import.meta.url);
+const migration145Url = new URL('../../src/db/migrations/0145_seo_owner_limits.sql', import.meta.url);
 const migration144Url = new URL('../../src/db/migrations/0144_creative_studio_library.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
@@ -732,6 +734,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0142_mhp_payments_live.sql', version: 142 },
     { filename: '0143_mhp_whatsapp_direct_inbox.sql', version: 143 },
     { filename: '0144_creative_studio_library.sql', version: 144 },
+    { filename: '0145_seo_owner_limits.sql', version: 145 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -872,6 +875,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration142Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration143Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration144Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration145Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -887,6 +891,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===142)?.checksum, '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d');
   assert.equal(tail.find(m=>m.version===143)?.checksum, '69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e');
   assert.equal(tail.find(m=>m.version===144)?.checksum, CREATIVE_STUDIO_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===145)?.checksum, SEO_LIMITS_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

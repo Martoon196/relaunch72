@@ -1,3 +1,4 @@
+import { unlimited } from '../seo-blog/limits.js';
 /** Typed-brief image generation pages: briefs, honest cost review, explicit request, progress and results. */
 import { randomUUID } from 'node:crypto';
 import { SEO_IMAGE_SIZES } from '../seo-blog/image-generation.js';
@@ -23,14 +24,14 @@ export interface ReferenceChoice { readonly assetId: string; readonly sha256: st
 
 function settingsCard(shell: Shell, brand: Brand, state: GenerationState, policy: SeoImageOperatorPolicy | null, providerConfigured: boolean): string {
   const s = brand.settings.studioImages, enabled = s?.enabled === true, perMonth = s?.perMonth ?? 0;
-  const open = Boolean(policy?.enabled && policy.maxConcurrency > 0 && policy.monthlyMicrousd > 0 && policy.perAttemptMicrousd > 0);
+  const open = Boolean(policy?.enabled && policy.maxConcurrency > 0 && (policy.monthlyUnlimited === true || policy.monthlyMicrousd > 0) && policy.perAttemptMicrousd > 0);
   return `<section class="card" id="generation-settings"><h2>Allowances</h2>
-<ul class="small"><li><strong>Studio image generation:</strong> ${enabled ? `on, up to ${perMonth} per UTC month` : 'off'} (${state.usage.studioImagesCounted} counted this month${state.usage.studioUnresolved ? `, ${state.usage.studioUnresolved} awaiting reconciliation` : ''}).</li>
-<li><strong>Brand image allowance</strong> (shared with blog images, set in <a href="${SEO_BLOG_BASE}/b/${e(brand.id)}/publishing#campaign-images">Publishing</a>): ${state.usage.brandImagesThisMonth} of ${brand.settings.budgets.imagesPerMonth} used this month.</li>
+<ul class="small"><li><strong>Studio image generation:</strong> ${enabled ? `on, ${unlimited(brand.settings, 'studioImages') ? 'Unlimited' : `up to ${perMonth} per UTC month`}` : 'off'} (${state.usage.studioImagesCounted} counted this month${state.usage.studioUnresolved ? `, ${state.usage.studioUnresolved} awaiting reconciliation` : ''}).</li>
+<li><strong>Brand image allowance</strong> (shared with blog images, set in <a href="${SEO_BLOG_BASE}/b/${e(brand.id)}/publishing#campaign-images">Publishing</a>): ${state.usage.brandImagesThisMonth} of ${unlimited(brand.settings, 'images') ? 'Unlimited' : brand.settings.budgets.imagesPerMonth} used this month.</li>
 <li><strong>Platform image policy</strong> (operator-controlled): ${open ? 'open' : 'closed — no paid image can start'}. ${providerConfigured ? '' : 'The image provider is not configured on this server.'}</li></ul>
 <form method="post" action="${base(shell)}/generate/settings" class="cs-form">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${brand.rowVersion}">
 <label><input type="checkbox" name="enabled" value="1"${enabled ? ' checked' : ''} style="width:auto"> Allow paid images from typed briefs for this brand</label>
-<label for="gen-per-month">Studio images per UTC month (0 = none)</label><input id="gen-per-month" name="perMonth" type="number" min="0" max="1000" value="${perMonth}">
+<label for="gen-per-month">Studio images per UTC month (0 = none)</label>${unlimited(brand.settings, 'studioImages') ? `<input name="perMonth" type="hidden" value="${perMonth}"><output id="gen-per-month">Unlimited</output>` : `<input id="gen-per-month" name="perMonth" type="number" min="0" max="${brand.settings.operatorLimits?.studioImages ?? 1000}" value="${perMonth}">`}
 <button class="secondary" type="submit">Save allowance</button>
 <p class="small muted">A writing (model-token) allowance is not an image allowance. Each studio image also uses one of the brand image allowance above and is reserved against the platform’s monthly limit. Saving this never starts a request.</p></form></section>`;
 }
@@ -73,8 +74,8 @@ export function briefPage(shell: Shell, data: { brand: Brand; briefId: string; v
 <dt>Size</dt><dd>${e(SIZE_LABEL[est.size])}</dd><dt>Reference images</dt><dd>${est.references}</dd>
 <dt>Reserved against the platform limit</dt><dd>${est.reservedMicrousd === null ? 'Not available (paid images are not enabled)' : `${usd(est.reservedMicrousd)} (a fixed reservation set by the operator; it is not the charge and does not cap it)`}</dd>
 <dt>Exact cost</dt><dd>${e(est.exactCost)}</dd>
-<dt>Brand image allowance</dt><dd>${est.brandAllowance.remaining} of ${est.brandAllowance.limit} left this month</dd>
-<dt>Studio image allowance</dt><dd>${est.studioAllowance.enabled ? `${est.studioAllowance.remaining} of ${est.studioAllowance.limit} left this month` : 'off'}${est.studioAllowance.unresolved ? ` (${est.studioAllowance.unresolved} awaiting reconciliation still count)` : ''}</dd></dl>
+<dt>Brand image allowance</dt><dd>${est.brandAllowance.unlimited ? 'Unlimited' : `${est.brandAllowance.remaining} of ${est.brandAllowance.limit} left this month`}</dd>
+<dt>Studio image allowance</dt><dd>${est.studioAllowance.enabled ? `${est.studioAllowance.unlimited ? 'Unlimited' : `${est.studioAllowance.remaining} of ${est.studioAllowance.limit} left this month`}` : 'off'}${est.studioAllowance.unresolved ? ` (${est.studioAllowance.unresolved} awaiting reconciliation still count)` : ''}</dd></dl>
 ${est.blockers.length ? `<ul class="blockers small">${est.blockers.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}</div>`;
   const requestForm = active ? `<p role="status" data-creative-job="${e(active.id)}" data-endpoint="${base(shell)}/jobs/${e(active.id)}">${pill(active.state)} <span data-job-detail>${e(active.progress)}</span></p><p class="small muted">You can leave this page; the request continues on the server and survives restarts.</p><noscript><p class="small"><a href="">Refresh to check progress</a></p></noscript>`
     : `<form method="post" action="${base(shell)}/generate/${e(data.briefId)}/request">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="version" value="${current.version}">

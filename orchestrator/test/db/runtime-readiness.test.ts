@@ -498,8 +498,11 @@ test('MHP inbox 143 cutover and recovery accept only the exact adjacent ledgers'
 });
 
 test('creative144 release is ready only on the exact applied MHP 0143 ledger with 0144 pending, never during the 0143 cut-over', async () => {
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, bundle, {});
+  const shipped=(await discoverMigrations()).slice(0,144);
+  const bundle=await mkdtemp(path.join(tmpdir(),'r72-studio144-'));
+  await Promise.all(shipped.map(m=>writeFile(path.join(bundle,m.filename),m.sql,'utf8')));
+  const rows=shipped.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,144);
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
   assert.deepEqual(rows[142],{filename:DIRECT_WA_MIGRATION,checksum:DIRECT_WA_CHECKSUM});
@@ -517,4 +520,18 @@ test('creative144 release is ready only on the exact applied MHP 0143 ledger wit
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0145_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('owner limits 145 accepts only the exact applied Studio 144 ledger or its full successor', async()=>{
+  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(rows.length,145);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),undefined,{});
+  await check(rows.slice(0,144));
+  await check(rows);
+  await assert.rejects(check(rows.slice(0,143)),/schema is behind by 2/);
+  for(const at of [0,136,142,143,144]) {
+    const changed=rows.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r);
+    await assert.rejects(check(changed),/checksum changed/);
+  }
+  await assert.rejects(check([...rows,{filename:'0146_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });

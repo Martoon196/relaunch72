@@ -36,6 +36,8 @@ import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
+import { limitsPage } from './seo-blog-limits-view.js';
+import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 
 export interface SeoBlogRouteInput {
@@ -143,7 +145,7 @@ function lines(value: string | null): string[] {
 }
 
 function int(value: string | null, field: string): number {
-  if (value === null || !/^\d{1,10}$/.test(value.trim())) throw new SeoBlogError(400, `Enter a whole number for ${field}.`);
+  if (value === null || !/^\d{1,16}$/.test(value.trim()) || !Number.isSafeInteger(Number(value?.trim()))) throw new SeoBlogError(400, `Enter a whole number for ${field}.`);
   return Number(value.trim());
 }
 
@@ -202,6 +204,23 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const form: FormData = multipart ? parseMultipartForm(body, contentType) : { fields: new URLSearchParams(body.toString('utf8')), file: null };
       const f = (name: string) => form.fields.get(name);
       if (!verifyPortalCsrf(input.sessionSecret, identity.sessionToken, f('_csrf') ?? undefined)) throw new SeoBlogError(403, 'Your form expired. Refresh the page and try again.');
+      if (path === `${SEO_BLOG_BASE}/limits`) {
+        const limits = input.service.limitsFor?.(identity, input.requestId);
+        if (!limits || !(await limits.allowed())) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
+        if (f('action') === 'policy') {
+          const version = Number(f('version')), concurrency = Number(f('concurrency'));
+          const monthly = f('monthlyUnlimited') === '1' ? null : Number(f('monthly')) * 1_000_000;
+          if (!Number.isSafeInteger(version) || version < 1 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10
+            || (monthly !== null && (!Number.isSafeInteger(monthly) || monthly < 0 || monthly > 1_000_000_000_000))) throw new SeoBlogError(400, 'Check the platform limits.');
+          await limits.policy(version, { enabled: f('enabled') === '1', concurrency, monthlyMicrousd: monthly });
+        } else {
+          const target = f('target') ?? '', rowVersion = Number(f('rowVersion'));
+          if (!new RegExp(`^${UUID}$`, 'i').test(target) || !Number.isSafeInteger(rowVersion) || rowVersion < 1) throw new SeoBlogError(400, 'Refresh and select the account again.');
+          await limits.save(target, rowVersion, { modelTokens: limitFromForm(form.fields, 'modelTokens'), searchCalls: limitFromForm(form.fields, 'searchCalls'),
+            images: limitFromForm(form.fields, 'images'), studioImages: limitFromForm(form.fields, 'studioImages') });
+        }
+        return ok(`${SEO_BLOG_BASE}/limits`, 'Limits saved. Usage history and publishing settings are unchanged.');
+      }
       return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
     }
     if (method !== 'GET' && method !== 'HEAD') throw new SeoBlogError(405, 'Use the controls on the page.');
@@ -213,8 +232,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     }
     const brands = await engine.listBrands(actor);
     const messages = readMessage(input.sessionSecret, url);
+    const limits = input.service.limitsFor?.(identity, input.requestId);
+    const limitsAvailable = limits ? await limits.allowed() : false;
+    if (path === `${SEO_BLOG_BASE}/limits`) {
+      if (!limits || !limitsAvailable) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
+      return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
+    }
     if (path === SEO_BLOG_BASE) {
-      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, applicationName: input.applicationName }, randomUUID()));
+      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID()));
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
@@ -233,7 +258,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
