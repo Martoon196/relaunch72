@@ -38,6 +38,24 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: npx --no-install playwright-core install --with-deps --only-shell chromium
+      - name: Permit the exact pinned CI browser to create its sandbox
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+        run: |
+          # Ubuntu's AppArmor restriction blocked Chromium's namespace sandbox.
+          # Use Chromium's documented per-binary profile, not a global switch
+          # or an application --no-sandbox override. Disposable runner only.
+          # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
+          webinar_ci_chromium="$(node --import tsx --input-type=module -e "import {findCreativeChromium} from './orchestrator/src/creative-studio/renderer.ts'; console.log(findCreativeChromium() ?? '')")"
+          test -x "$webinar_ci_chromium"
+          sudo tee /etc/apparmor.d/rl72-ci-chromium >/dev/null <<PROFILE
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile rl72-ci-chromium "$webinar_ci_chromium" flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/rl72-ci-chromium
       - name: Verify the renderer starts with the application sandbox policy
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
