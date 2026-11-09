@@ -601,7 +601,7 @@ export const STUDIO_SCRIPT = String.raw`(function () {
     var buttons = sessionControls.querySelectorAll('button');
     Array.prototype.forEach.call(buttons, function (b) { b.disabled = true; });
     say(status, action === 'end' ? 'Ending the session…' : 'Opening the broadcast…');
-    fetch(form.action, { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) })
+    fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) })
       .then(function (r) { return r.text().then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var error = doc.querySelector('[role="alert"]');
