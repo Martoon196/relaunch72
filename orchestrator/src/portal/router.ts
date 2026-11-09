@@ -2011,7 +2011,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       service: deps.kind === 'postgres' ? deps.webinars : undefined,
       setup: deps.kind === 'postgres' && deps.webinarSetup ? deps.webinarSetup
         : { database: false, databaseDetail: deps.kind === 'postgres'
-            ? 'The webinar service is not composed on this deployment: it needs DATABASE_CONTENT_COMMAND_URL (r72_content_command) and migration 0144 applied.'
+            ? 'The webinar service is not composed on this deployment: it needs DATABASE_CONTENT_COMMAND_URL (r72_content_command) and migration 0146 applied.'
             : 'Webinars need the PostgreSQL workspace (this deployment runs the legacy sandbox portal).', config: null, crmAvailable: false },
       identity: deps.kind === 'postgres' ? portalIdentity : null,
       authenticated: deps.kind === 'postgres' ? portalIdentity !== null : tenantId !== null,

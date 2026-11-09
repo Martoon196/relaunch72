@@ -528,27 +528,43 @@ test('creative144 release is ready only on the exact applied MHP 0143 ledger wit
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0145_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
 
-test('webinars 145 cutover and prepared 144 recovery accept only the exact reviewed 0145', async()=>{
+test('webinars146 cutover and prepared limits145 recovery require the exact applied limits ledger', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
-  assert.equal(all.length,145);
-  assert.deepEqual(all[144],{filename:WEBINARS_MIGRATION,checksum:WEBINARS_CHECKSUM});
-  const through144=all.slice(0,144);
-  const webinars=all[144]!;
-  const forged={...webinars,checksum:'a'.repeat(64)};
-  // The capable 145 release: ready on the exact 144 ledger (0145 pending) and after 0145.
+  assert.equal(all.length,146);
+  assert.equal(all[144]!.filename,'0145_seo_owner_limits.sql');
+  assert.equal(all[144]!.checksum,'5cfa689e208bb4cf2197451dd04b00d2a214e1368887106e005b2e26e0a664df');
+  assert.deepEqual(all[145],{filename:WEBINARS_MIGRATION,checksum:WEBINARS_CHECKSUM});
+  const through145=all.slice(0,145), native=all[145]!;
   const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
-  await assert.doesNotReject(capable(through144));
-  await assert.doesNotReject(capable(all));
-  await assert.rejects(capable(all.slice(0,143)),/schema is behind by 2 migration/);
-  await assert.rejects(capable([...through144,forged]),/checksum changed/);
-  await assert.rejects(capable([...through144.slice(0,-1),webinars]),/not a contiguous prefix|behind/);
-  await assert.rejects(capable([...through144.slice(0,-1),{...through144[143]!,checksum:'0'.repeat(64)}]),/checksum changed|behind/);
-  await assert.rejects(capable([...all,{filename:'0146_unreviewed.sql',checksum:'a'.repeat(64)}]),/migration not present/);
-  // The 144 recovery release stays ready after the exact additive 0145 only.
-  const directory=await prefixDirectory(144,'webinars144');
-  const recovery=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),directory,{});
-  await assert.doesNotReject(recovery(through144));
-  await assert.doesNotReject(recovery(all));
-  await assert.rejects(recovery([...through144,forged]),/migration not present/);
-  await assert.rejects(recovery([...all.slice(0,142),webinars]),/migration not present|not a contiguous prefix/);
+  await capable(through145); await capable(all);
+  await assert.rejects(capable(all.slice(0,144)),/schema is behind by 2/);
+  await assert.rejects(capable([...through145,{...native,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,144),native]),/not a contiguous prefix|behind/);
+  const recoveryDir=await prefixDirectory(145,'limits145-native146-recovery');
+  const recovery=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),recoveryDir,{});
+  await recovery(through145); await recovery(all);
+  await assert.rejects(recovery([...through145,{...native,checksum:'0'.repeat(64)}]),/migration not present/);
+  await assert.rejects(recovery([...all.slice(0,144),native]),/migration not present|not a contiguous prefix/);
+  for(const at of [0,120,136,140,141,142,143,144]) {
+    const changed=all.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r);
+    await assert.rejects(capable(changed),/checksum changed/);
+    await assert.rejects(recovery(changed),/checksum changed|migration not present/);
+  }
+  await assert.rejects(capable([...all,{filename:'0147_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(recovery([...all,{filename:'0147_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('owner limits 145 accepts only the exact applied Studio 144 ledger or its full successor', async()=>{
+  const directory=await prefixDirectory(145,'limits145-historical');
+  const rows=(await discoverMigrations()).slice(0,145).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(rows.length,145);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows.slice(0,144));
+  await check(rows);
+  await assert.rejects(check(rows.slice(0,143)),/schema is behind by 2/);
+  for(const at of [0,136,142,143,144]) {
+    const changed=rows.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r);
+    await assert.rejects(check(changed),/checksum changed/);
+  }
+  await assert.rejects(check([...rows,{filename:'0146_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });

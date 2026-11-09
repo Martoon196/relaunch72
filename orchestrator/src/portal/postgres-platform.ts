@@ -208,7 +208,7 @@ export interface PgPortalPlatform {
   followupFlows?: PortalFollowupFlowService;
   /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
   seoBlog?: PortalSeoBlogService;
-  /** Native webinars; omitted unless r72_content_command is ready and migration 0145 is applied. */
+  /** Native webinars; omitted unless r72_content_command is ready and migration 0146 is applied. */
   webinars?: PgWebinarService;
   /** In-process worker for webinar messages and Cloudflare reconciliation (started by the server). */
   webinarWorker?: WebinarWorker;
@@ -1321,7 +1321,7 @@ export async function buildPgPortalPlatform(
           const studioProbe = await webinarStudio.probe();
           webinarSetup = { database: true, databaseDetail: '', config: webinarConfig, crmAvailable: true, studio: studioProbe };
         } else {
-          webinarSetup = { ...webinarSetup, databaseDetail: 'Migration 0145 (native webinars) is not applied to this database yet.' };
+          webinarSetup = { ...webinarSetup, databaseDetail: 'Migration 0146 (native webinars) is not applied to this database yet.' };
         }
       } catch {
         webinarSetup = { ...webinarSetup, databaseDetail: 'The webinar schema check failed; webinars stay off until it passes.' };

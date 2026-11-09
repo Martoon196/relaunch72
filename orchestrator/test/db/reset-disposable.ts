@@ -79,6 +79,7 @@ const APP_ROLES = [
   'r72_public',
   'r72_readonly',
   'r72_security_definer',
+  'r72_seo_limits_definer',
   'r72_seo_media_definer',
   'r72_seo_method_definer',
   'r72_setup_delivery_command',

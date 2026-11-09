@@ -186,6 +186,7 @@ export interface SeoImageOperatorPolicy {
   readonly quality: 'medium';
   readonly maxConcurrency: number;
   readonly monthlyMicrousd: number;
+  readonly monthlyUnlimited?: boolean;
   readonly perAttemptMicrousd: number;
   readonly admissionEpoch: number;
 }

@@ -1,3 +1,4 @@
+import { unlimited, COMPATIBLE_UNLIMITED } from '../seo-blog/limits.js';
 /**
  * Owner-facing typed-brief generation: save a brief, review the cost and allowances, then explicitly request
  * one paid image. The HTTP request only records the intent as a durable job; the worker performs the call.
@@ -24,8 +25,8 @@ export interface GenerationEstimate {
   readonly reservedMicrousd: number | null;
   readonly exactCost: string;
   /** `used` is what admission will count: this month's debits plus unresolved attempts from earlier months. */
-  readonly brandAllowance: Readonly<{ limit: number; used: number; remaining: number }>;
-  readonly studioAllowance: Readonly<{ enabled: boolean; limit: number; counted: number; unresolved: number; remaining: number }>;
+  readonly brandAllowance: Readonly<{ limit: number; used: number; remaining: number; unlimited?: boolean }>;
+  readonly studioAllowance: Readonly<{ unlimited?: boolean; enabled: boolean; limit: number; counted: number; unresolved: number; remaining: number }>;
   readonly sharedLimitOpen: boolean;
   readonly blockers: readonly string[];
 }
@@ -60,18 +61,18 @@ export class CreativeGeneration {
   estimate(brand: Brand, state: GenerationState, policy: SeoImageOperatorPolicy | null, brief: CreativeBrief, policyUnreadable = false): GenerationEstimate {
     const studio = brand.settings.studioImages, enabled = studio?.enabled === true, studioLimit = enabled ? studio!.perMonth : 0;
     const brandLimit = brand.settings.budgets.imagesPerMonth, used = state.usage.brandImagesThisMonth + state.usage.brandUnresolvedEarlier;
-    const sharedOpen = Boolean(policy && policy.enabled && policy.maxConcurrency > 0 && policy.perAttemptMicrousd > 0 && policy.monthlyMicrousd > 0);
+    const sharedOpen = Boolean(policy && policy.enabled && policy.maxConcurrency > 0 && policy.perAttemptMicrousd > 0 && (policy.monthlyUnlimited === true || policy.monthlyMicrousd > 0));
     const blockers = [
       ...(!this.deps.providerConfigured ? ['The image provider is not configured on this server.'] : []),
       ...(policyUnreadable ? ['The platform image policy could not be read just now. Try again shortly.'] : !sharedOpen ? ['Paid image generation is not enabled by the platform operator.'] : []),
-      ...(!enabled ? ['Studio image generation is switched off for this brand.'] : studioLimit - state.usage.studioImagesCounted <= 0 ? ['The studio image allowance for this month is used up or zero.'] : []),
-      ...(brandLimit - used <= 0 ? ['The brand image allowance (shared with blog images) is used up or zero.'] : []),
+      ...(!enabled ? ['Studio image generation is switched off for this brand.'] : !unlimited(brand.settings, 'studioImages') && studioLimit - state.usage.studioImagesCounted <= 0 ? ['The studio image allowance for this month is used up or zero.'] : []),
+      ...(!unlimited(brand.settings, 'images') && brandLimit - used <= 0 ? ['The brand image allowance (shared with blog images) is used up or zero.'] : []),
     ];
     return Object.freeze({ paidGenerations: 1 as const, model: CREATIVE_IMAGE_MODEL, quality: CREATIVE_IMAGE_QUALITY, size: brief.size, references: brief.references.length,
       reservedMicrousd: policy && sharedOpen ? policy.perAttemptMicrousd : null,
       exactCost: 'The provider bills by tokens and returns usage after the call; the exact charge is not known in advance. If usage is not returned, the cost is recorded as unknown, never as zero. Reference images add input cost.',
-      brandAllowance: { limit: brandLimit, used, remaining: Math.max(0, brandLimit - used) },
-      studioAllowance: { enabled, limit: studioLimit, counted: state.usage.studioImagesCounted, unresolved: state.usage.studioUnresolved, remaining: Math.max(0, studioLimit - state.usage.studioImagesCounted) },
+      brandAllowance: { limit: brandLimit, used, unlimited: unlimited(brand.settings, 'images'), remaining: unlimited(brand.settings, 'images') ? COMPATIBLE_UNLIMITED : Math.max(0, brandLimit - used) },
+      studioAllowance: { enabled, limit: studioLimit, counted: state.usage.studioImagesCounted, unresolved: state.usage.studioUnresolved, unlimited: unlimited(brand.settings, 'studioImages'), remaining: unlimited(brand.settings, 'studioImages') ? COMPATIBLE_UNLIMITED : Math.max(0, studioLimit - state.usage.studioImagesCounted) },
       sharedLimitOpen: sharedOpen, blockers });
   }
 
@@ -88,9 +89,9 @@ export class CreativeGeneration {
   }
 
   async configure(actorId: string, brandId: string, rowVersion: number, enabled: boolean, perMonth: number): Promise<void> {
-    await this.brand(actorId, brandId);
+    const brand = await this.brand(actorId, brandId);
     if (!this.deps.settings) throw new SeoBlogError(503, 'Settings are not available here.');
-    if (!Number.isInteger(perMonth) || perMonth < 0 || perMonth > 1000) throw new SeoBlogError(400, 'Studio image allowance must be a whole number from 0 to 1000.');
+    if (!Number.isInteger(perMonth) || perMonth < 0 || perMonth > (brand.settings.operatorLimits?.studioImages === null ? COMPATIBLE_UNLIMITED : brand.settings.operatorLimits?.studioImages ?? 1000)) throw new SeoBlogError(400, 'Studio image allowance must be a whole number within your assigned limit.');
     await this.deps.settings.configure(actorId, brandId, rowVersion, { enabled, perMonth });
   }
 

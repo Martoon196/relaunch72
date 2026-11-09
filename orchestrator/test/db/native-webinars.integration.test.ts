@@ -1,5 +1,5 @@
 /**
- * Native webinars on a disposable PostgreSQL (migration 0145) with the actual
+ * Native webinars on a disposable PostgreSQL (migration 0146) with the actual
  * r72_content_command and r72_crm_command roles. Cloudflare and Postmark are
  * replaced by recording fakes at the HTTP boundary: this proves application,
  * schema and RLS behaviour, not live Cloudflare acceptance.
@@ -20,7 +20,7 @@ import { WebinarWorker } from '../../src/webinars/worker.js';
 
 const skip = testDatabaseSkipReason();
 
-test('0145 native webinars: brand isolation, registration, reminders, signals, Q&A, Stream lifecycle and CRM handoff on actual roles', { skip, timeout: 300_000 }, async () => {
+test('0146 native webinars: brand isolation, registration, reminders, signals, Q&A, Stream lifecycle and CRM handoff on actual roles', { skip, timeout: 300_000 }, async () => {
   const admin = await openTestDatabase();
   const content = await loginRole(admin, 'r72_content_command');
   const crmPool = await loginRole(admin, 'r72_crm_command');

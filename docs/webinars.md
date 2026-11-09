@@ -131,20 +131,27 @@ reachable from the build environment. Re-check against current docs during the l
 
 ## Data and release — current integration order
 
-Creative Studio already owns **0144** on canonical. Native webinars is now
-**0145_native_webinars.sql**, with unchanged SQL SHA-256
+Creative Studio owns **0144**, and the separately released owner usage limits own
+**0145_seo_owner_limits.sql** (SHA-256
+`5cfa689e208bb4cf2197451dd04b00d2a214e1368887106e005b2e26e0a664df`). Native webinars is now
+**0146_native_webinars.sql**, with unchanged SQL SHA-256
 `dea9e16c2743b58b5901f95be06abcfc39d2237dc087b1c949478eb17357f3af`.
-Payment 0142, inbox 0143 and Creative Studio 0144 are preserved.
+Payment 0142, inbox 0143, Creative Studio 0144 and the applied limits 0145 are preserved.
 
-The 145 application is ready on the exact applied 144 ledger with only its reviewed
-145 pending, and after 145. It is not deployable on a 143 database while Creative
-Studio 144 is also pending. Verify actual source/schema before starting a release.
+The 146 application is ready on the exact applied 145 ledger with only its reviewed
+146 pending, and after 146. It refuses a 144 ledger with both limits and webinars
+pending. Verify actual source/schema before starting a release.
 
-**The currently released 143/144 binaries are not assumed to support rollback after
-145.** A separate prepared 144 recovery source is
-`ba05116ace7b4ac53bbb98bbb31eb6a38bfb3ed5`, tree
-`174d3f90aada3bd7e52b57bdbf9280135d28d285`. Its exact readiness bridge accepts
-only this additive 145; it does not contain the webinar routes or services.
+**Already released binaries are not assumed to support rollback after 146.**
+Prepare and prove a separate recovery artifact from the exact released limits/Studio
+source, with an explicit readiness bridge for only this additive 146 and without
+webinar routes or services. The prepared source is
+`2c99f7b36042a5bfb8879b967310ac9f2897d8a2`, tree
+`12ecc3f70f72f6c0b18a0c178d6351aae2e84814`, directly based on Studio
+`9bf20d2d39539e9ef93b81380c6e2103373238bf`. Record the actual-role proof in the release
+receipt before cutover. Until that artifact passes, production rollout remains blocked.
+The former native-145 recovery `ba05116ace7b4ac53bbb98bbb31eb6a38bfb3ed5` is historical:
+it does not accept the current limits-145 namespace and must not be used for recovery.
 
 ### Before production
 
@@ -158,12 +165,12 @@ that exact host was checked.
 
 ### Controlled rollout, after review and owner rehearsal
 
-1. Confirm Creative Studio 144 is actually applied and the shared release window
+1. Confirm the exact owner limits 145 is actually applied and the shared release window
    is available. Preserve existing MHP/other brands' environment settings.
-2. Retain and prove the exact prepared 144 recovery artifact. Deploy the exact
-   capable 145 source to every strict schema consumer with new webinar mail and
+2. Retain and prove the exact prepared limits-145 recovery artifact. Deploy the exact
+   capable 146 source to every strict schema consumer with new webinar mail and
    worker disabled. Verify `/ready` and the honest setup state before migration.
-3. Apply only reviewed 145 with the migrator; verify the exact ledger/checksum and
+3. Apply only reviewed 146 with the migrator; verify the exact ledger/checksum and
    `/ready` on every consumer. Restart the app so its schema-probed service composes.
 4. Verify the Webinars menu, owner permissions, actual Render FFmpeg checks and
    the approved configuration. Activate only the bounded webinar mode reviewed
@@ -171,7 +178,7 @@ that exact host was checked.
 
 ### Recovery and pause
 
-Use the exact prepared 144 recovery release above; never assume an older binary
+Use the exact proved limits-145 recovery release above; never assume an older binary
 accepts the advanced ledger. No down-migration or removal of recorded data.
 `WEBINAR_EMAIL_MODE=off` and `WEBINAR_WORKER_ENABLED=false` are startup configuration:
 after changing Render environment values the running process must be restarted or
@@ -274,4 +281,7 @@ applications, MHP marketing templates and `MHP_MARKETING_MODE`) is **not changed
   instances the effective limit multiplies. Room polling and signals are limited per registration (240 requests
   per minute each), so an office or campus behind one address is never throttled as a group; questions and
   signals are additionally bounded in the database.
-* Integration preserves Creative Studio 0144 and uses native webinars 0145.
+* The original integration preserved Creative Studio 0144 and used native webinars
+  0145. Following the separate production limits-0145 release, the future combined
+  source preserves those exact bytes and uses native webinars 0146. The isolated
+  rehearsal remains pinned to its separate native-0145 test database.

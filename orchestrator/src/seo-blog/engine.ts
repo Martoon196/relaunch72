@@ -1,3 +1,4 @@
+import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED } from './limits.js';
 /**
  * SEO blog engine service. The portal router, the worker and tests all drive
  * the engine through this class. Every owner call carries the server-resolved
@@ -217,6 +218,7 @@ export class SeoBlogEngine {
         ...(patch.programme ? {focus:cleanText(patch.programme.focus??'').slice(0,300)||null,exclusions:(patch.programme.exclusions??[]).map((x)=>cleanText(x).slice(0,80)).filter(Boolean).slice(0,20)} : {}),
         authorisedBy:actor.userId,authorisedAt:this.now()}} : {}),
     };
+    enforceManagedLimits(brand.settings, next);
     validateSettings(next);
     const updated = await this.store.updateBrand({ ...brand, settings: next });
     const changes: string[] = [];
@@ -351,7 +353,7 @@ export class SeoBlogEngine {
   // ─── Profile ─────────────────────────────────────────────────────────────
 
   private async requireBudget(brand: Brand, kind: UsageKind, amount: number): Promise<void> {
-    const ceiling = kind === 'model_tokens' ? brand.settings.budgets.modelTokensPerMonth : kind === 'search_calls' ? brand.settings.budgets.searchCallsPerMonth : brand.settings.budgets.imagesPerMonth;
+    const ceiling = monthlyCeiling(brand.settings, kind);
     const used = await this.store.usageSince(brand.id, kind, monthStart(this.now()));
     if (ceiling <= 0 || used + amount > ceiling) throw new BudgetExceededError(kind, used, ceiling, amount);
   }
@@ -2647,13 +2649,13 @@ export function normaliseWebsite(raw: string): string {
 
 function validateSettings(s: BrandSettings): void {
   if (s.media && typeof s.media.imageGenerationEnabled !== 'boolean') throw new SeoBlogError(400, 'Invalid image generation toggle.');
-  if (s.studioImages && (typeof s.studioImages.enabled !== 'boolean' || !Number.isInteger(s.studioImages.perMonth) || s.studioImages.perMonth < 0 || s.studioImages.perMonth > 1000))
-    throw new SeoBlogError(400, 'Studio image allowance must be a whole number from 0 to 1000.');
+  if (s.studioImages && (typeof s.studioImages.enabled !== 'boolean' || !Number.isInteger(s.studioImages.perMonth) || s.studioImages.perMonth < 0 || s.studioImages.perMonth > (s.operatorLimits?.studioImages === null ? COMPATIBLE_UNLIMITED : s.operatorLimits?.studioImages ?? 1000)))
+    throw new SeoBlogError(400, 'Studio image allowance must be a whole number within your assigned limit.');
   validateCadence(s.cadence);
   if (!Number.isInteger(s.planningHorizonDays) || s.planningHorizonDays < 7 || s.planningHorizonDays > 120) throw new SeoBlogError(400, 'Planning horizon must be 7–120 days.');
   if (!Number.isInteger(s.backlogCeiling) || s.backlogCeiling < 0 || s.backlogCeiling > 50) throw new SeoBlogError(400, 'Backlog ceiling must be 0–50 articles.');
   if (!['concise', 'standard', 'in-depth'].includes(s.lengthPreference)) throw new SeoBlogError(400, 'Choose a length preference.');
-  for (const [k, v] of Object.entries(s.budgets)) if (!Number.isInteger(v) || v < 0 || v > 1_000_000_000) throw new SeoBlogError(400, `Budget ${k} must be a whole number of 0 or more.`);
+  for (const [k, v] of Object.entries(s.budgets)) if (!Number.isInteger(v) || v < 0 || (v > 1_000_000_000 && !(v === COMPATIBLE_UNLIMITED && unlimited(s, k === 'modelTokensPerMonth' ? 'modelTokens' : k === 'searchCallsPerMonth' ? 'searchCalls' : 'images')))) throw new SeoBlogError(400, `Budget ${k} must be a whole number of 0 or more.`);
   if (s.author && (!s.author.name.trim() || s.author.name.length > 120 || (s.author.url && !/^https:\/\//.test(s.author.url)))) throw new SeoBlogError(400, 'Author needs a name and, optionally, an https:// profile link.');
   for (const key of ['autoPublish', 'pauseAll', 'ongoingProduction', 'autoAcceptPlans'] as const) if (typeof s[key] !== 'boolean') throw new SeoBlogError(400, 'Invalid toggle value.');
 }

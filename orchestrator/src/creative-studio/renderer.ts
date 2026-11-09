@@ -15,12 +15,12 @@ import jpeg from 'jpeg-js';
 import type { VerifiedImage } from './image-input.js';
 import { remuxFragmentedMp4 } from './mp4-remux.js';
 import type { Placement } from './placements.js';
-import type { ArtworkIssue, Palette } from './types.js';
+import type { ArtworkIssue, Palette, CreativeTypography } from './types.js';
 
-export const RENDERER_VERSION = 'r72-creative-chromium-v1';
+export const RENDERER_VERSION = 'r72-creative-chromium-v2';
 const ORIGIN = 'https://render.invalid';
 const FONT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fonts');
-const FONTS = Object.freeze({ 'display.otf': 'inter-display-bold.otf', 'text.otf': 'inter-regular.otf', 'strong.otf': 'inter-semibold.otf' });
+const FONTS = Object.freeze({ 'display.otf': 'inter-display-bold.otf', 'text.otf': 'inter-regular.otf', 'strong.otf': 'inter-semibold.otf', 'website.ttf': 'arimo-variable.ttf' });
 const SCRIM_STEPS = Object.freeze([0.42, 0.55, 0.68, 0.8, 0.9]);
 const RENDER_TIMEOUT_MS = 20_000;
 /** Upper bound on one in-page step; the playback check's own waits stay well inside it. */
@@ -34,6 +34,7 @@ function fonts(): Map<string, Buffer> {
 type SessionFiles = Map<string, { type: string; body: Buffer }>;
 
 export interface ArtworkInput {
+  readonly typography?: CreativeTypography;
   readonly placement: Placement;
   readonly palette: Palette;
   readonly brandName: string;
@@ -152,6 +153,9 @@ function cover(img: VerifiedImage, w: number, h: number, focal: { x: number; y: 
 
 export function artworkHtml(input: ArtworkInput): string {
   const { placement: pl, palette } = input;
+  const websiteSans = input.typography === 'website_sans';
+  const face = (normal: string) => websiteSans ? 'website.ttf' : normal;
+  const format = websiteSans ? 'truetype' : 'opentype';
   const W = pl.width, H = pl.height, side = pl.layout === 'side';
   const disclosureSize = Math.max(18, Math.round(W * 0.019));
   const ctaSize = Math.round(pl.body.size * 0.95);
@@ -173,9 +177,9 @@ export function artworkHtml(input: ArtworkInput): string {
   const card = input.card ? `<span class="card">${input.card.current}/${input.card.total}</span>` : '';
   const s = pl.safe;
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><style>
-@font-face{font-family:R72Display;src:url(${ORIGIN}/f/display.otf) format('opentype');font-weight:700}
-@font-face{font-family:R72Text;src:url(${ORIGIN}/f/text.otf) format('opentype');font-weight:400}
-@font-face{font-family:R72Text;src:url(${ORIGIN}/f/strong.otf) format('opentype');font-weight:600}
+@font-face{font-family:R72Display;src:url(${ORIGIN}/f/${face('display.otf')}) format('${format}');font-weight:700}
+@font-face{font-family:R72Text;src:url(${ORIGIN}/f/${face('text.otf')}) format('${format}');font-weight:400}
+@font-face{font-family:R72Text;src:url(${ORIGIN}/f/${face('strong.otf')}) format('${format}');font-weight:600}
 *{box-sizing:border-box}html,body{margin:0;padding:0;width:${W}px;height:${H}px;overflow:hidden;background:${palette.dark}}
 #art{position:relative;width:${W}px;height:${H}px;overflow:hidden;--scrim:0.42;font-family:R72Text;color:${palette.light};-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;font-kerning:normal}
 #bg{position:absolute;display:block;max-width:none}
@@ -363,7 +367,7 @@ export class ChromiumArtworkRenderer implements ArtworkRenderer {
       try {
         const context = await browser.newContext({ javaScriptEnabled: true, serviceWorkers: 'block', deviceScaleFactor: 1, viewport: { width: 1280, height: 900 } });
         const files: SessionFiles = new Map();
-        for (const [key, body] of fonts()) files.set(key, { type: 'font/otf', body });
+        for (const [key, body] of fonts()) files.set(key, { type: key.endsWith('.ttf') ? 'font/ttf' : 'font/otf', body });
         await context.route('**/*', async (route) => {
           const url = new URL(route.request().url());
           const file = url.origin === ORIGIN ? files.get(url.pathname) : undefined;

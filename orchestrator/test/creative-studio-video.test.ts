@@ -147,7 +147,7 @@ test('real Chromium records a playable MP4/WebM of the exact scenes and the play
   const r = new ChromiumArtworkRenderer();
   const bg = verifyCreativeImage(syntheticLandscapeJpeg()), logo = verifyCreativeImage(syntheticLogoPng([255, 255, 255]));
   const palette = { primary: '#0f766e', accent: '#fbbf24', dark: '#0b2421', light: '#ffffff' };
-  const base = { placement: PLACEMENTS.square, palette, brandName: 'Hearth', logo, background: bg, focal: { x: 0.5, y: 0.5 }, hook: null, body: null, cta: null, disclosure: 'Fictional demonstration brand.', illustrativeTag: true, card: null, captureOverlay: true };
+  const base = { typography: 'website_sans' as const, placement: PLACEMENTS.square, palette, brandName: 'Hearth', logo, background: bg, focal: { x: 0.5, y: 0.5 }, hook: null, body: null, cta: null, disclosure: 'Fictional demonstration brand.', illustrativeTag: true, card: null, captureOverlay: true };
   const frames = await r.renderBatch([{ ...base, headline: 'Is your boiler ready for winter?' }, { ...base, background: null, headline: 'Book a service', cta: 'Book a service' }]);
   assert.ok(frames.every((f) => f.overlay && f.overlay.subarray(1, 4).toString() === 'PNG'));
   const v = await r.renderVideo({ width: 1080, height: 1080, palette, scenes: [{ background: bg, focal: { x: 0.5, y: 0.5 }, overlay: frames[0]!.overlay!, durationMs: 2000, motion: 'zoom_in' }, { background: null, focal: { x: 0.5, y: 0.5 }, overlay: frames[1]!.overlay!, durationMs: 2000, motion: 'none' }] });
