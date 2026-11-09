@@ -13,6 +13,23 @@ import {websiteFixture} from './seo-blog-website-fixtures.js';
 
 const SECRET = 's'.repeat(48);
 
+test('article FAQ corrections save through the normal free editor with legacy-form and malformed-pair protection',async()=>{
+ const f=await websiteFixture(),engine=f.h.engine,who=identity(OWNER.userId),csrf=portalCsrfToken(SECRET,who.sessionToken);
+ const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>engine,socialCallback:async()=>null};
+ const base=`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`,before=(await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!,b=before.body,calls=f.h.llm.calls.length,usage=await engine.usage(OWNER,f.brand.id);
+ const form={_csrf:csrf,versionId:before.id,title:b.title,slug:b.slug,seoTitle:b.seoTitle,metaDescription:b.metaDescription,excerpt:b.excerpt,intro:b.intro,conclusion:b.conclusion,imageUrl:b.image.url??'',imageAlt:b.image.alt,sectionId:b.sections.map(s=>s.id),sectionHeading:b.sections.map(s=>s.heading),sectionBody:b.sections.map(s=>s.body)};
+ const questions=b.faqs.map(f=>f.q),answers=b.faqs.map(f=>f.a);answers[0]='Keep the source and its limitations visible when comparing the evidence.';
+ const page=await call(service,who,'GET',base);assert.match(page.body,/name="faqQuestion"/);assert.match(page.body,/name="faqAnswer"/);
+ for(const bad of [{faqAnswer:[]},{faqAnswer:['']},{faqQuestion:Array(9).fill('A question?'),faqAnswer:Array(9).fill('A useful answer.')}]){
+  const invalidForm=Object.assign({...form,faqEditor:'1',faqQuestion:questions,faqAnswer:answers},bad);const result=await call(service,who,'POST',base+'/edit',invalidForm);assert.ok(new URL(result.headers.location!,'https://x').searchParams.has('e'));assert.equal((await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,before.id);
+ }
+ const saved=await call(service,who,'POST',base+'/edit',{...form,faqEditor:'1',faqQuestion:questions,faqAnswer:answers});assert.ok(new URL(saved.headers.location!,'https://x').searchParams.has('n'));
+ const current=(await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!;assert.equal(current.body.faqs[0]!.a,answers[0]);assert.equal(current.number,before.number+1);
+ const legacy=await call(service,who,'POST',base+'/edit',{...form,versionId:current.id,excerpt:'An older editor can still save without overwriting the existing questions.'});assert.ok(new URL(legacy.headers.location!,'https://x').searchParams.has('n'));assert.deepEqual((await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.body.faqs,current.body.faqs);
+ const stale=await call(service,who,'POST',base+'/edit',{...form,faqEditor:'1',faqQuestion:questions,faqAnswer:answers});assert.ok(new URL(stale.headers.location!,'https://x').searchParams.has('e'));
+ assert.equal(f.h.llm.calls.length,calls);assert.deepEqual(await engine.usage(OWNER,f.brand.id),usage);assert.equal(f.h.site.posts,0);
+});
+
 test('posting draft owner routes save, export and restore versions with CSRF and foreign access protection',async()=>{
   const f=await websiteFixture(),engine=f.h.engine,who=identity(OWNER.userId),csrf=portalCsrfToken(SECRET,who.sessionToken);
   const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>engine,socialCallback:async()=>null};

@@ -1157,7 +1157,10 @@ export class SeoBlogEngine {
           const m=s.article.campaignGeneration;
           if(!m||m.nonce!==receipt.nonce||!m.startedAt)throw new SeoBlogError(409,'Copy receipt identity changed.');
           if(m.receipt)return {article:s.article};
-          return {article:{...s.article,campaignGeneration:{...m,receipt}},usage:{brandId:brand.id,kind:'model_tokens',amount:receipt.record.tokensIn+receipt.record.tokensOut,at:receipt.at,reference:`promotion:${s.article.id}:${m.plannedVersionId}`}};
+          // 0139 meters rejected private-method receipts atomically. Preserve
+          // that actual usage without charging it again in this boundary.
+          const alreadyMetered=receipt.result.kind==='rejected'&&!!receipt.record.methodReceiptId;
+          return {article:{...s.article,campaignGeneration:{...m,receipt}},...(alreadyMetered?{}:{usage:{brandId:brand.id,kind:'model_tokens' as const,amount:receipt.record.tokensIn+receipt.record.tokensOut,at:receipt.at,reference:`promotion:${s.article.id}:${m.plannedVersionId}`}})};
         });
         // Retry persistence only, using the same known result. Never repeat LLM work.
         try{article=await save();}catch{article=await save();}
@@ -1204,7 +1207,7 @@ export class SeoBlogEngine {
       article=result.article; campaignDrafts=result.drafts; generationRecord=result.generation;
       posts=campaignDrafts.filter(p=>p.angle==='launch').map(({network,title,copy,artworkInstructions})=>({network,title,copy,artworkInstructions}));
     } else try {
-      if (skipPromotionGeneration) throw new GenerationUnavailableError('This image-only edit retains article-text accompanying drafts; no model call was made.');
+      if (skipPromotionGeneration) throw new GenerationUnavailableError('This edit retains article-text accompanying drafts; no model call was made.');
       await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
       {
         const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId,url:c.url,title:c.title,retrievedAt:c.retrievedAt,passage:c.passage,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,primary:false,provider: "recorded",query: ""} as ResearchSource))), profile, body);
@@ -1653,7 +1656,7 @@ export class SeoBlogEngine {
     if (sha256(body) === version.contentSha) return version;
     const onlyMeta = sections === undefined && edit.intro === undefined && edit.conclusion === undefined && edit.faqs === undefined;
     const change: VersionChange = edit.image && Object.keys(edit).length === 1 ? 'image_changed' : onlyMeta ? 'metadata_changed' : 'edited';
-    const next = await this.appendVersion(brand, article, body, change, null, actor.userId, null, profile, brief);
+    const next = await this.appendVersion(brand, article, body, change, null, actor.userId, null, profile, brief,undefined,true);
     await this.log(brandId, actor.userId, 'article.edited', `“${body.title}” edited (version ${next.number}). Approval was reset.`, articleId);
     return next;
   }

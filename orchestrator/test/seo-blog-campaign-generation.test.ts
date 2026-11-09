@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, campaignParentHold, createArticleCampaign, fallbackCampaignDrafts } from '../src/seo-blog/campaign.js';
-import { writeArticleCampaignPromotions } from '../src/seo-blog/generation.js';
+import { writeArticleCampaignPromotions,CampaignGenerationRejectedError } from '../src/seo-blog/generation.js';
+import {MethodController} from '../src/seo-blog/method-packs.js';
+import {MemoryMethodStore} from '../src/seo-blog/method-store.js';
+import {fixtureBrand} from './rl72-method-fixtures.js';
+import {UpgradeFixtureModel,upgradeSnapshot} from './rl72-upgrade-fixtures.js';
 import type { LlmClient } from '../src/llm/client.js';
 import type { ArticleBody, BrandProfile } from '../src/seo-blog/types.js';
 
@@ -30,6 +34,15 @@ test('partial or duplicate model output is rejected after one call, never automa
     await assert.rejects(writeArticleCampaignPromotions(m.llm, profile, body), /after one attempt/);
     assert.equal(m.calls(), 1);
   }
+});
+
+test('a known private-method copy rejection preserves its receipt and usage for the existing labelled fallback',async()=>{
+ const f=fixtureBrand(),store=new MemoryMethodStore(),m=new UpgradeFixtureModel();
+ store.snapshots.set(f.brand.id,upgradeSnapshot(f.brand.id,['production-core','social-repurposing']));
+ m.mutate=v=>{delete v._method_sidecar.qualityFindings[0].detail;};
+ const llm=await new MethodController(store,true).prepare(m,{...f,stage:'social',stages:['social'],assetRef:'promotion:'+VERSION,sources:['S1','fixture-source'],baselineTokens:6000,evidence:{research:f.sources}});
+ await assert.rejects(writeArticleCampaignPromotions(llm,f.profile,body),e=>{assert.ok(e instanceof CampaignGenerationRejectedError);assert.equal(e.record.methodReceiptId,[...store.receipts.values()][0]!.id);assert.equal(e.record.tokensIn+e.record.tokensOut,250);return true;});
+ assert.equal(m.requests.length,1);assert.equal([...store.receipts.values()][0]!.outcome,'rejected');
 });
 
 test('unconnected article still gets clearly labelled six article-text proposals; null URL grants no review/queue authority', () => {

@@ -315,6 +315,8 @@ ${websiteTargetEditor(shell,{article:a,version:v,versions:data.versions,destinat
 <label for="ei">Introduction</label><textarea id="ei" name="intro">${e(body.intro)}</textarea>
 ${body.sections.map((s, i) => `<fieldset class="card"><legend>Section ${i + 1}</legend><input type="hidden" name="sectionId" value="${e(s.id)}"><label for="sh${i}">Heading</label><input id="sh${i}" name="sectionHeading" type="text" value="${e(s.heading)}"><label for="sb${i}">Body</label><textarea id="sb${i}" name="sectionBody">${e(s.body)}</textarea></fieldset>`).join('')}
 <label for="ec">Conclusion</label><textarea id="ec" name="conclusion">${e(body.conclusion)}</textarea>
+<input type="hidden" name="faqEditor" value="1">
+${body.faqs.map((faq,i)=>`<fieldset class="card"><legend>FAQ ${i+1}</legend><label for="fq${i}">Question</label><input id="fq${i}" name="faqQuestion" type="text" maxlength="200" required value="${e(faq.q)}"><label for="fa${i}">Answer</label><textarea id="fa${i}" name="faqAnswer" maxlength="1500" required>${e(faq.a)}</textarea></fieldset>`).join('')}
 <p class="muted">Saving creates a new version, keeps the old one and resets approval. Citations like [src:…] link claims to sources.</p><button type="submit">Save as new version</button></form></section>
 <section class="card"><h2>Regenerate one section</h2><form method="post" action="${base}/regenerate-section">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}">
 <label for="rs">Section</label><select id="rs" name="sectionId">${body.sections.map((s) => `<option value="${e(s.id)}">${e(s.heading)}</option>`).join('')}</select>

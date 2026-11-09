@@ -637,6 +637,8 @@ async function handlePost(
       if (action === 'edit') {
         const ids = form.fields.getAll('sectionId'), headings = form.fields.getAll('sectionHeading'), bodies = form.fields.getAll('sectionBody');
         if (ids.length !== headings.length || ids.length !== bodies.length) throw new SeoBlogError(400, 'Refresh the editor and try again.');
+        const questions=form.fields.getAll('faqQuestion'),answers=form.fields.getAll('faqAnswer'),editFaqs=f('faqEditor')==='1';
+        if(editFaqs&&(questions.length!==answers.length||questions.length>8||questions.some(q=>!q.trim()||q.length>200)||answers.some(a=>!a.trim()||a.length>1500)))throw new SeoBlogError(400,'Each FAQ needs a question and answer within the shown limits. Refresh the editor and try again.');
         const current = (await engine.getArticle(actor, brandId, articleId)).version;
         const imageUrl = (f('imageUrl') ?? '').trim();
         const imageChanged = current && (imageUrl !== (current.body.image.url ?? '') || (f('imageAlt') ?? '') !== current.body.image.alt);
@@ -644,6 +646,7 @@ async function handlePost(
           title: f('title') ?? '', slug: f('slug') ?? '', seoTitle: f('seoTitle') ?? '', metaDescription: f('metaDescription') ?? '', excerpt: f('excerpt') ?? '',
           intro: f('intro') ?? '', conclusion: f('conclusion') ?? '',
           sections: ids.map((id, i) => ({ id, heading: headings[i]!, body: bodies[i]! })),
+          ...(editFaqs?{faqs:questions.map((q,i)=>({q:q.trim(),a:answers[i]!.trim()}))}:{}),
           ...(imageChanged ? { image: imageUrl ? { kind: 'brand_asset', url: imageUrl, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } : { kind: 'none', url: null, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } } : {}),
         });
         return ok(here, `Saved as version ${v.number}. Checks ran again.`);
