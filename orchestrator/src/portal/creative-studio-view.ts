@@ -8,7 +8,9 @@ import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js
 
 const e = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, (c) => `&#${c.charCodeAt(0)};`);
 const base = (shell: Shell) => `${SEO_BLOG_BASE}/b/${shell.brand!.id}/creative`;
-export const artUrl = (shell: Shell, v: Pick<CreativeVersion, 'id' | 'render'>, download = false) => `${base(shell)}/art/${v.id}/${v.render.sha256}.jpg${download ? '?download=1' : ''}`;
+const EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'video/mp4': 'mp4', 'video/webm': 'webm' };
+export const artUrl = (shell: Shell, v: Pick<CreativeVersion, 'id' | 'render'>, download = false) => `${base(shell)}/art/${v.id}/${v.render.sha256}.${EXT[v.render.mime] ?? 'jpg'}${download ? '?download=1' : ''}`;
+const MOTION_OPTIONS: [string, string][] = [['zoom_in', 'Slow zoom in'], ['zoom_out', 'Slow zoom out'], ['pan_left', 'Pan left'], ['pan_right', 'Pan right'], ['none', 'Still']];
 
 const STYLE = `<style>
 .cs-hero{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-end;margin:0 0 16px}.cs-hero h1{margin:0}.cs-hero p{margin:4px 0 0}
@@ -28,7 +30,7 @@ figure.art figcaption{font-size:13px;margin-top:8px;display:grid;gap:6px}.art-ac
 @media(max-width:700px){.cmp{grid-template-columns:1fr}}
 </style>`;
 
-const statePill = (s: ApprovalState) => s === 'approved' ? '<span class="pill ok">Approved image</span>' : s === 'stale' ? '<span class="pill bad">Approval no longer current</span>' : '<span class="pill warn">Needs review</span>';
+const statePill = (s: ApprovalState, what = 'image') => s === 'approved' ? `<span class="pill ok">Approved ${what}</span>` : s === 'stale' ? '<span class="pill bad">Approval no longer current</span>' : '<span class="pill warn">Needs review</span>';
 
 function gapsList(context: CreativeBrandContext): string {
   const essential = !context.confirmed ? `<li><span class="pill bad">Needed</span> Confirm the brand profile in <a href="${SEO_BLOG_BASE}/b/${e(context.brandId)}/setup">Brand setup</a>. Unconfirmed facts are never used in artwork.</li>` : '';
@@ -130,11 +132,42 @@ ${x.issues.length ? `<ul class="issues">${x.issues.map((i) => `<li class="${i.bl
 <div class="art-actions">${approve}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a>${handoff}</div>${v.handoffs.length ? `<span class="small">Added to campaign as a draft input (${v.handoffs.length}).</span>` : ''}${focal}
 ${v.history.length > 1 ? `<details class="small"><summary>${v.history.length - 1} earlier version${v.history.length === 2 ? '' : 's'}</summary><ul>${v.history.slice(1).map((h) => `<li><a href="${artUrl(shell, h)}">Version ${h.number}</a> · ${e(h.change)}${data.record.approvals.some((a) => a.versionId === h.id) ? ' · approved then superseded' : ''}</li>`).join('')}</ul></details>` : ''}</figcaption></figure>`;
   };
+  const motion = (c: SetViewData['concepts'][number]) => {
+    const bg = c.concept.background;
+    const start = `<form method="post" action="${base(shell)}/s/${e(data.record.set.id)}/storyboard/${e(c.key)}">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}">
+<div class="row"><label>Video format<select name="placement">${(['vertical', 'square', 'portrait', 'landscape'] as const).map((p) => `<option value="${p}">${e(PLACEMENTS[p].label)} ${PLACEMENTS[p].width}×${PLACEMENTS[p].height}</option>`).join('')}</select></label></div>
+${bg.kind === 'image' && bg.origin === 'owner_upload' ? '<label class="small" style="font-weight:400"><input type="checkbox" name="likeness" value="1" required> I have permission for any identifiable person shown in the uploaded image.</label>' : ''}
+<button class="secondary" type="submit">Draft a storyboard</button> <span class="small muted">Still frames and a script only — not a video. No provider call.</span></form>`;
+    const boards = c.storyboards.map((sb) => {
+      const v = sb.version, scenes = v.variant.storyboard!.scenes, total = scenes.reduce((n, x) => n + x.durationMs, 0);
+      const video = c.videos.find((x) => x.version.placement === v.placement);
+      const blocking = v.issues.some((i) => i.blocking);
+      const fresh = video && video.version.variant.storyboard?.sourceStoryboardVersionId === v.id;
+      const sceneForm = `<details class="small"><summary>Edit scenes</summary><form method="post" action="${base(shell)}/v/${e(v.id)}/scenes">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="scene_count" value="${scenes.length + 1}">
+${[...scenes, null].map((x, i) => `<fieldset><legend>${x ? `Scene ${i + 1}` : 'Add a scene (optional — leave blank to skip)'}</legend><label>On-screen text<input type="text" name="scene.${i}.headline" maxlength="90" value="${e(x?.headline ?? '')}"${x ? ' required' : ''}></label><label>Supporting line<input type="text" name="scene.${i}.body" maxlength="160" value="${e(x?.body ?? '')}"></label>
+<div class="row"><label>Seconds<select name="scene.${i}.duration">${Array.from({ length: 14 }, (_, k) => 1500 + k * 500).map((ms) => `<option value="${ms}"${ms === (x?.durationMs ?? 3000) ? ' selected' : ''}>${ms / 1000}</option>`).join('')}</select></label><label>Motion<select name="scene.${i}.motion">${MOTION_OPTIONS.map(([m, l]) => `<option value="${m}"${m === (x?.motion ?? 'zoom_in') ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+${c.concept.cta ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.cta" value="1"${x?.showCta ? ' checked' : ''}> Show the “${e(c.concept.cta)}” button</label>` : ''}<label>Voiceover script <span class="muted">(script only — no voice is generated)</span><textarea name="scene.${i}.script" maxlength="400" style="min-height:50px">${e(x?.script ?? '')}</textarea></label>${x ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.remove" value="1"> Remove this scene</label>` : ''}</fieldset>`).join('')}
+<button type="submit">Save storyboard</button></form></details>`;
+      const est = Math.ceil(total / 1000 + scenes.length * 1.5 + 4);
+      const renderForm = `<form method="post" action="${base(shell)}/v/${e(v.id)}/video">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><button type="submit"${blocking || sb.staleContext || !data.rendererReady ? ' disabled' : ''}>${fresh ? 'Render again' : 'Render video'}</button> <span class="small muted">${(total / 1000).toFixed(1)} s · about ${est} s to render on this server · no provider call or charge · silent with on-screen text</span></form>`;
+      const player = video ? (() => { const x = video.version; const r = x.render;
+        return `<figure class="art" id="v-${e(x.id)}"><video controls muted playsinline preload="metadata" width="${r.width}" height="${r.height}" src="${artUrl(shell, x)}" style="width:100%;height:auto;border-radius:6px;background:#000"></video>
+<figcaption><div>${statePill(video.state, 'video')} ${x.issues.some((i) => i.code === 'not_playable') ? '<span class="pill bad">Failed playback check</span>' : '<span class="pill ok">Playable video</span>'} <span class="muted small">${r.width}×${r.height} · ${e(r.mime)}${r.container === 'progressive' ? ' (fast start)' : ''} · ${((r.measuredDurationMs ?? 0) / 1000).toFixed(1)} s measured · version ${x.number}${fresh ? '' : ' · <strong>older than the current storyboard</strong>'}</span></div>
+${x.issues.length ? `<ul class="issues">${x.issues.map((i) => `<li class="${i.blocking ? 'block' : ''}">${e(i.detail)}</li>`).join('')}</ul>` : ''}
+<div class="art-actions">${video.state === 'approved' ? '' : `<form method="post" action="${base(shell)}/v/${e(x.id)}/approve">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="sha" value="${e(r.sha256)}">${x.issues.some((i) => i.code === 'unsupported_figure') ? '<label class="small" style="font-weight:400"><input type="checkbox" name="figures_confirmed" value="1" required> I confirm the flagged figures are accurate</label>' : ''}<button type="submit"${x.issues.some((i) => i.blocking) || video.staleContext ? ' disabled' : ''}>Approve this video</button></form>`}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a></div></figcaption></figure>`; })() : '';
+      return `<div class="cmp" style="--cols:2"><figure class="art"><a href="${artUrl(shell, v)}"><img src="${artUrl(shell, v)}" width="${v.render.width}" height="${v.render.height}" alt="Storyboard for concept ${e(c.key.slice(1))}"></a>
+<figcaption><div><span class="pill warn">Storyboard — not a video</span> <span class="muted small">${e(PLACEMENTS[v.placement].label)} · ${scenes.length} scenes · version ${v.number}</span></div>
+${v.issues.length ? `<ul class="issues">${v.issues.map((i) => `<li class="${i.blocking ? 'block' : ''}">${e(i.detail)}</li>`).join('')}</ul>` : '<span class="small muted">No layout, contrast or wording issues found.</span>'}${sceneForm}${renderForm}</figcaption></figure>${player || '<p class="muted small">No video yet. A storyboard is a plan; a video exists only after it is rendered and passes the playback check.</p>'}</div>`;
+    }).join('');
+    return `<section class="cmp-row"><h3>Video · Concept ${e(c.key.slice(1))}</h3><div class="concept-head">${start}</div>${boards}</section>`;
+  };
   const rows: { label: string; placement: PlacementId; card: number }[] = [];
   for (const p of r.placements) for (const card of r.cardCount ? Array.from({ length: Math.max(...concepts.map((c) => c.concept.cards.length)) }, (_, i) => i + 1) : [0]) rows.push({ label: `${PLACEMENTS[p].label}${card ? ` · card ${card}` : ''}`, placement: p, card });
   const cols = Math.max(1, concepts.length);
   return layout(shell, 'Compare artwork', `${STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><div class="cs-hero"><div><h1>Compare artwork</h1><p class="muted">${e(PURPOSE_LABELS[r.purpose])} · ${e(src)}${r.audience ? ` · for ${e(r.audience)}` : ''}${r.destination ? ` · links to ${e(r.destination.label)}` : ''}</p></div></div>
 <p class="notice small">Approving covers one exact image only. It does not approve a caption, campaign, schedule or paid advert, and nothing is published or spent. Starter copy was drafted from ${e(data.context.brandName)}'s approved facts only — edit it freely.</p>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server; edits cannot be rendered.</p>' : ''}
 <div class="cmp" style="--cols:${cols};margin-bottom:18px">${concepts.map(head).join('')}</div>
-${rows.map((row) => `<section class="cmp-row"><h3>${e(row.label)} <span class="muted small">${PLACEMENTS[row.placement].use}</span></h3><div class="cmp" style="--cols:${cols}">${concepts.map((c) => figure(c.variants.find((v) => v.version.placement === row.placement && v.version.card === row.card))).join('')}</div></section>`).join('')}`);
+${rows.map((row) => `<section class="cmp-row"><h3>${e(row.label)} <span class="muted small">${PLACEMENTS[row.placement].use}</span></h3><div class="cmp" style="--cols:${cols}">${concepts.map((c) => figure(c.variants.find((v) => v.version.placement === row.placement && v.version.card === row.card))).join('')}</div></section>`).join('')}
+<h2>Video</h2><p class="muted small">Storyboards turn a concept's own copy into scenes. Videos are recorded on this server from an exact storyboard, silent with on-screen text, and checked for playback before they can be approved. No avatar, voice or video provider is used, and no customer endorsements may appear.</p>
+${concepts.map(motion).join('')}`);
 }

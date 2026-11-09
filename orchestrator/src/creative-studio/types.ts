@@ -1,4 +1,25 @@
 import type { PlacementId } from './placements.js';
+import type { MotionId } from './renderer.js';
+
+/** Image artwork, a storyboard (a plan made of still frames — never a video) or a rendered, playback-verified video. */
+export type MediaKind = 'image' | 'storyboard' | 'video';
+export interface StoryboardScene {
+  readonly headline: string;
+  readonly body: string;
+  readonly showCta: boolean;
+  readonly durationMs: number;
+  readonly motion: MotionId;
+  /** Voiceover script text only. No voice is generated. */
+  readonly script: string;
+}
+export interface Storyboard {
+  readonly scenes: readonly StoryboardScene[];
+  /** Owner confirmed permission for any identifiable person in uploaded imagery. */
+  readonly likenessPermission: boolean;
+  /** For videos: the exact storyboard version this video was rendered from. */
+  readonly sourceStoryboardVersionId?: string;
+  readonly sourceStoryboardSpecSha256?: string;
+}
 
 export const CREATIVE_PURPOSES = ['advert', 'organic_social', 'article_image', 'product_promotion', 'carousel'] as const;
 export type CreativePurpose = typeof CREATIVE_PURPOSES[number];
@@ -75,9 +96,10 @@ export interface ConceptComponents {
 /** Placement-level components. */
 export interface VariantComponents {
   readonly focal: Readonly<{ x: number; y: number }>;
+  readonly storyboard?: Storyboard;
 }
 
-export type IssueCode = 'text_overflow' | 'low_contrast' | 'cta_contrast' | 'unsupported_figure' | 'restricted_phrase' | 'missing_essential';
+export type IssueCode = 'text_overflow' | 'low_contrast' | 'cta_contrast' | 'unsupported_figure' | 'restricted_phrase' | 'missing_essential' | 'fictional_endorsement' | 'not_playable';
 export interface ArtworkIssue {
   readonly code: IssueCode;
   readonly blocking: boolean;
@@ -88,10 +110,15 @@ export interface RenderReceipt {
   readonly rendererVersion: string;
   readonly blobId: string;
   readonly sha256: string;
-  readonly mime: 'image/jpeg';
+  readonly mime: 'image/jpeg' | 'video/mp4' | 'video/webm';
   readonly width: number;
   readonly height: number;
   readonly byteLength: number;
+  /** Videos: planned and independently measured playback length, encoder codec string. */
+  readonly durationMs?: number;
+  readonly measuredDurationMs?: number | null;
+  readonly codec?: string;
+  readonly container?: 'progressive' | 'fragmented' | 'webm';
   readonly contrast: Readonly<Record<string, number>>;
   readonly scrimAlpha: number;
   readonly headlineSize: number;
@@ -102,6 +129,8 @@ export interface CreativeVersion {
   readonly setId: string;
   readonly brandId: string;
   readonly conceptKey: string;
+  /** Absent on image versions created before rich media. */
+  readonly media?: MediaKind;
   readonly placement: PlacementId;
   /** 0 for single images; 1..n for carousel cards. */
   readonly card: number;

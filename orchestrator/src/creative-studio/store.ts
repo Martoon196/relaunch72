@@ -35,11 +35,13 @@ export interface CreativeLibraryStore {
   getVersion(brandId: string, versionId: string): Promise<{ version: CreativeVersion; head: boolean; approval: CreativeApproval | null } | null>;
 }
 
-export const variantKey = (v: Pick<CreativeVersion, 'conceptKey' | 'placement' | 'card'>) => `${v.conceptKey}:${v.placement}:${v.card}`;
+export const mediaOf = (v: Pick<CreativeVersion, 'media'>) => v.media ?? 'image';
+export const variantKey = (v: Pick<CreativeVersion, 'conceptKey' | 'placement' | 'card' | 'media'>) => `${v.conceptKey}:${mediaOf(v) === 'image' ? '' : `${mediaOf(v)}_`}${v.placement}:${v.card}`;
 const sameContext = (a: ContextInputs, b: ContextInputs) => a.profileVersion === b.profileVersion && a.factsSha === b.factsSha && a.kitVersion === b.kitVersion;
 
 /** Shared invariant checks (also implemented independently in SQL). */
 export function approvalProblem(version: CreativeVersion, head: boolean, approval: Pick<CreativeApproval, 'renderSha256' | 'figuresConfirmed' | 'context'>, current: ContextInputs): string | null {
+  if (mediaOf(version) === 'storyboard') return 'A storyboard is a plan made of still frames, not a video. Render the video and approve that.';
   if (!head) return 'A newer version of this artwork exists. Review and approve the current version.';
   if (approval.renderSha256 !== version.render.sha256) return 'The artwork changed since you reviewed it. Review the current image.';
   if (!sameContext(version.context, current) || !sameContext(approval.context, current)) return 'Brand facts or the creative kit changed since this version was made. Refresh it from the current brand context before approval.';
@@ -77,6 +79,11 @@ export class MemoryCreativeLibraryStore implements CreativeLibraryStore {
     for (const v of versions) {
       if (v.brandId !== brandId || v.setId !== setId) throw new SeoBlogError(403, 'Artwork belongs to another brand.');
       if (!sameContext(v.context, current)) throw new SeoBlogError(409, 'Brand facts or the creative kit changed while rendering. Try again.');
+      if (mediaOf(v) === 'video') {
+        const source = this.versions.get(v.variant.storyboard?.sourceStoryboardVersionId ?? '');
+        if (!source || mediaOf(source) !== 'storyboard' || source.setId !== setId || source.conceptKey !== v.conceptKey || source.placement !== v.placement
+          || source.specSha256 !== v.variant.storyboard?.sourceStoryboardSpecSha256) throw new SeoBlogError(409, 'A video must be rendered from an exact storyboard version of the same concept and format.');
+      }
       const key = variantKey(v), head = this.head(brandId, setId, key);
       const expected = next.get(key) ?? (head ? head.number + 1 : 1);
       if (v.number !== expected || (v.parentVersionId ?? null) !== (next.has(key) ? null : head?.id ?? null) || this.versions.has(v.id)) throw new SeoBlogError(409, 'This artwork changed while you were editing. Refresh and review the current version.');

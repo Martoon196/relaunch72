@@ -50,7 +50,7 @@ export interface SeoBlogRouteInput {
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
-const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
@@ -221,12 +221,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const parts = rest.split('/');
-      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.jpg$`, 'i').exec(rest);
+      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.(?:jpg|mp4|webm)$`, 'i').exec(rest);
       if (art) {
         const found = await studio.artwork(actor.userId, brandId, art[1]!.toLowerCase(), art[2]!.toLowerCase());
         const v = found.version;
-        const name = `${brand.slug}-${v.conceptKey}-${v.placement}${v.card ? `-card${v.card}` : ''}-v${v.number}-${found.approved ? 'approved' : 'draft'}.jpg`.replace(/[^a-z0-9.-]/giu, '_');
-        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
+        const ext = v.render.mime === 'video/mp4' ? 'mp4' : v.render.mime === 'video/webm' ? 'webm' : 'jpg';
+        const kind = v.media === 'storyboard' ? '-storyboard' : v.media === 'video' ? '-video' : '';
+        const name = `${brand.slug}-${v.conceptKey}${kind}-${v.placement}${v.card ? `-card${v.card}` : ''}-v${v.number}-${v.media === 'storyboard' ? 'not-a-video' : found.approved ? 'approved' : 'draft'}.${ext}`.replace(/[^a-z0-9.-]/giu, '_');
+        res.writeHead(200, { 'content-type': v.render.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
           ...(url.searchParams.get('download') === '1' ? { 'content-disposition': `attachment; filename="${name}"` } : {}) });
         res.end(method === 'HEAD' ? undefined : found.bytes); return;
       }
@@ -404,13 +406,31 @@ async function handlePost(
         }, background());
         return ok(`${home}/s/${parts[2]}`, result.changed.length ? `Saved: ${result.changed.join(', ')} changed. New versions need review.` : 'No change to save.');
       }
+      if (parts[1] === 's' && parts[2] && parts[3] === 'storyboard' && parts[4]) {
+        await studio.createStoryboard(actor.userId, brandId, parts[2], parts[4], (f('placement') ?? 'vertical') as never, commandId, f('likeness') === '1');
+        return ok(`${home}/s/${parts[2]}`, 'Storyboard drafted from this concept. It is a plan, not a video; review the scenes, then render.');
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3] === 'scenes') {
+        const located = await studio.artworkSet(actor.userId, brandId, parts[2]);
+        const count = Math.min(9, Math.max(0, Number(f('scene_count') ?? 0)));
+        const scenes = Array.from({ length: count }, (_, i) => ({ headline: f(`scene.${i}.headline`) ?? '', body: f(`scene.${i}.body`) ?? '', durationMs: Number(f(`scene.${i}.duration`)),
+          motion: (f(`scene.${i}.motion`) ?? 'none') as never, showCta: f(`scene.${i}.cta`) === '1', script: f(`scene.${i}.script`) ?? '', remove: f(`scene.${i}.remove`) === '1' }))
+          .filter((x) => !x.remove && x.headline.trim()).map(({ remove: _r, ...x }) => x);
+        const result = await studio.editStoryboard(actor.userId, brandId, parts[2], commandId, scenes);
+        return ok(`${home}/s/${located}`, result.changed.length ? `Storyboard saved (${result.changed.slice(0, 4).join(', ')}${result.changed.length > 4 ? '…' : ''}). Render a new video to include the changes.` : 'No change to save.');
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3] === 'video') {
+        const located = await studio.artworkSet(actor.userId, brandId, parts[2]);
+        const result = await studio.renderVideo(actor.userId, brandId, parts[2], commandId);
+        return ok(`${home}/s/${located}`, result.playable ? 'Video rendered and verified as playable. Review it before approving.' : 'The video did not pass the playback check and cannot be approved. Render it again.');
+      }
       if (parts[1] === 'v' && parts[2] && parts[3]) {
         const version = parts[2];
         const located = await studio.artworkSet(actor.userId, brandId, version);
         const back = `${home}/s/${located}#v-${version}`;
         if (parts[3] === 'approve') {
           await studio.approve(actor.userId, brandId, version, commandId, f('sha') ?? '', f('figures_confirmed') === '1');
-          return ok(back, 'Approved this exact image. Captions, campaigns, schedules and paid adverts are not approved by this.');
+          return ok(back, 'Approved this exact asset. Captions, campaigns, schedules and paid adverts are not approved by this.');
         }
         if (parts[3] === 'focal') {
           await studio.editFocal(actor.userId, brandId, version, commandId, { x: Number(f('x')), y: Number(f('y')) });

@@ -1,4 +1,4 @@
-# Creative Studio — Milestones 1 and 2 (brand-aware creative; campaign intelligence and assembly)
+# Creative Studio — Milestones 1–3 (brand-aware creative; campaign intelligence; video and rich media)
 
 **Status, stated separately:**
 
@@ -124,3 +124,40 @@ Production rules → ensure **Hook & Close** is on → Campaign creators → **A
 - New research is not started from the proposal; it uses research already saved. Run topic research first if the evidence gaps say so.
 - Predictions are qualitative by design. Measured outcomes (leads, bookings, sales) arrive with Milestone 4 (distribution and attribution via existing CRM/LeadRelay contracts).
 - Release: unchanged from Milestone 1 (single additive 0143, after the 0142 cut-over). Note an unmerged, stopped Apollo branch also claims a `0143_` filename; renumber whichever lands second.
+
+---
+
+# Milestone 3 — Video and rich media
+
+**Status:** source complete on the same branch; not deployed; not verified live. Everything renders locally: no video, avatar or voice provider, no provider call and no charge.
+
+## Reuse check
+
+| Capability | Existing implementation | Proven status | Missing | Extension made |
+|---|---|---|---|---|
+| Video in the codebase | Posting client accepts `video/mp4`, `video/webm` (`zernio-posting-client.ts`); no producer | Contract only | No way to make a video | Videos produced here use those exact types for the Milestone 4 hand-off |
+| Renderer | Milestone 1 Chromium compositor with measured contrast | This branch | Stills only | Optional transparent overlay capture of the exact measured layout; contact-sheet and video rendering in the same offline session |
+| Encoding | Pinned headless Chromium's built-in MediaRecorder | Probed here: H.264 High MP4 and WebM supported | Recorder writes fragmented MP4 | `mp4-remux.ts`: lossless rewrite to a standard index-first ("fast start") MP4; all 325 decoded frames proved pixel-identical with ffmpeg in development |
+| Versioning / approvals | Milestone 1 library (0143) | PG-proven | Single media type | `storyboard` and `video` media kinds as separate lineages per concept and format, reusing lineage, stale-context and approval rules |
+
+## Behaviour
+
+- **Storyboard** (Draft a storyboard): scenes drafted only from the concept's own copy (opening, supporting line, end card with the real button; carousel cards become scenes). Rendered as real frames on a contact sheet captioned with timing, motion and voiceover *script*, labelled **STORYBOARD — NOT A VIDEO**. Never approvable (service, memory store and SQL all refuse).
+- **Scene-level revision**: edit on-screen text, supporting line, duration (1.5–8 s), motion (zoom/pan/still), button and script per scene; add or remove scenes; ≤30 s total. Each save is a new storyboard version recording exactly what changed; unchanged scenes keep their exact content.
+- **Render video** from the current storyboard version only: each scene's measured overlay layer (scrim, real text, real logo, disclosure, illustrative marker) is animated over the background with gentle motion and crossfades, recorded to H.264 MP4 (WebM fallback), rewritten to fast-start MP4, then **independently played back** in a fresh page (dimensions, a decodable non-blank frame, full play-through length). Only then is it shown as a playable video; a failed check is a blocking issue.
+- A video version records the exact storyboard version and spec digest it came from; SQL refuses a video without that exact provenance or with non-video bytes.
+- **Estimate** shown before rendering: duration, approximate render time on this server, no provider call or charge. Videos are silent with on-screen text.
+- **People and endorsements**: no avatar or voice generation. Uploaded imagery needs an explicit permission confirmation for any identifiable person before it can be used in video. Customer quotes with attribution, star ratings and "reviews/testimonials" copy are blocking issues.
+- Brand-kit or fact changes make storyboards unrenderable until saved again and existing video approvals stale, as for images.
+
+## Checks
+
+- `test/creative-studio-video.test.ts` (7): scene drafting and limits; endorsement detection; storyboard → edit → video lineage; storyboard never approvable; replay never re-renders; concept edits leave videos and approvals intact; unplayable output, endorsement copy, stale context and missing likeness permission refused; forged provenance refused; **real Chromium** recording (container signature, playback-measured length, fast-start box order, digest); remux refusal paths.
+- `test/db/creative-studio-video-pg.integration.test.ts` on fresh disposable PostgreSQL 16 after 143 migrations, real runtime role: storyboard key and SQL approval refusal; video stored as `video/mp4` under its own key and approvable; forged storyboard reference and image bytes posing as video refused. All four integration files together: 30/30.
+- Visual: `test/manual-video-demo.ts` through the real forms (kit → artwork → storyboard → scene edit → render → approve): H.264 High 1080×1920, 10.97 s against 11.0 s planned, rendered in ~15 s. Evidence: `docs/creative-studio-evidence/m3-*`.
+
+## Remaining proof and limits
+
+- MP4 recording was proven on this container's newer headless build (Chromium 153). The production build pinned by `playwright-core@1.61.1` (headless shell 1228) could not be downloaded here because the session's network policy blocks `cdn.playwright.dev`. If that build lacks H.264 recording, the renderer automatically produces WebM (accepted by the existing posting contract) and still enforces the playback check; confirm on the first Growth HQ build.
+- The browser recorder produces variable frame timing; platforms requiring constant frame rate or audio tracks are not addressed. No music, voice or captions file is produced.
+- Brand font files, provider image-to-video and avatar/voice providers are intentionally not added: no permissioned use case or credentials exist yet.

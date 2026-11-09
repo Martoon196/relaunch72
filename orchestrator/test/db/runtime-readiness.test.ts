@@ -489,7 +489,7 @@ test('creative143 release is ready only on the exact applied 0142 ledger with 01
   const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,143);
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
-  assert.deepEqual(rows[142],{filename:'0143_creative_studio_library.sql',checksum:'10bca4fc840ce7203d3dea6de55a5323f45500d7ff8e2ac540fc53fb5dfb7257'});
+  assert.deepEqual(rows[142],{filename:'0143_creative_studio_library.sql',checksum:'1213955d762f3c359a7cc5de727e74e7523282e10a98c632fd4dcade825e0ec4'});
   // Deployed to every consumer before 0143 is applied: exact 0142 ledger, only 0143 pending.
   await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows.slice(0,142))));
   await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows)));

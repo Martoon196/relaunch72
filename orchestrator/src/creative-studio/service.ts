@@ -13,12 +13,54 @@ import { essentialGaps, resolveCreativeContext, type ContextGap, type CreativeBr
 import { clip, copyIssues, COPY_LIMITS, draftConcepts, factsCorpus, type ArticleSourceText } from './concepts.js';
 import { verifyCreativeImage, CreativeImageError, type VerifiedImage } from './image-input.js';
 import { isPlacementId, PLACEMENTS, type PlacementId } from './placements.js';
-import { parseHex, RendererUnavailableError, type ArtworkInput, type ArtworkRenderer } from './renderer.js';
-import { variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
+import { MOTIONS, parseHex, RendererUnavailableError, VIDEO_LIMITS, type ArtworkInput, type ArtworkRenderer, type MotionId } from './renderer.js';
+import { mediaOf, variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
 import {
   CREATIVE_PURPOSES, type BackgroundComponent, type BrandKit, type ConceptComponents, type ContextInputs, type CreativeApproval,
   type CreativeHandoff, type CreativePurpose, type CreativeRequest, type CreativeSet, type CreativeVersion, type Palette, type StoredImageRef,
+  type ArtworkIssue, type Storyboard, type StoryboardScene,
 } from './types.js';
+
+export const STORYBOARD_LIMITS = Object.freeze({ minScenes: 2, maxScenes: VIDEO_LIMITS.scenes, headline: 90, body: 160, script: 400 });
+const MOTION_CYCLE: readonly MotionId[] = ['zoom_in', 'pan_left', 'zoom_out', 'pan_right'];
+const MOTION_LABEL: Readonly<Record<MotionId, string>> = { zoom_in: 'slow zoom in', zoom_out: 'slow zoom out', pan_left: 'pan left', pan_right: 'pan right', none: 'still' };
+
+/** Content that could present invented customers or reviews as real. Blocking: no permissioned testimonial flow exists here. */
+export function endorsementIssues(texts: readonly string[]): ArtworkIssue[] {
+  const all = texts.join('\n');
+  const patterns = [/["“][^"”]{8,}["”]\s*[—–-]\s*\p{Lu}/u, /★{2,}|\b[1-5](?:\.\d)?\s*(?:\/\s*5|stars?)\b/iu,
+    /\b(?:testimonials?|customer reviews?|our (?:customers|clients) say|said (?:one|a) (?:customer|client)|verified (?:buyer|customer)|real customer)\b/iu];
+  return patterns.some((p) => p.test(all)) ? [{ code: 'fictional_endorsement', blocking: true, detail: 'Video copy must not present customer quotes, ratings or reviews. Real testimonials need a separate, permissioned process that this studio does not provide.' }] : [];
+}
+
+/** Starter scenes from a concept's own copy: opening, supporting point(s), end card. No new facts are introduced. */
+export function draftScenes(concept: ConceptComponents): StoryboardScene[] {
+  if (concept.cards.length) return concept.cards.map((c, i) => ({ headline: clip(c.headline, STORYBOARD_LIMITS.headline), body: clip(c.body, STORYBOARD_LIMITS.body),
+    showCta: i === concept.cards.length - 1 && Boolean(concept.cta), durationMs: 3000, motion: MOTION_CYCLE[i % 4]!, script: clip(c.headline, STORYBOARD_LIMITS.script) }));
+  const scenes: StoryboardScene[] = [{ headline: clip(concept.headline, STORYBOARD_LIMITS.headline), body: '', showCta: false, durationMs: 3500, motion: 'zoom_in',
+    script: clip([concept.hook, concept.headline].filter(Boolean).join('. '), STORYBOARD_LIMITS.script) }];
+  if (concept.body) {
+    const [first, ...rest] = concept.body.split(/(?<=[.!?])\s+/u);
+    scenes.push({ headline: clip(first!, STORYBOARD_LIMITS.headline), body: clip(rest.join(' '), STORYBOARD_LIMITS.body), showCta: false, durationMs: 4000, motion: 'pan_left', script: clip(concept.body, STORYBOARD_LIMITS.script) });
+  }
+  scenes.push({ headline: clip(concept.cta || concept.headline, STORYBOARD_LIMITS.headline), body: '', showCta: Boolean(concept.cta), durationMs: 3000, motion: 'none', script: clip(concept.cta, STORYBOARD_LIMITS.script) });
+  return scenes;
+}
+
+export function validateScenes(raw: readonly Partial<StoryboardScene>[], concept: ConceptComponents): StoryboardScene[] {
+  if (raw.length < STORYBOARD_LIMITS.minScenes || raw.length > STORYBOARD_LIMITS.maxScenes) throw new SeoBlogError(400, `A storyboard has ${STORYBOARD_LIMITS.minScenes} to ${STORYBOARD_LIMITS.maxScenes} scenes.`);
+  const scenes = raw.map((r) => {
+    const durationMs = Math.round(Number(r.durationMs) / 500) * 500;
+    if (!(durationMs >= VIDEO_LIMITS.sceneMs[0] && durationMs <= VIDEO_LIMITS.sceneMs[1])) throw new SeoBlogError(400, 'Each scene lasts between 1.5 and 8 seconds.');
+    if (!MOTIONS.includes(r.motion as MotionId)) throw new SeoBlogError(400, 'Choose a supported motion.');
+    const headline = text(r.headline, STORYBOARD_LIMITS.headline);
+    if (!headline) throw new SeoBlogError(400, 'Every scene needs on-screen text.');
+    if (r.showCta && !concept.cta) throw new SeoBlogError(400, 'This concept has no call to action to show.');
+    return Object.freeze({ headline, body: text(r.body, STORYBOARD_LIMITS.body), showCta: Boolean(r.showCta), durationMs, motion: r.motion as MotionId, script: text(r.script, STORYBOARD_LIMITS.script) });
+  });
+  if (scenes.reduce((n, x) => n + x.durationMs, 0) > VIDEO_LIMITS.totalMs) throw new SeoBlogError(400, 'Keep the whole video to 30 seconds or less.');
+  return scenes;
+}
 
 export type CreativeBrandPort = Pick<SeoBlogStore, 'getBrand' | 'canManage' | 'latestProfile' | 'listKnowledge' | 'putBlob' | 'getBlob' | 'getArticle' | 'getVersion' | 'listArticles'>;
 
@@ -314,11 +356,144 @@ export class CreativeStudioService {
   private async headsFor(brandId: string, setId: string, conceptKey: string, expectedHeads: readonly string[]) {
     const record = await this.deps.library.getSet(brandId, setId);
     if (!record) throw new SeoBlogError(404, 'That creative set was not found.');
-    const heads = currentHeads(record).filter((v) => v.conceptKey === conceptKey);
+    const heads = currentHeads(record).filter((v) => v.conceptKey === conceptKey && mediaOf(v) === 'image');
     if (!heads.length) throw new SeoBlogError(404, 'That concept was not found.');
     if (expectedHeads.length && (heads.length !== expectedHeads.length || heads.some((h) => !expectedHeads.includes(h.id)))) throw new SeoBlogError(409, 'This concept changed while you were editing. Refresh and review the current version.');
     return { record, heads };
   }
+  // ─── Storyboards and video ────────────────────────────────────────────────
+  private sceneArtwork(context: CreativeBrandContext, logo: VerifiedImage | null, background: VerifiedImage | null, concept: ConceptComponents, scenes: readonly StoryboardScene[],
+    placement: PlacementId, focal: { x: number; y: number }, overlay: boolean): ArtworkInput[] {
+    return scenes.map((scene, i) => ({ placement: PLACEMENTS[placement], palette: context.palette, brandName: context.brandName, logo, background, focal,
+      hook: i === 0 ? concept.hook || null : null, headline: scene.headline, body: scene.body || null, cta: scene.showCta ? concept.cta || null : null,
+      disclosure: context.disclosure, illustrativeTag: concept.illustrativeTag, card: null, captureOverlay: overlay }));
+  }
+  private async motionVersion(input: { readonly brandId: string; readonly actorId: string; readonly context: CreativeBrandContext; readonly kit: BrandKit | null;
+    readonly base: CreativeVersion; readonly media: 'storyboard' | 'video'; readonly storyboard: Storyboard; readonly head: CreativeVersion | null; readonly change: string;
+    readonly corpus: string; readonly frameIssues: readonly ArtworkIssue[]; readonly render: CreativeVersion['render']; readonly extraIssues?: readonly ArtworkIssue[] }): Promise<CreativeVersion> {
+    const { base, storyboard, context, kit } = input;
+    const scenesText = storyboard.scenes.flatMap((x) => [x.headline, x.body, x.script]);
+    const copy = copyIssues({ hook: base.concept.hook, headline: storyboard.scenes.map((x) => x.headline).join(' '), body: storyboard.scenes.map((x) => `${x.body} ${x.script}`).join(' '), cta: base.concept.cta, cards: [] }, context, input.corpus);
+    const componentShas = Object.freeze({ scenes: sha(canonical(storyboard.scenes)), background: sha(canonical(base.concept.background)), focal: sha(canonical(base.variant.focal)),
+      illustrativeTag: sha(String(base.concept.illustrativeTag)), kit: sha(canonical({ version: context.kitVersion, kitSha: kit?.sha256 ?? null })), disclosure: sha(context.disclosure ?? ''),
+      source: sha(canonical({ storyboard: storyboard.sourceStoryboardVersionId ?? null, spec: storyboard.sourceStoryboardSpecSha256 ?? null })) });
+    return Object.freeze({ id: this.newId(), setId: base.setId, brandId: input.brandId, conceptKey: base.conceptKey, media: input.media, placement: base.placement, card: 0,
+      number: (input.head?.number ?? 0) + 1, parentVersionId: input.head?.id ?? null, change: input.change, concept: base.concept,
+      variant: Object.freeze({ focal: base.variant.focal, storyboard: Object.freeze(storyboard) }), context: this.inputs(context), componentShas,
+      specSha256: sha(canonical({ componentShas, media: input.media, placement: base.placement, renderer: this.deps.renderer.version })), contextSha256: context.contextSha256,
+      render: input.render, issues: Object.freeze([...copy, ...endorsementIssues(scenesText), ...input.frameIssues, ...(input.extraIssues ?? [])]), createdBy: input.actorId, createdAt: this.now() });
+  }
+  private async storyboardRender(brandId: string, actorId: string, context: CreativeBrandContext, kit: BrandKit | null, base: CreativeVersion, storyboard: Storyboard, head: CreativeVersion | null, change: string, corpus: string): Promise<CreativeVersion> {
+    const renderer = this.deps.renderer;
+    if (!renderer.available() || !renderer.renderContactSheet) throw new SeoBlogError(503, 'The artwork renderer is not installed on this server. No storyboard was produced.');
+    const background = base.concept.background.kind === 'image' ? await this.loadImage(brandId, base.concept.background.image) : null;
+    const logo = kit?.logo ? await this.loadImage(brandId, kit.logo) : null;
+    try {
+      const frames = await renderer.renderBatch(this.sceneArtwork(context, logo, background, base.concept, storyboard.scenes, base.placement, base.variant.focal, false));
+      const sheet = await renderer.renderContactSheet(frames.map((f, i) => ({ image: f.bytes, caption: `${(storyboard.scenes[i]!.durationMs / 1000).toFixed(1)} s · ${MOTION_LABEL[storyboard.scenes[i]!.motion]}`, script: storyboard.scenes[i]!.script || null })),
+        `${context.brandName} · Concept ${base.conceptKey.slice(1)} · ${PLACEMENTS[base.placement].label}`);
+      const blobId = await this.deps.brands.putBlob(brandId, sheet.bytes, 'image/jpeg');
+      const frameIssues = frames.flatMap((f, i) => f.issues.map((x) => ({ ...x, detail: `Scene ${i + 1}: ${x.detail}` })));
+      return this.motionVersion({ brandId, actorId, context, kit, base, media: 'storyboard', storyboard, head, change, corpus, frameIssues,
+        render: Object.freeze({ rendererVersion: renderer.version, blobId, sha256: sha(sheet.bytes), mime: 'image/jpeg', width: sheet.width, height: sheet.height, byteLength: sheet.bytes.byteLength,
+          durationMs: storyboard.scenes.reduce((n, x) => n + x.durationMs, 0), contrast: Object.freeze(Object.fromEntries(frames.map((f, i) => [`scene${i + 1}`, Math.min(...Object.values(f.contrast))]))), scrimAlpha: 0, headlineSize: 0 }) });
+    } catch (error) { if (error instanceof RendererUnavailableError) throw new SeoBlogError(503, error.message); throw error; }
+  }
+  private async motionContext(actorId: string, brandId: string, setId: string, conceptKey: string, placement: PlacementId) {
+    const { context, kit } = await this.context(actorId, brandId);
+    const record = UUID.test(setId) ? await this.deps.library.getSet(brandId, setId) : null;
+    if (!record) throw new SeoBlogError(404, 'That creative set was not found.');
+    const heads = currentHeads(record).filter((v) => v.conceptKey === conceptKey);
+    const images = heads.filter((v) => mediaOf(v) === 'image');
+    if (!images.length) throw new SeoBlogError(404, 'That concept was not found.');
+    const base = images.find((v) => v.placement === placement) ?? images[0]!;
+    const head = (media: 'storyboard' | 'video') => heads.find((v) => mediaOf(v) === media && v.placement === placement) ?? null;
+    const corpus = this.corpus(context, record.set, await this.articleFor(brandId, record.set));
+    return { context, kit, record, base: { ...base, placement, variant: { focal: base.placement === placement ? base.variant.focal : { x: 0.5, y: 0.5 } } } as CreativeVersion, head, corpus };
+  }
+
+  /** Estimated local render time for a video; no provider call or charge. */
+  videoEstimate(storyboard: Storyboard) {
+    const ms = storyboard.scenes.reduce((n, x) => n + x.durationMs, 0);
+    return Object.freeze({ durationMs: ms, renderSecondsApprox: Math.ceil(ms / 1000 + storyboard.scenes.length * 1.5 + 4), providerAttempts: 0, providerCostMinor: 0 });
+  }
+
+  async createStoryboard(actorId: string, brandId: string, setId: string, conceptKey: string, placement: PlacementId, commandId: string, likenessPermission: boolean): Promise<{ replayed: boolean }> {
+    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    if (!['square', 'portrait', 'vertical', 'landscape'].includes(placement)) throw new SeoBlogError(400, 'Choose a square, portrait, vertical or landscape video format.');
+    const inputSha = sha(canonical({ setId, conceptKey, placement, likenessPermission, action: 'storyboard' }));
+    const replay = await this.deps.library.commandResult(brandId, commandId, inputSha);
+    if (replay) { await this.authorise(actorId, brandId); return { replayed: true }; }
+    const m = await this.motionContext(actorId, brandId, setId, conceptKey, placement);
+    if (m.base.concept.background.kind === 'image' && m.base.concept.background.origin === 'owner_upload' && !likenessPermission) {
+      throw new SeoBlogError(400, 'Confirm that you have permission for any identifiable person shown in the uploaded image before using it in video.');
+    }
+    const storyboard: Storyboard = { scenes: draftScenes(m.base.concept), likenessPermission };
+    const version = await this.storyboardRender(brandId, actorId, m.context, m.kit, m.base, storyboard, m.head('storyboard'), m.head('storyboard') ? 'new storyboard from concept' : 'initial storyboard', m.corpus);
+    await this.deps.library.appendVersions(brandId, commandId, inputSha, setId, [version], this.inputs(m.context));
+    return { replayed: false };
+  }
+
+  /** Scene-level revision: a new storyboard version; unchanged scenes keep their exact text and timing. */
+  async editStoryboard(actorId: string, brandId: string, storyboardVersionId: string, commandId: string, scenesRaw: readonly Partial<StoryboardScene>[]): Promise<{ replayed: boolean; changed: string[] }> {
+    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const inputSha = sha(canonical({ storyboardVersionId, scenesRaw, action: 'scenes' }));
+    const replay = await this.deps.library.commandResult(brandId, commandId, inputSha);
+    if (replay) { await this.authorise(actorId, brandId); return { replayed: true, changed: [] }; }
+    await this.authorise(actorId, brandId);
+    const found = UUID.test(storyboardVersionId) ? await this.deps.library.getVersion(brandId, storyboardVersionId) : null;
+    if (!found || mediaOf(found.version) !== 'storyboard') throw new SeoBlogError(404, 'That storyboard was not found.');
+    if (!found.head) throw new SeoBlogError(409, 'A newer storyboard exists. Edit the current version.');
+    const before = found.version.variant.storyboard!;
+    const scenes = validateScenes(scenesRaw, found.version.concept);
+    const changed = scenes.flatMap((x, i) => { const b = before.scenes[i]; if (!b) return [`scene ${i + 1} added`];
+      return (['headline', 'body', 'showCta', 'durationMs', 'motion', 'script'] as const).filter((k) => x[k] !== b[k]).map((k) => `scene ${i + 1} ${k === 'durationMs' ? 'duration' : k === 'showCta' ? 'button' : k}`); });
+    if (scenes.length < before.scenes.length) changed.push(`${before.scenes.length - scenes.length} scene(s) removed`);
+    if (!changed.length) return { replayed: false, changed };
+    const m = await this.motionContext(actorId, brandId, found.version.setId, found.version.conceptKey, found.version.placement);
+    const version = await this.storyboardRender(brandId, actorId, m.context, m.kit, { ...m.base, variant: { focal: found.version.variant.focal } } as CreativeVersion,
+      { scenes, likenessPermission: before.likenessPermission }, found.version, `edited ${changed.join(', ')}`, m.corpus);
+    await this.deps.library.appendVersions(brandId, commandId, inputSha, found.version.setId, [version], this.inputs(m.context));
+    return { replayed: false, changed };
+  }
+
+  /** Render a real, playback-verified video from one exact storyboard version. Local only: no provider call or charge. */
+  async renderVideo(actorId: string, brandId: string, storyboardVersionId: string, commandId: string): Promise<{ replayed: boolean; playable: boolean }> {
+    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const inputSha = sha(canonical({ storyboardVersionId, action: 'video' }));
+    const replay = await this.deps.library.commandResult(brandId, commandId, inputSha);
+    if (replay) { await this.authorise(actorId, brandId); return { replayed: true, playable: true }; }
+    const { context, kit } = await this.context(actorId, brandId);
+    const found = UUID.test(storyboardVersionId) ? await this.deps.library.getVersion(brandId, storyboardVersionId) : null;
+    if (!found || mediaOf(found.version) !== 'storyboard') throw new SeoBlogError(404, 'That storyboard was not found.');
+    if (!found.head) throw new SeoBlogError(409, 'A newer storyboard exists. Render the current version.');
+    const sb = found.version;
+    if (sb.issues.some((x) => x.blocking)) throw new SeoBlogError(409, 'Resolve the storyboard’s blocking issues before rendering a video.');
+    const c = this.inputs(context);
+    if (sb.context.profileVersion !== c.profileVersion || sb.context.factsSha !== c.factsSha || sb.context.kitVersion !== c.kitVersion) throw new SeoBlogError(409, 'Brand facts or the creative kit changed since this storyboard was made. Save the storyboard again first.');
+    const renderer = this.deps.renderer;
+    if (!renderer.available() || !renderer.renderVideo) throw new SeoBlogError(503, 'The video renderer is not installed on this server. No video was produced.');
+    const m = await this.motionContext(actorId, brandId, sb.setId, sb.conceptKey, sb.placement);
+    const background = sb.concept.background.kind === 'image' ? await this.loadImage(brandId, sb.concept.background.image) : null;
+    const logo = kit?.logo ? await this.loadImage(brandId, kit.logo) : null;
+    const scenes = sb.variant.storyboard!.scenes;
+    try {
+      const frames = await renderer.renderBatch(this.sceneArtwork(context, logo, background, sb.concept, scenes, sb.placement, sb.variant.focal, true));
+      const video = await renderer.renderVideo({ width: PLACEMENTS[sb.placement].width, height: PLACEMENTS[sb.placement].height, palette: context.palette,
+        scenes: frames.map((f, i) => ({ background, focal: sb.variant.focal, overlay: f.overlay!, durationMs: scenes[i]!.durationMs, motion: scenes[i]!.motion })) });
+      const blobId = await this.deps.brands.putBlob(brandId, video.bytes, video.mime);
+      const storyboard: Storyboard = { scenes, likenessPermission: sb.variant.storyboard!.likenessPermission, sourceStoryboardVersionId: sb.id, sourceStoryboardSpecSha256: sb.specSha256 };
+      const playbackOk = video.playable && video.measuredDurationMs !== null && Math.abs(video.measuredDurationMs - video.durationMs) <= 1000;
+      const version = await this.motionVersion({ brandId, actorId, context, kit, base: { ...sb, variant: { focal: sb.variant.focal } } as CreativeVersion, media: 'video', storyboard,
+        head: m.head('video'), change: `rendered from storyboard version ${sb.number}`, corpus: m.corpus, frameIssues: frames.flatMap((f, i) => f.issues.map((x) => ({ ...x, detail: `Scene ${i + 1}: ${x.detail}` }))),
+        render: Object.freeze({ rendererVersion: renderer.version, blobId, sha256: video.sha256, mime: video.mime, width: video.width, height: video.height, byteLength: video.byteLength,
+          durationMs: video.durationMs, measuredDurationMs: video.measuredDurationMs, codec: video.codec, container: video.container, contrast: Object.freeze({}), scrimAlpha: 0, headlineSize: 0 }),
+        extraIssues: playbackOk ? [] : [{ code: 'not_playable', blocking: true, detail: 'The recorded file did not pass the playback check (dimensions, length or a decodable frame). It cannot be approved; render it again.' }] });
+      await this.deps.library.appendVersions(brandId, commandId, inputSha, sb.setId, [version], c);
+      return { replayed: false, playable: playbackOk };
+    } catch (error) { if (error instanceof RendererUnavailableError) throw new SeoBlogError(503, error.message); throw error; }
+  }
+
   private async articleFor(brandId: string, set: CreativeSet): Promise<ArticleSourceText | null> {
     return set.request.source.kind === 'article' ? (await this.article(brandId, set.request.source.articleId)).source : null;
   }
@@ -441,15 +616,16 @@ export type ApprovalState = 'approved' | 'stale' | 'unapproved';
 export function setView(record: CreativeSetRecord, context: CreativeBrandContext) {
   const heads = currentHeads(record);
   const current = context.confirmed ? { profileVersion: context.profileVersion!, factsSha: context.factsSha!, kitVersion: context.kitVersion } : null;
-  const concepts = [...new Set(heads.map((h) => h.conceptKey))].sort().map((key) => {
-    const variants = heads.filter((h) => h.conceptKey === key).sort((a, b) => a.placement.localeCompare(b.placement) || a.card - b.card).map((v) => {
+  const concepts = [...new Set(heads.filter((h) => mediaOf(h) === 'image').map((h) => h.conceptKey))].sort().map((key) => {
+    const all = heads.filter((h) => h.conceptKey === key).sort((a, b) => a.placement.localeCompare(b.placement) || a.card - b.card).map((v) => {
       const approval = record.approvals.find((a) => a.versionId === v.id) ?? null;
       const state: ApprovalState = approval ? (current && approvalProblem(v, true, approval, current) === null ? 'approved' : 'stale') : 'unapproved';
       const history = record.versions.filter((x) => variantKey(x) === variantKey(v)).sort((a, b) => b.number - a.number);
       const stale = !current || v.context.profileVersion !== current.profileVersion || v.context.factsSha !== current.factsSha || v.context.kitVersion !== current.kitVersion;
       return { version: v, approval, state, staleContext: stale, history, handoffs: record.handoffs.filter((h) => h.versionId === v.id) };
     });
-    return { key, concept: variants[0]!.version.concept, variants };
+    const variants = all.filter((x) => mediaOf(x.version) === 'image');
+    return { key, concept: variants[0]!.version.concept, variants, storyboards: all.filter((x) => mediaOf(x.version) === 'storyboard'), videos: all.filter((x) => mediaOf(x.version) === 'video') };
   });
   return { concepts };
 }

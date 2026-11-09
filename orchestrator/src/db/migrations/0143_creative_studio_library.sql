@@ -1,4 +1,4 @@
--- 0143 Creative Studio library: owner-only, append-only artwork versions, exact image approvals and
+-- 0143 Creative Studio library: owner-only, append-only artwork, storyboard and video versions, exact approvals and
 -- draft campaign hand-offs for any programme brand. Additive only; 0001-0142 are unchanged.
 -- No provider call, paid-generation admission, scheduler, publishing, outreach or ad-spend capability.
 -- Rendered bytes live in the existing workspace-scoped app.seo_blog_blobs.
@@ -39,7 +39,7 @@ CREATE TABLE app.creative_studio_sets(
 );
 CREATE TABLE app.creative_studio_versions(
   workspace_id uuid NOT NULL, id uuid NOT NULL, set_id uuid NOT NULL,
-  variant_key text NOT NULL CHECK(variant_key ~ '^c[1-9]:(square|portrait|vertical|landscape|article):[0-9]$'),
+  variant_key text NOT NULL CHECK(variant_key ~ '^c[1-9]:((storyboard|video)_(square|portrait|vertical|landscape):0|(square|portrait|vertical|landscape|article):[0-9])$'),
   number integer NOT NULL CHECK(number>0), parent_id uuid, blob_id uuid NOT NULL,
   render_sha256 text NOT NULL CHECK(render_sha256 ~ '^[0-9a-f]{64}$'),
   profile_version integer NOT NULL CHECK(profile_version>0), facts_sha text NOT NULL, kit_version integer NOT NULL CHECK(kit_version>=0),
@@ -105,11 +105,18 @@ CREATE POLICY seo_blog_creator_campaigns_creative_read ON app.seo_blog_creator_c
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 
+-- Image versions keep their original key; storyboards and videos are separate lineages per concept and format.
+CREATE FUNCTION app_private.creative_studio_variant_key(p_v jsonb)
+RETURNS text LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+  SELECT (p_v->>'conceptKey')||':'||CASE WHEN coalesce(p_v->>'media','image')='image' THEN '' ELSE (p_v->>'media')||'_' END||(p_v->>'placement')||':'||(p_v->>'card')
+$f$;
+
 -- Insert one artwork version after independently rechecking brand context, lineage and stored bytes.
 CREATE FUNCTION app_private.creative_studio_insert_version(p_workspace uuid,p_actor uuid,p_set uuid,p_v jsonb,p_profile jsonb,p_kit integer)
 RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE k text; expected integer; parent uuid;
+DECLARE k text; expected integer; parent uuid; media text:=coalesce(p_v->>'media','image'); source app.creative_studio_versions;
 BEGIN
+  IF media NOT IN ('image','storyboard','video') THEN RAISE EXCEPTION 'Invalid creative media' USING ERRCODE='22023'; END IF;
   IF p_v->>'brandId' IS DISTINCT FROM p_workspace::text OR p_v->>'setId' IS DISTINCT FROM p_set::text OR p_v->>'createdBy' IS DISTINCT FROM p_actor::text
     OR coalesce(p_v->>'id','') !~ '^[0-9a-f-]{36}$' OR jsonb_typeof(p_v->'issues') IS DISTINCT FROM 'array' THEN
     RAISE EXCEPTION 'Invalid creative version' USING ERRCODE='22023';
@@ -118,15 +125,23 @@ BEGIN
     OR p_v#>>'{context,factsSha}' IS DISTINCT FROM p_profile->>'factsSha' OR (p_v#>>'{context,kitVersion}')::integer IS DISTINCT FROM p_kit THEN
     RAISE EXCEPTION 'Brand facts or the creative kit changed while rendering. Try again.' USING ERRCODE='55000';
   END IF;
-  k:=(p_v->>'conceptKey')||':'||(p_v->>'placement')||':'||(p_v->>'card');
+  k:=app_private.creative_studio_variant_key(p_v);
   SELECT coalesce(max(number),0)+1 INTO expected FROM app.creative_studio_versions WHERE workspace_id=p_workspace AND set_id=p_set AND variant_key=k;
   SELECT id INTO parent FROM app.creative_studio_versions WHERE workspace_id=p_workspace AND set_id=p_set AND variant_key=k AND number=expected-1;
   IF (p_v->>'number')::integer IS DISTINCT FROM expected OR (p_v->>'parentVersionId') IS DISTINCT FROM parent::text THEN
     RAISE EXCEPTION 'This artwork changed while you were editing. Refresh and review the current version.' USING ERRCODE='40001';
   END IF;
   IF NOT EXISTS(SELECT 1 FROM app.seo_blog_blobs b WHERE b.workspace_id=p_workspace AND b.id=(p_v#>>'{render,blobId}')::uuid
-    AND encode(b.sha256,'hex')=p_v#>>'{render,sha256}' AND b.mime='image/jpeg') THEN
+    AND encode(b.sha256,'hex')=p_v#>>'{render,sha256}' AND b.mime=ANY(CASE WHEN media='video' THEN ARRAY['video/mp4','video/webm'] ELSE ARRAY['image/jpeg'] END)) THEN
     RAISE EXCEPTION 'Rendered artwork bytes are missing or do not match' USING ERRCODE='42501';
+  END IF;
+  -- A video is always rendered from one exact storyboard version of the same concept and format.
+  IF media='video' THEN
+    SELECT * INTO source FROM app.creative_studio_versions WHERE workspace_id=p_workspace AND id=(p_v#>>'{variant,storyboard,sourceStoryboardVersionId}')::uuid;
+    IF source.id IS NULL OR source.set_id<>p_set OR source.variant_key IS DISTINCT FROM (p_v->>'conceptKey')||':storyboard_'||(p_v->>'placement')||':0'
+      OR source.data->>'specSha256' IS DISTINCT FROM p_v#>>'{variant,storyboard,sourceStoryboardSpecSha256}' THEN
+      RAISE EXCEPTION 'A video must be rendered from an exact storyboard version of the same concept and format' USING ERRCODE='55000';
+    END IF;
   END IF;
   INSERT INTO app.creative_studio_versions(workspace_id,id,set_id,variant_key,number,parent_id,blob_id,render_sha256,profile_version,facts_sha,kit_version,blocking,figures_flagged,data,created_by)
     VALUES(p_workspace,(p_v->>'id')::uuid,p_set,k,expected,parent,(p_v#>>'{render,blobId}')::uuid,p_v#>>'{render,sha256}',
@@ -205,7 +220,7 @@ BEGIN
     END IF;
     IF jsonb_typeof(p_input->'versions') IS DISTINCT FROM 'array' OR jsonb_array_length(p_input->'versions') NOT BETWEEN 1 AND 24 THEN RAISE EXCEPTION 'Invalid creative versions' USING ERRCODE='22023'; END IF;
     FOR v IN SELECT value FROM jsonb_array_elements(p_input->'versions') LOOP
-      k:=(v->>'conceptKey')||':'||(v->>'placement')||':'||(v->>'card');
+      k:=app_private.creative_studio_variant_key(v);
       IF k=ANY(keys) THEN RAISE EXCEPTION 'Duplicate artwork variant in one command' USING ERRCODE='22023'; END IF;
       keys:=keys||k;
       PERFORM app_private.creative_studio_insert_version(p_workspace,actor,v_set,v,prof,kit_v);
@@ -215,6 +230,7 @@ BEGIN
     a:=p_input->'approval';
     SELECT * INTO ver FROM app.creative_studio_versions WHERE workspace_id=p_workspace AND id=(a->>'versionId')::uuid;
     IF ver.id IS NULL OR a->>'approvedBy' IS DISTINCT FROM actor::text OR a->>'scope' IS DISTINCT FROM 'image_only' THEN RAISE EXCEPTION 'Artwork version not found' USING ERRCODE='22023'; END IF;
+    IF ver.variant_key ~ '^c[1-9]:storyboard_' THEN RAISE EXCEPTION 'A storyboard is a plan made of still frames, not a video. Render the video and approve that.' USING ERRCODE='55000'; END IF;
     IF EXISTS(SELECT 1 FROM app.creative_studio_versions WHERE workspace_id=p_workspace AND set_id=ver.set_id AND variant_key=ver.variant_key AND number>ver.number) THEN
       RAISE EXCEPTION 'A newer version of this artwork exists. Review and approve the current version.' USING ERRCODE='55000'; END IF;
     IF a->>'renderSha256' IS DISTINCT FROM ver.render_sha256 THEN RAISE EXCEPTION 'The artwork changed since you reviewed it.' USING ERRCODE='55000'; END IF;
@@ -246,7 +262,7 @@ BEGIN
   RETURN jsonb_build_object('replayed',false,'id',rid);
 END $f$;
 
-REVOKE ALL ON FUNCTION app_private.creative_studio_insert_version(uuid,uuid,uuid,jsonb,jsonb,integer),app_private.creative_studio_command(uuid,bytea,text,jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_private.creative_studio_variant_key(jsonb),app_private.creative_studio_insert_version(uuid,uuid,uuid,jsonb,jsonb,integer),app_private.creative_studio_command(uuid,bytea,text,jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_studio_command(uuid,bytea,text,jsonb) TO r72_content_command;
 
 RESET ROLE;

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import jpeg from 'jpeg-js';
 import type { VerifiedImage } from './image-input.js';
+import { remuxFragmentedMp4 } from './mp4-remux.js';
 import type { Placement } from './placements.js';
 import type { ArtworkIssue, Palette } from './types.js';
 
@@ -37,6 +38,8 @@ export interface ArtworkInput {
   readonly disclosure: string | null;
   readonly illustrativeTag: boolean;
   readonly card: Readonly<{ current: number; total: number }> | null;
+  /** Video scenes: also capture the measured text/scrim/logo layer as a transparent PNG. */
+  readonly captureOverlay?: boolean;
 }
 
 export interface RenderedArtwork {
@@ -49,13 +52,54 @@ export interface RenderedArtwork {
   readonly headlineSize: number;
   readonly issues: readonly ArtworkIssue[];
   readonly bytes: Buffer;
+  /** Transparent PNG of the exact overlay layer, present only when requested. */
+  readonly overlay?: Buffer;
 }
+
+export type MotionId = 'none' | 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right';
+export const MOTIONS: readonly MotionId[] = Object.freeze(['zoom_in', 'zoom_out', 'pan_left', 'pan_right', 'none']);
+export interface VideoScene {
+  readonly background: VerifiedImage | null;
+  readonly focal: Readonly<{ x: number; y: number }>;
+  /** Transparent PNG produced by renderBatch({ captureOverlay: true }) for the same layout. */
+  readonly overlay: Buffer;
+  readonly durationMs: number;
+  readonly motion: MotionId;
+}
+export interface VideoInput {
+  readonly width: number;
+  readonly height: number;
+  readonly palette: Palette;
+  readonly scenes: readonly VideoScene[];
+}
+export interface RenderedVideo {
+  readonly mime: 'video/mp4' | 'video/webm';
+  readonly codec: string;
+  /** progressive: index-first standard MP4 (losslessly rewritten); fragmented/webm: as recorded. */
+  readonly container: 'progressive' | 'fragmented' | 'webm';
+  readonly sha256: string;
+  readonly width: number;
+  readonly height: number;
+  /** Planned timeline length. */
+  readonly durationMs: number;
+  /** Duration reported by an independent playback check, or null when the container does not state it. */
+  readonly measuredDurationMs: number | null;
+  readonly playable: boolean;
+  readonly byteLength: number;
+  readonly bytes: Buffer;
+}
+export interface ContactSheetFrame { readonly image: Buffer; readonly caption: string; readonly script: string | null }
+export const VIDEO_LIMITS = Object.freeze({ scenes: 8, sceneMs: [1500, 8000] as const, totalMs: 30_000, fps: 30, bitsPerSecond: 5_000_000, bytes: 20 * 1024 * 1024 });
 
 export interface ArtworkRenderer {
   readonly version: string;
   available(): boolean;
   /** Renders sequentially in one browser; resolves only with real raster bytes. */
   renderBatch(inputs: readonly ArtworkInput[]): Promise<RenderedArtwork[]>;
+  /** Storyboard sheet: still frames plus captions, clearly labelled as not a video. */
+  renderContactSheet?(frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }>;
+  /** Records the scenes to a real video file and verifies it plays back. */
+  renderVideo?(input: VideoInput): Promise<RenderedVideo>;
 }
 
 export class RendererUnavailableError extends Error {
@@ -209,6 +253,66 @@ const FIT_SCRIPT = `async ({ max, min, maxLines, bodyLines, bodySize }) => {
 }`;
 const BOXES_SCRIPT = `[...document.querySelectorAll('.measure')].map((el) => { const r = el.getBoundingClientRect(); return { role: el.dataset.role || 'text', x: r.x, y: r.y, w: r.width, h: r.height }; })`;
 
+/** Canvas timeline recorded in real time by the browser's own MediaRecorder (H.264 MP4 preferred). */
+const VIDEO_SCRIPT = `async ({ scenes, palette, fps, bits }) => {
+  const c = document.getElementById('c'), ctx = c.getContext('2d'), W = c.width, H = c.height;
+  const load = (src) => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => fail(new Error('image')); i.src = src; });
+  const items = [];
+  for (const s of scenes) items.push({ ...s, bgImg: s.bg ? await load(s.bg) : null, ovImg: await load(s.ov) });
+  const draw = (s, p) => {
+    if (s.bgImg) {
+      const base = Math.max(W / s.bgImg.width, H / s.bgImg.height);
+      const z = s.motion === 'zoom_in' ? 1 + 0.08 * p : s.motion === 'zoom_out' ? 1.08 - 0.08 * p : 1.06;
+      const dw = s.bgImg.width * base * z, dh = s.bgImg.height * base * z;
+      let x = Math.min(0, Math.max(W - dw, W / 2 - s.focal.x * dw)), y = Math.min(0, Math.max(H - dh, H / 2 - s.focal.y * dh));
+      const slack = dw - W;
+      if (s.motion === 'pan_left') x = -slack * (0.15 + 0.7 * p); if (s.motion === 'pan_right') x = -slack * (0.85 - 0.7 * p);
+      ctx.drawImage(s.bgImg, x, y, dw, dh);
+    } else {
+      const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, palette.primary); g.addColorStop(0.78, palette.dark); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    ctx.drawImage(s.ovImg, 0, 0, W, H);
+  };
+  const types = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1.4d0028', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8'];
+  const mimeType = types.find((t) => MediaRecorder.isTypeSupported(t));
+  if (!mimeType) throw new Error('No supported video encoder');
+  const stream = c.captureStream(fps), rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bits }), chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((r) => { rec.onstop = r; });
+  const total = items.reduce((n, s) => n + s.ms, 0); let frames = 0;
+  draw(items[0], 0); rec.start(250);
+  const t0 = performance.now();
+  await new Promise((done) => { const tick = () => {
+    const t = performance.now() - t0; if (t >= total) return done();
+    let start = 0, i = 0; while (i < items.length - 1 && t >= start + items[i].ms) { start += items[i].ms; i++; }
+    const s = items[i], p = Math.min(1, (t - start) / s.ms);
+    draw(s, p);
+    const q = (t - start) / 350;
+    if (i > 0 && q < 1) { ctx.globalAlpha = 1 - q; draw(items[i - 1], 1); ctx.globalAlpha = 1; }
+    frames++; requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+  rec.stop(); await stopped;
+  const buf = new Uint8Array(await new Blob(chunks, { type: mimeType }).arrayBuffer());
+  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return { mime: mimeType, b64: btoa(bin), frames };
+}`;
+/** Independent playback check of the recorded bytes: metadata, real dimensions, a decodable non-blank frame. */
+const PLAYBACK_CHECK = `async ({ src, w, h }) => {
+  const v = document.createElement('video'); v.muted = true; v.preload = 'auto'; v.src = src; document.body.appendChild(v);
+  const wait = (ev, ms = 20000) => new Promise((ok, fail) => { const t = setTimeout(() => fail(new Error('timeout ' + ev)), ms); v.addEventListener(ev, () => { clearTimeout(t); ok(); }, { once: true }); v.addEventListener('error', () => { clearTimeout(t); fail(new Error('decode')); }, { once: true }); });
+  try {
+    await wait('loadeddata');
+    // A decodable, non-blank frame near the start.
+    v.currentTime = 0.8; await wait('seeked');
+    const k = document.createElement('canvas'); k.width = 64; k.height = 64; const x = k.getContext('2d'); x.drawImage(v, 0, 0, 64, 64);
+    const px = x.getImageData(0, 0, 64, 64).data; let min = 255, max = 0;
+    for (let i = 0; i < px.length; i += 4) { const l = (px[i] + px[i + 1] + px[i + 2]) / 3; if (l < min) min = l; if (l > max) max = l; }
+    // Recorder output is fragmented and under-reports its length until read: play it all (fast) to the end.
+    v.currentTime = 0; await wait('seeked'); v.playbackRate = 16; await v.play(); await wait('ended', 30000);
+    const ends = [v.duration, v.currentTime].filter(Number.isFinite);
+    return { ok: max - min > 8, duration: ends.length ? Math.max(...ends) : null, width: v.videoWidth, height: v.videoHeight };
+  } catch (e) { return { ok: false, duration: null, width: v.videoWidth, height: v.videoHeight }; }
+}`;
+
 let queue: Promise<unknown> = Promise.resolve();
 /** One render batch at a time per process: bounded memory on small instances. */
 function serialised<T>(task: () => Promise<T>): Promise<T> {
@@ -281,9 +385,15 @@ export class ChromiumArtworkRenderer implements ArtworkRenderer {
             contrast.cta = Number(ratio.toFixed(2));
             if (ratio < 4.5) issues.push({ code: 'cta_contrast', blocking: true, detail: `The button colours reach only ${ratio.toFixed(2)}:1 contrast. Choose an accent colour that contrasts with the brand light or dark colour.` });
           }
+          let overlay: Buffer | null = null;
+          if (input.captureOverlay) {
+            await page.evaluate(`(() => { const bg = document.getElementById('bg'); if (bg) bg.style.visibility = 'hidden'; document.documentElement.style.background = 'transparent'; document.body.style.background = 'transparent'; })()`);
+            overlay = Buffer.from(await page.screenshot({ type: 'png', omitBackground: true, animations: 'disabled' }));
+          }
           const owned = Buffer.from(bytes);
           const result = { mime: 'image/jpeg' as const, sha256: createHash('sha256').update(owned).digest('hex'), width: W, height: H, contrast: Object.freeze(contrast), scrimAlpha: scrim, headlineSize: fit.size, issues: Object.freeze(issues) };
           Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(owned) });
+          if (overlay) { const layer = overlay; Object.defineProperty(result, 'overlay', { enumerable: false, get: () => Buffer.from(layer) }); }
           results.push(Object.freeze(result) as RenderedArtwork);
         }
         await context.close();
@@ -291,6 +401,88 @@ export class ChromiumArtworkRenderer implements ArtworkRenderer {
       } finally {
         await browser.close();
       }
+    });
+  }
+
+  /** One offline browser page serving only in-memory files from the private pseudo-origin. */
+  private session<T>(work: (page: import('playwright-core').Page, files: Map<string, { type: string; body: Buffer }>) => Promise<T>): Promise<T> {
+    if (!this.executable) return Promise.reject(new RendererUnavailableError());
+    const executable = this.executable;
+    return serialised(async () => {
+      const { chromium } = await import('playwright-core');
+      let browser: Awaited<ReturnType<typeof chromium.launch>>;
+      try { browser = await chromium.launch({ executablePath: executable, headless: true, chromiumSandbox: process.getuid?.() !== 0, args: ['--disable-gpu', '--font-render-hinting=none', '--autoplay-policy=no-user-gesture-required'] }); }
+      catch { throw new RendererUnavailableError(); }
+      try {
+        const context = await browser.newContext({ javaScriptEnabled: true, serviceWorkers: 'block', deviceScaleFactor: 1, viewport: { width: 1280, height: 900 } });
+        const files = new Map<string, { type: string; body: Buffer }>();
+        for (const [key, file] of Object.entries(FONTS)) files.set(`/f/${key}`, { type: 'font/otf', body: readFileSync(path.join(FONT_DIR, file)) });
+        await context.route('**/*', async (route) => {
+          const url = new URL(route.request().url());
+          const file = url.origin === ORIGIN ? files.get(url.pathname) : undefined;
+          return file ? route.fulfill({ status: 200, contentType: file.type, body: file.body, headers: { 'accept-ranges': 'none' } }) : route.abort('blockedbyclient');
+        });
+        const page = await context.newPage();
+        page.setDefaultTimeout(RENDER_TIMEOUT_MS + VIDEO_LIMITS.totalMs);
+        const result = await work(page, files);
+        await context.close();
+        return result;
+      } finally { await browser.close(); }
+    });
+  }
+
+  renderContactSheet(frames: readonly ContactSheetFrame[], title: string): Promise<{ bytes: Buffer; sha256: string; width: number; height: number }> {
+    if (!frames.length || frames.length > VIDEO_LIMITS.scenes + 1) return Promise.reject(new Error('A storyboard has one to nine frames.'));
+    return this.session(async (page, files) => {
+      frames.forEach((f, i) => files.set(`/sb/${i}.jpg`, { type: 'image/jpeg', body: f.image }));
+      const cards = frames.map((f, i) => `<figure><img src="${ORIGIN}/sb/${i}.jpg" alt=""><figcaption><b>Scene ${i + 1}</b> · ${escape(f.caption)}${f.script ? `<span class="script">Script only — no audio produced: ${escape(f.script)}</span>` : ''}</figcaption></figure>`).join('');
+      files.set('/sheet', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:R72Text;src:url(${ORIGIN}/f/text.otf);font-weight:400}@font-face{font-family:R72Text;src:url(${ORIGIN}/f/strong.otf);font-weight:600}
+body{margin:0;width:1600px;background:#f3f4f6;font-family:R72Text;color:#111827}header{background:#111827;color:#fff;padding:22px 32px;font-weight:600;font-size:26px;display:flex;justify-content:space-between}
+header span{background:#fbbf24;color:#111827;padding:4px 12px;border-radius:6px;font-size:18px}main{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;padding:24px 32px 32px}
+figure{margin:0;background:#fff;border-radius:10px;padding:10px;box-shadow:0 1px 3px rgba(0,0,0,.12)}img{width:100%;display:block;border-radius:6px}figcaption{font-size:15px;line-height:1.35;margin-top:8px}
+.script{display:block;margin-top:6px;color:#4b5563;font-size:14px;border-left:3px solid #fbbf24;padding-left:8px}</style></head><body><header>${escape(title)}<span>STORYBOARD — NOT A VIDEO</span></header><main>${cards}</main></body></html>`) });
+      await page.setViewportSize({ width: 1600, height: 900 });
+      await page.goto(`${ORIGIN}/sheet`, { waitUntil: 'load' });
+      await page.evaluate('document.fonts.ready');
+      const bytes = Buffer.from(await page.screenshot({ type: 'jpeg', quality: 85, fullPage: true }));
+      const size = await page.evaluate('[document.documentElement.scrollWidth, document.documentElement.scrollHeight]') as [number, number];
+      return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), width: size[0], height: size[1] };
+    });
+  }
+
+  renderVideo(input: VideoInput): Promise<RenderedVideo> {
+    const total = input.scenes.reduce((n, s) => n + s.durationMs, 0);
+    if (!input.scenes.length || input.scenes.length > VIDEO_LIMITS.scenes || total > VIDEO_LIMITS.totalMs
+      || input.scenes.some((s) => s.durationMs < VIDEO_LIMITS.sceneMs[0] || s.durationMs > VIDEO_LIMITS.sceneMs[1] || !MOTIONS.includes(s.motion))) {
+      return Promise.reject(new Error('A video has one to eight scenes of 1.5–8 seconds, at most 30 seconds in total.'));
+    }
+    return this.session(async (page, files) => {
+      const scenes = input.scenes.map((s, i) => {
+        if (s.background) files.set(`/v/bg${i}`, { type: s.background.mime, body: s.background.bytes });
+        files.set(`/v/ov${i}`, { type: 'image/png', body: s.overlay });
+        return { bg: s.background ? `${ORIGIN}/v/bg${i}` : null, ov: `${ORIGIN}/v/ov${i}`, focal: s.focal, ms: s.durationMs, motion: s.motion };
+      });
+      files.set('/video', { type: 'text/html; charset=utf-8', body: Buffer.from(`<!DOCTYPE html><html><body style="margin:0;background:#000"><canvas id="c" width="${input.width}" height="${input.height}"></canvas></body></html>`) });
+      await page.setViewportSize({ width: input.width, height: input.height });
+      await page.goto(`${ORIGIN}/video`, { waitUntil: 'load' });
+      const recorded = await page.evaluate(`(${VIDEO_SCRIPT})(${JSON.stringify({ scenes, palette: input.palette, fps: VIDEO_LIMITS.fps, bits: VIDEO_LIMITS.bitsPerSecond })})`) as { mime: string; b64: string; frames: number };
+      const recordedBytes = Buffer.from(recorded.b64, 'base64');
+      const mime = recorded.mime.startsWith('video/mp4') ? 'video/mp4' as const : 'video/webm' as const;
+      // Same encoded samples, standard index-first layout with real durations; unknown shapes stay as recorded.
+      const progressive = mime === 'video/mp4' ? remuxFragmentedMp4(recordedBytes) : null;
+      const bytes = progressive ?? recordedBytes;
+      const container = mime === 'video/webm' ? 'webm' as const : progressive ? 'progressive' as const : 'fragmented' as const;
+      if (!bytes.length || bytes.length > VIDEO_LIMITS.bytes) throw new Error('The recorded video is empty or exceeds the 20 MB limit.');
+      files.set('/v/out', { type: mime, body: bytes });
+      files.set('/check', { type: 'text/html; charset=utf-8', body: Buffer.from('<!DOCTYPE html><html><body></body></html>') });
+      await page.goto(`${ORIGIN}/check`, { waitUntil: 'load' });
+      const check = await page.evaluate(`(${PLAYBACK_CHECK})(${JSON.stringify({ src: `${ORIGIN}/v/out`, w: input.width, h: input.height })})`) as { ok: boolean; duration: number | null; width: number; height: number };
+      const result = { mime, codec: recorded.mime, container, sha256: createHash('sha256').update(bytes).digest('hex'), width: input.width, height: input.height, durationMs: total,
+        measuredDurationMs: check.duration === null ? null : Math.round(check.duration * 1000),
+        playable: check.ok && check.width === input.width && check.height === input.height, byteLength: bytes.length };
+      Object.defineProperty(result, 'bytes', { enumerable: false, get: () => Buffer.from(bytes) });
+      return Object.freeze(result) as RenderedVideo;
     });
   }
 }
