@@ -38,6 +38,22 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: npx --no-install playwright-core install --with-deps --only-shell chromium
+      - name: Verify the renderer starts with the application sandbox policy
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { chromium } from 'playwright-core';
+          import { findCreativeChromium } from './orchestrator/src/creative-studio/renderer.ts';
+          const executablePath = findCreativeChromium();
+          assert(executablePath, 'Pinned Chromium was not found');
+          const browser = await chromium.launch({ executablePath, headless: true,
+            chromiumSandbox: process.getuid?.() !== 0,
+            args: ['--disable-gpu', '--font-render-hinting=none', '--disable-lcd-text'] });
+          await browser.close();
+          console.log('Actual application Chromium launch policy passed.');
+          NODE
       - name: TypeScript and supply-chain gates
         run: |
           npm run typecheck
