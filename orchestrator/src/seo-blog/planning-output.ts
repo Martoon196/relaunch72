@@ -2,6 +2,7 @@
 import type { RulePack } from './method-packs.js';
 import { methodEvidenceContext, selectionCatalogue, type MethodEvidenceInputs } from './method-evidence.js';
 import type { BrandProfile } from './types.js';
+import { extractJson } from '../llm/json.js';
 
 type Schema = Record<string, unknown>;
 const str = { type: 'string', minLength: 3, maxLength: 500 };
@@ -59,17 +60,21 @@ export function decodePlanningOutput(raw:Record<string,unknown>):{value:Record<s
   let value=structuredClone(raw);
   const parseObject=(text:unknown,limit:number):Record<string,unknown>|null=>{
     if(typeof text!=='string'||text.length>limit)return null;
-    try {const parsed:unknown=JSON.parse(text);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed as Record<string,unknown>:null;}catch{return null;}
+    const parsed=extractJson(text);
+    return 'value' in parsed&&parsed.value&&typeof parsed.value==='object'&&!Array.isArray(parsed.value)?parsed.value as Record<string,unknown>:null;
   };
   if(Object.hasOwn(value,'planJson')){
     const plan=parseObject(value.planJson,64000);
-    if(!plan||Object.hasOwn(plan,'_method_sidecar')||Object.keys(value).some(k=>k!=='planJson'&&k!=='_method_sidecar'))return {value:{},problems:['planJson must encode only the original plan object within its size limit.']};
+    if(!plan)return {value:{},problems:['planJson must contain a parseable JSON plan object within 64000 characters.']};
+    if(Object.hasOwn(plan,'_method_sidecar'))return {value:{},problems:['Keep _method_sidecar outside planJson; planJson contains only the stage plan.']};
+    if(Object.keys(value).some(k=>k!=='planJson'&&k!=='_method_sidecar'))return {value:{},problems:['The planning envelope contains only planJson and _method_sidecar.']};
     value={...plan,_method_sidecar:value._method_sidecar};
   }
   const sidecar=value._method_sidecar;
   if(sidecar&&typeof sidecar==='object'&&!Array.isArray(sidecar)&&Object.hasOwn(sidecar,'decisionsJson')){
     const s=sidecar as Record<string,unknown>,decisions=parseObject(s.decisionsJson,30000);
-    if(!decisions||Object.hasOwn(s,'decisions'))return {value,problems:['decisionsJson must encode one original decisions object within its size limit.']};
+    if(!decisions)return {value,problems:['decisionsJson must contain a parseable JSON decisions object within 30000 characters.']};
+    if(Object.hasOwn(s,'decisions'))return {value,problems:['Use decisionsJson only; omit its sibling decisions field from the wire review.']};
     const {decisionsJson:_wire,...rest}=s;value._method_sidecar={...rest,decisions};
   }
   return {value,problems:[]};

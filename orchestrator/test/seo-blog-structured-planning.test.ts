@@ -9,7 +9,7 @@ import { fixtureBrand } from './rl72-method-fixtures.js';
 import { UpgradeFixtureModel, upgradeSnapshot } from './rl72-upgrade-fixtures.js';
 import { decodePlanningOutput } from '../src/seo-blog/planning-output.js';
 
-async function plan(mutate?: (v:any,request:LlmRequest)=>void) {
+async function plan(mutate?: (v:any,request:LlmRequest)=>void,mutateWire?:(v:any)=>void) {
   const f=fixtureBrand(),store=new MemoryMethodStore(),model=new UpgradeFixtureModel();
   let wire:any;
   store.snapshots.set(f.brand.id,upgradeSnapshot(f.brand.id,['production-core','editorial-planning']));
@@ -22,6 +22,7 @@ async function plan(mutate?: (v:any,request:LlmRequest)=>void) {
     const {_method_sidecar:sidecar,...asset}=structuredClone(v),{decisions,...review}=sidecar;
     for(const key of Object.keys(v))delete v[key];
     Object.assign(v,{planJson:JSON.stringify(asset),_method_sidecar:{...review,decisionsJson:JSON.stringify(decisions)}});
+    mutateWire?.(v);
     wire=structuredClone(v);
   };
   const llm=await new MethodController(store,true).prepare(model,{...f,stage:'planning',stages:['planning'],assetRef:'plan:test',sources:['S1','fixture-source'],baselineTokens:16000,evidence:{research:f.sources}});
@@ -42,6 +43,7 @@ test('native planning request carries the full wire grammar once and persists ex
   const row=(receipt!.sidecar!.decisions as any).claimLedger[0];
   assert.equal(row.text,out.value.pillar.key_points[0]);assert.equal(row.assetPointer,'/asset/pillar/key_points/0');
   assert.equal(f.model.requests.length,1);assert.equal(f.store.receipts.size,1);
+  assert.equal(receipt!.heldResponse,undefined);
   assert(!('_method_sidecar' in out.value));
 });
 
@@ -93,6 +95,30 @@ test('wire decoding rejects malformed, oversized, conflicting or non-object JSON
   const raw={planJson:'{"topic":"An unchanged topic"}',_method_sidecar:{decisionsJson:'{"ownerDecisionsNeeded":[]}'}};
   assert.deepEqual(decodePlanningOutput(raw),{value:{topic:'An unchanged topic',_method_sidecar:{decisions:{ownerDecisionsNeeded:[]}}},problems:[]});
   assert.equal(raw.planJson,'{"topic":"An unchanged topic"}');
+});
+
+test('inner JSON uses the existing platform fence/prose extractor, then runs the complete plan and evidence checks',async()=>{
+  const fence=(v:any)=>{v.planJson='```json\n'+v.planJson+'\n```';v._method_sidecar.decisionsJson='The decisions follow:\n```json\n'+v._method_sidecar.decisionsJson+'\n```';};
+  const f=await plan(undefined,fence);const out=await f.run();assert.equal(out.value.supporting.length,6);assert.ok(out.record.methodReceiptId);
+  const bad=await plan(v=>{v._method_sidecar.decisions.claimLedger[0].references=['foreign'];},fence);
+  await assert.rejects(bad.run,/supplied reference/);
+});
+
+test('an early wire rejection retains the exact final response and known usage in one private immutable receipt',async()=>{
+  const f=await plan(undefined,v=>{v._method_sidecar.decisionsJson='not a JSON object';});
+  await assert.rejects(f.run,/decisionsJson must contain/);
+  const receipt=[...f.store.receipts.values()][0]!;
+  assert.equal(receipt.outcome,'rejected');assert.equal(receipt.sidecar,null);assert.equal(receipt.heldDraft,null);
+  assert.equal(receipt.heldResponse,JSON.stringify(f.wire()));assert.equal(receipt.usage.tokensIn+receipt.usage.tokensOut,500);
+  assert.equal(f.store.receipts.size,1);assert.equal(f.model.requests.length,2);
+  assert.ok(Buffer.byteLength(JSON.stringify(receipt),'utf8')<131072);
+  await assert.rejects(()=>f.store.saveReceipt(receipt),/immutable/);
+});
+
+test('nested review conflicts are rejected with specific feedback and retained instead of discarding the evidence',async()=>{
+  const f=await plan(undefined,v=>{v.planJson=JSON.stringify({...JSON.parse(v.planJson),_method_sidecar:{decisions:{ownerDecisionsNeeded:['An unresolved decision']}}});});
+  await assert.rejects(f.run,/Keep _method_sidecar outside planJson/);
+  const receipt=[...f.store.receipts.values()][0]!;assert.equal(receipt.outcome,'rejected');assert.ok(receipt.heldResponse?.includes('An unresolved decision'));
 });
 
 test('Anthropic serializes native output_config only when requested; streaming and usage are preserved',async()=>{

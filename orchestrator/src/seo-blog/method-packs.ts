@@ -47,6 +47,8 @@ export interface MethodReceipt {
   revisionPasses: number; outcome: 'accepted'|'rejected'|'unknown'; resultHash: string|null;
   approvalState: 'draft'; createdAt: string; heldDraft?: unknown; compiledHash: string;
   resultText?:string;
+  /** Exact private wire text, only when rejection occurred before a canonical draft existed. */
+  heldResponse?:string;
 }
 export interface MethodStore {
   snapshot(brandId:string): Promise<MethodSnapshot>;
@@ -125,6 +127,7 @@ export class MethodRun {
   readonly maxPasses:number;readonly compiled:string;
   private attempts=0;private tokensIn=0;private tokensOut=0;private promptHash='';private model='';
   private sidecar:MethodSidecar|null=null;private lastValue:unknown=null;private saved=false;
+  private lastResponse:string|null=null;
   constructor(readonly store:MethodStore,readonly context:{brand:Brand;profile:BrandProfile;stage:string;assetRef:string;sources:readonly string[];evidence?:MethodEvidenceInputs},
     readonly assignment:MethodAssignment,readonly pins:readonly MethodPin[],readonly packs:readonly RulePack[]){
     this.maxPasses=Math.min(1,...packs.map(p=>p.revisionPolicy.maxRevisionPasses));
@@ -154,6 +157,10 @@ export class MethodRun {
       run.promptHash=methodHash(JSON.stringify({system:effectiveRequest.system,messages:effectiveRequest.messages,...(effectiveRequest.outputSchema?{outputSchema:effectiveRequest.outputSchema}:{})}));
       if(strict&&Buffer.byteLength(JSON.stringify(effectiveRequest),'utf8')>150000)return methodError('This method request exceeds its bounded context.','method_context_limit');
       const response=await llm.complete(effectiveRequest);
+      if(run.structuredPlanning){
+        run.sidecar=null;run.lastValue=null;
+        run.lastResponse=Buffer.byteLength(JSON.stringify(response.text),'utf8')<=64000?response.text:null;
+      }
       run.tokensIn+=response.tokensIn;run.tokensOut+=response.tokensOut;run.model=response.model||request.model;
       return response;
     }};
@@ -200,6 +207,7 @@ export class MethodRun {
         sidecar:this.sidecar as unknown as Record<string,unknown>|null,usage:{tokensIn:this.tokensIn,tokensOut:this.tokensOut},
         revisionPasses:Math.max(0,this.attempts-1),outcome,resultHash:outcome==='accepted'?methodHash(JSON.stringify(this.lastValue)):null,
         approvalState:'draft',createdAt:new Date().toISOString(),compiledHash:methodHash(this.compiled),...(outcome!=='accepted'&&JSON.stringify(this.lastValue).length<64000?{heldDraft:this.lastValue}:{})};
+      if(outcome!=='accepted'&&this.structuredPlanning&&this.sidecar===null&&this.lastResponse!==null)receipt.heldResponse=this.lastResponse;
       if(['email','advocacy'].includes(this.context.stage)&&outcome==='accepted')receipt.resultText=JSON.stringify(this.lastValue);
       try { await this.store.saveReceipt(receipt); }
       catch(error) {
