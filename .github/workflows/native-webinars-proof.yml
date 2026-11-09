@@ -36,7 +36,7 @@ jobs:
           ffmpeg -hide_banner -version
       - name: Install pinned renderer for actual artwork and video checks
         env:
-          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: npx --no-install playwright-core install --with-deps --only-shell chromium
       - name: TypeScript and supply-chain gates
         run: |
@@ -87,7 +87,7 @@ jobs:
         run: node --import tsx scripts/native-webinars-recovery-proof.mjs
       - name: Exact-source offline suite with real local media tools
         env:
-          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
           TEST_DATABASE_URL: ''
           RL72_METHODS_PG_TEST_URL: ''
           RELAUNCH72_DATABASE_INTEGRATION: ''
