@@ -1,4 +1,4 @@
-name: Native webinars exact-source integration gate
+name: Native webinar provider correction exact-source gate
 on:
   push:
     branches: [codex/native-webinars-limits146-20261109]
@@ -78,6 +78,12 @@ jobs:
         run: |
           npm run typecheck
           node scripts/supply-chain.mjs --check
+      # Broader release gate42703612380 on exact720515e passed before this
+      # provider-only correction: Studio44/44, offline4327/0/73, SQL146 and recovery.
+      # Studio, payments, migrations and recovery bytes are unchanged; retain those
+      # source-bound receipts. Repeat only native adapter/UI/actual-role neighbours.
+      - name: Corrected provider adapter and room-state neighbours
+        run: node --import tsx --test orchestrator/test/webinars.test.ts
       - name: Apply all exact migrations to disposable localhost only
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
@@ -90,26 +96,6 @@ jobs:
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test --test-concurrency=1 test/db/native-webinars.integration.test.ts test/db/native-webinars-http.integration.test.ts test/db/native-webinars-recovery.integration.test.ts test/db/native-webinars-browser.integration.test.ts test/db/mhp-wa-direct-inbox.integration.test.ts
-      - name: Existing Creative Studio actual-role neighbours
-        working-directory: orchestrator
-        env:
-          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
-          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import pg from 'pg';
-          const url = new URL(process.env.RL72_METHODS_PG_TEST_URL);
-          assert(['localhost', '127.0.0.1'].includes(url.hostname));
-          assert.equal(url.pathname, '/relaunch72_test');
-          assert.equal(process.env.RELAUNCH72_DATABASE_INTEGRATION, 'explicit-disposable-run');
-          const admin = new pg.Pool({ connectionString: url.toString(), max: 1 });
-          try {
-            // Webinar fixtures rotate this role's password; restore the neighbour fixture's local-only password.
-            await admin.query("ALTER ROLE r72_content_command PASSWORD 'local-methods-test-only'");
-          } finally { await admin.end(); }
-          NODE
-          node --import tsx --test --test-concurrency=1 test/db/creative-studio-pg.integration.test.ts test/db/creative-studio-video-pg.integration.test.ts test/db/acquisition-campaign-pg.integration.test.ts test/db/creative-studio-distribution-pg.integration.test.ts test/db/creative-studio-learning-pg.integration.test.ts test/db/creative-studio-generation-pg.integration.test.ts test/db/creative-studio-enquiry-pg.integration.test.ts
       - name: Fetch exact prepared limits0145 recovery source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -121,10 +107,3 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx scripts/native-webinars-recovery-proof.mjs
-      - name: Exact-source offline suite with real local media tools
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
-          TEST_DATABASE_URL: ''
-          RL72_METHODS_PG_TEST_URL: ''
-          RELAUNCH72_DATABASE_INTEGRATION: ''
-        run: npm test

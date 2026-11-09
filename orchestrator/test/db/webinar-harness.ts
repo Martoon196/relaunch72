@@ -105,9 +105,8 @@ export function fakeCloudflare(): FakeCloudflare {
     if (method === 'GET' && path === '/live_inputs') return ok([...state.liveInputs.values()]);
     const li = /^\/live_inputs\/([0-9a-f]{32})$/.exec(path);
     if (method === 'GET' && li) return state.liveInputs.has(li[1]!) ? ok(state.liveInputs.get(li[1]!)) : new Response('{}', { status: 404 });
-    if (method === 'GET' && path === '' && url.searchParams.get('live_input_id')) {
-      return ok([...state.videos.values()].filter((v) => v.liveInput === url.searchParams.get('live_input_id')));
-    }
+    const recordings = /^\/live_inputs\/([0-9a-f]{32})\/videos$/.exec(path);
+    if (method === 'GET' && recordings) return ok([...state.videos.values()].filter(v => v.liveInput === recordings[1]));
     if (method === 'POST' && path === '' && url.searchParams.get('direct_user') === 'true') {
       const uid = randomUUID().replace(/-/g, '');
       state.videos.set(uid, { uid, readyToStream: false, status: { state: 'pendingupload' }, duration: -1 });

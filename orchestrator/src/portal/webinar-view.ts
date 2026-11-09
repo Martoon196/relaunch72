@@ -326,7 +326,7 @@ ${blocked}
 <p class="wb-help" data-studio-status role="status" aria-live="polite"></p>
 <ol class="wb-help" style="padding-left:18px;margin-top:14px"><li>Turn on your camera and microphone; share a screen if you need one.</li><li><strong>Start sending</strong> to rehearse privately. Cloudflare shows "Encoder connected".</li><li><strong>Go live</strong> when ready. Attendees see the broadcast.</li><li><strong>End session</strong>, then Stop sending. The recording becomes the replay.</li></ol>
 <p class="wb-help">Keep this tab open while you broadcast. Closing it or losing your connection stops the broadcast; attendees see "reconnecting" until you start sending again. Works in Chrome, Edge and Safari.</p></div></section>
-</div><script src="${WEBINARS_STUDIO_ASSET}?v=controls-2" defer></script>`;
+</div><script src="${WEBINARS_STUDIO_ASSET}?v=controls-3" defer></script>`;
 }
 
 export function peopleTab(input: { event: WebinarEvent; rows: readonly RegistrationRow[]; csrf: string; crmAvailable: boolean }): string {

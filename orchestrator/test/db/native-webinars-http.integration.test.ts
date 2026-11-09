@@ -180,7 +180,7 @@ test('0146 native webinars over HTTP: menu, management, brand isolation, attende
     // ── go live: rehearsal first, then the owner opens the session ──
     clock = Date.parse('2026-11-25T18:55:00Z');
     const liveUid = [...h.cf.liveInputs.keys()][0]!;
-    h.cf.liveInputs.get(liveUid)!.status = 'connected';
+    h.cf.liveInputs.get(liveUid)!.status = { current: { state: 'connected' } };
     const hostState = JSON.parse((await owner.go(`/portal/webinars/${id}/host/state`)).text);
     assert.equal(hostState.roomState, 'host_connecting');
     assert.equal(JSON.parse((await ann.go(`/w/${publicKey}/state`)).text).state, 'host_connecting');
