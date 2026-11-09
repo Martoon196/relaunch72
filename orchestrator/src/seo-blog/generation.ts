@@ -20,6 +20,7 @@ import type {
 import { SeoBlogError } from './types.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
+import {decodeArticleOutput} from './article-output.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = new Map<AnySchema, ValidateFunction>();
@@ -78,7 +79,7 @@ export async function callJson<T>(llm: LlmClient, input: {
       // Legacy/direct calls retain their bounded fallback.
       if(structuredRevision){
         const parsedDraft=extractJson(previous);
-        const decoded='value' in parsedDraft&&parsedDraft.value&&typeof parsedDraft.value==='object'&&!Array.isArray(parsedDraft.value)?decodePlanningOutput(parsedDraft.value as Record<string,unknown>,methodRun?.structuredArticle?'articleJson':'planJson'):null;
+        const decoded='value' in parsedDraft&&parsedDraft.value&&typeof parsedDraft.value==='object'&&!Array.isArray(parsedDraft.value)?(methodRun?.structuredArticle?decodeArticleOutput:decodePlanningOutput)(parsedDraft.value as Record<string,unknown>):null;
         // Decode transport/whitespace only. No facts, findings or fields are repaired.
         messages.push({role:'assistant',content:decoded&&!decoded.problems.length?JSON.stringify(decoded.value):previous});
       }else if(!methodRun||input.prompt.header.stage!=='SEO_BLOG_PLAN')messages.push({ role: 'assistant', content: previous.slice(0, 60_000) || '{}' });
@@ -110,8 +111,17 @@ export async function callJson<T>(llm: LlmClient, input: {
     const parsed = extractJson(response.text);
     if ('error' in parsed) { critique = `Not valid JSON: ${parsed.error}`; continue; }
     const methodOutput = methodRun?.unpack(parsed.value);
-    if (methodOutput?.problems.length) { rejection='method'; critique = methodOutput.problems.slice(0,12).join('\n'); continue; }
     const output = methodOutput ? methodOutput.value : parsed.value;
+    if(methodRun?.structuredArticle){
+      // A method error must not hide a section fragment or an unsafe link.
+      // Custom content checks are safe only after the complete stage shape passes.
+      const shapeOk=validate(output);
+      const shape=shapeOk?[]:(validate.errors??[]).map(e=>`${e.instancePath||'(root)'} ${e.message}`);
+      const method=methodOutput?.problems??[];
+      const content=shapeOk?(input.validate?.(output as T)??[]):[];
+      if(shape.length||method.length||content.length){rejection=shape.length?'schema':method.length?'method':'content';critique=[...shape,...method,...content].slice(0,12).join('\n');continue;}
+    }else{
+    if (methodOutput?.problems.length) { rejection='method'; critique = methodOutput.problems.slice(0,12).join('\n'); continue; }
     if (!validate(output)) {
       rejection='schema';
       critique = (validate.errors ?? []).slice(0, 12).map((e) => `${e.instancePath || '(root)'} ${e.message}`).join('\n');
@@ -119,6 +129,7 @@ export async function callJson<T>(llm: LlmClient, input: {
     }
     const problems = input.validate?.(output as T) ?? [];
     if (problems.length > 0) { rejection='content'; critique = problems.slice(0, 12).join('\n'); continue; }
+    }
     let record: GenerationRecord = { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut };
     if (methodRun) record = await methodRun.finish(record, "accepted");
     return {value: output as T, record};
