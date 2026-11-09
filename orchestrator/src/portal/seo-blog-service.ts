@@ -22,6 +22,8 @@ import { createCentralPromotionApproval } from './central-content-promotion-pg.j
 import { createPgSeoBlogSocialRegistry, resolveSeoBlogBrandForProfile, seoBlogSocialReservedProfileIds } from './seo-blog-social-pg.js';
 import type { PromotionNetwork } from '../seo-blog/types.js';
 import { createSeoBlogMediaRuntime } from './seo-blog-media-service.js';
+import { createCreativeStudio, engineSavedImages, type SavedImageWithPreview } from './creative-studio-composition.js';
+import type { CreativeStudioService } from '../creative-studio/service.js';
 
 export interface PortalSeoBlogService {
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
@@ -30,6 +32,11 @@ export interface PortalSeoBlogService {
   readonly research: 'live' | 'unconfigured';
   /** Whether per-brand social registration/delivery is composed (Zernio command boundary + content pools). */
   readonly social: 'live' | 'unavailable';
+  /** Creative Studio: mounted only when CREATIVE_STUDIO_ENABLED=true (after migration 0143). Drafts only; no provider calls. */
+  readonly creativeEnabled?: boolean;
+  creativeFor?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine): CreativeStudioService | null;
+  /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
+  creativeSavedImages?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine, brandId: string): Promise<SavedImageWithPreview[]>;
   /**
    * Completes a brand's provider OAuth callback when the profile id belongs to
    * a registered brand rather than Property Predator. Returns null when no
@@ -78,6 +85,13 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     generation: runtime.llm ? 'live' : 'unavailable',
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',
+    creativeEnabled: env.CREATIVE_STUDIO_ENABLED === 'true',
+    creativeFor(identity, requestId, engine) {
+      return env.CREATIVE_STUDIO_ENABLED === 'true' ? createCreativeStudio({ contentCommandPool, identity, requestId, engine }) : null;
+    },
+    async creativeSavedImages(identity, _requestId, engine, brandId) {
+      return env.CREATIVE_STUDIO_ENABLED === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
+    },
     engineFor(identity, requestId) {
       const social = socialFor(identity, requestId);
       const media = createSeoBlogMediaRuntime({ contentPool: contentCommandPool, adapterPool: promotionsReady ? contentAdapterPool : undefined, env, identity,

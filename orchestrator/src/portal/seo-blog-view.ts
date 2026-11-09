@@ -29,7 +29,7 @@ export function friendlyTaskState(state:string):string {
 export function friendlyDeliveryState(state:string):string {
   return ({queued:'Scheduled',leased:'Getting ready',calling:'Sending',reconciliation_pending:'Checking the result',succeeded:'Sent',failed:'Needs checking',needs_attention:'Needs checking',cancelled:'Cancelled'} as Record<string,string>)[state]??'Needs checking';
 }
-export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity' | 'authority' | 'campaigns' | 'methods';
+export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity' | 'authority' | 'campaigns' | 'methods' | 'creative';
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--muted:#5b6570;--line:#d9dee4;--accent:#0b5cad;--ok:#1d7a3a;--warn:#9a5b00;--bad:#b42318}
@@ -63,6 +63,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 
 export interface Shell {
   readonly creatorsAvailable?:boolean;
+  readonly creativeAvailable?:boolean;
   readonly methodsAvailable?:boolean;
   readonly brands: readonly Brand[];
   readonly brand: Brand | null;
@@ -88,6 +89,7 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
     : '';
   const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['social', 'Social'], ['activity', 'Activity']];
   if (feedback) tabs.push(['authority', 'Authority']);
+  if (shell.creativeAvailable) tabs.push(['creative','Creative studio']);
   if (shell.creatorsAvailable) tabs.push(['campaigns','Campaign creators']);
   if (shell.methodsAvailable) tabs.push(['methods','Production rules']);
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';

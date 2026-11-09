@@ -33,6 +33,8 @@ import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
+import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
+import type { BackgroundChoice } from '../creative-studio/service.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -48,7 +50,7 @@ export interface SeoBlogRouteInput {
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
-const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
@@ -214,7 +216,42 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady });
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
+    if (rest === 'creative' || rest.startsWith('creative/')) {
+      const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
+      if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
+      const parts = rest.split('/');
+      const art = new RegExp(`^creative/art/(${UUID})/([0-9a-f]{64})\\.jpg$`, 'i').exec(rest);
+      if (art) {
+        const found = await studio.artwork(actor.userId, brandId, art[1]!.toLowerCase(), art[2]!.toLowerCase());
+        const v = found.version;
+        const name = `${brand.slug}-${v.conceptKey}-${v.placement}${v.card ? `-card${v.card}` : ''}-v${v.number}-${found.approved ? 'approved' : 'draft'}.jpg`.replace(/[^a-z0-9.-]/giu, '_');
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
+          ...(url.searchParams.get('download') === '1' ? { 'content-disposition': `attachment; filename="${name}"` } : {}) });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const logo = /^creative\/kit-logo\/\d+\/([0-9a-f]{64})$/i.exec(rest);
+      if (logo) {
+        const found = await studio.kitLogo(actor.userId, brandId, logo[1]!.toLowerCase());
+        res.writeHead(200, { 'content-type': found.mime, 'content-length': String(found.bytes.byteLength), 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow' });
+        res.end(method === 'HEAD' ? undefined : found.bytes); return;
+      }
+      const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      if (rest === 'creative') {
+        const overview = await studio.overview(actor.userId, brandId);
+        const saved = await savedWithPreview();
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+      }
+      if (rest === 'creative/kit') {
+        const { context, kit } = await studio.context(actor.userId, brandId);
+        return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID() }));
+      }
+      if (parts[1] === 's' && parts[2] && parts.length === 3) {
+        const [found, articles, saved] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview()]);
+        return send(res, 200, creativeSetPage(shell('creative'), { ...found, articles: articles.map((a) => ({ id: a.article.id, title: a.title })), savedImages: saved, newCommand: () => randomUUID(), rendererReady: studio.rendererReady }));
+      }
+      throw new SeoBlogError(404, 'That page was not found.');
+    }
     if(rest==='methods')return send(res,200,productionRulesPage(shell('methods'),await engine.methodOverview(actor,brandId),engine.campaignCreatorsReady));
     if(rest==='campaigns'||rest.startsWith('campaigns/')){
       const creator=engine.creators(),parts=rest.split('/');
@@ -326,6 +363,65 @@ async function handlePost(
   const parts = rest.split('/');
   const rowVersion = () => int(f('rowVersion'), 'the form version');
   switch (parts[0]) {
+    case 'creative': {
+      const identity = input.identity!;
+      const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
+      if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
+      const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
+      const commandId = f('commandId') ?? '';
+      const background = (): BackgroundChoice => {
+        const kind = f('background') ?? 'neutral';
+        if (kind === 'keep') return { kind: 'keep' };
+        if (kind === 'upload') { if (!form.file?.data.length) throw new SeoBlogError(400, 'Choose an image file to upload.'); return { kind: 'upload', bytes: form.file.data }; }
+        if (kind === 'saved') { const [assetId, sha] = (f('saved') ?? '').split(':'); return { kind: 'saved', assetId: assetId ?? '', sha256: sha ?? '' }; }
+        return { kind: 'neutral' };
+      };
+      if (parts[1] === 'kit') {
+        const action = f('logo_action') ?? 'keep';
+        const logo = action === 'remove' ? { kind: 'remove' as const } : action === 'upload' && form.file?.data.length ? { kind: 'upload' as const, bytes: form.file.data, label: f('logo_label') ?? '' } : { kind: 'keep' as const };
+        const kit = await studio.saveKit(actor.userId, brandId, commandId, { palette: { primary: f('primary') ?? '', accent: f('accent') ?? '', dark: f('dark') ?? '', light: f('light') ?? '' },
+          disclosure: f('disclosure') ?? '', restricted: f('restricted') ?? '', logo, expectedVersion: int(f('expectedVersion'), 'the kit version') });
+        return ok(home, `Creative kit version ${kit.version} saved. Earlier image approvals for this brand now need a refresh.`);
+      }
+      if (parts[1] === 'draft') {
+        const raw: Record<string, string | string[]> = {};
+        for (const key of new Set(form.fields.keys())) raw[key] = key === 'placements' ? form.fields.getAll(key) : form.fields.get(key) ?? '';
+        const result = await studio.draft(actor.userId, brandId, commandId, raw, background());
+        return ok(`${home}/s/${result.setId}`, result.replayed ? 'These images were already created.' : `Images created for review.${result.note ? ` ${result.note}` : ''}`);
+      }
+      if (parts[1] === 's' && parts[2] && (parts[3] === 'concept' || parts[3] === 'refresh') && parts[4]) {
+        const heads = (f('heads') ?? '').split(',').filter(Boolean);
+        if (parts[3] === 'refresh') {
+          await studio.refreshConcept(actor.userId, brandId, parts[2], parts[4], commandId, heads);
+          return ok(`${home}/s/${parts[2]}`, 'Concept re-rendered from the current brand context. Review the new versions.');
+        }
+        const headlines = form.fields.getAll('card_headline'), bodies = form.fields.getAll('card_body');
+        const result = await studio.editConcept(actor.userId, brandId, parts[2], parts[4], commandId, heads, {
+          hook: f('hook') ?? undefined, headline: f('headline') ?? undefined, body: f('body') ?? undefined, cta: f('cta') ?? undefined,
+          ...(headlines.length ? { cards: headlines.map((h, i) => ({ headline: h, body: bodies[i] ?? '' })) } : {}),
+          illustrativeTag: f('illustrative') === '1',
+        }, background());
+        return ok(`${home}/s/${parts[2]}`, result.changed.length ? `Saved: ${result.changed.join(', ')} changed. New versions need review.` : 'No change to save.');
+      }
+      if (parts[1] === 'v' && parts[2] && parts[3]) {
+        const version = parts[2];
+        const located = await studio.artworkSet(actor.userId, brandId, version);
+        const back = `${home}/s/${located}#v-${version}`;
+        if (parts[3] === 'approve') {
+          await studio.approve(actor.userId, brandId, version, commandId, f('sha') ?? '', f('figures_confirmed') === '1');
+          return ok(back, 'Approved this exact image. Captions, campaigns, schedules and paid adverts are not approved by this.');
+        }
+        if (parts[3] === 'focal') {
+          await studio.editFocal(actor.userId, brandId, version, commandId, { x: Number(f('x')), y: Number(f('y')) });
+          return ok(`${home}/s/${located}`, 'Focal point moved for this format only. The new version needs review.');
+        }
+        if (parts[3] === 'handoff') {
+          await studio.handoff(actor.userId, brandId, version, commandId, { kind: 'article_campaign', articleId: (f('article') ?? '').toLowerCase() });
+          return ok(back, 'Added to the campaign as a draft input. Nothing was published, scheduled or spent.');
+        }
+      }
+      throw new SeoBlogError(404, 'That page was not found.');
+    }
     case 'methods': {
       if(parts[1]==='update'||parts[1]==='disable'){
         await engine.setReviewedMethods(actor,brandId,int(f('revision'),'the current rule assignment'),parts[1]==='disable'?[]:form.fields.getAll('packId'));

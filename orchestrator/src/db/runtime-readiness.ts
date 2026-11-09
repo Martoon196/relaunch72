@@ -51,6 +51,8 @@ const MHP_EVENT_WHATSAPP_MIGRATION = '0141_mhp_event_whatsapp_programme.sql';
 const MHP_EVENT_WHATSAPP_CHECKSUM = 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c';
 const MHP_PAYMENTS_LIVE_MIGRATION = '0142_mhp_payments_live.sql';
 const MHP_PAYMENTS_LIVE_CHECKSUM = '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d';
+const CREATIVE_STUDIO_MIGRATION = '0143_creative_studio_library.sql';
+const CREATIVE_STUDIO_CHECKSUM = 'b3f0ad0740c50ce7ff52c08b5ed29649a94e9b49f8fdea5ff469a3cef12f2796';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -265,6 +267,18 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
       && pending[0]?.checksum === MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(MHP_EVENT_WHATSAPP_MIGRATION) === MHP_EVENT_WHATSAPP_CHECKSUM) {
+    return;
+  }
+  // A release bundling the additive 0143 creative studio library is deployed to every
+  // consumer BEFORE 0143 is applied, and only on top of the exact applied 0142 ledger
+  // (never during the 0142 payments cut-over). Until 0143 is applied the studio stays
+  // unmounted (CREATIVE_STUDIO_ENABLED is off), so nothing reads the new tables.
+  if (pending.length === 1
+      && migrations.length === 143
+      && migrations[142]?.filename === CREATIVE_STUDIO_MIGRATION
+      && pending[0]?.filename === CREATIVE_STUDIO_MIGRATION
+      && pending[0]?.checksum === CREATIVE_STUDIO_CHECKSUM
+      && applied.get(MHP_PAYMENTS_LIVE_MIGRATION) === MHP_PAYMENTS_LIVE_CHECKSUM) {
     return;
   }
   if (pending.length > 0) {
