@@ -1,7 +1,7 @@
 name: Native webinar provider correction exact-source gate
 on:
   push:
-    branches: [codex/native-webinars-limits146-20261109]
+    branches: [codex/native-webinars-limits146-20261109, codex/webinar-native-player-recovery-20261109]
 permissions:
   contents: read
 jobs:
@@ -83,7 +83,7 @@ jobs:
       # Studio, payments, migrations and recovery bytes are unchanged; retain those
       # source-bound receipts. Repeat only native adapter/UI/actual-role neighbours.
       - name: Corrected provider adapter and room-state neighbours
-        run: node --import tsx --test orchestrator/test/webinars.test.ts orchestrator/test/central-content-mount.test.ts
+        run: node --import tsx --test orchestrator/test/webinars.test.ts orchestrator/test/central-content-mount.test.ts orchestrator/test/webinars-player-recovery.test.mjs
       - name: Apply all exact migrations to disposable localhost only
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test

@@ -18,6 +18,7 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
   var countdown = $('[data-countdown]'), playBtn = $('[data-play]'), note = $('[data-note]');
   var ctaBox = $('[data-cta]'), ctaLabel = $('[data-cta-label]'), ctaBody = $('[data-cta-body]'), ctaLink = $('[data-cta-link]');
   var state = null, skew = 0, fetchedAt = 0, hls = null, src = null, srcExpires = 0, srcMode = null, started = false, lastPos = null, timer = null;
+  var nativePlayback = false, recoveryTimer = null, recoveryAttempts = 0, mediaIssue = false, autoplayBlocked = false, playbackSeen = false;
   var PLAYING = { live: 1, scheduled_playing: 1, replay: 1, on_demand: 1 };
 
   function now() { return Date.now() + skew; }
@@ -51,12 +52,49 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
   function tryPlay() {
     // Only offer "Start watching" when there is real video attached; never a button with nothing behind it.
     if (!src) { playBtn.hidden = true; return; }
+    var expected = src;
     var p = video.play();
-    if (p && p.then) p.then(function () { playBtn.hidden = true; }, function () { if (!src) return; playBtn.hidden = false; overlay.hidden = false; message.textContent = 'Press play to start watching.'; });
+    if (p && p.then) p.then(function () {
+      if (src !== expected) return;
+      autoplayBlocked = false; paintPlayback();
+    }, function (error) {
+      if (src !== expected || !src || (error && error.name === 'AbortError')) return;
+      if (error && error.name === 'NotAllowedError') { autoplayBlocked = true; paintPlayback(); }
+      else recoverPlayback();
+    });
+  }
+  function clearRecovery() { clearTimeout(recoveryTimer); recoveryTimer = null; }
+  function paintPlayback() {
+    if (!state || !src) return;
+    overlay.hidden = playbackSeen && !autoplayBlocked && !mediaIssue;
+    playBtn.hidden = !autoplayBlocked && !(mediaIssue && recoveryAttempts >= 12);
+    playBtn.textContent = autoplayBlocked ? 'Start watching' : 'Try playback again';
+    message.textContent = autoplayBlocked ? 'Press play to start watching.' : mediaIssue ? 'Video is reconnecting…' : playbackSeen ? state.message : 'Starting video…';
+    setNote(autoplayBlocked ? 'Your browser needs a tap to play sound.' : mediaIssue
+      ? recoveryAttempts >= 12 ? 'Video could not start. Tap Try playback again to retry.' : 'Waiting for the video stream — retrying automatically.'
+      : !playbackSeen ? 'Connecting to the video stream…'
+      : state.playMode === 'scheduled_recording' ? 'This is a recording shown at a scheduled time. Everyone watches the same moment, so skipping is turned off.'
+      : state.playMode === 'live' ? 'You are watching live.' : state.replayUntil ? 'Replay available until ' + new Date(state.replayUntil).toLocaleString(undefined, fmt) + ' (your time).' : '');
+  }
+  function recoverPlayback() {
+    if (!src) return;
+    mediaIssue = true; lastPos = null;
+    // Native HLS can permanently stop after a first manifest/segment request
+    // races the encoder. State polling alone does not reload that failed URL.
+    if (nativePlayback && recoveryTimer == null && recoveryAttempts < 12) {
+      var expected = src;
+      recoveryTimer = setTimeout(function () {
+        recoveryTimer = null;
+        if (!src || src !== expected || !state || !PLAYING[state.state]) return;
+        recoveryAttempts++; video.load(); tryPlay(); paintPlayback();
+      }, 3000);
+    }
+    paintPlayback();
   }
   function attach(url, mode) {
     var keep = mode === srcMode && (mode === 'replay' || mode === 'on_demand') ? video.currentTime : null;
-    src = url; srcMode = mode;
+    clearRecovery(); recoveryAttempts = 0; mediaIssue = false; autoplayBlocked = false; playbackSeen = false;
+    nativePlayback = false; src = url; srcMode = mode;
     var done = function () {
       video.addEventListener('loadedmetadata', function once() {
         video.removeEventListener('loadedmetadata', once);
@@ -69,7 +107,7 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
       });
       tryPlay();
     };
-    if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; done(); return; }
+    if (video.canPlayType('application/vnd.apple.mpegurl')) { nativePlayback = true; video.src = url; done(); return; }
     loadHls().then(function (Hls) {
       if (!Hls || !Hls.isSupported()) { setNote('This browser cannot play the video. Please use a current Chrome, Edge, Firefox or Safari.'); return; }
       if (hls) hls.destroy();
@@ -83,6 +121,7 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
     });
   }
   function detach() {
+    clearRecovery(); nativePlayback = false; mediaIssue = false; autoplayBlocked = false; playbackSeen = false;
     if (hls) { hls.destroy(); hls = null; }
     if (src) { video.removeAttribute('src'); video.load(); }
     src = null; srcMode = null;
@@ -113,11 +152,9 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
     label.textContent = s.label; label.className = 'state' + (s.state === 'live' ? ' live' : '');
     var playing = !!PLAYING[s.state] && !!s.hlsUrl;
     if (playing) {
-      overlay.hidden = true; message.textContent = s.message;
       var expiring = srcExpires && Date.parse(s.expiresAt) > srcExpires && srcExpires - Date.now() < 10 * 60 * 1000;
       if (!src || s.playMode !== srcMode || expiring) { srcExpires = Date.parse(s.expiresAt); attach(s.hlsUrl, s.playMode); }
-      setNote(s.playMode === 'scheduled_recording' ? 'This is a recording shown at a scheduled time. Everyone watches the same moment, so skipping is turned off.'
-        : s.playMode === 'live' ? 'You are watching live.' : s.replayUntil ? 'Replay available until ' + new Date(s.replayUntil).toLocaleString(undefined, fmt) + ' (your time).' : '');
+      paintPlayback();
       video.controls = true;
     } else {
       if (src) detach();
@@ -143,9 +180,11 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
   }
   // Player-reported viewing only.
   video.addEventListener('playing', function () {
+    clearRecovery(); recoveryAttempts = 0; mediaIssue = false; autoplayBlocked = false; playbackSeen = true; paintPlayback();
     if (!started) { started = true; signal('player_started'); }
     lastPos = position();
   });
+  video.addEventListener('error', recoverPlayback);
   video.addEventListener('pause', function () { lastPos = null; });
   video.addEventListener('seeking', function () {
     var exp = expectedOffset();
@@ -160,7 +199,10 @@ export const PUBLIC_ROOM_SCRIPT = String.raw`(function () {
     if (state.playMode === 'replay' || state.playMode === 'on_demand') { try { localStorage.setItem('wb:pos:' + base, String(Math.floor(video.currentTime))); } catch (e) {} }
   }, 30000);
   setInterval(function () { renderCountdown(); renderCta(); }, 1000);
-  playBtn.addEventListener('click', function () { tryPlay(); });
+  playBtn.addEventListener('click', function () {
+    if (mediaIssue && nativePlayback) { clearRecovery(); recoveryAttempts = 0; video.load(); }
+    tryPlay();
+  });
   ctaLink.addEventListener('click', function () { signal('cta_clicked'); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
 

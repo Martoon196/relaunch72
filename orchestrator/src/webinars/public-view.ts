@@ -56,7 +56,7 @@ button:focus-visible,.btn:focus-visible,a:focus-visible{outline:3px solid color-
 .presenter{display:flex;gap:12px;align-items:center;margin-top:16px}.avatar{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:var(--on-accent);background:var(--accent)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 </style></head><body><header class="top"><strong>${e(brandName(brand))}</strong>${brand.supportEmail ? `<a class="small" href="mailto:${e(brand.supportEmail)}">Contact</a>` : ''}</header>
-<main id="main">${body}</main>${opts.script ? `<script src="${PUBLIC_ASSET_ROOM}" defer></script>` : ''}</body></html>`;
+<main id="main">${body}</main>${opts.script ? `<script src="${PUBLIC_ASSET_ROOM}?v=native-recovery-1" defer></script>` : ''}</body></html>`;
 }
 
 function initials(name: string): string {
