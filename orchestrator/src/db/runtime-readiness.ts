@@ -3,6 +3,7 @@ import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
 import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
+import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -246,11 +247,25 @@ export async function assertRuntimeSchemaCurrent(
   if (migrations.length===142 && migrations[141]?.checksum===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) applied.delete(DIRECT_WA_MIGRATION);
+  // Prepared limits145 recovery admits only the exact additive native146.
+  // Already-released145 binaries do not gain this bridge retroactively.
+  if (migrations.length===145 && migrations[144]?.filename===SEO_LIMITS_MIGRATION
+      && migrations[144]?.checksum===SEO_LIMITS_CHECKSUM
+      && applied.get(SEO_LIMITS_MIGRATION)===SEO_LIMITS_CHECKSUM
+      && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM) applied.delete(WEBINARS_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
   // Roll out the 143 binary before advancing shared PostgreSQL. During that interval the
   // reader retains the legacy signed projection and direct reply dispatch stays disabled.
+  // Native146 is capable only after the exact limits145 ledger is applied.
+  // While146 is pending, the webinar service is not composed.
+  if (migrations.length===146 && migrations[145]?.filename===WEBINARS_MIGRATION
+      && migrations[144]?.filename===SEO_LIMITS_MIGRATION && pending.length===1
+      && pending[0]?.filename===WEBINARS_MIGRATION && pending[0]?.checksum===WEBINARS_CHECKSUM
+      && applied.get(SEO_LIMITS_MIGRATION)===SEO_LIMITS_CHECKSUM
+      && applied.get(CREATIVE_STUDIO_MIGRATION)===CREATIVE_STUDIO_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
