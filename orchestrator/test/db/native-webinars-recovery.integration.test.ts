@@ -58,6 +58,8 @@ test('native webinar recovery: thrown dispatch cannot resend; polling upgrades a
         duration, liveInput: bound.liveInputUid, created: new Date(clock).toISOString() });
       const short = randomUUID().replace(/-/g, '');
       cf.videos.set(short, recording(short, 20));
+      // Ending a session schedules the first reconciliation one minute later.
+      clock += 61_000;
       const poller = new WebinarWorker({ pool: content, config: { ...config, emailMode: 'off' }, stream,
         mailer: recordingMailer(), now: () => clock });
       await poller.workspace(brand.ws);
