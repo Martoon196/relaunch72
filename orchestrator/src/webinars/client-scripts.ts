@@ -558,6 +558,7 @@ export const STUDIO_SCRIPT = String.raw`(function () {
             socket.send(ev.data);
             if (socket.bufferedAmount > 8 * 1024 * 1024) say(status, 'Your upload is falling behind. Attendees may see a delay.');
           };
+          recorder.onerror = function () { stopSending('The browser encoder stopped. Press Start sending to try again.'); };
           recorder.onstop = function () { if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'stop' })); };
           recorder.start(500);
         };
@@ -589,6 +590,57 @@ export const STUDIO_SCRIPT = String.raw`(function () {
   sendStart.addEventListener('click', startSending);
   sendStop.addEventListener('click', function () { stopSending(null); });
   window.addEventListener('beforeunload', function (e) { if (sending) { e.preventDefault(); e.returnValue = ''; } });
+
+  // Host actions must never navigate away from the recorder/WebSocket.
+  // Reuse the existing same-origin form and CSRF guard; only update its controls.
+  var sessionControls = $('[data-studio-session-controls]'), sessionPending = false;
+  function changeSession(form) {
+    if (sessionPending) return;
+    sessionPending = true;
+    var action = form.querySelector('input[name="action"]').value;
+    var buttons = sessionControls.querySelectorAll('button');
+    Array.prototype.forEach.call(buttons, function (b) { b.disabled = true; });
+    say(status, action === 'end' ? 'Ending the session…' : 'Opening the broadcast…');
+    fetch(form.action, { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) })
+      .then(function (r) { return r.text().then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var error = doc.querySelector('[role="alert"]');
+        if (!r.ok || error || new URL(r.url).searchParams.has('e')) throw new Error(error ? error.textContent : 'The session change was refused.');
+        var fresh = doc.querySelector('[data-studio-session-controls]');
+        var freshRoot = doc.querySelector('[data-studio]');
+        if (!fresh || !freshRoot) throw new Error('Your session could not be confirmed. Keep the studio open and try again.');
+        sessionControls.innerHTML = fresh.innerHTML;
+        root.setAttribute('data-session-state', freshRoot.getAttribute('data-session-state'));
+        var badge = document.querySelector('[data-event-status]'), nextBadge = doc.querySelector('[data-event-status]');
+        if (badge && nextBadge) badge.innerHTML = nextBadge.innerHTML;
+        var oldNotice = document.querySelector('.notice[role="status"]');
+        if (oldNotice) oldNotice.remove();
+        if (action === 'end') { blocked = true; stopSending(null); sendStart.disabled = true; }
+        var notice = doc.querySelector('.notice[role="status"]');
+        say(status, notice ? notice.textContent : action === 'end' ? 'Session ended.' : 'You are live.');
+      }); })
+      .catch(function (err) {
+        say(status, err.message || 'The session could not be changed. Try again.');
+        Array.prototype.forEach.call(buttons, function (b) { b.disabled = false; });
+      }).then(function () { sessionPending = false; });
+  }
+  if (sessionControls) sessionControls.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!form.matches('form[data-studio-session]')) return;
+    ev.preventDefault();
+    if (form.querySelector('input[name="action"]').value !== 'end') { changeSession(form); return; }
+    if (form.querySelector('[data-studio-end-confirm]')) return;
+    var confirmation = document.createElement('div');
+    confirmation.setAttribute('data-studio-end-confirm', '');
+    confirmation.setAttribute('role', 'group');
+    confirmation.setAttribute('aria-label', 'Confirm ending the session');
+    var label = document.createElement('p'); label.textContent = 'End the session for everyone? The recording becomes the replay.';
+    var yes = document.createElement('button'); yes.type = 'button'; yes.className = 'button'; yes.textContent = 'End for everyone';
+    var no = document.createElement('button'); no.type = 'button'; no.className = 'button secondary'; no.textContent = 'Keep broadcasting';
+    yes.addEventListener('click', function () { changeSession(form); });
+    no.addEventListener('click', function () { confirmation.remove(); });
+    confirmation.append(label, yes, no); form.appendChild(confirmation); yes.focus();
+  });
 
   // ── Cloudflare's view (the provider's truth, not the browser's) ──
   var names = { idle: 'Encoder not connected', connected: 'Encoder connected', reconnecting: 'Encoder reconnecting', disconnected: 'Encoder disconnected', unknown: 'Status unknown', not_provisioned: 'No live input', provisioning: 'Creating live input' };

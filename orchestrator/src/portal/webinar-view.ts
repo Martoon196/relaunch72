@@ -185,7 +185,7 @@ export function eventFrame(input: { profile: WorkspaceProfile; event: WebinarEve
       ? `<form method="post" action="${WEBINARS_BASE}/${e(ev.id)}/status" data-confirm="Cancel this webinar and email every registrant?">${csrfField(input.csrf)}<input type="hidden" name="action" value="cancel"><button class="button secondary" type="submit">Cancel webinar</button></form>`
       : '';
   return `${CSS}<header class="page-heading"><div><div class="eyebrow"><a href="${WEBINARS_BASE}">Webinars</a> · ${e(input.profile.name)}</div>
-<h1>${e(ev.title)}</h1><p>${statusPill(ev)} <span class="wb-muted">${e(KIND_LABEL[ev.kind])} · ${when(ev)}</span></p></div>
+<h1>${e(ev.title)}</h1><p><span data-event-status>${statusPill(ev)}</span> <span class="wb-muted">${e(KIND_LABEL[ev.kind])} · ${when(ev)}</span></p></div>
 <div class="page-heading-actions wb-actions"><a class="button secondary" href="${WEBINARS_BASE}/${e(ev.id)}/preview" target="_blank" rel="noopener">Preview registration page</a>${statusActions}</div></header>
 ${input.publicUrl && ev.status === 'published' ? `<p class="notice" role="note">Public registration link: <a href="${e(input.publicUrl)}" target="_blank" rel="noopener">${e(input.publicUrl)}</a></p>` : ''}
 ${notice(input.notice, input.error)}
@@ -290,8 +290,8 @@ export function studioTab(input: { event: WebinarEvent; csrf: string; setup: Set
     : !ev.liveInputUid ? `<div class="notice" role="note"><strong>Create a live input first.</strong> Open <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> and press Create live input; the studio sends to it.</div>`
     : ev.sessionState === 'ended' ? '<div class="notice" role="note">This session has ended. The studio is closed.</div>' : '';
   const sessionControls = ev.status !== 'published' ? '<p class="wb-help">Publish the webinar to go live.</p>'
-    : ev.sessionState === 'scheduled' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-confirm="Open the broadcast to attendees now?">${csrfField(input.csrf)}<input type="hidden" name="action" value="start"><input type="hidden" name="return" value="studio"><button class="button" type="submit" data-go-live>Go live</button></form>`
-    : ev.sessionState === 'live' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-confirm="End the session for everyone? The recording becomes the replay.">${csrfField(input.csrf)}<input type="hidden" name="action" value="end"><input type="hidden" name="return" value="studio"><button class="button" type="submit" style="background:#dc2626;border-color:#dc2626">End session</button></form>`
+    : ev.sessionState === 'scheduled' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-studio-session>${csrfField(input.csrf)}<input type="hidden" name="action" value="start"><input type="hidden" name="return" value="studio"><button class="button" type="submit" data-go-live>Go live</button></form>`
+    : ev.sessionState === 'live' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-studio-session>${csrfField(input.csrf)}<input type="hidden" name="action" value="end"><input type="hidden" name="return" value="studio"><button class="button" type="submit" style="background:#dc2626;border-color:#dc2626">End session</button></form>`
     : '';
   const disabled = blocked ? ' disabled' : '';
   return `<style>.wb-studio{display:grid;gap:14px;grid-template-columns:minmax(0,2.2fr) minmax(260px,1fr)}@media(max-width:1100px){.wb-studio{grid-template-columns:1fr}}
@@ -302,7 +302,7 @@ export function studioTab(input: { event: WebinarEvent; csrf: string; setup: Set
 .wb-studio .wb-devices{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px}.wb-studio .wb-devices label{font-weight:600;font-size:.86rem;display:grid;gap:4px}
 .wb-onair{display:inline-flex;align-items:center;gap:6px}.wb-onair::before{content:'';width:8px;height:8px;border-radius:50%;background:currentColor}</style>
 ${blocked}
-<div class="wb-studio" data-studio data-event="${id}" data-csrf="${e(input.csrf)}" data-tick="${WEBINARS_STUDIO_TICK_ASSET}"${blocked ? ' data-blocked' : ''}>
+<div class="wb-studio" data-studio data-session-state="${e(ev.sessionState)}" data-event="${id}" data-csrf="${e(input.csrf)}" data-tick="${WEBINARS_STUDIO_TICK_ASSET}"${blocked ? ' data-blocked' : ''}>
 <section class="panel"><div class="panel-head"><div class="panel-title-wrap"><h2>Studio</h2><p class="panel-subtitle">This picture is exactly what attendees will see. Nothing leaves this browser until you press Start sending, and attendees see it only after Go live.</p></div></div>
 <div class="panel-body"><canvas data-studio-canvas width="1280" height="720" aria-label="Broadcast preview"></canvas>
 <div class="wb-actions" style="margin-top:12px">
@@ -322,11 +322,11 @@ ${blocked}
 <p><strong>Cloudflare:</strong> <span class="wb-status" data-live-state>Checking…</span></p>
 <p><strong>Attendees see:</strong> <span class="wb-status ${input.room.state === 'live' ? 'live' : ''}" data-room-label>${e(input.room.label)}</span></p>
 <div class="wb-actions"><button class="button" type="button" data-send-start disabled>Start sending</button><button class="button secondary" type="button" data-send-stop hidden>Stop sending</button></div>
-<div class="wb-actions" style="margin-top:12px">${sessionControls}</div>
+<div class="wb-actions" style="margin-top:12px" data-studio-session-controls>${sessionControls}</div>
 <p class="wb-help" data-studio-status role="status" aria-live="polite"></p>
 <ol class="wb-help" style="padding-left:18px;margin-top:14px"><li>Turn on your camera and microphone; share a screen if you need one.</li><li><strong>Start sending</strong> to rehearse privately. Cloudflare shows "Encoder connected".</li><li><strong>Go live</strong> when ready. Attendees see the broadcast.</li><li><strong>End session</strong>, then Stop sending. The recording becomes the replay.</li></ol>
 <p class="wb-help">Keep this tab open while you broadcast. Closing it or losing your connection stops the broadcast; attendees see "reconnecting" until you start sending again. Works in Chrome, Edge and Safari.</p></div></section>
-</div><script src="${WEBINARS_STUDIO_ASSET}" defer></script>`;
+</div><script src="${WEBINARS_STUDIO_ASSET}?v=controls-2" defer></script>`;
 }
 
 export function peopleTab(input: { event: WebinarEvent; rows: readonly RegistrationRow[]; csrf: string; crmAvailable: boolean }): string {
