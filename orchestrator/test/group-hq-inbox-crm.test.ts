@@ -24,6 +24,15 @@ test('inbox command credential and brand mappings are explicit and separate from
   for(const values of [ {R72_GROUP_HQ_INBOX_SECRET:'short',R72_GROUP_HQ_INBOX_SCOPES:JSON.stringify(config.scopes)},
     {R72_GROUP_HQ_INBOX_SECRET:config.secret,R72_GROUP_HQ_INBOX_SCOPES:JSON.stringify({kp:scope,pp:scope})} ]) assert.throws(()=>loadInboxCrmConfig(values));
 });
+test('Prop Invest UK requires its own configured workspace, organization and actors',()=>{
+  const piuk={...scope,workspaceId:ID('7'),organizationId:ID('8'),label:'Prop Invest UK'};
+  const read=(scopes:unknown)=>loadInboxCrmConfig({R72_GROUP_HQ_INBOX_SECRET:config.secret,R72_GROUP_HQ_INBOX_SCOPES:JSON.stringify(scopes)});
+  assert.deepEqual(read({kp:scope,piuk})?.scopes.piuk,piuk);
+  assert.equal(read({kp:scope})?.scopes.piuk,undefined);
+  for(const invalid of [{workspaceId:scope.workspaceId},{organizationId:null},{actorEmails:[]}]) {
+    assert.throws(()=>read({kp:scope,piuk:{...piuk,...invalid}}));
+  }
+});
 test('signature binds exact bytes, timestamp, method and path',()=>{
   const bytes=Buffer.from(JSON.stringify(input)), now=Date.now(), stamp=String(Math.floor(now/1000));
   const signature=inboxSignature(config.secret,stamp,'POST',GROUP_HQ_INBOX_CRM_PATH,bytes);

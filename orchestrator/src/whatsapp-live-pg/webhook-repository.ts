@@ -150,7 +150,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
          $12::timestamptz
        ) AS projection`,
       values,
-    )), { isolation: 'serializable' });
+    )), { isolation: this.mhpEventWhatsApp ? 'read committed' : 'serializable' });
   }
 
   #assertBound(event: VerifiedMetaWhatsAppLiveEvent): void {
