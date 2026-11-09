@@ -1,4 +1,4 @@
-# Creative Studio — Milestone 1 (brand-aware image and ad creative)
+# Creative Studio — Milestones 1 and 2 (brand-aware creative; campaign intelligence and assembly)
 
 **Status, stated separately:**
 
@@ -79,4 +79,48 @@ Recovery: set `CREATIVE_STUDIO_ENABLED=false` (routes unmount immediately). Keep
 
 - **New paid generation from a free-text brief.** The existing durable paid ledger admits only article sources. Extending it means changing reviewed SQL admission functions shared by every brand (`seo_image_reserve` and its source checks) and the fixed 1536×1024 request; that needs its own reviewed change and an owner-set operator policy and brand image allowance. Today: generate through an article's Campaign page (existing allowance), then reuse the saved image here.
 - **Live provider proof.** The image policy is disabled with zero headroom and no image credential is configured. The single remaining live proof: one owner-authorised article image intent within an explicitly set allowance (the reviewed request is one `gpt-image-2` medium 1536×1024 image), then reuse it in the studio.
-- Model-written hooks and copy (Milestone 2), image editing with a provider, brand-supplied font files, campaign media-use authorisation and delivery (Milestone 4).
+- Image editing with a provider, brand-supplied font files, campaign media-use authorisation and delivery (Milestone 4).
+
+---
+
+# Milestone 2 — Campaign intelligence and assembly
+
+**Status:** source complete on the same branch; not deployed; not verified live. Generation uses the brand's existing writing allowance through the reviewed creator boundary; no live model run was made here (deterministic fixture model only).
+
+## Reuse check
+
+| Capability | Existing implementation | Proven status | Missing | Extension made |
+|---|---|---|---|---|
+| Saved research | `TopicPlan.sources`: dated, bounded passages with primary/confidence flags | Live engine + tests | Never used for campaign planning | `seo-blog/acquisition-evidence.ts` builds a bounded evidence pack (accepted plans first, deduplicated, ≤6 sources) with no new search or fetch |
+| Audience language | Knowledge `audience_notes` / `faqs` bound to the confirmed profile | Live | Not used for objections | Included as owner facts (`knowledge:<id>:<version>`) only when bound to the confirmed profile |
+| Evidence-checked writing | Method packs 0.1.1 + `validateMethodEvidence` (claim ledger, numbers present in evidence, source freshness, three distinct hook options, proof decision) | Reviewed, PG-proven | No acquisition output | Reused unchanged through existing pack stages `copy` + `social` (conversion-copy, social-repurposing, production-core). Pack releases and hashes untouched |
+| Model-backed drafting with allowance | Campaign creators (0139): atomic reservation, receipts, held/unknown recovery, exact approvals, export | PG-proven | Email/advocacy only | Third creator kind `acquisition` (Hook & Close pack). SQL: 0143 adds the kind to the table check and to `seo_creator_command` / `seo_method_save_receipt` — the 0139 bodies verbatim apart from those lists |
+| Creative assets | Milestone 1 studio | This branch | Not linked to campaigns | Each concept links to the studio with its copy, audience and destination pre-filled (one concept) |
+
+## What a proposal contains
+
+Objective and primary metric; 3–9 audience **insights** (problem / objection / opportunity), each citing supplied evidence IDs and marked *observed* only when backed by research, audience guidance or an article (otherwise *inferred*); channel roles limited to the owner's selection; 1–3 distinct **concepts** (angle, hook, headline, primary text, the exact approved destination, channels, insights addressed, illustrative creative direction); **UTM-tracked links** per concept and channel (`utm_campaign=<name>-<id>`, `utm_content=concept-n`); a **measurement plan** (metrics, review interval, learning rule, attribution limits); **predictions** labelled as hypotheses; and an **Actual results** section that states none are recorded.
+
+## Guards (enforced on generation, owner edits and approval)
+
+- Evidence IDs must be from the supplied pack; observed vs inferred is checked; evidence is server-built and a browser-supplied pack is discarded.
+- Channels limited to the owner's selection; every concept uses the exact approved destination; concepts and hooks must be distinct.
+- No commercial commitments (refunds, guarantees, discounts, trials, warranties, "% off", price promises) unless already in approved offers or claims; existing figure guard still applies.
+- Predictions and measurement contain no numbers, rates, costs or returns; nothing may claim results were achieved; no competitor spend.
+- A model output that breaks these is held, not shown as a draft. Replays and recovery never call the model or charge again.
+
+## Checks
+
+- `test/acquisition-campaign.test.ts` (8): evidence pack bounds and bound-guidance rule; one reserved run, forged evidence replaced, idempotent replay; pack/channel/destination/article gates; every guard; invented-guarantee output held; edit/approve/export with predictions separate from absent results; UTM identities; routes and review page.
+- `test/db/acquisition-campaign-pg.integration.test.ts` (4) on fresh disposable PostgreSQL 16 after 143 migrations, real runtime role: exact `acquisition` receipt, single usage charge, reservation released, evidence stored with the brief, replay/recovery charge nothing, SQL refuses an acquisition start without the conversion-copy pin, kind constraint admits only the new kind. The existing creators and creative-studio PG proofs pass unchanged alongside it (26/26 total).
+- Visual: `test/manual-acquisition-demo.ts` (fictional brand, fixture model) — `docs/creative-studio-evidence/m2-*.png`.
+
+## Use
+
+Production rules → ensure **Hook & Close** is on → Campaign creators → **Acquisition campaign**: objective, audience, offer, approved destination, channels, concepts, supporting articles → review insights and evidence, edit concept copy → approve → export (JSON or text). Use **Create artwork for this concept** to produce its images in the studio.
+
+## Not in this milestone
+
+- New research is not started from the proposal; it uses research already saved. Run topic research first if the evidence gaps say so.
+- Predictions are qualitative by design. Measured outcomes (leads, bookings, sales) arrive with Milestone 4 (distribution and attribution via existing CRM/LeadRelay contracts).
+- Release: unchanged from Milestone 1 (single additive 0143, after the 0142 cut-over). Note an unmerged, stopped Apollo branch also claims a `0143_` filename; renumber whichever lands second.

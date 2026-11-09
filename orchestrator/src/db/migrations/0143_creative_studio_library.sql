@@ -252,3 +252,144 @@ GRANT EXECUTE ON FUNCTION app_private.creative_studio_command(uuid,bytea,text,js
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
+
+
+-- ─── Milestone 2: acquisition campaign proposals reuse the reviewed 0139 creator boundary ───
+-- Only the kind/stage lists change: 'acquisition' requires the reviewed conversion-copy pack, reserves the same
+-- writing allowance atomically with every other creator run, and is charged once by the receipt boundary.
+-- Function bodies below are 0139 verbatim apart from those three lists.
+DO $creator_kind$
+BEGIN
+  IF (SELECT count(*) FROM pg_constraint WHERE conrelid='app.seo_blog_creator_campaigns'::regclass AND conname='seo_blog_creator_campaigns_kind_check'
+      AND contype='c' AND pg_get_constraintdef(oid)='CHECK ((kind = ANY (ARRAY[''email''::text, ''advocacy''::text])))')<>1 THEN
+    RAISE EXCEPTION 'Unexpected 0139 creator kind constraint' USING ERRCODE='55000';
+  END IF;
+  ALTER TABLE app.seo_blog_creator_campaigns DROP CONSTRAINT seo_blog_creator_campaigns_kind_check;
+  ALTER TABLE app.seo_blog_creator_campaigns ADD CONSTRAINT seo_blog_creator_campaigns_kind_check CHECK(kind IN ('email','advocacy','acquisition'));
+END $creator_kind$;
+GRANT CREATE ON SCHEMA app_private TO r72_seo_method_definer;
+SET LOCAL ROLE r72_seo_method_definer;
+
+CREATE OR REPLACE FUNCTION app_private.seo_creator_command(p_workspace uuid,p_session bytea,p_id uuid,p_action text,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; c app.seo_blog_creator_campaigns; v app.seo_blog_creator_versions; p jsonb; a app.seo_blog_method_assignments;
+ used bigint; reserved bigint; ceiling bigint; receipt jsonb; body text; sha text; next_state text; required_pack text;
+BEGIN
+ actor:=app_private.seo_media_owner(p_workspace,p_session);
+ IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+ IF p_action='list' THEN RETURN coalesce((SELECT jsonb_agg(app_private.seo_creator_record(p_workspace,id) ORDER BY created_at DESC) FROM app.seo_blog_creator_campaigns WHERE workspace_id=p_workspace),'[]'::jsonb); END IF;
+ IF p_action='get' THEN RETURN app_private.seo_creator_record(p_workspace,p_id); END IF;
+ IF p_action NOT IN ('begin','complete','edit','approve','recover') THEN RAISE EXCEPTION 'Unknown creator command' USING ERRCODE='22023'; END IF;
+ -- Serialise allowance reservations with assignment changes and other creator starts for this brand.
+ PERFORM workspace_id FROM app.seo_blog_brands WHERE workspace_id=p_workspace FOR UPDATE;
+ SELECT * INTO c FROM app.seo_blog_creator_campaigns WHERE workspace_id=p_workspace AND id=p_id FOR UPDATE;
+ SELECT * INTO a FROM app.seo_blog_method_assignments WHERE workspace_id=p_workspace ORDER BY revision DESC LIMIT 1;
+ p:=app_private.seo_creator_profile(p_workspace);
+ IF p_action='begin' THEN
+   IF c.id IS NOT NULL THEN
+     IF c.input_hash IS DISTINCT FROM p_input->>'inputHash' THEN RAISE EXCEPTION 'Command input changed' USING ERRCODE='40001'; END IF;
+     RETURN jsonb_build_object('created',false,'record',app_private.seo_creator_record(p_workspace,p_id));
+   END IF;
+   required_pack:=CASE p_input#>>'{brief,kind}' WHEN 'email' THEN 'email-writing' WHEN 'advocacy' THEN 'advocacy-and-referral' WHEN 'acquisition' THEN 'conversion-copy' ELSE NULL END;
+   IF p_id IS NULL OR p_input->>'brandId' IS DISTINCT FROM p_workspace::text OR p_input->>'actorId' IS DISTINCT FROM actor::text
+     OR required_pack IS NULL OR p_input->>'id' IS DISTINCT FROM p_id::text OR (p_input->>'reservation')::bigint<>350000
+     OR p IS NULL OR p->>'version' IS DISTINCT FROM p_input->>'profileVersion' OR p->>'factsSha' IS DISTINCT FROM p_input->>'factsSha'
+     OR a.revision IS NULL OR a.revision IS DISTINCT FROM (p_input->>'assignmentRevision')::integer THEN
+     RAISE EXCEPTION 'Current confirmed profile and method assignment required' USING ERRCODE='55000'; END IF;
+   IF NOT EXISTS(SELECT 1 FROM app.seo_blog_brands b JOIN app.seo_blog_method_private_organizations o ON o.organization_id=b.organization_id WHERE b.workspace_id=p_workspace)
+     OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(a.pins) pin JOIN app.seo_blog_method_releases r ON r.pack_id=pin->>'packId' AND r.version=pin->>'version' AND r.canonical_sha256=pin->>'hash'
+       WHERE r.pack_id=required_pack AND r.version='0.1.1' AND r.private_approval='approved') THEN RAISE EXCEPTION 'Reviewed private creator assignment required' USING ERRCODE='42501'; END IF;
+   IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p->'conversionPages') page WHERE page->>'url'=p_input#>>'{brief,cta,url}' AND page->>'label'=p_input#>>'{brief,cta,label}') THEN RAISE EXCEPTION 'Approved brand action required' USING ERRCODE='22023'; END IF;
+   SELECT coalesce(sum(amount),0) INTO used FROM app.seo_blog_usage WHERE workspace_id=p_workspace AND kind='model_tokens' AND at>=date_trunc('month',clock_timestamp());
+   SELECT coalesce(sum(reserved_tokens),0) INTO reserved FROM app.seo_blog_creator_campaigns WHERE workspace_id=p_workspace;
+   SELECT (settings#>>'{budgets,modelTokensPerMonth}')::bigint INTO ceiling FROM app.seo_blog_brands WHERE workspace_id=p_workspace;
+   IF ceiling IS NULL OR ceiling-used-reserved<350000 THEN RAISE EXCEPTION 'More writing allowance is needed for this campaign; pending or uncertain runs retain their reservation' USING ERRCODE='55000'; END IF;
+   INSERT INTO app.seo_blog_creator_campaigns(workspace_id,id,kind,input_hash,brief,profile_version,facts_sha,assignment_revision,method_receipt_id,reserved_tokens,state,created_by)
+     VALUES(p_workspace,p_id,p_input#>>'{brief,kind}',p_input->>'inputHash',p_input->'brief',(p_input->>'profileVersion')::integer,p_input->>'factsSha',a.revision,(p_input->>'methodReceiptId')::uuid,350000,'generating',actor);
+   RETURN jsonb_build_object('created',true,'record',app_private.seo_creator_record(p_workspace,p_id));
+ END IF;
+ IF c.id IS NULL THEN RAISE EXCEPTION 'Campaign not found' USING ERRCODE='22023'; END IF;
+ IF p_action='recover' THEN
+   p_action:='complete';p_input:=jsonb_build_object('receiptId',c.method_receipt_id,'detail','Recovered the saved generation receipt without another model call.');
+ END IF;
+ IF p_action='complete' THEN
+   IF c.method_receipt_id IS DISTINCT FROM (p_input->>'receiptId')::uuid THEN RAISE EXCEPTION 'Wrong campaign receipt' USING ERRCODE='42501'; END IF;
+   SELECT data INTO receipt FROM app.seo_blog_method_receipts WHERE workspace_id=p_workspace AND id=c.method_receipt_id;
+   IF c.state<>'generating' AND NOT(c.state='unknown' AND receipt->>'outcome' IN ('accepted','rejected')) THEN RETURN app_private.seo_creator_record(p_workspace,p_id); END IF;
+   body:=coalesce(p_input->>'contentText',CASE WHEN receipt->>'outcome'='accepted' THEN receipt->>'resultText' ELSE NULL END);
+   IF receipt IS NULL OR receipt->>'outcome'='unknown' THEN next_state:='unknown';
+   ELSIF receipt->>'outcome'='rejected' THEN next_state:='held';
+   ELSIF body IS NOT NULL AND receipt->>'outcome'='accepted' THEN
+     sha:=encode(sha256(convert_to(body,'UTF8')),'hex');
+     IF receipt->>'assetRef' IS DISTINCT FROM 'creator:'||p_id::text OR receipt->>'stage' IS DISTINCT FROM c.kind
+       OR receipt->>'resultHash' IS DISTINCT FROM sha OR receipt->>'profileVersion' IS DISTINCT FROM c.profile_version::text
+       OR receipt#>>'{assignment,revision}' IS DISTINCT FROM c.assignment_revision::text THEN RAISE EXCEPTION 'Campaign body does not match generation receipt' USING ERRCODE='42501'; END IF;
+     INSERT INTO app.seo_blog_creator_versions(workspace_id,campaign_id,number,content_text,content_sha,method_receipt_id,created_by) VALUES(p_workspace,p_id,1,body,sha,c.method_receipt_id,actor);
+     next_state:='draft';
+   ELSE next_state:='held'; END IF;
+   IF next_state='draft' AND (p IS NULL OR p->>'version' IS DISTINCT FROM c.profile_version::text OR p->>'factsSha' IS DISTINCT FROM c.facts_sha OR a.revision IS DISTINCT FROM c.assignment_revision) THEN next_state:='held'; END IF;
+   UPDATE app.seo_blog_creator_campaigns SET state=next_state,current_version=CASE WHEN sha IS NOT NULL THEN 1 ELSE 0 END,
+     reserved_tokens=CASE WHEN next_state='unknown' THEN reserved_tokens ELSE 0 END,row_version=row_version+1,
+     detail=CASE WHEN next_state='held' AND sha IS NOT NULL THEN 'Brand context or production rules changed during generation. Create a new campaign from the current confirmed inputs.' ELSE left(coalesce(p_input->>'detail','Review this campaign'),800) END WHERE workspace_id=p_workspace AND id=p_id;
+   RETURN app_private.seo_creator_record(p_workspace,p_id);
+ END IF;
+ SELECT * INTO v FROM app.seo_blog_creator_versions WHERE workspace_id=p_workspace AND campaign_id=p_id AND number=c.current_version;
+ IF c.row_version IS DISTINCT FROM (p_input->>'expectedRowVersion')::integer OR v.content_sha IS NULL OR v.content_sha IS DISTINCT FROM p_input->>'expectedSha' THEN RAISE EXCEPTION 'Campaign version changed' USING ERRCODE='40001'; END IF;
+ IF p IS NULL OR p->>'version' IS DISTINCT FROM c.profile_version::text OR p->>'factsSha' IS DISTINCT FROM c.facts_sha OR a.revision IS DISTINCT FROM c.assignment_revision THEN RAISE EXCEPTION 'Current profile or production rules changed; create a new campaign from the confirmed inputs' USING ERRCODE='55000'; END IF;
+ IF c.state IN ('generating','held','unknown') THEN RAISE EXCEPTION 'Held or uncertain generation cannot be approved or edited as a clean draft' USING ERRCODE='55000'; END IF;
+ IF p_action='edit' THEN
+   body:=p_input->>'contentText';sha:=encode(sha256(convert_to(body,'UTF8')),'hex');
+   IF sha=v.content_sha THEN RETURN app_private.seo_creator_record(p_workspace,p_id); END IF;
+   INSERT INTO app.seo_blog_creator_versions(workspace_id,campaign_id,number,content_text,content_sha,created_by) VALUES(p_workspace,p_id,c.current_version+1,body,sha,actor);
+   UPDATE app.seo_blog_creator_campaigns SET current_version=current_version+1,state='draft',approval=NULL,row_version=row_version+1,detail='Owner edit saved. Review this new version before export.' WHERE workspace_id=p_workspace AND id=p_id;
+ ELSE
+   UPDATE app.seo_blog_creator_campaigns SET state='approved',approval=jsonb_build_object('version',current_version,'contentSha',v.content_sha,'by',actor,'at',clock_timestamp()),row_version=row_version+1,detail='Approved authoring draft. No messages have been sent or scheduled.' WHERE workspace_id=p_workspace AND id=p_id;
+ END IF;
+ RETURN app_private.seo_creator_record(p_workspace,p_id);
+END $f$;
+
+CREATE OR REPLACE FUNCTION app_private.seo_method_save_receipt(p_workspace uuid,p_session bytea,p_data jsonb)
+RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE a app.seo_blog_method_assignments; pin jsonb; saved app.seo_blog_method_receipts;
+BEGIN
+  PERFORM app_private.seo_media_private_actor(p_workspace,p_session);
+  IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  IF p_data->>'brandId' IS DISTINCT FROM p_workspace::text OR p_data->>'approvalState' IS DISTINCT FROM 'draft'
+    OR p_data->>'outcome' IS NULL OR p_data->>'outcome' NOT IN ('accepted','rejected','unknown')
+    OR p_data->>'stage' IS NULL OR p_data->>'stage' NOT IN ('planning','blog','revision','social','email','advocacy','acquisition')
+    OR p_data->>'promptHash' IS NULL OR p_data#>>'{usage,tokensIn}' IS NULL OR p_data#>>'{usage,tokensOut}' IS NULL
+    OR p_data->>'revisionPasses' IS NULL OR p_data->>'profileVersion' IS NULL OR (p_data->>'profileVersion')::integer<1
+    OR (p_data->>'outcome'='accepted' AND (p_data->>'resultHash' IS NULL OR p_data->>'resultHash' !~ '^[0-9a-f]{64}$'))
+    OR jsonb_typeof(p_data->'pins') IS DISTINCT FROM 'array'
+    OR jsonb_array_length(p_data->'pins') NOT BETWEEN 1 AND 12 OR p_data->>'promptHash' !~ '^[0-9a-f]{64}$'
+    OR (p_data#>>'{usage,tokensIn}')::bigint NOT BETWEEN 0 AND 10000000
+    OR (p_data#>>'{usage,tokensOut}')::bigint NOT BETWEEN 0 AND 10000000
+    OR (p_data->>'revisionPasses')::integer NOT BETWEEN 0 AND 1 THEN
+    RAISE EXCEPTION 'Invalid method receipt' USING ERRCODE='22023';
+  END IF;
+  SELECT * INTO a FROM app.seo_blog_method_assignments WHERE workspace_id=p_workspace
+    AND revision=(p_data#>>'{assignment,revision}')::integer;
+  IF a.revision IS NULL OR a.scope IS DISTINCT FROM p_data#>>'{assignment,scope}'
+    OR a.pins IS DISTINCT FROM p_data#>'{assignment,pins}' THEN RAISE EXCEPTION 'Invalid assignment receipt' USING ERRCODE='42501'; END IF;
+  FOR pin IN SELECT value FROM jsonb_array_elements(p_data->'pins') LOOP
+    IF NOT a.pins @> jsonb_build_array(pin) OR NOT EXISTS(SELECT 1 FROM app.seo_blog_method_releases r
+      WHERE r.pack_id=pin->>'packId' AND r.version=pin->>'version' AND r.canonical_sha256=pin->>'hash' AND r.private_approval='approved')
+      THEN RAISE EXCEPTION 'Unapproved receipt method' USING ERRCODE='42501'; END IF;
+  END LOOP;
+  SELECT * INTO saved FROM app.seo_blog_method_receipts WHERE workspace_id=p_workspace AND id=(p_data->>'id')::uuid;
+  IF saved.id IS NOT NULL THEN
+    IF saved.data IS DISTINCT FROM p_data THEN RAISE EXCEPTION 'Receipt is immutable' USING ERRCODE='42501'; END IF;
+    RETURN;
+  END IF;
+  INSERT INTO app.seo_blog_method_receipts(workspace_id,id,assignment_revision,data)
+    VALUES(p_workspace,(p_data->>'id')::uuid,a.revision,p_data);
+  -- Blog success usage stays in its engine. Creator usage and rejected calls are charged once here, even if a later asset save fails.
+  IF p_data->>'outcome'<>'accepted' OR p_data->>'stage' IN ('email','advocacy','acquisition') THEN
+    INSERT INTO app.seo_blog_usage(workspace_id,kind,amount,at,reference) VALUES(p_workspace,'model_tokens',
+      (p_data#>>'{usage,tokensIn}')::bigint+(p_data#>>'{usage,tokensOut}')::bigint,clock_timestamp(),'method-cost:'||(p_data->>'id'));
+  END IF;
+END $f$;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_seo_method_definer;

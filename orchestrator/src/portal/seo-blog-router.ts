@@ -240,7 +240,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
-        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
@@ -257,8 +257,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const creator=engine.creators(),parts=rest.split('/');
       if(!parts[1]){
         const settings=await engine.methodOverview(actor,brandId),pins=settings.assignment?.pins??[];
-        const enabled=(['email','advocacy'] as const).filter(kind=>pins.some(p=>p.packId===(kind==='email'?'email-writing':'advocacy-and-referral')));
-        return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId),enabled));
+        const enabled=(['email','advocacy','acquisition'] as const).filter(kind=>pins.some(p=>p.packId===(kind==='email'?'email-writing':kind==='advocacy'?'advocacy-and-referral':'conversion-copy')));
+        const articles=(await engine.listArticles(actor,brandId)).filter(a=>a.article.currentVersionId).map(a=>({id:a.article.id,title:a.title}));
+        return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId),enabled,articles));
       }
       const record=await creator.get(actor.userId,brandId,parts[1]);
       if(parts[2]==='export'){
@@ -437,7 +438,8 @@ async function handlePost(
         const profile=await engine.getProfile(actor,brandId),index=int(f('ctaIndex'),'the next-step link');
         const cta=profile?.conversionPages[index];if(!cta)throw new SeoBlogError(400,'Choose a confirmed next-step link.');
         const brief:CampaignBrief={kind:f('kind') as CampaignBrief['kind'],name:f('name')??'',goal:f('goal')??'',audience:f('audience')??'',purpose:f('purpose') as CampaignBrief['purpose'],count:int(f('count'),'the email count'),cta,
-          offerName:f('offerName')||null,permissionContext:f('permissionContext')??'',customerMoment:f('customerMoment')??'',consentProcess:f('consentProcess')??'',incentiveTerms:f('incentiveTerms')??'None'};
+          offerName:f('offerName')||null,permissionContext:f('permissionContext')??'',customerMoment:f('customerMoment')??'',consentProcess:f('consentProcess')??'',incentiveTerms:f('incentiveTerms')??'None',
+          ...(f('kind')==='acquisition'?{objective:(f('objective')??'') as CampaignBrief['objective'],channels:form.fields.getAll('channels') as CampaignBrief['channels'],articleIds:form.fields.getAll('articleId')}:{})};
         const r=await creator.create(actor.userId,brandId,f('commandId')??'',brief);
         return ok(back('campaigns/'+r.id),r.state==='draft'?'Campaign draft ready for review.':'Campaign saved. Review its current state before starting another run.');
       }

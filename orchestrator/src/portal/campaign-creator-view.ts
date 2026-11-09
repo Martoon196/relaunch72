@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BrandProfile } from '../seo-blog/types.js';
-import type { AdvocacyKit, CampaignContent, CreatorRecord, EmailCampaign } from '../seo-blog/campaign-creator.js';
+import { ACQUISITION_CHANNELS, ACQUISITION_OBJECTIVES, type AcquisitionProposal, type AdvocacyKit, type CampaignContent, type CreatorRecord, type EmailCampaign } from '../seo-blog/campaign-creator.js';
+import { creativePrefill, trackedLinks } from '../seo-blog/acquisition-assembly.js';
 import { escapeHtml as e } from './ui.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 
@@ -20,11 +21,27 @@ function createForm(shell:Shell,profile:BrandProfile,kind:'email'|'advocacy'):st
   ${email?'<input type="hidden" name="customerMoment" value=""><input type="hidden" name="consentProcess" value=""><input type="hidden" name="incentiveTerms" value="None">':area('customerMoment','What real customer milestone would make this request appropriate?','',1500,3)+area('consentProcess','How will you record permission, approved attribution and withdrawal requests?','',1500,3)+area('incentiveTerms','Approved referral incentive terms, or None','None',1500,3)}
   <p class="section-note">Uses your writing allowance. Relative days are proposed timing. Creating this draft does not contact anyone.</p><button type="submit">Create ${email?'email campaign':'request kit'}</button></form></section>`;
 }
-export function campaignCreatorsPage(shell:Shell,profile:BrandProfile|null,records:readonly CreatorRecord[],enabledKinds:readonly ('email'|'advocacy')[]=['email','advocacy']):string {
+const CHANNEL_LABEL:Record<string,string>={instagram:'Instagram',facebook:'Facebook',linkedin:'LinkedIn',email:'Email',search:'Search',website:'Website'};
+const OBJECTIVE_LABEL:Record<string,string>={leads:'Qualified leads',bookings:'Bookings',sales:'Sales',sign_ups:'Sign-ups',awareness:'Awareness'};
+function acquisitionForm(shell:Shell,profile:BrandProfile,articles:readonly {id:string;title:string}[]):string {
+  return `<section class="card"><h2>Hook &amp; Close · Acquisition campaign</h2><p>Turn this brand's saved research, audience guidance and approved facts into an evidence-led campaign proposal: problems, objections, channels, distinct concepts and a measurement plan.</p><form method="post" action="${base(shell)}/create">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="kind" value="acquisition"><input type="hidden" name="purpose" value="acquisition">
+  ${input('name','Campaign name','',160)}${area('goal','What should this campaign achieve?','',1000,3)}
+  <label>Objective<select name="objective">${ACQUISITION_OBJECTIVES.map(o=>`<option value="${o}">${OBJECTIVE_LABEL[o]}</option>`).join('')}</select></label>
+  <label>Audience<select name="audience" required>${profile.audiences.map(a=>`<option value="${e(a)}">${e(a)}</option>`).join('')}</select></label>
+  <label>Approved offer<select name="offerName"><option value="">No specific offer</option>${profile.offers.map(o=>`<option value="${e(o.name)}">${e(o.name)}</option>`).join('')}</select></label>
+  <label>Destination<select name="ctaIndex" required>${profile.conversionPages.map((p,i)=>`<option value="${i}">${e(p.label)} — ${e(p.url)}</option>`).join('')}</select></label>
+  <fieldset><legend>Channels to consider</legend>${ACQUISITION_CHANNELS.map(c=>`<label style="display:inline-block;margin-right:12px;font-weight:400"><input type="checkbox" name="channels" value="${c}"${['instagram','linkedin'].includes(c)?' checked':''}> ${CHANNEL_LABEL[c]}</label>`).join('')}</fieldset>
+  <label>Distinct concepts<select name="count"><option>1</option><option>2</option><option selected>3</option></select></label>
+  ${articles.length?`<fieldset><legend>Supporting articles (up to three)</legend>${articles.slice(0,12).map(a=>`<label style="display:block;font-weight:400"><input type="checkbox" name="articleId" value="${e(a.id)}"> ${e(a.title)}</label>`).join('')}</fieldset>`:''}
+  <input type="hidden" name="permissionContext" value="Campaign proposal only; the owner decides channels, audiences, budgets and activation separately."><input type="hidden" name="customerMoment" value=""><input type="hidden" name="consentProcess" value=""><input type="hidden" name="incentiveTerms" value="None">
+  <p class="section-note">Uses your writing allowance (one reserved model run). Creating a proposal does not publish, schedule, contact anyone or start any advertising spend.</p><button type="submit">Create campaign proposal</button></form></section>`;
+}
+export function campaignCreatorsPage(shell:Shell,profile:BrandProfile|null,records:readonly CreatorRecord[],enabledKinds:readonly ('email'|'advocacy'|'acquisition')[]=['email','advocacy'],articles:readonly {id:string;title:string}[]=[]):string {
   const ready=Boolean(profile?.confirmedAt&&profile.audiences.length&&profile.conversionPages.length&&!profile.conflicts.length);
   return layout(shell,'Campaign creators',`<h1>Campaign creators</h1><p class="muted">Shared production methods, written in ${e(shell.brand!.name)}’s voice. Review and export here; delivery stays in your existing tools.</p>
+  ${ready&&enabledKinds.includes('acquisition')?acquisitionForm(shell,profile!,articles):''}
   ${ready?`<div class="setup-grid">${(['email','advocacy'] as const).map(kind=>enabledKinds.includes(kind)?createForm(shell,profile!,kind):`<section class="card"><h2>${kind==='email'?'Inbox Engine':'Word of Mouth Engine'} is switched off</h2><p>Saved drafts remain available. New generation is disabled for this brand.</p><a href="${SEO_BLOG_BASE}/b/${shell.brand!.id}/methods">Manage production packs</a></section>`).join('')}</div>`:`<section class="card"><h2>Confirm this brand’s context first</h2><p>Resolve conflicting facts and confirm an audience and working next-step link in Brand setup.</p><a class="button" href="${SEO_BLOG_BASE}/b/${shell.brand!.id}/setup">Review brand setup</a></section>`}
-  <section class="card"><h2>Saved campaigns</h2>${records.length?records.map(r=>`<article><h3><a href="${base(shell)}/${r.id}">${e(r.brief.name)}</a></h3><p>${r.brief.kind==='email'?'Email campaign':'Request kit'} · <span class="pill">${e(r.state)}</span> · ${e(r.createdAt.slice(0,10))}</p></article>`).join(''):'<p>No campaigns yet. Start with one useful sequence or request kit.</p>'}</section>`);
+  <section class="card"><h2>Saved campaigns</h2>${records.length?records.map(r=>`<article><h3><a href="${base(shell)}/${r.id}">${e(r.brief.name)}</a></h3><p>${r.brief.kind==='email'?'Email campaign':r.brief.kind==='advocacy'?'Request kit':'Acquisition proposal'} · <span class="pill">${e(r.state)}</span> · ${e(r.createdAt.slice(0,10))}</p></article>`).join(''):'<p>No campaigns yet. Start with one useful sequence or request kit.</p>'}</section>`);
 }
 function emailEditor(v:EmailCampaign):string {
   return v.emails.map((mail,i)=>`<fieldset class="card"><legend>Email ${i+1}</legend><label>Proposed day after the start<input type="number" name="email.${i}.dayOffset" min="0" max="90" value="${mail.dayOffset}" required></label>${input(`email.${i}.purpose`,'Job of this email',mail.purpose,180)}
@@ -37,6 +54,29 @@ function advocacyEditor(v:AdvocacyKit):string {
   (v.referralMessages?`<fieldset class="card"><legend>Referral invitations</legend>${area('referral.short','Short invitation',v.referralMessages.short,700)}${area('referral.standard','Standard invitation',v.referralMessages.standard,1400,7)}${area('referral.extended','Extended invitation',v.referralMessages.extended,2200,9)}</fieldset>`:'')+
   `<fieldset class="card"><legend>Permission checklist</legend>${v.consentChecklist.map((s,i)=>input(`consent.${i}`,`Check ${i+1}`,s,300)).join('')}<p>Approved incentive terms: ${e(v.incentiveTerms)}</p></fieldset>`;
 }
+function evidenceLabel(record:CreatorRecord,id:string):string {
+  const ev=record.brief.evidence,research=ev?.research??[];
+  const m=/^S(\d+)$/.exec(id),s=m?research[Number(m[1])-1]:research.find(x=>x.id===id);
+  if(s)return `<a href="${e(s.url)}" rel="noopener noreferrer" target="_blank" title="${e(s.passage)}">${e(s.title)}</a> <span class="muted">(research, retrieved ${e(s.retrievedAt.slice(0,10))}${s.primary?', primary source':''})</span>`;
+  const f=ev?.facts.find(x=>x.id===id);if(f)return `${e(f.title)} <span class="muted">(${f.kind==='article'?'your article':'your audience guidance'})</span>`;
+  if(/^profile:\d+:claim:/.test(id))return 'Approved claim <span class="muted">(brand profile)</span>';
+  if(/^profile:\d+:offer:/.test(id))return 'Approved offer <span class="muted">(brand profile)</span>';
+  return `${e(id)} <span class="pill bad">unknown</span>`;
+}
+function acquisitionEditor(shell:Shell,r:CreatorRecord,v:AcquisitionProposal):string {
+  const links=trackedLinks(r.brief,r.id,v),creative=shell.creativeAvailable?`${SEO_BLOG_BASE}/b/${shell.brand!.id}/creative`:null;
+  const ev=r.brief.evidence;
+  return `<section class="card"><h2>Evidence used</h2>${ev?.gaps.length?`<ul>${ev.gaps.map(g=>`<li><span class="pill warn">Gap</span> ${e(g)}</li>`).join('')}</ul>`:''}<p class="section-note">${ev?.research.length??0} saved research source(s) and ${ev?.facts.length??0} owner fact(s) were supplied, plus the confirmed profile's approved claims and offers. Nothing else was searched or fetched.</p></section>
+  <section class="card"><h2>Audience insights</h2><table><thead><tr><th>Type</th><th>Insight</th><th>Basis</th><th>Evidence</th></tr></thead><tbody>${v.insights.map((i,n)=>`<tr><td>${e(i.type)}</td><td style="min-width:320px">${area(`insight.${n}.statement`,`Insight ${n+1}`,i.statement,400,3)}</td><td><span class="pill ${i.basis==='observed'?'ok':'warn'}">${i.basis==='observed'?'Observed in evidence':'Inferred'}</span></td><td>${i.evidence.map(id=>evidenceLabel(r,id)).join('<br>')}</td></tr>`).join('')}</tbody></table></section>
+  <section class="card"><h2>Objective and channels</h2><p><strong>${e(OBJECTIVE_LABEL[r.brief.objective??'']??'')}</strong> · ${e(v.objective.goal)} · primary metric: ${e(v.objective.primaryMetric)}</p><p>Destination: ${e(r.brief.cta.label)} — ${e(r.brief.cta.url)}</p><ul>${v.channels.map(c=>`<li><strong>${e(CHANNEL_LABEL[c.channel]??c.channel)}</strong> — ${e(c.role)}. <span class="muted">${e(c.rationale)}</span></li>`).join('')}</ul><p class="section-note">Channel roles are proposals. No account connection, audience targeting, budget or publication is created here.</p></section>
+  ${v.concepts.map((c,n)=>`<fieldset class="card"><legend>Concept ${n+1} · ${e(c.name)}</legend><p class="muted">${e(c.angle)} · addresses insight ${c.addresses.map(i=>i+1).join(', ')} · ${c.channels.map(ch=>e(CHANNEL_LABEL[ch]??ch)).join(', ')}</p>
+    ${input(`concept.${n}.hook`,'Hook',c.hook,120)}${input(`concept.${n}.headline`,'Headline',c.headline,90)}${area(`concept.${n}.primaryText`,'Primary text',c.primaryText,600,4)}${area(`concept.${n}.creativeDirection`,'Creative direction (illustrative image)',c.creativeDirection,500,2)}
+    <p>Call to action: ${e(c.cta.label)}</p><details><summary>Tracked links</summary><ul>${links.filter(l=>l.concept===n).map(l=>`<li>${e(CHANNEL_LABEL[l.channel]??l.channel)}: <code>${e(l.url)}</code></li>`).join('')}</ul></details>
+    ${creative?`<p><a class="button secondary" href="${creative}?${e(creativePrefill(r.brief,c))}">Create artwork for this concept</a></p>`:''}</fieldset>`).join('')}
+  <section class="card"><h2>Measurement plan</h2><p>Primary: ${e(v.measurement.primaryMetric)}${v.measurement.secondaryMetrics.length?` · secondary: ${v.measurement.secondaryMetrics.map(e).join(', ')}`:''}</p><p>Review after ${v.measurement.reviewAfterDays} days. ${e(v.measurement.learningRule)}</p><h3>Attribution limits</h3><ul>${v.measurement.limitations.map(l=>`<li>${e(l)}</li>`).join('')}</ul></section>
+  <section class="card"><h2>Predictions <span class="pill warn">Hypotheses — not results</span></h2><ul>${v.hypotheses.map(h=>`<li>${e(h.statement)} <span class="muted">${e(h.basis)}</span></li>`).join('')}</ul></section>
+  <section class="card"><h2>Actual results</h2><p><strong>No results recorded.</strong> This is a plan. Results appear only from real outcomes recorded after you run it through an existing channel; nothing here is evidence of performance.</p></section>`;
+}
 export function campaignCreatorReviewPage(shell:Shell,record:CreatorRecord,currentProfile:BrandProfile|null):string {
   const r=record,v=r.version;
   const current=Boolean(currentProfile?.confirmedAt&&currentProfile.version===r.profileVersion&&currentProfile.factsSha===r.factsSha&&!currentProfile.conflicts.length);
@@ -44,9 +84,9 @@ export function campaignCreatorReviewPage(shell:Shell,record:CreatorRecord,curre
   const hidden=`${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${r.rowVersion}"><input type="hidden" name="contentSha" value="${e(v?.contentSha??'')}">`;
   return layout(shell,'Review campaign',`<p><a href="${base(shell)}">← Campaign creators</a></p><h1>${e(r.brief.name)}</h1><p><span class="pill">${e(r.state)}</span> · ${e(r.detail)}</p>
   ${!current?'<p class="notice">Brand context changed or needs confirmation. Review Brand setup and create a fresh campaign from the current facts.</p>':''}
-  <section class="card"><h2>Campaign brief</h2><p>${e(r.brief.goal)}</p><p>Audience: ${e(r.brief.audience)}</p><p>Permission context: ${e(r.brief.permissionContext)}</p>${r.brief.kind==='advocacy'?`<p>Permission process: ${e(r.brief.consentProcess)}</p>`:''}<p class="section-note">This is an authoring draft. It does not establish any recipient’s consent or schedule a send.</p></section>
-  ${v?`<form method="post" action="${base(shell)}/${r.id}/edit">${hidden}<fieldset${editAllowed?'':' disabled'}>${input('title','Draft title',v.content.title,160)}${area('summary','Campaign summary',v.content.summary,800,3)}${r.brief.kind==='email'?emailEditor(v.content as EmailCampaign):advocacyEditor(v.content as AdvocacyKit)}<button type="submit">Save a new draft version</button></fieldset></form>
-  ${editAllowed?`<section class="card"><h2>Review this version</h2><p>Editing clears approval. Check every subject, claim, link and permission note before approving.</p><form method="post" action="${base(shell)}/${r.id}/approve">${hidden}<label><input type="checkbox" name="reviewed" value="1" required> I reviewed the wording, facts and permission process for this exact draft.</label><button type="submit">Approve this campaign draft</button></form>${r.state==='approved'?`<p><a class="button" href="${base(shell)}/${r.id}/export">Export approved campaign</a> <a href="${base(shell)}/${r.id}/export?format=json">Export JSON</a></p>`:''}</section>`:''}`:
+  <section class="card"><h2>Campaign brief</h2><p>${e(r.brief.goal)}</p><p>Audience: ${e(r.brief.audience)}</p>${r.brief.kind==='acquisition'?'':`<p>Permission context: ${e(r.brief.permissionContext)}</p>`}${r.brief.kind==='advocacy'?`<p>Permission process: ${e(r.brief.consentProcess)}</p>`:''}<p class="section-note">${r.brief.kind==='acquisition'?'This is a campaign proposal. It does not publish, schedule, target anyone or start advertising spend.':'This is an authoring draft. It does not establish any recipient’s consent or schedule a send.'}</p></section>
+  ${v?`<form method="post" action="${base(shell)}/${r.id}/edit">${hidden}<fieldset${editAllowed?'':' disabled'}>${input('title','Draft title',v.content.title,160)}${area('summary','Campaign summary',v.content.summary,800,3)}${r.brief.kind==='email'?emailEditor(v.content as EmailCampaign):r.brief.kind==='advocacy'?advocacyEditor(v.content as AdvocacyKit):acquisitionEditor(shell,r,v.content as AcquisitionProposal)}<button type="submit">Save a new draft version</button></fieldset></form>
+  ${editAllowed?`<section class="card"><h2>Review this version</h2><p>Editing clears approval. Check every subject, claim, link and permission note before approving.</p><form method="post" action="${base(shell)}/${r.id}/approve">${hidden}<label><input type="checkbox" name="reviewed" value="1" required> ${r.brief.kind==='acquisition'?'I reviewed the evidence, wording and commercial claims of this exact proposal.':'I reviewed the wording, facts and permission process for this exact draft.'}</label><button type="submit">Approve this campaign draft</button></form>${r.state==='approved'?`<p><a class="button" href="${base(shell)}/${r.id}/export">Export approved campaign</a> <a href="${base(shell)}/${r.id}/export?format=json">Export JSON</a></p>`:''}</section>`:''}`:
   `<section class="card"><h2>No usable draft yet</h2><p>A pending or uncertain request is never automatically repeated. Check its saved run to recover any completed draft. If it remains uncertain, its writing allowance stays reserved until the operation is reconciled.</p><form method="post" action="${base(shell)}/${r.id}/recover">${csrfField(shell.csrf)}<button type="submit">Check saved run</button></form></section>`}`);
 }
 /** Rebuild from known saved fields, not browser-supplied schema or recipient data. */
@@ -54,7 +94,11 @@ export function creatorContentFromForm(record:CreatorRecord,fields:URLSearchPara
   if(!record.version)throw new Error('No saved draft to edit.');
   const content=structuredClone(record.version.content);
   content.title=fields.get('title')??'';content.summary=fields.get('summary')??'';
-  if(record.brief.kind==='email')for(const [i,mail] of (content as EmailCampaign).emails.entries()){
+  if(record.brief.kind==='acquisition'){
+    const p=content as AcquisitionProposal;
+    p.insights.forEach((insight,i)=>{insight.statement=fields.get(`insight.${i}.statement`)??'';});
+    for(const [i,c] of p.concepts.entries())for(const key of ['hook','headline','primaryText','creativeDirection'] as const)c[key]=fields.get(`concept.${i}.${key}`)??'';
+  }else if(record.brief.kind==='email')for(const [i,mail] of (content as EmailCampaign).emails.entries()){
     mail.dayOffset=Number(fields.get(`email.${i}.dayOffset`));mail.purpose=fields.get(`email.${i}.purpose`)??'';
     mail.subjects=mail.subjects.map((_s,j)=>fields.get(`email.${i}.subject.${j}`)??'');
     mail.subject=mail.subjects[Number(fields.get(`email.${i}.chosen`))]??'';
@@ -72,6 +116,12 @@ export function creatorContentFromForm(record:CreatorRecord,fields:URLSearchPara
 }
 export function creatorTextExport(record:CreatorRecord,content?:CampaignContent):string {
   const c=content??record.version!.content;
+  if(record.brief.kind==='acquisition'){
+    const p=c as AcquisitionProposal,links=trackedLinks(record.brief,record.id,p);
+    return `${record.brief.name}\nApproved campaign PROPOSAL — nothing launched, published, scheduled or spent.\nObjective: ${OBJECTIVE_LABEL[record.brief.objective??'']??''} — ${p.objective.goal}\nDestination: ${record.brief.cta.label} ${record.brief.cta.url}\n\n${p.summary}\n\nINSIGHTS\n${p.insights.map(i=>`- [${i.type}, ${i.basis}] ${i.statement} (evidence: ${i.evidence.join(', ')})`).join('\n')}\n\nCHANNELS\n${p.channels.map(ch=>`- ${ch.channel}: ${ch.role}`).join('\n')}\n`
+      +p.concepts.map((k,i)=>`\nCONCEPT ${i+1}: ${k.name}\nHook: ${k.hook}\nHeadline: ${k.headline}\n${k.primaryText}\n${k.cta.label}\nCreative direction: ${k.creativeDirection}\nTracked links:\n${links.filter(l=>l.concept===i).map(l=>`  ${l.channel}: ${l.url}`).join('\n')}\n`).join('')
+      +`\nMEASUREMENT\nPrimary: ${p.measurement.primaryMetric}\nReview after ${p.measurement.reviewAfterDays} days. ${p.measurement.learningRule}\nLimitations:\n${p.measurement.limitations.map(l=>'- '+l).join('\n')}\n\nPREDICTIONS (hypotheses, not results)\n${p.hypotheses.map(h=>'- '+h.statement).join('\n')}\n\nACTUAL RESULTS\nNone recorded.\n`;
+  }
   const intro=`${record.brief.name}\nApproved authoring draft — not sent or scheduled.\nPermission context: ${record.brief.permissionContext}\n\n${c.summary}\n`;
   if(record.brief.kind==='email')return intro+(c as EmailCampaign).emails.map((m,i)=>`\nEMAIL ${i+1} — proposed day ${m.dayOffset}\nSubject: ${m.subject}\nAlternatives: ${m.subjects.filter(s=>s!==m.subject).join(' / ')}\nPreview: ${m.preview}\n\n${m.body}\n\n${m.cta.label}: ${m.cta.url}\n`).join('');
   const k=c as AdvocacyKit;
