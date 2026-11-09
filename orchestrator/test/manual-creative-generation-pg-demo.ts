@@ -71,7 +71,7 @@ const SECRET = 's'.repeat(48);
 const identity = { sessionToken: token, userId: actor, workspaceId: f.brand.id, userEmail: 'owner@example.test' };
 const server = createServer((req, res) => {
   if (req.url?.startsWith(ENQUIRY_ROUTE + '/')) { void handleEnquiryPublic(req, res, service.creativeEnquiries!, SECRET, 'demo-enquiry'); return; }
-  void handleSeoBlog(req, res, new URL(req.url!, 'http://127.0.0.1'), { service, identity, requestId: 'demo-' + randomUUID(), sessionSecret: SECRET, vaultReady: true } as never); });
+  void handleSeoBlog(req, res, new URL(req.url!, 'http://127.0.0.1'), { service, identity, requestId: 'demo-' + randomUUID(), sessionSecret: SECRET, vaultReady: true, publicOrigin: origin } as never); });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 const files = path.join(out, 'inputs'); mkdirSync(files, { recursive: true });
