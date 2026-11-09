@@ -6,6 +6,8 @@ import { requestDatabaseContext, type DatabaseRequestContext } from '../../db/rl
 import { CrmCommandService } from '../../crm-pg/commands.js';
 import { CrmPgRepository } from '../../crm-pg/repository.js';
 import type { CrmTransactionRunner, SqlExecutor } from '../../crm-pg/types.js';
+import { MHP_MARKETING_WORKSPACE_ID } from '../../mhp/marketing-workspace-service.js';
+import { readOwnerWhatsapp } from './whatsapp-reader.js';
 
 export const GROUP_HQ_INBOX_CRM_PATH = '/api/group-hq/inbox/crm';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -27,9 +29,9 @@ export class InboxCrmError extends Error {
 }
 export interface InboxCrmScope {
   label: string; workspaceId: string; organizationId: string; ownerUserId: string;
-  pipelineId: string; stageId: string; actorEmails: readonly string[];
+  pipelineId: string; stageId: string; actorEmails: readonly string[]; whatsappOwnerIds?: Readonly<Record<string,string>>;
 }
-export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>> }
+export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>>; mhpWhatsappInboxId?: string }
 export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | undefined {
   const raw = env.R72_GROUP_HQ_INBOX_SCOPES?.trim() ?? '';
   const secret = env.R72_GROUP_HQ_INBOX_SECRET?.trim() ?? '';
@@ -50,8 +52,19 @@ export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | und
     scopes[brand] = { label: text(value.label, 200), workspaceId, organizationId: uuid(value.organizationId),
       ownerUserId: uuid(value.ownerUserId), pipelineId: uuid(value.pipelineId), stageId: uuid(value.stageId),
       actorEmails: value.actorEmails.map(e => String(e).toLowerCase()) };
+    if (brand === 'mhp' && env.GHQ_MHP_WHATSAPP_OWNER_IDS) {
+      const mapping: unknown=JSON.parse(env.GHQ_MHP_WHATSAPP_OWNER_IDS);
+      if (!record(mapping)) throw new Error('Invalid WhatsApp owner mapping');
+      const owners: Record<string,string> = {};
+      for (const [email,id] of Object.entries(mapping)) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) || email!==email.toLowerCase()) throw new Error('Invalid WhatsApp inbox actor');
+        owners[email]=uuid(id);
+      }
+      scopes[brand]!.whatsappOwnerIds=owners;
+    }
   }
-  return { secret, scopes };
+  const binding = env.GHQ_MHP_WHATSAPP_INBOX_ID?.trim();
+  return binding && UUID.test(binding) ? { secret, scopes, mhpWhatsappInboxId: binding.toLowerCase() } : {secret, scopes};
 }
 
 export function inboxSignature(secret: string, timestamp: string, method: string, path: string, body: Buffer): string {
@@ -103,6 +116,19 @@ export class GroupHqInboxCrmService {
     const requestId = uuid(input.requestId);
     const brand = text(input.brand, 12);
     const { context, scope } = await this.context(actorEmail, brand, requestId);
+    if (input.action === 'whatsappThreads' || input.action === 'whatsappMessages') {
+      const inboxId = this.config.mhpWhatsappInboxId;
+      if (brand !== 'mhp' || scope.workspaceId !== MHP_MARKETING_WORKSPACE_ID || !inboxId || input.accountId !== inboxId) {
+        throw new InboxCrmError(403,'forbidden_scope');
+      }
+      const thread = input.action === 'whatsappMessages' ? uuid(input.threadId) : undefined;
+      const cursor = thread && input.cursor != null ? uuid(input.cursor) : undefined;
+      const actorId=scope.whatsappOwnerIds?.[actorEmail] ?? scope.ownerUserId;
+      const ownerContext=requestDatabaseContext({workspaceId:scope.workspaceId,userId:actorId,requestId});
+      const result = await readOwnerWhatsapp(this.readPool, ownerContext, actorEmail, inboxId, thread, cursor);
+      if (!result) throw new InboxCrmError(404,'conversation_unavailable');
+      return result;
+    }
     if (input.action === 'contact') {
       const contactId=uuid(input.contactId);
       return this.runner.run(context,async tx=>{

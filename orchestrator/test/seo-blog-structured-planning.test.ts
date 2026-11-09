@@ -5,7 +5,7 @@ import { AnthropicClient, providerJsonSchema, type LlmRequest } from '../src/llm
 import { MethodController } from '../src/seo-blog/method-packs.js';
 import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
 import { PLAN_SCHEMA, proposeCluster } from '../src/seo-blog/generation.js';
-import { fixtureBrand } from './rl72-method-fixtures.js';
+import { fixtureBrand, block } from './rl72-method-fixtures.js';
 import { UpgradeFixtureModel, upgradeSnapshot } from './rl72-upgrade-fixtures.js';
 import { decodePlanningOutput } from '../src/seo-blog/planning-output.js';
 
@@ -26,7 +26,7 @@ async function plan(mutate?: (v:any,request:LlmRequest)=>void,mutateWire?:(v:any
     wire=structuredClone(v);
   };
   const llm=await new MethodController(store,true).prepare(model,{...f,stage:'planning',stages:['planning'],assetRef:'plan:test',sources:['S1','fixture-source'],baselineTokens:16000,evidence:{research:f.sources}});
-  const run=()=>proposeCluster(llm,{brandName:f.brand.name,profile:f.profile,inventory:[],sources:f.sources,focus:null,excluded:[],sourceArticleUrl:null});
+  const run=(inventory:any[]=[])=>proposeCluster(llm,{brandName:f.brand.name,profile:f.profile,inventory,sources:f.sources,focus:null,excluded:[],sourceArticleUrl:null});
   return {f,store,model,run,wire:()=>wire};
 }
 
@@ -119,6 +119,43 @@ test('nested review conflicts are rejected with specific feedback and retained i
   const f=await plan(undefined,v=>{v.planJson=JSON.stringify({...JSON.parse(v.planJson),_method_sidecar:{decisions:{ownerDecisionsNeeded:['An unresolved decision']}}});});
   await assert.rejects(f.run,/Keep _method_sidecar outside planJson/);
   const receipt=[...f.store.receipts.values()][0]!;assert.equal(receipt.outcome,'rejected');assert.ok(receipt.heldResponse?.includes('An unresolved decision'));
+});
+
+test('one existing planning correction sees both an orphan pointer and an insufficient source',async()=>{
+  const f=await plan(v=>{
+    v._method_sidecar.decisions.claimLedger[0].assetPointer='/asset/pillar/key_points/99';
+    v._method_sidecar.decisions.claimLedger.push({assetPointer:'/asset/supporting/0/key_points/0',references:['S1']});
+    v._method_sidecar.decisions.sourceAssessments=[{sourceId:'S1',publishedAt:null,observedPeriod:null,confidence:'unknown',freshness:'insufficient',reason:'No usable evidence has been established for this assertion.'}];
+  });
+  await assert.rejects(f.run,/claimLedger/);assert.equal(f.model.requests.length,2);
+  const critique=f.model.requests[1]!.messages.at(-1)!.content;
+  assert.match(critique,/key_points\/99/);assert.match(critique,/zero-based/);
+  assert.match(critique,/references S1 without a usable source assessment/);assert.match(critique,/never invent dates or confidence/);
+  assert.equal([...f.store.receipts.values()][0]!.outcome,'rejected');
+});
+
+test('private correction carries the complete unchanged draft and facts while deduplicating inventory and offer text',async()=>{
+  let firstDraft:any;
+  const f=await plan((v,req)=>{if(req.meta?.attempt===1){v._method_sidecar.decisions.claimLedger[0].assetPointer='/asset/pillar/key_points/99';firstDraft=structuredClone(v);}});
+  const url='https://hearth.example/guide',canonical='https://hearth.example/guide-canonical';
+  const out=await f.run([{url,canonical,fetchStatus:'ok',title:'An existing website guide',headings:['Its existing heading'],editorial:true}]);
+  assert.ok(out.record.methodReceiptId);assert.equal(f.model.requests.length,2);
+  const [first,second]=f.model.requests;
+  const assistant=second!.messages.find(m=>m.role==='assistant');assert.ok(assistant);
+  assert.deepEqual(JSON.parse(assistant!.content),firstDraft); // No fact, field or failed finding repaired by the server.
+  assert.deepEqual(block(first!.messages[0]!.content,'method_context'),block(second!.messages[0]!.content,'method_context'));
+  const before=block(first!.messages[0]!.content,'brand_profile'),after=block(second!.messages[0]!.content,'brand_profile');
+  for(const key of ['summary','audiences','positioning','conversionPages','voice','exclusions','unresolvedConflicts','missingFacts'])assert.deepEqual(after[key],before[key]);
+  assert.equal(after.approvedClaims,undefined);assert.equal(after.approvedClaimReferences.length,f.f.profile.approvedClaims.length);
+  assert.deepEqual(after.offers.map((o:any)=>[o.name,o.url,o.sourceDocumentId]),before.offers.map((o:any)=>[o.name,o.url,o.sourceDocumentId]));
+  assert.deepEqual(block(second!.messages[0]!.content,'website_inventory'),[{url},{url:canonical}]);
+  assert.match(second!.system,/complete verified claims and full offer facts remain in method_context.factReferences/);
+  assert.ok(Buffer.byteLength(JSON.stringify(second),'utf8')<150000);
+});
+
+test('malformed basic review shape still holds safely before deeper evidence evaluation',async()=>{
+  const f=await plan(v=>{v._method_sidecar.qualityFindings[0]=null;});await assert.rejects(f.run,/Invalid quality findings/);
+  assert.equal(f.model.requests.length,2);assert.equal([...f.store.receipts.values()][0]!.outcome,'rejected');
 });
 
 test('Anthropic serializes native output_config only when requested; streaming and usage are preserved',async()=>{

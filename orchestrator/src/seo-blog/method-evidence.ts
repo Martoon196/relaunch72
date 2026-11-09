@@ -91,9 +91,9 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
       const s=context.research.find(s=>s.id===assessment?.sourceId||s.shortId===assessment?.sourceId);
       if(!s||assessment.publishedAt!==s.publishedAt||assessment.observedPeriod!==s.observedPeriod||assessment.confidence!==s.confidence||!['evergreen','dated','insufficient'].includes(assessment.freshness)||!text(assessment.reason))problems.push('Source provenance must match supplied dates, period and confidence.');
     }
-    for(const row of ledger)for(const ref of array(row?.references)?row.references:[]){
+    for(const [index,row] of ledger.entries())for(const ref of array(row?.references)?row.references:[]){
       const s=context.research.find(s=>s.id===ref||s.shortId===ref);
-      if(s&&!d.sourceAssessments.some((a:any)=>(a.sourceId===s.id||a.sourceId===s.shortId)&&a.freshness!=='insufficient'))problems.push('A referenced research claim needs a usable source assessment.');
+      if(s&&!d.sourceAssessments.some((a:any)=>(a.sourceId===s.id||a.sourceId===s.shortId)&&a.freshness!=='insufficient'))problems.push(`claimLedger[${index}] references ${s.shortId} without a usable source assessment (missing or insufficient). Omit the claim or use genuinely usable supplied support; never invent dates or confidence.`);
     }
   }
   if(!array(d.ownerDecisionsNeeded)||d.ownerDecisionsNeeded.length)problems.push('Resolve owner decisions before this draft can pass.');
