@@ -31,7 +31,7 @@ test('private article native envelope requires every detail and decodes the comp
  const wire={article:asset,_method_sidecar:{...review,decisionsJson:JSON.stringify(decisions)}};
  assert.deepEqual(Object.keys(schema.properties),['article','_method_sidecar']);
  assert.ok(Object.keys(schema.properties._method_sidecar.properties).indexOf('decisionsJson')<Object.keys(schema.properties._method_sidecar.properties).indexOf('qualityFindings'));
- assert.equal(validate(wire),true);delete wire._method_sidecar.qualityFindings[0].detail;assert.equal(validate(wire),false);
+ assert.equal(validate(wire),true);assert.equal(validate({...wire,article:{...asset,public_source_ids:['made-up-source-uuid']}}),false);delete wire._method_sidecar.qualityFindings[0].detail;assert.equal(validate(wire),false);
  assert.equal(out.value.title,prior.title);assert.deepEqual(out.value.sections,prior.sections);
  const receipt=[...f.store.receipts.values()][0]!;assert.equal(receipt.outcome,'accepted');assert.equal(receipt.heldResponse,undefined);
  assert.deepEqual(receipt.sidecar?.decisions,decisions);
@@ -90,6 +90,40 @@ test('legacy article JSON and canonical receipts remain transport-compatible wit
  assert.deepEqual(decodeArticleOutput({articleJson:JSON.stringify({title:canonical.title}),_method_sidecar:{decisionsJson:JSON.stringify(decisions)}}),{value:canonical,problems:[]});
  assert.ok(decodeArticleOutput({article:{intro:'x'.repeat(64001)}}).problems.length);
  assert.ok(decodeArticleOutput({article:{title:'A title'},extra:'conflicting'}).problems.length);
+});
+
+test('exact paragraph anchors avoid list counting and preserve the selected paragraph unchanged',async()=>{
+ const f=await article(v=>{v._method_sidecar.decisions.mechanismMap=[{assetPointer:'/asset/intro',paragraphQuote:v.intro.slice(8,45),reason:'The recorded check makes an unknown visible.'}];});
+ const out=await f.run(),d=[...f.store.receipts.values()][0]!.sidecar!.decisions as any;
+ assert.equal(d.mechanismMap[0].recommendation,out.value.intro);
+ const asset={intro:'Opening paragraph.\n\n- First list item\n- Second list item\n\nThe final supported paragraph. '};
+ const sidecar:any={decisions:{claimLedger:[{assetPointer:'/asset/intro',paragraphQuote:'final supported',references:['S1']}]}};
+ assert.deepEqual(resolveArticleEvidence(sidecar,asset),[]);assert.equal(sidecar.decisions.claimLedger[0].text,'The final supported paragraph. ');
+});
+
+for(const [name,quote,index] of [
+ ['absent','A completely absent anchor',undefined],['ambiguous','Repeated anchor',undefined],['too short','tiny',undefined],['too long','x'.repeat(161),undefined],['competing index','Repeated anchor',0],
+] as const)test('paragraph anchors reject '+name,()=>{
+ const sidecar:any={decisions:{claimLedger:[{assetPointer:'/asset/intro',paragraphQuote:quote,...(index!==undefined?{paragraphIndex:index}:{}),references:['S1']}]}};
+ assert.ok(resolveArticleEvidence(sidecar,{intro:'Repeated anchor first.\n\nRepeated anchor second.'}).length);assert.equal(sidecar.decisions.claimLedger[0].text,undefined);
+});
+
+test('private profile IDs and malformed research citations cannot leak into finished article prose',async()=>{
+ for(const suffix of [' [profile:1:claim:0]',' [S1]']){
+  const invalid=await article(v=>{v.intro+=suffix;});await assert.rejects(invalid.run,/Private profile references|citation syntax/);assert.equal(invalid.model.requests.length,2);
+  const fixed=await article((v,r)=>{if(r.meta?.attempt===1)v.intro+=suffix;});assert.ok((await fixed.run()).record.methodReceiptId);assert.equal(fixed.model.requests.length,2);
+ }
+});
+
+test('only private structured article requests gain finite full-draft correction headroom',async()=>{
+ for(const [stage,size,allowed] of [['blog',130000,true],['blog',200001,false],['planning',155000,false]] as const){
+  const f=fixtureBrand(),store=new MemoryMethodStore();let calls=0,bytes=0;
+  store.snapshots.set(f.brand.id,upgradeSnapshot(f.brand.id,stage==='blog'?['production-core','blog-writing']:['production-core','editorial-planning']));
+  const llm=await new MethodController(store,true).prepare({mode:'live',complete:async r=>{calls++;bytes=Buffer.byteLength(JSON.stringify(r),'utf8');return{text:'{}',tokensIn:0,tokensOut:0,model:'fixture',stopReason:'end_turn'};}},{...f,stage,stages:[stage],assetRef:'bound:'+stage,sources:['S1'],baselineTokens:32000,evidence:{research:f.sources}});
+  const request={model:'fixture',maxTokens:1,system:'Bounded mechanics only.',messages:[{role:'user' as const,content:'x'.repeat(size)}]};
+  if(allowed)await llm.complete(request);else await assert.rejects(()=>llm.complete(request),/bounded context/);
+  assert.equal(calls,allowed?1:0);if(allowed)assert.ok(bytes>150000&&bytes<=200000);
+ }
 });
 
 test('the existing article correction receives the entire prior draft, unchanged facts/sources and the same link URLs',async()=>{
