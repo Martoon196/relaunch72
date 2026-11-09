@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "blog-writing",
+  "summary": "How to turn a planned brief into a useful, evidence-disciplined article: select the format that actually answers the question, explain mechanisms rather than assert benefits, structure for a reader who skims first, cite every figure, keep brand voice, and leave with one next step; inside the existing article output contract.",
+  "supportedStages": [
+    "blog",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Voice, audiences, positioning used for expression and framing.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "articleBrief",
+      "purpose": "The planned brief: role, target_query, intent, angle, outline, key_points, cta_url, source_ids.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "researchSources",
+      "purpose": "Passages with ids that figures and external facts must cite.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "linkablePages",
+      "purpose": "Real pages that may be linked.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "verifiedFacts",
+      "purpose": "Approved brand claims and offers.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "lengthPreference",
+      "purpose": "Owner's length preference (concise, standard, in-depth).",
+      "missingBehaviour": "use-explicit-task-default"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "blog.decide-format",
+      "instruction": "Choose the format that lets the reader act on the answer fastest: how-to for a procedure, checklist for a set of things to confirm, comparison for a choice between named options, FAQ for a question cluster, guide/explainer for a mechanism, decision guide for 'should I'. Prefer the brief's implied format; change it only when the target_query clearly demands another and record why.",
+      "produces": [
+        "selectedFormat",
+        "formatRationale"
+      ]
+    },
+    {
+      "id": "blog.map-mechanisms",
+      "instruction": "For each key point, write one sentence stating the mechanism (why it works or what causes it) that the body must explain. A point with no explainable mechanism and no supporting source is downgraded to a brief mention or removed.",
+      "produces": [
+        "mechanismMap"
+      ]
+    },
+    {
+      "id": "blog.plan-evidence",
+      "instruction": "List every figure, date, rate, threshold or external fact the article will state and the source id for each. Anything without a source is removed from the plan now, before drafting.",
+      "produces": [
+        "evidenceReferences"
+      ]
+    },
+    {
+      "id": "blog.design-skim-path",
+      "instruction": "Design the article so a reader who reads only the title, the first two sentences, the H2 headings and the bullets still gets the answer. Decide which points become bullets or numbered steps and which stay prose.",
+      "produces": [
+        "skimPath"
+      ]
+    },
+    {
+      "id": "blog.place-next-action",
+      "instruction": "Place the primary next action from production-core once, near the end, phrased as the natural next step for this reader; optionally one earlier contextual internal link where it genuinely helps.",
+      "produces": [
+        "primaryNextAction"
+      ]
+    },
+    {
+      "id": "blog.handoff",
+      "instruction": "Hand the immutable article version to the existing checks and approval path unchanged. Hand social-repurposing and visual-briefing the exact approved version id, title, excerpt, sections and key points, the evidence references and the primary next action; never a draft that failed checks. Hand conversion-copy nothing unless the brief requests a downstream copy asset.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "blog.answer-in-the-open",
+      "instruction": "The first paragraph states the direct answer or the decisive consideration. No warm-up, no restating the question, no 'in this article we will'.",
+      "appliesWhen": "Writing the intro.",
+      "check": "The first two sentences contain the answer or the key decision factor."
+    },
+    {
+      "id": "blog.explain-the-mechanism",
+      "instruction": "Every recommendation is followed by why it works in plain terms a non-specialist can follow. Benefits without mechanisms are not acceptable.",
+      "appliesWhen": "Any recommendation in the body.",
+      "check": "For each recommendation a 'because' or equivalent explanation is present within the same section."
+    },
+    {
+      "id": "blog.figures-cited-exactly",
+      "instruction": "Every figure appears exactly as given in its source passage and is followed by the platform's citation marker for that source id. Round numbers only if the source rounds them. No figure appears without a marker.",
+      "appliesWhen": "Any number, rate, price, date or threshold in the body.",
+      "check": "All figures carry a marker that resolves to a supplied source containing that figure."
+    },
+    {
+      "id": "blog.no-outcome-promises",
+      "instruction": "Never promise results, rankings, returns, savings or timescales. Legal, tax, financial, safety and medical points are framed as general information and cite a current primary source.",
+      "appliesWhen": "Always.",
+      "check": "No sentence contains 'guarantee', 'you will', 'risk-free' or an unsourced outcome claim."
+    },
+    {
+      "id": "blog.format-shape",
+      "instruction": "A how-to uses numbered steps each starting with an imperative verb; a checklist uses parallel bullet items with a verification cue; a comparison names the options, uses the same criteria for each and ends with who each option suits; an FAQ uses the actual questions as headings; a decision guide ends each section with the condition under which to choose that path.",
+      "appliesWhen": "After selectedFormat is chosen.",
+      "check": "The body exhibits the structural markers of the selected format throughout, not only in one section."
+    },
+    {
+      "id": "blog.headings-carry-meaning",
+      "instruction": "H2 headings state the point or the question, not the topic label. Three to ten sections per the stage contract. No heading repeats the title.",
+      "appliesWhen": "Writing sections.",
+      "check": "Reading only the headings gives a coherent summary of the answer."
+    },
+    {
+      "id": "blog.links-only-allowed",
+      "instruction": "Links point only at linkablePages or research source URLs, in Markdown, with anchors that say what the reader will find. No bare URLs, no links to pages not listed.",
+      "appliesWhen": "Any link.",
+      "check": "Each link resolves to an allowed URL and its anchor describes the destination."
+    },
+    {
+      "id": "blog.original-prose",
+      "instruction": "Research passages are paraphrased in the brand's voice; at most a short attributed phrase is quoted, and only when the exact words appear in the passage. No copied paragraphs.",
+      "appliesWhen": "Using research passages.",
+      "check": "No sentence longer than a short phrase matches a source passage verbatim."
+    },
+    {
+      "id": "blog.metadata-honest",
+      "instruction": "seo_title and meta_description describe what the article actually contains, within the stage length limits, with no clickbait, no year unless the content is year-specific and sourced, and no superlatives that the body does not support.",
+      "appliesWhen": "Writing seo_title, meta_description, excerpt.",
+      "check": "Each metadata field is within limits and every claim in it appears in the body."
+    },
+    {
+      "id": "blog.faq-only-if-real",
+      "instruction": "Include FAQs only for the brief's related_questions that the body does not already answer directly, zero to six, each answered in two to four sentences with the same evidence discipline.",
+      "appliesWhen": "Writing faqs.",
+      "check": "No FAQ duplicates a section; every FAQ answer follows the figure and promise rules."
+    },
+    {
+      "id": "blog.image-alt-neutral",
+      "instruction": "image_alt describes a neutral illustrative image related to the subject and never claims to show a real property, person, product screen, customer or result.",
+      "appliesWhen": "Writing image_alt.",
+      "check": "image_alt contains no proper noun, result or 'our' claim."
+    },
+    {
+      "id": "blog.section-revision-preserves",
+      "instruction": "When revising one section, keep every other section byte-for-byte, keep the format and heading sequence, and apply the same evidence rules to the new text. Do not introduce a new claim that the original evidence plan did not cover unless a new source id is supplied.",
+      "appliesWhen": "The revision stage for a single section.",
+      "check": "Diff shows changes confined to the requested section; new figures carry markers."
+    }
+  ],
+  "internalReceiptFields": [
+    "audience",
+    "purpose",
+    "selectedFormat",
+    "formatRationale",
+    "angle",
+    "mechanismMap",
+    "evidenceReferences",
+    "skimPath",
+    "primaryNextAction",
+    "omittedUnsupportedClaims",
+    "revisionPasses",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "blog.check-answer-first",
+      "criterion": "The answer or decisive consideration is in the first two sentences.",
+      "passingEvidence": "Quoted first two sentences in the sidecar.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-mechanisms",
+      "criterion": "Every recommendation has an explanation of why it works in the same section.",
+      "passingEvidence": "Recommendation/mechanism pairs listed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-figures",
+      "criterion": "All figures cited with markers that resolve; no unsourced figure remains.",
+      "passingEvidence": "Figure list with source ids.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-no-promises",
+      "criterion": "No outcome promise or unsourced legal/financial/safety assertion.",
+      "passingEvidence": "Promise-pattern scan recorded as clear.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-format-markers",
+      "criterion": "Body exhibits the selected format's structure throughout.",
+      "passingEvidence": "Structural markers enumerated per section.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-stage-schema",
+      "criterion": "Output validates against the existing article contract (title, seo_title ≤65, meta 70–160, excerpt, intro, 3–10 sections, conclusion, 0–6 faqs, image_alt, cited source ids, allowed links, Markdown-only bodies).",
+      "passingEvidence": "Schema validation result.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "blog.check-brand-separation",
+      "criterion": "No fact, price, product name or CTA from any other brand appears.",
+      "passingEvidence": "All brand-specific nouns traced to this brand's profile or verified facts.",
+      "failureAction": "block-task"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 2,
+    "stopWhen": "All checks pass; or the only remaining findings are missing sources that require owner input.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "The article in the existing stage output format (title, seo_title, meta_description, excerpt, intro, sections, conclusion, faqs, image_alt) with no internal audit prose.",
+    "internalSidecar": "Format decision, mechanism map, evidence references, skim path, omitted unsupported claims, next-action choice and quality findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Brief: 'How do I stop condensation on bedroom windows?' intent learn, how-to outline, one illustrative research passage giving an indoor humidity range with id src_h1, linkablePages includes a ventilation-service page, lengthPreference standard.",
+      "expectedBehaviour": "Format: how-to with numbered imperative steps. Intro states that condensation forms when warm moist air meets a cold surface and that the fix is reducing moisture and warming the surface. The humidity range appears once with [src:src_h1]. Each step explains why it works. One contextual link to the ventilation page near the end as the next step. image_alt describes a generic window with droplets.",
+      "forbiddenBehaviour": "Writing 'our customers see 80% less condensation', inventing a dehumidifier price, or linking to a manufacturer page not in linkablePages."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Brief: 'Should we take deposits for bookings?' intent compare, comparison outline across no deposit / partial deposit / full prepayment, one illustrative research passage on consumer refund rules with id src_r2, verified fact: the product supports deposits by card.",
+      "expectedBehaviour": "Format: comparison with identical criteria (no-show effect, customer friction, admin, refund handling) for each option and a closing section naming who each option suits. The refund-rules point is general information citing [src:src_r2]. The verified deposit capability is stated plainly once. Next action: the pricing page if in linkablePages.",
+      "forbiddenBehaviour": "Stating a no-show reduction figure with no source, promising 'you will never lose a slot again', or reusing a home-maintenance example from another brand's article."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Compatible with the recorded Relaunch72 article contract and section-revision path. Not approved or installable.",
+    "originalityNotes": "Original design: the mechanism map, skim-path design step, format-shape markers and section-revision preservation rule were written for this platform. No private corpus or licensed manual was consulted; evidence rules mirror the platform's existing factual constraints.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

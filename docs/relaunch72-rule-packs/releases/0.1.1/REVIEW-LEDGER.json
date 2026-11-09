@@ -1,0 +1,219 @@
+{
+  "release": "0.1.1",
+  "date": "2026-11-04",
+  "status": "validated_private_release_prepared_not_deployed",
+  "branch": "codex/rl72-boosters-integration-20261104",
+  "testedImplementation": "186988e71f7e400d9baddf3df582ae35e0188044",
+  "ci": {
+    "runId": 41838255930,
+    "jobId": 126602723437,
+    "url": "https://github.com/Martoon196/relaunch72/actions/runs/41838255930",
+    "conclusion": "success",
+    "typeScript": "pass",
+    "offline": {
+      "total": 4118,
+      "passed": 4063,
+      "skipped": 55,
+      "failed": 0
+    },
+    "actualPostgreSQL": {
+      "total": 21,
+      "passed": 21,
+      "skipped": 0,
+      "failed": 0
+    },
+    "appliedMigrations": "1–139 in disposable localhost PostgreSQL only"
+  },
+  "approval": {
+    "private": "Owner requested six-pack fixes plus Inbox Engine and Word of Mouth Engine on 2026-11-04; validation condition now satisfied.",
+    "publicCommercial": "blocked; separate review unrecorded"
+  },
+  "pins": [
+    {
+      "packId": "advocacy-and-referral",
+      "version": "0.1.1",
+      "hash": "5f5445da6dbbc471d4b16df7fced6fa37a64526fb44faecc5652efdf1e9730ea"
+    },
+    {
+      "packId": "blog-writing",
+      "version": "0.1.1",
+      "hash": "3c43d95d51651ff8af8389bb40eb35f7afb8dac267fe476e7c579aa73e8fd063"
+    },
+    {
+      "packId": "conversion-copy",
+      "version": "0.1.1",
+      "hash": "10777fa8331f1e1dc7cc6431cc91ef4baea08d88f548af675d52c5a0e50ecc34"
+    },
+    {
+      "packId": "editorial-planning",
+      "version": "0.1.1",
+      "hash": "6663021c521271bfd9aa9b83f9585facccec2763fcac9dccfbb259d2504eae2d"
+    },
+    {
+      "packId": "email-writing",
+      "version": "0.1.1",
+      "hash": "a2a314dad44b48fdac700e2ef29f814ad4647c6328ca3faca7a125a763fe6fc5"
+    },
+    {
+      "packId": "production-core",
+      "version": "0.1.1",
+      "hash": "7bcc918952b1d6f56363e61ae0723f9cd48e3e4926eeb5c421aedfbc8cb9826e"
+    },
+    {
+      "packId": "social-repurposing",
+      "version": "0.1.1",
+      "hash": "b0bd8597873769cedfdac9cf28d574363d64ededcdcb00342064902ceea7cc28"
+    },
+    {
+      "packId": "visual-briefing",
+      "version": "0.1.1",
+      "hash": "b310bd14ba857190bfe035eb5a497533f119b4330cf8bdf5f6cff21e2e11514f"
+    }
+  ],
+  "migrations": {
+    "138": {
+      "lfSha256": "84f1abb3a152ac93800edbfd92b281d34d31e8ffe4e4ec5b0df2019e806898d8",
+      "productionApplied": false,
+      "previousFrozenReleasePreserved": true
+    },
+    "139": {
+      "lfSha256": "30dd3672ae8fb89e2397b8f18145f87dffc36ff20e702480989909fd017a4643",
+      "productionApplied": false
+    },
+    "prior1Through137": "No migration bytes changed; production 137 was not reapplied."
+  },
+  "scope": {
+    "sharedCatalogue": {
+      "formats": 61,
+      "hookApproaches": 14,
+      "copyStructures": 8
+    },
+    "methodEvidence": "Typed per-stage decisions, reference/span checks, concrete quality pointers and rejection of unassessed checks. Model-reported semantic quality remains subject to human review.",
+    "planningHandoff": "Persisted format/rationale/plan receipt in each brief, then supplied to writer and preserved on revision; actual engine journey tested.",
+    "research": "Acquired publication date retained; retrieval/publication/observation-period/confidence metadata reaches planning, writing, citations, social and revisions. Unknown data remains unknown.",
+    "visual": "Confirmed, same-brand, same-version/hash guidance and matching reviewed hero assets/placement metadata; no invented palette/logo assets.",
+    "email": "One to seven emails; three subject options and chosen subject; preview/body/relative days/single approved action; saved revisions, approval, text/JSON export.",
+    "advocacy": "Feedback and/or referral requests, neutral questions, follow-up, invitations and permission checklist; exact approved incentive terms; saved revisions/review/export.",
+    "notAdded": [
+      "Campaign delivery, recipient selection or scheduling",
+      "Automated consent capture, customer testimonials or referral attribution/tracking",
+      "Standalone sales-page/ad authoring",
+      "Full social analytics/trend scouting",
+      "Image-provider activation",
+      "Public billing/upgrade entitlements"
+    ]
+  },
+  "unavailable": [
+    "brand-context-building",
+    "offer-design",
+    "journey-review",
+    "audience-resonance"
+  ],
+  "controls": {
+    "methodsFlag": "SEO_BLOG_METHOD_PACKS",
+    "creatorFlag": "SEO_BLOG_CAMPAIGN_CREATORS",
+    "defaults": "off",
+    "bridge": "RL72_METHOD_SCHEMA_BRIDGE=138-139; admits exact 137/138 prefixes only with both features off",
+    "creatorReservationTokens": 350000,
+    "requestsPerRunMax": 2,
+    "requestUtf8BytesMax": 150000,
+    "outputTokensPerRequestMax": 20000,
+    "replay": "Canonical input identity; durable start before provider work; same command does not pay again",
+    "recovery": "Accepted receipt saves bounded exact output text; recovery does not call the provider",
+    "uncertainty": "Unknown calls keep the reservation and cannot become approved assets automatically",
+    "database": "Forced RLS; table-blind runtime; existing NOLOGIN/NOBYPASSRLS definer; genuine active owner rechecked per transaction",
+    "editAndApproval": "Immutable revisions; edit clears approval; exact current version/profile required for approval/export",
+    "legacy": "0.1.0 packages, records and pinned section policies preserved"
+  },
+  "validationCases": [
+    "All eight exact 0.1.1 packages validate and resolve; hashes match authoring/runtime copies",
+    "Largest selected stage stays within compiled method bound",
+    "Missing concrete evidence, unassessed checks, invented references/dates, unavailable interview input, format drift and false image evidence reject",
+    "Actual engine persists and supplies planner format to writer",
+    "Source acquisition preserves dated metadata and does not invent observation period/confidence",
+    "Same methods create distinct fictional home/B2B campaign inputs",
+    "Native forms protect CSRF and support review, subject selection, approval and export",
+    "PostgreSQL table blindness, forced RLS, foreign-owner denial and immutable history",
+    "Concurrent same command calls one model; parallel different commands reserve atomically",
+    "Accepted usage charged once, edits clear approval, stale approval blocked",
+    "Durable exact receipt recovers interrupted asset save without generation",
+    "Expired/revoked session cannot save or approve a usable draft",
+    "Uncertain transport is retained without paid replay",
+    "Profile/assignment changes block a later approval",
+    "Exact bridge works at 137/138 only with both features off; strict 139 and unknown/checksum rejection remain"
+  ],
+  "ui": {
+    "fictionalOnly": true,
+    "automatedWidths": [
+      1440,
+      390
+    ],
+    "pages": [
+      "creators",
+      "email-review",
+      "referral-review"
+    ],
+    "checks": 6,
+    "horizontalOverflow": false,
+    "providerCalls": 0,
+    "manualInspection": [
+      "creators desktop",
+      "email review mobile"
+    ],
+    "evidenceDirectory": "Private artifact: outputs/rl72-boosters-preview; held outside the repository"
+  },
+  "comparisonDisposition": {
+    "source": "RL72-ORIGINAL-DOCS-COMPARISON-20261104.json, 23 selected text documents",
+    "implemented": [
+      "Broader original format/opening/structure vocabulary with prerequisites",
+      "Structured source provenance and visual input routing",
+      "Persisted planning handoff",
+      "Concrete stage evidence contracts",
+      "Email campaign authoring",
+      "Advocacy/referral request-kit authoring"
+    ],
+    "remainingScopeLimits": [
+      "Additional editorial planning modes",
+      "Standalone conversion-copy workspace",
+      "Full social audit/trend/channel/video workflows",
+      "Full art-direction/image-generation workspace",
+      "The four unavailable packs",
+      "Independent factual/semantic verification and real-model pilot remain separate"
+    ]
+  },
+  "brandRollout": {
+    "brands": [
+      "Martin Howard Property",
+      "Property Predator",
+      "Prop Invest UK",
+      "Key Properties UK"
+    ],
+    "mapping": "Use actual verified owned workspace IDs and current confirmed profiles at activation; source names are not ownership or profile approval.",
+    "pilotDefault": "Property Predator if its current confirmed profile is ready",
+    "steps": [
+      "Refresh affected shared-schema fleet inventory",
+      "Deploy exact compatible source to affected fleet with both features off and explicit bridge setting",
+      "Apply frozen 138 then frozen 139 once; confirm exact ledger",
+      "Remove bridge setting; keep automatic new generation held during assignments",
+      "Operator enrolls verified founder-owned organization only; reuse existing enrollment",
+      "Enable portal flags and assign exact six/eight reviewed pins through each brand's Production rules screen",
+      "Enable SEO worker method flag after intended assignments; retain all publication/provider controls",
+      "Review controlled paid pilot and representative brand samples within existing approved limits"
+    ]
+  },
+  "effects": {
+    "development": "Implementation and review branch push; disposable CI; fictional local UI previews and private reports",
+    "productionDatabaseWrites": 0,
+    "productionDeployments": 0,
+    "productionAssignments": 0,
+    "providerMessagesOrPosts": 0,
+    "paidLiveGenerationCalls": 0
+  },
+  "localDiagnostics": "Initial Windows full-suite attempt encountered five sandbox EPERM failures in existing temporary-file tests and two expected migration-tail assertions. Tail assertions were updated for 139; unchanged filesystem tests passed in the authoritative full Linux CI run. Superseded local TypeScript/test sessions were stopped after final CI success.",
+  "earlierEvidenceReused": {
+    "coreLiveSource": "2bd32194a3a33d6e43cfa1b29d5b0769598fc137",
+    "originalBoosterImplementation": "1e9992022028cb6a2da23e2caee61a76ac5e5348",
+    "originalBoosterCI": "https://github.com/Martoon196/relaunch72/actions/runs/41748339355",
+    "coreReleaseQA": "Recorded earlier; no production rebuild, authenticated journey repeat or media/provider activation performed."
+  }
+}

@@ -1,0 +1,1191 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import test from 'node:test';
+import type { DatabaseRequestContext } from '../src/db/rls.js';
+import type { SqlExecutor, SqlResult } from '../src/crm-pg/types.js';
+import {
+  CompanyContentIdempotencyConflictError,
+  CompanyContentPgRepository,
+  CompanyContentService,
+  CompanyContentValidationError,
+  CompanyContentVersionConflictError,
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+  canonicalCompanyContentJson,
+  canonicalCompanyContentEmailDraft,
+  companyContentRequestHash,
+  normalizeCompanyContentVersionCommand,
+  type CompanyContentTransactionRunner,
+  type CreateCompanyContentEmailDraftVersionCommand,
+  type CreateCompanyContentVersionCommand,
+} from '../src/company-content-pg/index.js';
+import { PropertyPredatorGeneratedDraftLifecycle } from '../src/company-content-adapter/property-predator-generation-approval.js';
+import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
+
+const context: DatabaseRequestContext = {
+  actorKind: 'user',
+  workspaceId: '11111111-1111-4111-8111-111111111111',
+  userId: '22222222-2222-4222-8222-222222222222',
+  requestId: 'content-test-request',
+};
+const HASH_A = '11'.repeat(32);
+const HASH_B = '22'.repeat(32);
+const ATTESTATION_CHECKED_AT = new Date(Date.now() - 60_000);
+const ATTESTATION_EXPIRES_AT = new Date(ATTESTATION_CHECKED_AT.getTime() + 5 * 60_000);
+
+function command(overrides: Partial<CreateCompanyContentVersionCommand> = {}): CreateCompanyContentVersionCommand {
+  return {
+    commandKey: 'fixture-import-1',
+    origin: 'imported',
+    kind: 'document',
+    title: 'Property Predator launch plan',
+    contentMimeType: 'text/markdown',
+    content: '# Launch plan\nExact fixture bytes.',
+    source: { system: 'property_predator', itemId: 'launch-plan', version: 'fixture-v1' },
+    blob: { storageKey: 'fixtures/launch-plan-v1.pdf', sha256: HASH_A },
+    brand: { snapshotRef: 'brand/property-predator/v1', sha256: HASH_B },
+    attestation: {
+      catalogSha256: '33'.repeat(32),
+      checkedAt: ATTESTATION_CHECKED_AT.toISOString(),
+      expiresAt: ATTESTATION_EXPIRES_AT.toISOString(),
+    },
+    metadata: { fixture: true, pageCount: 12 },
+    ...overrides,
+  };
+}
+
+function emailCommand(
+  overrides: Partial<CreateCompanyContentEmailDraftVersionCommand> = {},
+): CreateCompanyContentEmailDraftVersionCommand {
+  return {
+    commandKey: 'fixture-email-draft-1',
+    origin: 'generated',
+    title: 'Property Predator owned-seed welcome draft',
+    subject: 'Your Property Predator briefing',
+    bodyText: 'Hi Martin,\n\nThis is bounded fixture copy for exact human review.\n\nProperty Predator',
+    source: {
+      system: 'propertypredator.company-content',
+      itemId: 'campaign-owned-seed-welcome',
+      version: 'draft-v1',
+    },
+    blob: { storageKey: 'company-content/campaign-owned-seed-welcome/v1', sha256: HASH_A },
+    brand: { snapshotRef: 'brand/property-predator/runtime-v1', sha256: HASH_B },
+    attestation: {
+      catalogSha256: '33'.repeat(32),
+      checkedAt: ATTESTATION_CHECKED_AT.toISOString(),
+      expiresAt: ATTESTATION_EXPIRES_AT.toISOString(),
+    },
+    metadata: {
+      fixture: true,
+      evidence: { brandBrain: 'property-predator-runtime-v1' },
+    },
+    ...overrides,
+  };
+}
+
+interface Receipt {
+  id: string;
+  name: string;
+  key: string;
+  payloadHash: Uint8Array;
+  status: 'started' | 'succeeded';
+  result: unknown;
+}
+
+interface Version {
+  id: string;
+  itemId: string;
+  versionNumber: number;
+  previousVersionId: string | null;
+  origin: string;
+  kind: string;
+  title: string;
+  contentMimeType: string;
+  content: string;
+  sourceSystem: string;
+  sourceItemId: string;
+  sourceVersion: string;
+  metadata: Record<string, unknown>;
+  contentSha256: string;
+  blobSha256: string;
+  brandSha256: string;
+  createdAt: string;
+}
+
+interface ApprovalRequest {
+  id: string;
+  itemId: string;
+  versionId: string;
+  requestNumber: number;
+  contentSha256: string;
+}
+
+class InMemoryContentSql implements SqlExecutor {
+  readonly receipts = new Map<string, Receipt>();
+  readonly items = new Map<string, { sourceSystem: string; sourceItemId: string }>();
+  readonly versions: Version[] = [];
+  readonly requests: ApprovalRequest[] = [];
+  readonly decisions = new Map<string, { id: string; decision: string }>();
+  readonly attestations = new Map<string, {
+    id: string;
+    checkedAt: string;
+    expiresAt: string;
+  }>();
+
+  private rows<T extends Record<string, unknown>>(rows: readonly Record<string, unknown>[]): SqlResult<T> {
+    return { rows: rows as T[], rowCount: rows.length };
+  }
+
+  async query<T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    values: readonly unknown[] = [],
+  ): Promise<SqlResult<T>> {
+    if (sql.includes('company-content.claim-command')) {
+      const [id, name, key, , payloadHash] = values as [string, string, string, string, Uint8Array];
+      const receiptKey = `${name}:${key}`;
+      if (this.receipts.has(receiptKey)) return this.rows<T>([]);
+      const receipt: Receipt = { id, name, key, payloadHash, status: 'started', result: null };
+      this.receipts.set(receiptKey, receipt);
+      return this.rows<T>([{ id, payloadHash, status: 'started', result: null }]);
+    }
+    if (sql.includes('company-content.read-command-receipt')) {
+      const [name, key] = values as [string, string];
+      const receipt = this.receipts.get(`${name}:${key}`);
+      return this.rows<T>(receipt ? [{
+        id: receipt.id,
+        payloadHash: receipt.payloadHash,
+        status: receipt.status,
+        result: receipt.result,
+      }] : []);
+    }
+    if (sql.includes('company-content.complete-command')) {
+      const [id, , rawResult] = values as [string, Uint8Array, string];
+      const receipt = [...this.receipts.values()].find((candidate) => candidate.id === id)!;
+      receipt.status = 'succeeded';
+      receipt.result = JSON.parse(rawResult) as unknown;
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes('company-content.insert-item')) {
+      this.items.set(String(values[0]), {
+        sourceSystem: String(values[1]),
+        sourceItemId: String(values[2]),
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes('company-content.lock-source-identity')) {
+      return this.rows<T>([{}]);
+    }
+    if (sql.includes('company-content.lock-item-identity')
+        || sql.includes('company-content.lock-version-item')
+        || sql.includes('company-content.lock-approval-identity')) {
+      return this.rows<T>([{}]);
+    }
+    if (sql.includes('company-content.find-item-by-source')) {
+      const [sourceSystem, sourceItemId] = values.map(String);
+      const entry = [...this.items.entries()].find(([, source]) => (
+        source.sourceSystem === sourceSystem && source.sourceItemId === sourceItemId
+      ));
+      if (!entry) return this.rows<T>([]);
+      const [itemId, source] = entry;
+      const latest = this.versions
+        .filter((version) => version.itemId === itemId)
+        .sort((left, right) => right.versionNumber - left.versionNumber)[0];
+      return this.rows<T>([{
+        contentItemId: itemId,
+        sourceSystem: source.sourceSystem,
+        sourceItemId: source.sourceItemId,
+        latestVersionId: latest?.id ?? null,
+        latestVersionNumber: latest?.versionNumber ?? null,
+      }]);
+    }
+    if (sql.includes('company-content.lock-item')) {
+      const itemId = String(values[0]);
+      const source = this.items.get(itemId);
+      if (!source) return this.rows<T>([]);
+      const latest = this.versions
+        .filter((version) => version.itemId === itemId)
+        .sort((left, right) => right.versionNumber - left.versionNumber)[0];
+      return this.rows<T>([{
+        contentItemId: itemId,
+        sourceSystem: source.sourceSystem,
+        sourceItemId: source.sourceItemId,
+        latestVersionId: latest?.id ?? null,
+        latestVersionNumber: latest?.versionNumber ?? null,
+      }]);
+    }
+    if (sql.includes('company-content.insert-version')) {
+      const version: Version = {
+        id: String(values[0]),
+        itemId: String(values[1]),
+        versionNumber: Number(values[2]),
+        previousVersionId: values[3] == null ? null : String(values[3]),
+        origin: String(values[4]),
+        kind: String(values[5]),
+        title: String(values[6]),
+        contentMimeType: String(values[10]),
+        content: String(values[11]),
+        sourceSystem: String(values[7]),
+        sourceItemId: String(values[8]),
+        sourceVersion: String(values[9]),
+        contentSha256: createHash('sha256').update(String(values[11]), 'utf8').digest('hex'),
+        blobSha256: String(values[13]),
+        brandSha256: String(values[15]),
+        metadata: JSON.parse(String(values[16])) as Record<string, unknown>,
+        createdAt: String(values[19]),
+      };
+      this.versions.push(version);
+      return this.rows<T>([{
+        contentItemId: version.itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        contentSha256: version.contentSha256,
+        isLatest: true,
+      }]);
+    }
+    if (sql.includes('company-content.insert-source-attestation')) {
+      const id = String(values[0]);
+      const versionId = String(values[2]);
+      const checkedAt = String(values[10]);
+      const expiresAt = String(values[11]);
+      this.attestations.set(versionId, { id, checkedAt, expiresAt });
+      return this.rows<T>([{ id, expiresAt }]);
+    }
+    if (sql.includes('company-content.lock-attestation-version-item')) {
+      return this.rows<T>([{}]);
+    }
+    if (sql.includes('company-content.lock-attestation-version')) {
+      const [itemId, versionId] = values.map(String);
+      const version = this.versions.find((candidate) => (
+        candidate.itemId === itemId && candidate.id === versionId
+      ));
+      if (!version) return this.rows<T>([]);
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === itemId)
+        .map((candidate) => candidate.versionNumber));
+      return this.rows<T>([{
+        contentItemId: itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        sourceSystem: version.sourceSystem,
+        sourceItemId: version.sourceItemId,
+        sourceVersion: version.sourceVersion,
+        contentSha256: version.contentSha256,
+        blobSha256: version.blobSha256,
+        brandSha256: version.brandSha256,
+        isLatest: version.versionNumber === latestNumber,
+      }]);
+    }
+    if (sql.includes('company-content.insert-refreshed-source-attestation')) {
+      const id = String(values[0]);
+      const versionId = String(values[2]);
+      const checkedAt = String(values[10]);
+      const expiresAt = String(values[11]);
+      this.attestations.set(versionId, { id, checkedAt, expiresAt });
+      return this.rows<T>([{ id, expiresAt }]);
+    }
+    if (sql.includes('company-content.lock-version')) {
+      const [itemId, versionId] = values.map(String);
+      const version = this.versions.find((candidate) => candidate.itemId === itemId && candidate.id === versionId);
+      if (!version) return this.rows<T>([]);
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === itemId)
+        .map((candidate) => candidate.versionNumber));
+      return this.rows<T>([{
+        contentItemId: itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        contentSha256: version.contentSha256,
+        isLatest: version.versionNumber === latestNumber,
+      }]);
+    }
+    if (sql.includes('company-content.next-approval-request-number')) {
+      const [itemId, versionId] = values.map(String);
+      const count = this.requests.filter((request) => (
+        request.itemId === itemId && request.versionId === versionId
+      )).length;
+      return this.rows<T>([{ next: count + 1 }]);
+    }
+    if (sql.includes('company-content.insert-approval-request')) {
+      const request: ApprovalRequest = {
+        id: String(values[0]),
+        itemId: String(values[1]),
+        versionId: String(values[2]),
+        contentSha256: String(values[3]),
+        requestNumber: Number(values[4]),
+      };
+      this.requests.push(request);
+      return this.rows<T>([{
+        approvalRequestId: request.id,
+        contentItemId: request.itemId,
+        contentVersionId: request.versionId,
+        requestNumber: request.requestNumber,
+        contentSha256: request.contentSha256,
+        isLatest: true,
+        decision: null,
+      }]);
+    }
+    if (sql.includes('company-content.lock-approval-request')) {
+      const request = this.requests.find((candidate) => candidate.id === String(values[0]));
+      if (!request) return this.rows<T>([]);
+      const version = this.versions.find((candidate) => candidate.id === request.versionId)!;
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === request.itemId)
+        .map((candidate) => candidate.versionNumber));
+      return this.rows<T>([{
+        approvalRequestId: request.id,
+        contentItemId: request.itemId,
+        contentVersionId: request.versionId,
+        requestNumber: request.requestNumber,
+        contentSha256: request.contentSha256,
+        isLatest: version.versionNumber === latestNumber,
+        decision: this.decisions.get(request.id)?.decision ?? null,
+      }]);
+    }
+    if (sql.includes('company-content.insert-approval-decision')) {
+      this.decisions.set(String(values[3]), { id: String(values[0]), decision: String(values[5]) });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes('company-content.list-version-approval-states')) {
+      const itemId = String(values[0]);
+      const versions = this.versions.filter((candidate) => candidate.itemId === itemId);
+      const latestNumber = Math.max(...versions.map((candidate) => candidate.versionNumber));
+      return this.rows<T>(versions
+        .sort((left, right) => right.versionNumber - left.versionNumber)
+        .map((version) => {
+          const request = this.requests
+            .filter((candidate) => candidate.versionId === version.id)
+            .sort((left, right) => right.requestNumber - left.requestNumber)[0];
+          const decision = request ? this.decisions.get(request.id) : undefined;
+          return {
+            contentItemId: itemId,
+            contentVersionId: version.id,
+            versionNumber: version.versionNumber,
+            previousVersionId: version.previousVersionId,
+            title: version.title,
+            origin: version.origin,
+            sourceSystem: version.sourceSystem,
+            sourceItemId: version.sourceItemId,
+            sourceVersion: version.sourceVersion,
+            sourceMetadata: version.metadata.source,
+            editor: typeof version.metadata.editor === 'string' ? version.metadata.editor : null,
+            previousContentVersionId:
+              typeof version.metadata.previousContentVersionId === 'string'
+                ? version.metadata.previousContentVersionId : null,
+            previousContentSha256:
+              typeof version.metadata.previousContentSha256 === 'string'
+                ? version.metadata.previousContentSha256 : null,
+            contentSha256: version.contentSha256,
+            blobSha256: version.blobSha256,
+            brandSha256: version.brandSha256,
+            approvalRequestId: request?.id ?? null,
+            approvalDecisionId: decision?.id ?? null,
+            approvalStatus: decision?.decision ?? (request ? 'pending' : 'unrequested'),
+            approvalStale: version.versionNumber !== latestNumber,
+          };
+        }));
+    }
+    if (sql.includes('company-content.load-exact-review')) {
+      const [itemId, versionId] = values.map(String);
+      const version = this.versions.find((candidate) => (
+        candidate.itemId === itemId && candidate.id === versionId
+      ));
+      if (!version) return this.rows<T>([]);
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === itemId)
+        .map((candidate) => candidate.versionNumber));
+      const request = this.requests
+        .filter((candidate) => candidate.versionId === version.id)
+        .sort((left, right) => right.requestNumber - left.requestNumber)[0];
+      const decision = request ? this.decisions.get(request.id) : undefined;
+      return this.rows<T>([{
+        contentItemId: version.itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        isLatest: version.versionNumber === latestNumber,
+        origin: version.origin,
+        kind: version.kind,
+        title: version.title,
+        contentMimeType: version.contentMimeType,
+        canonicalContent: version.content,
+        contentSha256: version.contentSha256,
+        sourceSystem: version.sourceSystem,
+        sourceItemId: version.sourceItemId,
+        sourceVersion: version.sourceVersion,
+        blobSha256: version.blobSha256,
+        brandSha256: version.brandSha256,
+        approvalRequestId: request?.id ?? null,
+        approvalDecisionId: decision?.id ?? null,
+        approvalStatus: decision?.decision ?? (request ? 'pending' : 'unrequested'),
+        approvalStale: Boolean(request) && version.versionNumber !== latestNumber,
+        createdAt: version.createdAt,
+      }]);
+    }
+    if (sql.includes('company-content.list-catalog')) {
+      const [cursorAt, cursorId, rawLimit, sourceSystem] = values as [
+        string | null, string | null, number, string | null,
+      ];
+      return this.rows<T>(this.versions
+        .filter((version) => {
+          const latest = Math.max(...this.versions
+            .filter((candidate) => candidate.itemId === version.itemId)
+            .map((candidate) => candidate.versionNumber));
+          if (version.versionNumber !== latest) return false;
+          if (sourceSystem !== null && version.sourceSystem !== sourceSystem) return false;
+          if (cursorAt === null) return true;
+          return version.createdAt < cursorAt
+            || (version.createdAt === cursorAt && version.id < String(cursorId));
+        })
+        .sort((left, right) => (
+          right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
+        ))
+        .slice(0, Number(rawLimit))
+        .map((version) => {
+          const request = this.requests
+            .filter((candidate) => candidate.versionId === version.id)
+            .sort((left, right) => right.requestNumber - left.requestNumber)[0];
+          const decision = request ? this.decisions.get(request.id) : undefined;
+          const priorApproved = this.versions.some((older) => (
+            older.itemId === version.itemId
+            && older.versionNumber < version.versionNumber
+            && this.requests.some((candidate) => (
+              candidate.versionId === older.id
+              && this.decisions.get(candidate.id)?.decision === 'approved'
+            ))
+          ));
+          const attestation = this.attestations.get(version.id);
+          const sourceFresh = Boolean(attestation
+            && new Date(attestation.checkedAt).getTime() <= Date.now()
+            && new Date(attestation.expiresAt).getTime() > Date.now());
+          return {
+            contentItemId: version.itemId,
+            contentVersionId: version.id,
+            versionNumber: version.versionNumber,
+            origin: version.origin,
+            kind: version.kind,
+            title: version.title,
+            contentMimeType: version.contentMimeType,
+            sourceSystem: version.sourceSystem,
+            sourceItemId: version.sourceItemId,
+            sourceVersion: version.sourceVersion,
+            contentSha256: version.contentSha256,
+            blobSha256: version.blobSha256,
+            brandSha256: version.brandSha256,
+            approvalRequestId: request?.id ?? null,
+            approvalDecisionId: decision?.id ?? null,
+            approvalStatus: request
+              ? decision?.decision ?? 'pending'
+              : priorApproved ? 'stale' : 'unrequested',
+            approvalStale: priorApproved && decision?.decision !== 'approved',
+            sourceAttestationId: attestation?.id ?? null,
+            sourceCheckedAt: attestation?.checkedAt ?? null,
+            sourceExpiresAt: attestation?.expiresAt ?? null,
+            sourceFresh,
+            publishable: decision?.decision === 'approved' && sourceFresh,
+            createdAt: version.createdAt,
+          };
+        }));
+    }
+    throw new Error(`Unexpected company content SQL: ${sql}`);
+  }
+}
+
+function runner(sql: InMemoryContentSql): CompanyContentTransactionRunner {
+  return { run: async (_context, operation) => operation(sql) };
+}
+
+function ids(): () => string {
+  let next = 3;
+  return () => `${String(next++).padStart(8, '0')}-3333-4333-8333-${String(next).padStart(12, '0')}`;
+}
+
+test('generated lifecycle persists into the real catalogue and exact-review repository paths', async () => {
+  const database = new InMemoryContentSql();
+  const content = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+  });
+  const fixture = JSON.parse(JSON.stringify(createPropertyPredatorBrandBrainFixture())) as ReturnType<typeof createPropertyPredatorBrandBrainFixture>;
+  const brain = {
+    ...fixture,
+    brain: {
+      ...fixture.brain,
+      evaluationPassed: true,
+      activated: true,
+      visualPolicyConflict: false,
+      reviews: [...fixture.brain.reviews, {
+        dimension: 'brand_readiness' as const,
+        decision: 'approved' as const,
+        decisionId: 'b3000000-0000-4000-8000-000000000003',
+      }],
+      specialists: fixture.brain.specialists.map((profile) => profile.profileId === 'propertypredator.owned.social/v1'
+        ? { ...profile, capabilities: ['post', 'thread'], runtimeReady: true, blockedReason: null }
+        : profile),
+    },
+  };
+  let generationCalls = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    content,
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+    generation: {
+      async generateDraft(command) {
+        generationCalls += 1;
+        const payload = Object.freeze({
+          body: 'A saved Property Predator draft for exact review.',
+          contextSha256: command.contextSha256,
+          cta_url: 'https://propertypredator.com/learn',
+          kind: 'post' as const,
+          platform: 'linkedin',
+          schema: 'propertypredator.company-content/v1' as const,
+          title: 'Review this saved draft',
+          type: 'generated' as const,
+        });
+        const usage = Object.freeze({
+          accountingState: 'provider_tokens_unpriced' as const,
+          inputTokens: 20,
+          outputTokens: 30,
+          model: 'offline-fixture',
+          providerRequestId: 'offline-provider-request',
+        });
+        return Object.freeze({
+          ok: true as const,
+          schemaVersion: 1 as const,
+          brandSha256: command.expectedBrandSha256,
+          contentSha256: createHash('sha256').update(canonicalCompanyContentJson(payload)).digest('hex'),
+          contextSha256: command.contextSha256,
+          draftId: 'd1000000-0000-4000-8000-000000000001',
+          itemVersion: 1,
+          payload,
+          status: 'source_review_required' as const,
+          usage,
+          usageSha256: createHash('sha256').update(canonicalCompanyContentJson(usage)).digest('hex'),
+          versionId: 'd2000000-0000-4000-8000-000000000001',
+        });
+      },
+    },
+  });
+
+  const staged = await lifecycle.generateAndStage(context, {
+    persistenceCommandKey: 'campaign-stage-real-repository-1',
+    draftPlan: {
+      selection: 'property-predator-agency-laps:presentation',
+      brandBrainSnapshot: brain,
+    },
+    generation: {
+      idempotencyKey: 'campaign-generate-real-repository-1',
+      expectedBrandSha256: brain.brain.runtimeBrandSha256,
+      maximumCostMinor: 250,
+      brief: { kind: 'post', platform: 'linkedin', topic: 'Useful evidence', tone: 'direct' },
+    },
+  });
+
+  assert.equal(generationCalls, 1);
+  const catalogue = await content.listCatalog(context, { limit: 10 });
+  assert.equal(catalogue.items.length, 1);
+  assert.equal(catalogue.items[0]?.contentItemId, staged.reviewTarget.contentItemId);
+  assert.equal(catalogue.items[0]?.contentVersionId, staged.reviewTarget.contentVersionId);
+  assert.equal(catalogue.items[0]?.kind, 'social_post');
+  const review = await content.getExactReview(context, staged.reviewTarget);
+  assert.equal(review?.canonicalContent, canonicalCompanyContentJson(staged.draft.payload));
+  assert.equal(review?.social?.publicationCopy, staged.draft.payload.body);
+  assert.equal(review?.social?.platform, 'linkedin');
+  assert.equal(review?.social?.legacyCombined, true);
+  assert.equal(review?.approvalStatus, 'unrequested');
+  assert.equal(review?.approvalStale, false);
+});
+
+test('normalization computes exact content SHA and rejects malformed provenance hashes', () => {
+  const normalized = normalizeCompanyContentVersionCommand(command());
+  assert.equal(
+    normalized.contentSha256,
+    createHash('sha256').update(command().content, 'utf8').digest('hex'),
+  );
+  assert.throws(
+    () => normalizeCompanyContentVersionCommand(command({
+      blob: { storageKey: 'fixtures/source.pdf', sha256: 'AA'.repeat(32) },
+    })),
+    CompanyContentValidationError,
+  );
+  assert.throws(
+    () => normalizeCompanyContentVersionCommand(command({
+      contentItemId: '33333333-3333-4333-8333-333333333333',
+    })),
+    /contentItemId and previousVersionId/,
+  );
+  assert.throws(
+    () => normalizeCompanyContentVersionCommand(command({
+      attestation: {
+        catalogSha256: '33'.repeat(32),
+        checkedAt: ATTESTATION_CHECKED_AT.toISOString(),
+        expiresAt: new Date(
+          ATTESTATION_CHECKED_AT.getTime() + 15 * 60_000 + 1,
+        ).toISOString(),
+      },
+    })),
+    /may not exceed 15 minutes/,
+  );
+  assert.throws(
+    () => normalizeCompanyContentVersionCommand(command({
+      metadata: { oversized: 'x'.repeat(65_537) },
+    })),
+    /metadata must not exceed 65536 UTF-8 bytes/,
+  );
+});
+
+test('email draft persistence seals exact subject and body into one immutable reviewed version', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+  });
+  const draft = emailCommand();
+  const expectedCanonical = canonicalCompanyContentEmailDraft(
+    draft.subject,
+    draft.bodyText,
+  );
+
+  const persisted = await service.createEmailDraftVersion(context, draft);
+  assert.equal(database.versions[0]?.kind, 'email');
+  assert.equal(database.versions[0]?.contentMimeType, COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE);
+  assert.equal(database.versions[0]?.content, expectedCanonical);
+  assert.equal(
+    persisted.contentSha256,
+    createHash('sha256').update(expectedCanonical, 'utf8').digest('hex'),
+  );
+
+  const review = await service.getExactReview(context, {
+    contentItemId: persisted.contentItemId,
+    contentVersionId: persisted.contentVersionId,
+  });
+  assert.ok(review);
+  assert.equal(review.canonicalContent, expectedCanonical);
+  assert.equal(review.canonicalByteLength, Buffer.byteLength(expectedCanonical, 'utf8'));
+  assert.deepEqual(review.email, {
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: draft.subject,
+    bodyText: draft.bodyText,
+    subjectSha256: createHash('sha256').update(draft.subject, 'utf8').digest('hex'),
+    bodySha256: createHash('sha256').update(draft.bodyText, 'utf8').digest('hex'),
+  });
+  assert.equal(review.approvalStatus, 'unrequested');
+  assert.equal(review.isLatest, true);
+
+  await assert.rejects(
+    service.createEmailDraftVersion(context, emailCommand({ subject: 'Unsafe\r\nBcc: x@example.test' })),
+    CompanyContentValidationError,
+  );
+});
+
+test('exact review rejects a database body whose bytes do not match its immutable digest', async () => {
+  const executor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(): Promise<SqlResult<T>> {
+      return {
+        rows: [{
+          contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          versionNumber: 1,
+          isLatest: true,
+          origin: 'generated',
+          kind: 'email',
+          title: 'Exact fixture',
+          contentMimeType: COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+          canonicalContent: canonicalCompanyContentEmailDraft('Subject', 'Body'),
+          contentSha256: '99'.repeat(32),
+          sourceSystem: 'propertypredator.company-content',
+          sourceItemId: 'fixture',
+          sourceVersion: 'v1',
+          blobSha256: HASH_A,
+          brandSha256: HASH_B,
+          approvalRequestId: null,
+          approvalDecisionId: null,
+          approvalStatus: 'unrequested',
+          approvalStale: false,
+          createdAt: '2026-08-28T14:00:00.000Z',
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    },
+  };
+  await assert.rejects(
+    new CompanyContentPgRepository(executor).loadExactReview(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ),
+    /invalid canonical data/,
+  );
+});
+
+test('request hashes are canonical, actor-bound and insensitive to metadata key order', () => {
+  const left = normalizeCompanyContentVersionCommand(command({ metadata: { z: 1, a: true } }));
+  const right = normalizeCompanyContentVersionCommand(command({ metadata: { a: true, z: 1 } }));
+  assert.deepEqual(
+    companyContentRequestHash(context, 'companyContent.createVersion', left),
+    companyContentRequestHash(context, 'companyContent.createVersion', right),
+  );
+  assert.notDeepEqual(
+    companyContentRequestHash(context, 'companyContent.createVersion', left),
+    companyContentRequestHash({ ...context, userId: '99999999-9999-4999-8999-999999999999' }, 'companyContent.createVersion', left),
+  );
+  assert.equal(
+    canonicalCompanyContentJson({ é: 4, a: 3, _: 2, Z: 1 }),
+    '{"Z":1,"_":2,"a":3,"é":4}',
+  );
+});
+
+test('normalization snapshots and deeply freezes metadata before request-hash binding', () => {
+  const mutable = {
+    nested: { label: 'original', flags: ['reviewed', { accepted: true }] },
+  };
+  const normalized = normalizeCompanyContentVersionCommand(command({ metadata: mutable }));
+  const requestHash = companyContentRequestHash(
+    context,
+    'companyContent.createVersion',
+    normalized,
+  );
+
+  mutable.nested.label = 'mutated';
+  mutable.nested.flags[0] = 'replaced';
+  (mutable.nested.flags[1] as { accepted: boolean }).accepted = false;
+
+  assert.deepEqual(normalized.metadata, {
+    nested: { flags: ['reviewed', { accepted: true }], label: 'original' },
+  });
+  assert.deepEqual(
+    companyContentRequestHash(context, 'companyContent.createVersion', normalized),
+    requestHash,
+  );
+  const nested = normalized.metadata.nested as Readonly<Record<string, unknown>>;
+  const flags = nested.flags as readonly unknown[];
+  assert.equal(Object.isFrozen(normalized.metadata), true);
+  assert.equal(Object.isFrozen(nested), true);
+  assert.equal(Object.isFrozen(flags), true);
+  assert.equal(Object.isFrozen(flags[1]), true);
+});
+
+test('version, approval and edit flow preserves old approval as explicitly stale', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-26T12:00:00.000Z'),
+  });
+  const first = await service.createVersion(context, command());
+  const requested = await service.requestApproval(context, {
+    commandKey: 'approve-request-v1',
+    contentItemId: first.contentItemId,
+    contentVersionId: first.contentVersionId,
+  });
+  await service.decideApproval(context, {
+    commandKey: 'approve-decision-v1',
+    approvalRequestId: requested.approvalRequestId,
+    decision: 'approved',
+  });
+  const second = await service.createVersion(context, command({
+    commandKey: 'fixture-edit-2',
+    contentItemId: first.contentItemId,
+    previousVersionId: first.contentVersionId,
+    origin: 'edited',
+    content: '# Launch plan\nCorrected fixture bytes.',
+    source: { system: 'property_predator', itemId: 'launch-plan', version: 'edit-v2' },
+    metadata: {
+      editor: 'growth_hq_exact_review',
+      previousContentVersionId: first.contentVersionId,
+      previousContentSha256: first.contentSha256,
+      providerEffects: false,
+    },
+  }));
+  assert.equal(second.versionNumber, 2);
+  const projected = await service.listVersionApprovalStates(context, first.contentItemId);
+  assert.deepEqual({
+    previousVersionId: projected[0]!.previousVersionId,
+    editor: projected[0]!.editor,
+    previousContentVersionId: projected[0]!.previousContentVersionId,
+    previousContentSha256: projected[0]!.previousContentSha256,
+  }, {
+    previousVersionId: first.contentVersionId,
+    editor: 'growth_hq_exact_review',
+    previousContentVersionId: first.contentVersionId,
+    previousContentSha256: first.contentSha256,
+  });
+  assert.deepEqual(
+    projected.map((version) => ({
+      version: version.versionNumber,
+      approval: version.approvalStatus,
+      stale: version.approvalStale,
+    })),
+    [
+      { version: 2, approval: 'unrequested', stale: false },
+      { version: 1, approval: 'approved', stale: true },
+    ],
+  );
+  const catalog = await service.listCatalog(context, { limit: 10 });
+  assert.equal(catalog.items.length, 1);
+  assert.deepEqual({
+    version: catalog.items[0]!.versionNumber,
+    approval: catalog.items[0]!.approvalStatus,
+    stale: catalog.items[0]!.approvalStale,
+    sourceFresh: catalog.items[0]!.sourceFresh,
+    publishable: catalog.items[0]!.publishable,
+  }, {
+    version: 2, approval: 'stale', stale: true,
+    sourceFresh: true, publishable: false,
+  });
+  assert.equal(catalog.nextCursor, null);
+  await assert.rejects(
+    service.requestApproval(context, {
+      commandKey: 'stale-request-v1',
+      contentItemId: first.contentItemId,
+      contentVersionId: first.contentVersionId,
+    }),
+    CompanyContentVersionConflictError,
+  );
+});
+
+test('exact command replay returns stored result while changed input conflicts', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const first = await service.createVersion(context, command());
+  assert.deepEqual(await service.createVersion(context, command()), {
+    ...first,
+    disposition: 'replayed',
+  });
+  await assert.rejects(
+    service.createVersion(context, command({ content: 'Different bytes under the same key' })),
+    CompanyContentIdempotencyConflictError,
+  );
+  assert.equal(database.versions.length, 1);
+});
+
+test('generated draft replay preserves its first observation proof when only clocks advance', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const firstCommand = command({
+    commandKey: 'generated-clock-stable-replay',
+    source: { system: 'property_predator_generation', itemId: 'draft-1', version: 'v1' },
+    attestation: { catalogSha256: '33'.repeat(32), checkedAt: '2026-09-08T03:00:00.000Z', expiresAt: '2026-09-08T03:10:00.000Z' },
+    metadata: { marketing: { approvedEvidenceCheckedAt: '2026-09-08T02:59:00.000Z' } },
+  });
+  const first = await service.createVersion(context, firstCommand);
+  const replayed = await service.createVersion(context, {
+    ...firstCommand,
+    attestation: { catalogSha256: '33'.repeat(32), checkedAt: '2026-09-08T03:05:00.000Z', expiresAt: '2026-09-08T03:15:00.000Z' },
+    metadata: { marketing: {
+      approvedEvidenceCheckedAt: '2026-09-08T03:04:00.000Z',
+      approvedEvidenceRecheck: { status: 'approved_at_post_generation_check', checkedAt: '2026-09-08T03:04:30.000Z' },
+    } },
+  });
+  assert.deepEqual(replayed, { ...first, disposition: 'replayed' });
+  assert.equal(database.versions.length, 1);
+  assert.equal([...database.attestations.values()][0]?.checkedAt, '2026-09-08T03:00:00.000Z');
+});
+
+test('generated source refresh retries preserve the first committed proof and expiry', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const sourceMetadata = { sourceDraftId: 'd1000000-0000-4000-8000-000000000002' };
+  const version = await service.createVersion(context, command({
+    source: { system: 'property_predator_generation', itemId: 'draft-1', version: 'v2' },
+    metadata: { source: sourceMetadata },
+  }));
+  const state = (await service.listVersionApprovalStates(context, version.contentItemId))[0]!;
+  assert.deepEqual(state.sourceMetadata, sourceMetadata);
+  const refreshCommand = {
+    commandKey: 'generated-refresh-clock-stable-replay',
+    contentItemId: version.contentItemId,
+    contentVersionId: version.contentVersionId,
+    expected: {
+      source: state.source, contentSha256: state.contentSha256,
+      blobSha256: state.blobSha256, brandSha256: state.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-09-09T03:00:00.000Z',
+      expiresAt: '2026-09-09T03:10:00.000Z',
+    },
+  };
+  const first = await service.refreshSourceAttestation(context, refreshCommand);
+  const proof = database.attestations.get(version.contentVersionId);
+  const retry = { ...refreshCommand, attestation: {
+    ...refreshCommand.attestation,
+    checkedAt: '2026-09-09T03:05:00.000Z',
+    expiresAt: '2026-09-09T03:15:00.000Z',
+  } };
+  assert.deepEqual(await service.refreshSourceAttestation(context, retry), {
+    ...first, disposition: 'replayed',
+  });
+  assert.deepEqual(database.attestations.get(version.contentVersionId), proof);
+  for (const changed of [
+    { ...retry, attestation: { ...retry.attestation, catalogSha256: '55'.repeat(32) } },
+    { ...retry, attestation: { ...retry.attestation, expiresAt: '2026-09-09T03:14:00.000Z' } },
+    { ...retry, expected: { ...retry.expected, contentSha256: '66'.repeat(32) } },
+    { ...retry, expected: { ...retry.expected, source: { ...state.source, version: 'v3' } } },
+  ]) {
+    await assert.rejects(service.refreshSourceAttestation(context, changed), CompanyContentIdempotencyConflictError);
+  }
+  assert.deepEqual(database.attestations.get(version.contentVersionId), proof);
+  const renewed = await service.refreshSourceAttestation(context, {
+    ...retry, commandKey: 'new-generated-source-observation',
+  });
+  assert.equal(renewed.disposition, 'applied');
+  assert.notEqual(renewed.sourceAttestationId, first.sourceAttestationId);
+  assert.equal(renewed.sourceAttestationExpiresAt, retry.attestation.expiresAt);
+});
+
+test('source sync atomically resolves one logical item and appends the next source version', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const first = await service.createVersion(context, command());
+  const second = await service.createVersion(context, command({
+    commandKey: 'fixture-import-2',
+    content: '# Launch plan\nSource revision two.',
+    source: { system: 'property_predator', itemId: 'launch-plan', version: 'fixture-v2' },
+  }));
+  assert.deepEqual({
+    sameItem: second.contentItemId === first.contentItemId,
+    version: second.versionNumber,
+    previous: database.versions[1]?.itemId,
+  }, {
+    sameItem: true,
+    version: 2,
+    previous: first.contentItemId,
+  });
+  assert.equal(database.items.size, 1);
+});
+
+test('source proof refresh is append-only and bound to the exact latest immutable tuple', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T10:00:00.000Z'),
+  });
+  const version = await service.createVersion(context, command());
+  const latest = (await service.listCatalog(context)).items[0]!;
+  const refreshCommand = {
+    commandKey: 'refresh-source-proof-1',
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    expected: {
+      source: latest.source,
+      contentSha256: latest.contentSha256,
+      blobSha256: latest.blobSha256,
+      brandSha256: latest.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-08-28T10:00:00.000Z',
+      expiresAt: '2026-08-28T10:10:00.000Z',
+    },
+  } as const;
+  const result = await service.refreshSourceAttestation(context, refreshCommand);
+  assert.deepEqual({
+    contentItemId: result.contentItemId,
+    contentVersionId: result.contentVersionId,
+    providerEffects: result.providerEffects,
+    latestAttestation: database.attestations.get(version.contentVersionId)?.id,
+  }, {
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    providerEffects: false,
+    latestAttestation: result.sourceAttestationId,
+  });
+  const replayed = await service.refreshSourceAttestation(context, refreshCommand);
+  assert.deepEqual(replayed, { ...result, disposition: 'replayed' });
+  await assert.rejects(service.refreshSourceAttestation(context, {
+    ...refreshCommand,
+    attestation: {
+      ...refreshCommand.attestation,
+      expiresAt: '2026-08-28T10:09:00.000Z',
+    },
+  }), CompanyContentIdempotencyConflictError);
+  await assert.rejects(service.refreshSourceAttestation(context, {
+    commandKey: 'refresh-source-proof-conflict',
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    expected: {
+      source: latest.source,
+      contentSha256: '99'.repeat(32),
+      blobSha256: latest.blobSha256,
+      brandSha256: latest.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-08-28T10:00:00.000Z',
+      expiresAt: '2026-08-28T10:10:00.000Z',
+    },
+  }), CompanyContentVersionConflictError);
+});
+
+test('approval is publishable only while the exact source attestation remains fresh', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const version = await service.createVersion(context, command());
+  const request = await service.requestApproval(context, {
+    commandKey: 'freshness-request',
+    contentItemId: version.contentItemId,
+    contentVersionId: version.contentVersionId,
+  });
+  await service.decideApproval(context, {
+    commandKey: 'freshness-decision',
+    approvalRequestId: request.approvalRequestId,
+    decision: 'approved',
+  });
+  const fresh = (await service.listCatalog(context)).items[0]!;
+  assert.deepEqual({
+    approval: fresh.approvalStatus,
+    sourceFresh: fresh.sourceFresh,
+    publishable: fresh.publishable,
+  }, { approval: 'approved', sourceFresh: true, publishable: true });
+
+  database.attestations.get(version.contentVersionId)!.expiresAt = new Date(
+    Date.now() - 1,
+  ).toISOString();
+  const expired = (await service.listCatalog(context)).items[0]!;
+  assert.deepEqual({
+    approval: expired.approvalStatus,
+    sourceFresh: expired.sourceFresh,
+    publishable: expired.publishable,
+  }, { approval: 'approved', sourceFresh: false, publishable: false });
+});
+
+test('workspace catalog is cursor-bounded and rejects invalid database rows', async () => {
+  const database = new InMemoryContentSql();
+  let tick = 0;
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date(Date.UTC(2026, 7, 26, 12, tick++)),
+  });
+  for (let index = 1; index <= 3; index += 1) {
+    await service.createVersion(context, command({
+      commandKey: `catalog-item-${index}`,
+      title: `Catalog item ${index}`,
+      source: {
+        system: 'fixture', itemId: `catalog-${index}`, version: 'v1',
+      },
+    }));
+  }
+  const first = await service.listCatalog(context, { limit: 2 });
+  assert.equal(first.items.length, 2);
+  assert.ok(first.nextCursor);
+  const second = await service.listCatalog(context, { limit: 2, cursor: first.nextCursor });
+  assert.equal(second.items.length, 1);
+  assert.equal(second.nextCursor, null);
+  assert.equal(new Set([...first.items, ...second.items].map((item) => item.contentItemId)).size, 3);
+  await assert.rejects(
+    service.listCatalog(context, { limit: 101 }),
+    CompanyContentValidationError,
+  );
+  await assert.rejects(
+    new CompanyContentPgRepository(database).listCatalog({ limit: 102, cursor: null }),
+    /repository catalog bound is invalid/,
+  );
+
+  const invalidRows: Record<string, unknown>[] = [{
+        contentItemId: 'not-a-uuid',
+        contentVersionId: 'also-not-a-uuid',
+        versionNumber: 1,
+        origin: 'imported',
+        kind: 'document',
+        title: 'Unsafe row',
+        contentMimeType: 'text/plain',
+        sourceSystem: 'fixture',
+        sourceItemId: 'one',
+        sourceVersion: 'v1',
+        contentSha256: HASH_A,
+        blobSha256: HASH_A,
+        brandSha256: HASH_B,
+        approvalRequestId: null,
+        approvalDecisionId: null,
+        approvalStatus: 'unrequested',
+        approvalStale: false,
+        sourceAttestationId: null,
+        sourceCheckedAt: null,
+        sourceExpiresAt: null,
+        sourceFresh: false,
+        publishable: false,
+        createdAt: '2026-08-26T12:00:00.000Z',
+  }];
+  const badExecutor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(): Promise<SqlResult<T>> {
+      return { rows: invalidRows as T[], rowCount: 1 };
+    },
+  };
+  await assert.rejects(
+    new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
+    /invalid canonical data/,
+  );
+  Object.assign(invalidRows[0]!, {
+    contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    title: 'Trusted catalogue item\u202egnp.exe',
+  });
+  await assert.rejects(
+    new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
+    /invalid canonical data/,
+  );
+});
+
+test('catalog source filtering is applied before SQL pagination and rejects unsafe filters', async () => {
+  const database = new InMemoryContentSql();
+  let tick = 0;
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date(Date.UTC(2026, 7, 28, 12, tick++)),
+  });
+  await service.createVersion(context, command({
+    commandKey: 'source-filter-property-predator',
+    source: {
+      system: 'propertypredator.company-content', itemId: 'owned-one', version: '1',
+    },
+  }));
+  await service.createVersion(context, command({
+    commandKey: 'source-filter-unrelated',
+    source: { system: 'unrelated.fixture', itemId: 'other-one', version: '1' },
+  }));
+  const filtered = await service.listCatalog(context, {
+    limit: 1,
+    sourceSystem: 'propertypredator.company-content',
+  });
+  assert.equal(filtered.items.length, 1);
+  assert.equal(filtered.items[0]?.source.system, 'propertypredator.company-content');
+  assert.equal(filtered.nextCursor, null);
+  await assert.rejects(
+    service.listCatalog(context, { sourceSystem: ' propertypredator.company-content' }),
+    CompanyContentValidationError,
+  );
+});
+
+test('source proof refresh rejects a malformed locked database tuple before appending evidence', async () => {
+  const badExecutor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(sql: string): Promise<SqlResult<T>> {
+      if (sql.includes('lock-attestation-version-item')) {
+        return { rows: [], rowCount: 1 };
+      }
+      return {
+        rows: [{
+          contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          versionNumber: 'not-a-number',
+          contentSha256: HASH_A,
+          sourceSystem: 'fixture',
+          sourceItemId: 'launch-plan',
+          sourceVersion: 'fixture-v1',
+          blobSha256: HASH_A,
+          brandSha256: HASH_B,
+          isLatest: true,
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    },
+  };
+  await assert.rejects(
+    new CompanyContentPgRepository(badExecutor).lockVersionForSourceAttestation(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ),
+    /attestation version returned invalid canonical data/,
+  );
+});

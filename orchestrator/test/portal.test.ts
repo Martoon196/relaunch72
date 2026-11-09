@@ -1,10 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { handlePortal, type PortalDeps } from '../src/portal/router.js';
-import { signTenant, PORTAL_COOKIE } from '../src/portal/session.js';
+import { createHash } from 'node:crypto';
+import {
+  handlePortal,
+  type LegacyPortalDeps,
+  type PortalDeps,
+  type PostgresPortalDeps,
+} from '../src/portal/router.js';
+import {
+  signTenant,
+  PORTAL_COOKIE,
+  PORTAL_LOGIN_CSRF_COOKIE,
+  PORTAL_SETUP_COOKIE,
+  PORTAL_SETUP_CLOCK_SKEW_MS,
+  PORTAL_SETUP_TTL_SECONDS,
+  InMemoryLoginThrottle,
+  InMemorySetupThrottle,
+  portalCsrfToken,
+  portalLoginCsrfToken,
+} from '../src/portal/session.js';
 import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
+import type {
+  PortalAuthRequestContext,
+  PortalAuthService,
+  PortalExternalIdentityAssertion,
+} from '../src/portal/auth-service.js';
+import {
+  PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
+  PROPERTY_PREDATOR_SSO_COOKIE,
+  PROPERTY_PREDATOR_SSO_START_ROUTE,
+  PropertyPredatorSsoAuthenticationError,
+  PropertyPredatorSsoExchangeError,
+  composePropertyPredatorSso,
+  type PropertyPredatorSsoClient,
+} from '../src/portal/property-predator-sso.js';
+import type { PortalCrmService } from '../src/portal/crm-service.js';
+import type { PortalJourneyManagerService } from '../src/portal/journey-manager-service.js';
+import type { JourneyManagerReadSnapshot } from '../src/conversion-pg/journey-manager.js';
+import { PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS } from '../src/conversion-pg/property-predator-blueprints.js';
+import { JOURNEY_MANAGER_CONFIRMATION } from '../src/portal/journey-manager-presenter.js';
+import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
+import type {
+  PortalAbuseAdmission,
+  PortalAbuseDecision,
+  PortalAbuseGuard,
+  PortalAbuseOutcome,
+} from '../src/portal/abuse.js';
+import { portalAbuseHash, type PortalRequestContext } from '../src/portal/request-context.js';
 
 function billingView(over: Partial<BillingView> = {}): BillingView {
   return {
@@ -16,6 +60,44 @@ function billingView(over: Partial<BillingView> = {}): BillingView {
 }
 
 const SECRET = 'test-secret';
+const USER_ID = '11111111-1111-4111-8111-111111111111';
+const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
+const ABUSE_SECRET = 'portal-router-abuse-test-secret-at-least-32-characters';
+
+function requestContext(requestId = 'abuse-request-1'): PortalRequestContext {
+  return Object.freeze({
+    requestId,
+    requestHash: portalAbuseHash(ABUSE_SECRET, 'request', requestId),
+    clientAddress: '203.0.113.42',
+    sourceHash: portalAbuseHash(ABUSE_SECRET, 'source', '203.0.113.42'),
+    cfRay: 'abc123-FRA',
+  });
+}
+
+function recordingAbuseGuard(
+  decide: (input: PortalAbuseAdmission, call: number) => PortalAbuseDecision,
+): PortalAbuseGuard & {
+  admissions: PortalAbuseAdmission[];
+  completions: Array<{ leaseHash: Buffer; outcome: PortalAbuseOutcome }>;
+} {
+  const admissions: PortalAbuseAdmission[] = [];
+  const completions: Array<{ leaseHash: Buffer; outcome: PortalAbuseOutcome }> = [];
+  return {
+    admissions,
+    completions,
+    admit: async (input) => {
+      admissions.push(input);
+      return decide(input, admissions.length);
+    },
+    complete: async (leaseHash, outcome) => { completions.push({ leaseHash, outcome }); },
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+}
+
+function allowedDecision(call: number): PortalAbuseDecision {
+  return { allowed: true, retryAfterSeconds: 0, leaseHash: Buffer.alloc(32, call) };
+}
 
 const demoData: DashboardData = {
   tenant: { id: 't1', name: 'Frayne Electrical', createdAt: '2026-07-26T00:00:00Z' },
@@ -25,7 +107,7 @@ const demoData: DashboardData = {
   artifacts: {},
 };
 
-function deps(over: Partial<PortalDeps> = {}): PortalDeps {
+function deps(over: Partial<LegacyPortalDeps> = {}): LegacyPortalDeps {
   return {
     sessionSecret: SECRET,
     secure: false,
@@ -34,32 +116,193 @@ function deps(over: Partial<PortalDeps> = {}): PortalDeps {
     dashboard: async (tid) => (tid === 't1' ? demoData : null),
     runTick: async () => 4,
     ...over,
+    kind: 'legacy',
+  };
+}
+
+const crm: PortalCrmService = {
+  snapshot: async () => ({
+    workspace: {
+      id: WORKSPACE_ID, name: 'Frayne Electrical', timezone: 'Europe/London',
+      snapshotAt: '2026-08-25T12:00:00.000Z', canWrite: true,
+    },
+    contacts: [], stages: [], opportunities: [], tasks: [], timeline: [],
+  }),
+  createLead: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+};
+
+function journeySnapshot(runtimeReady = false): JourneyManagerReadSnapshot {
+  const [selfServe, agency] = PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS;
+  const score = selfServe!.scoreModel;
+  return Object.freeze({
+    snapshotAt: '2026-08-25T12:00:00.000Z', canManage: true,
+    foundationState: runtimeReady ? 'ready' : 'not_installed', runtimeReady,
+    routes: Object.freeze([selfServe!, agency!].map((route) => Object.freeze({
+      slug: route.slug as 'property-predator-self-serve' | 'property-predator-agency-laps',
+      name: route.name, description: route.description, version: route.version,
+      definitionHash: route.definitionHash,
+      publication: runtimeReady ? 'published' as const : 'missing' as const,
+      activeVersion: runtimeReady ? route.version : null,
+      publishedAt: runtimeReady ? '2026-08-25T11:55:00.000Z' : null,
+      runtimeReady, milestones: route.milestones, triggers: route.triggers,
+    }))),
+    scoreModel: Object.freeze({
+      slug: score.slug, name: score.name, version: score.version,
+      definitionHash: score.definitionHash,
+      publication: runtimeReady ? 'published' : 'missing',
+      activeVersion: runtimeReady ? score.version : null,
+      publishedAt: runtimeReady ? '2026-08-25T11:55:00.000Z' : null,
+      maxScore: 100, components: score.components, bands: score.bands, rules: score.rules,
+    }),
+    safety: Object.freeze({ definitionsOnly: true, sendsMessages: false, publishesSocialPosts: false, triggersProviders: false }),
+  });
+}
+
+function postgresDeps(auth: PortalAuthService, over: Partial<PostgresPortalDeps> = {}): PostgresPortalDeps {
+  return {
+    sessionSecret: SECRET,
+    secure: false,
+    now: () => 1_000_000,
+    auth,
+    crm,
+    ...over,
+    kind: 'postgres',
+  };
+}
+
+const externalAssertion: PortalExternalIdentityAssertion = {
+  issuer: 'https://propertypredator.com',
+  subject: '44444444-4444-4444-8444-444444444444',
+  email: 'martin.howard1984@gmail.com',
+  emailVerified: true,
+  issuedAt: new Date(900_000).toISOString(),
+  expiresAt: new Date(1_100_000).toISOString(),
+  affiliate: {
+    member: true,
+    affiliateId: '55555555-5555-4555-8555-555555555555',
+    code: 'founder_01',
+    codeStatus: 'active',
+  },
+  attribution: { referrerAffiliateId: null, attachedAt: null },
+};
+
+function fakeSso(over: Partial<PropertyPredatorSsoClient> = {}): PropertyPredatorSsoClient {
+  return {
+    begin: () => ({
+      url: 'https://propertypredator.com/sso.html?client_id=growth-hq&state=external-state',
+      cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=600`,
+    }),
+    complete: async () => ({ assertion: externalAssertion, bootstrapUserId: USER_ID }),
+    clearCookie: () => `${PROPERTY_PREDATOR_SSO_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=0`,
+    ...over,
   };
 }
 
 // Minimal req/res doubles for the node http handler.
-function mkReq(method: string, url: string, opts: { cookie?: string; body?: string } = {}) {
-  const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> };
+interface RequestOptions {
+  cookie?: string;
+  body?: string;
+  remoteAddress?: string;
+  forwardedFor?: string;
+}
+
+function mkReq(method: string, url: string, opts: RequestOptions = {}) {
+  const req = new EventEmitter() as EventEmitter & {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    socket: { remoteAddress?: string };
+  };
   req.method = method;
   req.url = url;
   req.headers = {};
+  req.socket = { remoteAddress: opts.remoteAddress };
   if (opts.cookie) req.headers.cookie = opts.cookie;
-  queueMicrotask(() => { if (opts.body) req.emit('data', Buffer.from(opts.body)); req.emit('end'); });
+  if (opts.forwardedFor) req.headers['x-forwarded-for'] = opts.forwardedFor;
+  // A real IncomingMessage buffers until the handler subscribes. setImmediate
+  // lets async PostgreSQL session resolution finish before this stream emits.
+  setImmediate(() => { if (opts.body) req.emit('data', Buffer.from(opts.body)); req.emit('end'); });
   return req;
 }
 function mkRes() {
   const res = { statusCode: 0, headers: {} as Record<string, string>, body: '',
     setHeader(k: string, v: string) { this.headers[k.toLowerCase()] = v; },
-    writeHead(code: number, headers?: Record<string, string>) { this.statusCode = code; if (headers) for (const k in headers) this.headers[k.toLowerCase()] = headers[k]!; return this; },
+    writeHead(code: number, headers?: Record<string, string | string[]>) {
+      this.statusCode = code;
+      if (headers) for (const k in headers) {
+        const value = headers[k]!;
+        this.headers[k.toLowerCase()] = Array.isArray(value) ? value.join('\n') : value;
+      }
+      return this;
+    },
     end(b?: string) { if (b) this.body = b; } };
   return res;
 }
-async function call(method: string, url: string, d: PortalDeps, opts: { cookie?: string; body?: string } = {}) {
+async function call(method: string, url: string, d: PortalDeps, opts: RequestOptions = {}) {
   const res = mkRes();
   await handlePortal(mkReq(method, url, opts) as never, res as never, d);
   return res;
 }
-const cookieFor = (tid: string) => `${PORTAL_COOKIE}=${signTenant(SECRET, tid, 1_000_000)}`;
+const sessionFor = (tid: string) => signTenant(SECRET, tid, 1_000_000);
+const cookieFor = (tid: string) => `${PORTAL_COOKIE}=${sessionFor(tid)}`;
+const csrfBody = (tid = 't1', values: Record<string, string> = {}) => new URLSearchParams({
+  _csrf: portalCsrfToken(SECRET, sessionFor(tid)),
+  ...values,
+}).toString();
+const loginPost = (
+  values: Record<string, string>,
+  existingCookie?: string,
+): { cookie: string; body: string } => {
+  const token = portalLoginCsrfToken(SECRET);
+  return {
+    cookie: [existingCookie, `${PORTAL_LOGIN_CSRF_COOKIE}=${token}`].filter(Boolean).join('; '),
+    body: new URLSearchParams({ _login_csrf: token, ...values }).toString(),
+  };
+};
+
+const SETUP_TOKEN = Buffer.alloc(32, 23).toString('base64url');
+
+function responseCookie(headers: Record<string, string>, name: string): string {
+  const match = new RegExp(`(?:^|\\n)${name}=([^;]*)`).exec(headers['set-cookie'] ?? '');
+  assert.ok(match?.[1], `response did not set ${name}`);
+  return `${name}=${match[1]}`;
+}
+
+async function beginSetup(d: PortalDeps, token = SETUP_TOKEN, opts: RequestOptions = {}): Promise<{ cookie: string; csrf: string }> {
+  const exchange = await call('GET', `/portal/setup?token=${encodeURIComponent(token)}`, d, opts);
+  assert.equal(exchange.statusCode, 303);
+  assert.equal(exchange.headers.location, '/portal/setup');
+  assert.equal(exchange.headers['cache-control'], 'no-store');
+  assert.equal(exchange.headers['referrer-policy'], 'no-referrer');
+  assert.equal(exchange.body, '');
+  const cookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const page = await call('GET', '/portal/setup', d, { ...opts, cookie });
+  assert.equal(page.statusCode, 200);
+  assert.doesNotMatch(page.body, new RegExp(token));
+  assert.doesNotMatch(page.body, /name="token"/);
+  const csrf = /name="_setup_csrf" value="([A-Za-z0-9_-]{43})"/.exec(page.body)?.[1];
+  assert.ok(csrf, 'setup page did not contain its cookie-bound CSRF value');
+  return { cookie, csrf };
+}
+
+function setupPost(flow: { cookie: string; csrf: string }, values: Record<string, string>, opts: RequestOptions = {}): RequestOptions {
+  return {
+    ...opts,
+    cookie: flow.cookie,
+    body: new URLSearchParams({ _setup_csrf: flow.csrf, ...values }).toString(),
+  };
+}
+
+test('appearance client is available before authentication with a locked-down script response', async () => {
+  const response = await call('GET', '/portal/appearance.js', deps());
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['content-type'], 'text/javascript; charset=utf-8');
+  assert.match(response.headers['content-security-policy'] ?? '', /default-src 'none'/);
+  assert.match(response.body, /property-predator-appearance/);
+  assert.match(response.body, /private storage may be unavailable/);
+});
 
 test('GET /portal without a session redirects to login', async () => {
   const res = await call('GET', '/portal', deps());
@@ -68,28 +311,1074 @@ test('GET /portal without a session redirects to login', async () => {
 });
 
 test('POST /portal/login with good credentials sets a cookie and redirects', async () => {
-  const res = await call('POST', '/portal/login', deps(), { body: 'email=owner@frayne.co&password=good' });
+  const res = await call('POST', '/portal/login', deps(), loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal');
   assert.match(res.headers['set-cookie'] ?? '', new RegExp(PORTAL_COOKIE + '='));
 });
 
 test('POST /portal/login with bad credentials 401s and re-shows the form', async () => {
-  const res = await call('POST', '/portal/login', deps(), { body: 'email=owner@frayne.co&password=wrong' });
+  const res = await call('POST', '/portal/login', deps(), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
   assert.equal(res.statusCode, 401);
   assert.match(res.body, /Wrong email or password/);
+});
+
+test('database auth issues opaque cookies and never accepts a legacy signed tenant token', async () => {
+  const opaque = Buffer.alloc(32, 5).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque
+      ? { sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
+      : null,
+    login: async (email, password) => email === 'owner@frayne.co' && password === 'good'
+      ? { sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
+      : null,
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth);
+  const login = await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  assert.equal(login.statusCode, 302);
+  assert.equal(login.headers.location, '/portal');
+  assert.match(login.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
+  assert.doesNotMatch(login.headers['set-cookie'] ?? '', /\./, 'opaque database cookie is not a signed tenant payload');
+
+  const legacy = await call('GET', '/portal', d, { cookie: cookieFor('t1') });
+  assert.equal(legacy.statusCode, 302);
+  assert.equal(legacy.headers.location, '/portal/login?reason=session-ended');
+  const accepted = await call('GET', '/portal', d, { cookie: `${PORTAL_COOKIE}=${opaque}` });
+  assert.equal(accepted.statusCode, 200);
+  assert.match(accepted.body, /Turn attention into revenue/);
+});
+
+test('router passes keyed source evidence, never a raw or enumerable address digest, to database auth', async () => {
+  let captured: PortalAuthRequestContext | undefined;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async (_email, _password, context) => { captured = context; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+  const context = requestContext('auth-source-request');
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => context,
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+
+  assert.equal(response.statusCode, 401);
+  assert.ok(captured);
+  assert.deepEqual(captured.sourceHash, context.sourceHash);
+  assert.equal('ipAddress' in captured, false);
+  assert.doesNotMatch(JSON.stringify(captured), /203\.0\.113\.42/);
+  assert.notDeepEqual(
+    captured.sourceHash,
+    createHash('sha256').update('203.0.113.42').digest(),
+    'enumerable plain source digest never crosses the authentication boundary',
+  );
+});
+
+test('distributed source admission runs before session resolution and fails closed with Retry-After', async () => {
+  let resolves = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolves += 1; return null; },
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard(() => ({
+    allowed: false, retryAfterSeconds: 7, leaseHash: null,
+  }));
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '7');
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.match(response.body, /One moment — Growth HQ is catching up/);
+  assert.match(response.body, /Nothing new was started/);
+  assert.match(response.body, /Wait 7 seconds/);
+  assert.match(response.body, /Return to your workspace/);
+  assert.doesNotMatch(response.body, /Too many requests were received/);
+  assert.equal(resolves, 0);
+  assert.deepEqual(guard.admissions[0]?.dimensions.map(({ name }) => name), ['source', 'source_daily']);
+});
+
+test('missing source evidence and guard failures return generic no-store 503s', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => assert.fail('source boundary must run first'),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const throwingGuard: PortalAbuseGuard = {
+    admit: async () => { throw new Error('private database detail'); },
+    complete: async () => undefined,
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const missing = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: throwingGuard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => null,
+  }));
+  assert.equal(missing.statusCode, 503);
+  assert.equal(missing.headers['retry-after'], '30');
+  assert.equal(missing.headers['cache-control'], 'no-store');
+
+  const failed = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: throwingGuard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }));
+  assert.equal(failed.statusCode, 503);
+  assert.equal(failed.headers['retry-after'], '5');
+  assert.doesNotMatch(failed.body, /private database detail/);
+});
+
+test('principal admission is enforced before CRM work and releases the source lease', async () => {
+  let snapshots = 0;
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => callNumber === 1
+    ? allowedDecision(callNumber)
+    : { allowed: false, retryAfterSeconds: 11, leaseHash: null });
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+    crm: { ...crm, snapshot: async (...args) => { snapshots += 1; return crm.snapshot(...args); } },
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '11');
+  assert.equal(snapshots, 0);
+  assert.deepEqual(guard.admissions[1]?.dimensions.map(({ name }) => name), [
+    'account', 'account_daily', 'workspace', 'workspace_daily', 'route_account', 'route_workspace',
+  ]);
+  assert.equal(guard.completions.length, 1);
+  assert.equal(guard.completions[0]?.outcome, 'success');
+});
+
+test('one request id is reused across every CRM call in a guarded request', async () => {
+  const seenRequestIds: string[] = [];
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+  const guardedCrm = {
+    ...crm,
+    snapshot: async (identity: Parameters<PortalCrmService['snapshot']>[0]) => {
+      seenRequestIds.push(identity.requestId);
+      return crm.snapshot(identity);
+    },
+    growth: async (identity: Parameters<NonNullable<PortalCrmService['growth']>>[0]) => {
+      seenRequestIds.push(identity.requestId);
+      return null;
+    },
+  } as PortalCrmService;
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext('one-request-id'),
+    crm: guardedCrm,
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 403);
+  assert.deepEqual(seenRequestIds, ['one-request-id', 'one-request-id']);
+  assert.equal(guard.completions.length, 2);
+});
+
+test('login auth-subject denial happens before password verification', async () => {
+  let logins = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => { logins += 1; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 13, leaseHash: null }
+      : allowedDecision(callNumber));
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '13');
+  assert.equal(logins, 0);
+  assert.equal(guard.admissions[1]?.routeClass, 'auth.login');
+});
+
+test('auth lease completion retries preserve failure accounting', async () => {
+  const completions: Array<{ lease: number; outcome: PortalAbuseOutcome }> = [];
+  let admissions = 0;
+  let authCompletionAttempts = 0;
+  const guard: PortalAbuseGuard = {
+    admit: async () => allowedDecision(++admissions),
+    complete: async (leaseHash, outcome) => {
+      const lease = leaseHash[0]!;
+      completions.push({ lease, outcome });
+      if (lease === 2 && authCompletionAttempts++ === 0) {
+        throw new Error('ambiguous completion transport failure');
+      }
+    },
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(
+    completions.filter(({ lease }) => lease === 2).map(({ outcome }) => outcome),
+    ['auth_failure', 'auth_failure'],
+  );
+});
+
+test('setup auth-subject denial happens before password setup', async () => {
+  let setups = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    completeSetup: async () => { setups += 1; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 17, leaseHash: null }
+      : allowedDecision(callNumber));
+  const guarded = postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  });
+  const flow = await beginSetup(guarded);
+  const response = await call('POST', '/portal/setup', guarded, setupPost(flow, {
+    password: 'correct horse battery staple',
+    confirm: 'correct horse battery staple',
+  }));
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '17');
+  assert.equal(setups, 0);
+});
+
+test('SSO subject denial happens before the provider backchannel', async () => {
+  let exchanges = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 19, leaseHash: null }
+      : allowedDecision(callNumber));
+  const response = await call(
+    'GET',
+    `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=valid-state-value-123`,
+    postgresDeps(auth, {
+      abuse: guard,
+      abuseHashSecret: ABUSE_SECRET,
+      requestContext: () => requestContext(),
+      propertyPredatorSso: fakeSso({ complete: async () => { exchanges += 1; return null; } }),
+    }),
+    { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+  );
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '19');
+  assert.equal(exchanges, 0);
+});
+
+test('command class principal denial happens before route body or command work', async () => {
+  let installs = 0;
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => callNumber === 1
+    ? allowedDecision(callNumber)
+    : { allowed: false, retryAfterSeconds: 23, leaseHash: null });
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async () => { installs += 1; return { ok: false, kind: 'unavailable', message: 'not used' }; },
+  };
+  const response = await call('POST', '/portal/journeys/foundation', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+    journeys,
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '23');
+  assert.equal(guard.admissions[1]?.routeClass, 'command');
+  assert.equal(installs, 0);
+});
+
+test('database sessions use canonical workspace identity without a legacy bridge', async () => {
+  const opaque = Buffer.alloc(32, 11).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token,
+      userId: USER_ID,
+      userEmail: 'owner@frayne.co',
+      workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const res = await call('GET', '/portal', postgresDeps(auth), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /Frayne Electrical/);
+});
+
+test('authenticated Journey Manager renders the visual topology and setup boundary', async () => {
+  const opaque = Buffer.alloc(32, 17).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async () => assert.fail('GET must never install definitions'),
+  };
+
+  const res = await call('GET', '/portal/journeys', postgresDeps(auth, {
+    journeys,
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  }), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /Visual journey map/);
+  assert.match(res.body, /property-predator-self-serve/);
+  assert.match(res.body, /property-predator-agency-laps/);
+  assert.match(res.body, /name="_csrf"/);
+  assert.match(res.body, /name="command_key" value="[0-9a-f-]{36}"/);
+  assert.match(res.body, new RegExp(JOURNEY_MANAGER_CONFIRMATION));
+  assert.match(res.body, /href="\/portal\/journeys" aria-current="page"/);
+});
+
+test('Journey Manager install requires CSRF and typed confirmation, then returns a signed status', async () => {
+  const opaque = Buffer.alloc(32, 18).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  let installs = 0;
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async (identity) => {
+      installs += 1;
+      assert.equal(identity.requestId, '11111111-1111-4111-8111-111111111111');
+      return { ok: true, disposition: 'applied', routes: { selfServe: 'applied', agencyLaps: 'applied' } };
+    },
+  };
+  const d = postgresDeps(auth, { journeys });
+  const cookie = `${PORTAL_COOKIE}=${opaque}`;
+  const invalidCsrf = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: JOURNEY_MANAGER_CONFIRMATION,
+    }).toString(),
+  });
+  assert.equal(invalidCsrf.statusCode, 403);
+  assert.equal(installs, 0);
+
+  const invalidConfirmation = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      _csrf: portalCsrfToken(SECRET, opaque),
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: 'install whatever',
+    }).toString(),
+  });
+  assert.equal(invalidConfirmation.statusCode, 303);
+  assert.equal(installs, 0);
+
+  const installed = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      _csrf: portalCsrfToken(SECRET, opaque),
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: JOURNEY_MANAGER_CONFIRMATION,
+    }).toString(),
+  });
+  assert.equal(installed.statusCode, 303);
+  assert.match(installed.headers.location ?? '', /^\/portal\/journeys\?notice=installed\./);
+  assert.equal(installs, 1);
+
+  const status = await call('GET', installed.headers.location!, d, { cookie });
+  assert.equal(status.statusCode, 200);
+  assert.match(status.body, /Journey foundation installed/);
+  assert.doesNotMatch(status.body, /private database detail/);
+});
+
+test('database auth failure never downgrades to legacy login', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => { throw new Error('database unavailable'); },
+    revoke: async () => undefined,
+  };
+  const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  assert.equal(res.statusCode, 503);
+  assert.match(res.body, /temporarily unavailable/);
+});
+
+test('Growth HQ login offers shared Google and Property Predator sign-in while keeping password break-glass', async () => {
+  const opaque = Buffer.alloc(32, 19).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID }),
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso(),
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  });
+  const page = await call('GET', '/portal/login', d);
+  assert.equal(page.statusCode, 200);
+  assert.match(page.body, /Continue with Google/);
+  assert.match(page.body, /Continue with Property Predator/);
+  assert.match(page.body, /or use your Growth HQ password/);
+  assert.ok(page.body.includes(`${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=google`));
+  assert.match(page.body, /action="\/portal\/login"/);
+
+  const password = await call('POST', '/portal/login', d, loginPost({
+    email: 'office@propertypredator.com', password: 'break-glass-password',
+  }));
+  assert.equal(password.statusCode, 302);
+  assert.equal(password.headers.location, '/portal');
+  assert.match(password.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+});
+
+test('malformed enabled SSO stays absent while canonical password login remains mounted', async () => {
+  const opaque = Buffer.alloc(32, 29).toString('base64url');
+  const composition = composePropertyPredatorSso(
+    { PROPERTY_PREDATOR_SSO_ENABLED: 'true' } as NodeJS.ProcessEnv,
+    SECRET,
+    false,
+  );
+  assert.equal(composition.state, 'invalid');
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID }),
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, { propertyPredatorSso: composition.client });
+  const page = await call('GET', '/portal/login', d);
+  assert.equal(page.statusCode, 200);
+  assert.doesNotMatch(page.body, /Continue with Google|Continue with Property Predator/);
+  const ssoRoute = await call('GET', PROPERTY_PREDATOR_SSO_START_ROUTE, d);
+  assert.equal(ssoRoute.statusCode, 404);
+  const password = await call('POST', '/portal/login', d, loginPost({
+    email: 'office@propertypredator.com', password: 'native-break-glass',
+  }));
+  assert.equal(password.statusCode, 302);
+  assert.equal(password.headers.location, '/portal');
+  assert.match(password.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+});
+
+test('SSO start uses the provider hint and sets only the encrypted host-only transaction cookie', async () => {
+  const providers: Array<string | undefined> = [];
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso({
+      begin: (provider) => {
+        providers.push(provider);
+        return {
+          url: 'https://propertypredator.com/sso.html?client_id=growth-hq',
+          cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=opaque-encrypted-value; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=600`,
+        };
+      },
+    }),
+  });
+  const started = await call('GET', `${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=google`, d);
+  assert.equal(started.statusCode, 302);
+  assert.equal(started.headers.location, 'https://propertypredator.com/sso.html?client_id=growth-hq');
+  assert.deepEqual(providers, ['google']);
+  assert.match(started.headers['set-cookie'] ?? '', new RegExp(`^${PROPERTY_PREDATOR_SSO_COOKIE}=`));
+  assert.match(started.headers['set-cookie'] ?? '', /HttpOnly/);
+  assert.match(started.headers['set-cookie'] ?? '', /SameSite=Lax/);
+  assert.match(started.headers['set-cookie'] ?? '', new RegExp(`Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}`));
+  assert.doesNotMatch(started.headers['set-cookie'] ?? '', /Domain=/i);
+  assert.equal(started.headers['cache-control'], 'no-store');
+  assert.equal(started.headers['referrer-policy'], 'no-referrer');
+
+  const invalid = await call('GET', `${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=attacker&next=https://attacker.example`, d);
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(providers.length, 1);
+});
+
+test('SSO callback exchanges once, issues the existing opaque HQ cookie and uses a fixed redirect', async () => {
+  const opaque = Buffer.alloc(32, 20).toString('base64url');
+  const exchanges: unknown[][] = [];
+  const logins: unknown[][] = [];
+  let resolveCalls = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolveCalls += 1; throw new Error('stale session must not resolve on callback'); },
+    login: async () => null,
+    loginExternal: async (...args) => {
+      logins.push(args);
+      return { sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID };
+    },
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso({
+      complete: async (...args) => {
+        exchanges.push(args);
+        return { assertion: externalAssertion, bootstrapUserId: USER_ID };
+      },
+    }),
+  });
+  const callback = await call(
+    'GET',
+    `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=one-time-authorization-code&state=expected-state`,
+    d,
+    { cookie: `${PORTAL_COOKIE}=stale; ${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+  );
+  assert.equal(callback.statusCode, 303);
+  assert.equal(callback.headers.location, '/portal');
+  assert.equal(resolveCalls, 0);
+  assert.deepEqual(exchanges[0], ['one-time-authorization-code', 'expected-state', 'encrypted-transaction', 1_000_000]);
+  assert.equal(logins[0]?.[0], externalAssertion);
+  assert.equal(logins[0]?.[2], USER_ID);
+  assert.match(callback.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+  assert.match(callback.headers['set-cookie'] ?? '', /Max-Age=86400/);
+  assert.match(callback.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+  assert.equal(callback.headers['cache-control'], 'no-store');
+  assert.equal(callback.headers['referrer-policy'], 'no-referrer');
+});
+
+test('every terminal SSO callback failure clears the transaction and reveals no provider detail', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => null,
+    revoke: async () => undefined,
+  };
+  for (const scenario of [
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?error=access_denied&state=s`, sso: fakeSso(), status: 400 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => null }), status: 401 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => { throw new PropertyPredatorSsoAuthenticationError(); } }), status: 401 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => { throw new Error('secret provider detail'); } }), status: 503 },
+    { method: 'POST', url: PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE, sso: fakeSso(), status: 405 },
+  ]) {
+    const response = await call(scenario.method, scenario.url, postgresDeps(auth, {
+      propertyPredatorSso: scenario.sso,
+    }), { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` });
+    assert.equal(response.statusCode, scenario.status);
+    assert.match(response.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+    assert.doesNotMatch(response.body, /access_denied|secret provider detail|valid-code-value/);
+  }
+});
+
+test('SSO callback accounts token rejection as auth failure and transient exchange failure as service error', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => assert.fail('a rejected exchange must not reach local session issuance'),
+    revoke: async () => undefined,
+  };
+  for (const scenario of [
+    { error: new PropertyPredatorSsoAuthenticationError(), status: 401, outcome: 'auth_failure' as const },
+    { error: new PropertyPredatorSsoExchangeError(), status: 503, outcome: 'service_error' as const },
+  ]) {
+    const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+    const response = await call(
+      'GET',
+      `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=valid-state-value-123`,
+      postgresDeps(auth, {
+        abuse: guard,
+        abuseHashSecret: ABUSE_SECRET,
+        requestContext: () => requestContext(`sso-${scenario.outcome}`),
+        propertyPredatorSso: fakeSso({ complete: async () => { throw scenario.error; } }),
+      }),
+      { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+    );
+    assert.equal(response.statusCode, scenario.status);
+    assert.equal(
+      guard.completions.find(({ leaseHash }) => leaseHash[0] === 2)?.outcome,
+      scenario.outcome,
+    );
+    assert.match(response.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+    assert.doesNotMatch(response.body, new RegExp(scenario.error.name));
+  }
+});
+
+test('a stale cookie cannot block a fresh database login or account setup page', async () => {
+  const opaque = Buffer.alloc(32, 9).toString('base64url');
+  let resolveCalls = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolveCalls += 1; throw new Error('identity store unavailable'); },
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }),
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth);
+  const staleCookie = `${PORTAL_COOKIE}=${Buffer.alloc(32, 8).toString('base64url')}`;
+
+  const login = await call('POST', '/portal/login', d, {
+    ...loginPost({ email: 'owner@frayne.co', password: 'good' }, staleCookie),
+  });
+  assert.equal(login.statusCode, 302);
+  assert.match(login.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
+
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d, { cookie: staleCookie });
+  assert.equal(exchange.statusCode, 303, 'the sensitive query is cleaned even while setup is paused');
+  const setupCookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const setup = await call('GET', '/portal/setup', d, { cookie: `${staleCookie}; ${setupCookie}` });
+  assert.equal(setup.statusCode, 503);
+  assert.match(setup.body, /Setup is currently paused/);
+  assert.doesNotMatch(setup.body, /name="password"/);
+  assert.equal(resolveCalls, 0);
+});
+
+test('the setup router keeps Property Predator branding on available and unavailable paths', async () => {
+  const available = deps({
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+    completeSetup: async () => null,
+  });
+  const flow = await beginSetup(available);
+  const setup = await call('GET', '/portal/setup', available, { cookie: flow.cookie });
+  assert.equal(setup.statusCode, 200);
+  assert.match(setup.body, /<title>PropertyPredator — Set up your account<\/title>/);
+  assert.match(setup.body, /private PropertyPredator Growth HQ/);
+  assert.doesNotMatch(setup.body, /Relaunch72|RELAUNCH72|>R72</);
+
+  const unavailable = await call('GET', '/portal/setup', deps({
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  }));
+  assert.equal(unavailable.statusCode, 503);
+  assert.match(unavailable.body, /<title>PropertyPredator — Account setup<\/title>/);
+  assert.match(unavailable.body, /Ask the PropertyPredator team/);
+  assert.doesNotMatch(unavailable.body, /Relaunch72|RELAUNCH72|>R72</);
+});
+
+test('one-time setup chooses a password, signs in and rejects an already-used token', async () => {
+  const seen: Array<{ token: string; password: string; now: number }> = [];
+  let available = true;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(),
+    completeSetup: async (token, password, now) => {
+      seen.push({ token, password, now });
+      if (!available || token !== SETUP_TOKEN) return null;
+      available = false;
+      return 't1';
+    },
+  });
+  const flow = await beginSetup(d);
+
+  const first = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
+  assert.equal(first.statusCode, 303);
+  assert.equal(first.headers.location, '/portal');
+  assert.match(first.headers['set-cookie'] ?? '', new RegExp(PORTAL_COOKIE + '='));
+  assert.match(first.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_SETUP_COOKIE}=.*Max-Age=0`));
+  assert.deepEqual(seen[0], { token: SETUP_TOKEN, password: 'a-secure-password', now: 1_000_000 });
+
+  const reused = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
+  assert.equal(reused.statusCode, 400);
+  assert.match(reused.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(reused.body, new RegExp(SETUP_TOKEN));
+});
+
+test('database account setup issues its canonical session and enters the CRM', async () => {
+  const opaque = Buffer.alloc(32, 12).toString('base64url');
+  const seen: Array<{ token: string; password: string; now: number }> = [];
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    completeSetup: async (token, password, context) => {
+      seen.push({ token, password, now: context.now });
+      return token === SETUP_TOKEN
+        ? { sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
+        : null;
+    },
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, { setupThrottle: new InMemorySetupThrottle() });
+
+  const flow = await beginSetup(d);
+  const completed = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
+
+  assert.equal(completed.statusCode, 303);
+  assert.equal(completed.headers.location, '/portal');
+  assert.match(completed.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
+  assert.deepEqual(seen, [{ token: SETUP_TOKEN, password: 'a-secure-password', now: 1_000_000 }]);
+});
+
+test('setup query cleanup removes the capability from later HTML and binds POST to an encrypted HttpOnly cookie', async () => {
+  let setupCalls = 0;
+  const d = deps({
+    secure: true,
+    setupThrottle: new InMemorySetupThrottle(),
+    completeSetup: async () => { setupCalls += 1; return null; },
+  });
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d);
+  assert.equal(exchange.statusCode, 303);
+  assert.match(exchange.headers['set-cookie'] ?? '', new RegExp(`^${PORTAL_SETUP_COOKIE}=[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+;`));
+  assert.doesNotMatch(exchange.headers['set-cookie'] ?? '', new RegExp(SETUP_TOKEN));
+  assert.match(exchange.headers['set-cookie'] ?? '', /HttpOnly/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /SameSite=Lax/, 'email-origin top-level GETs must survive the clean 303');
+  assert.match(exchange.headers['set-cookie'] ?? '', /Path=\/portal\/setup/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /Max-Age=600/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /Secure/);
+
+  const issuedCookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const encryptedParts = issuedCookie.slice(PORTAL_SETUP_COOKIE.length + 1).split('.');
+  encryptedParts[1] = `${encryptedParts[1]![0] === 'A' ? 'B' : 'A'}${encryptedParts[1]!.slice(1)}`;
+  const tampered = await call('GET', '/portal/setup', d, {
+    cookie: `${PORTAL_SETUP_COOKIE}=${encryptedParts.join('.')}`,
+  });
+  assert.equal(tampered.statusCode, 400, 'AEAD rejects ciphertext tampering');
+  assert.doesNotMatch(tampered.body, new RegExp(SETUP_TOKEN));
+
+  const flow = await beginSetup(d);
+  const withoutCsrf = await call('POST', '/portal/setup', d, {
+    cookie: flow.cookie,
+    body: new URLSearchParams({ password: 'a-secure-password', confirm: 'a-secure-password' }).toString(),
+  });
+  assert.equal(withoutCsrf.statusCode, 403);
+  assert.equal(setupCalls, 0);
+  assert.match(withoutCsrf.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(withoutCsrf.body, new RegExp(SETUP_TOKEN));
+  assert.equal(withoutCsrf.headers['set-cookie'], undefined, 'a cross-site POST cannot clear the Strict setup cookie');
+});
+
+test('setup cookie lifetime is authenticated, skew-tolerant and enforced server-side', async () => {
+  let now = 1_000_000;
+  const issuedAt = now;
+  const d = deps({
+    now: () => now,
+    completeSetup: async () => null,
+  });
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d);
+  const cookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  now = issuedAt - PORTAL_SETUP_CLOCK_SKEW_MS;
+  assert.equal((await call('GET', '/portal/setup', d, { cookie })).statusCode, 200, 'one minute of issuer clock lead is tolerated');
+  now = issuedAt - PORTAL_SETUP_CLOCK_SKEW_MS - 1;
+  assert.equal((await call('GET', '/portal/setup', d, { cookie })).statusCode, 400, 'larger future issuance is rejected');
+  now = issuedAt + PORTAL_SETUP_TTL_SECONDS * 1000 + 1;
+  const expired = await call('GET', '/portal/setup', d, { cookie });
+  assert.equal(expired.statusCode, 400);
+  assert.match(expired.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(expired.body, new RegExp(SETUP_TOKEN));
+  assert.match(expired.headers['set-cookie'] ?? '', /Max-Age=0/);
+});
+
+test('malformed and forged setup capabilities fail generically without entering the setup service', async () => {
+  let setupCalls = 0;
+  const d = deps({ completeSetup: async () => { setupCalls += 1; return null; } });
+  const malformed = '<script>raw-capability</script>';
+  const badLink = await call('GET', `/portal/setup?token=${encodeURIComponent(malformed)}`, d);
+  assert.equal(badLink.statusCode, 400);
+  assert.match(badLink.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(badLink.body, /raw-capability/);
+
+  const forged = await call('GET', '/portal/setup', d, {
+    cookie: `${PORTAL_SETUP_COOKIE}=${SETUP_TOKEN}.${Buffer.alloc(32, 9).toString('base64url')}`,
+  });
+  assert.equal(forged.statusCode, 400);
+  assert.match(forged.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(forged.body, new RegExp(SETUP_TOKEN));
+  assert.equal(setupCalls, 0);
+});
+
+test('setup throttle retains only direct-source and token hashes, ignoring spoofable proxy headers', async () => {
+  const reserved: string[] = [];
+  const failed: string[] = [];
+  const throttle = {
+    reserve(key: string) { reserved.push(key); return { allowed: true, retryAfterSeconds: 0 }; },
+    release() {},
+    failure(key: string) { failed.push(key); },
+    success() {},
+  };
+  const d = deps({
+    setupThrottle: throttle,
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    completeSetup: async () => null,
+  });
+  const flow = await beginSetup(d, SETUP_TOKEN, { remoteAddress: '10.0.0.7', forwardedFor: '203.0.113.99' });
+  const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.7', forwardedFor: '198.51.100.4' }));
+  assert.equal(response.statusCode, 400);
+  const directSourceHash = createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update('10.0.0.7')
+    .digest('hex');
+  const tokenHash = createHash('sha256').update(SETUP_TOKEN).digest('hex');
+  assert.deepEqual(reserved, [`setup-source:${directSourceHash}`, `setup-token:${tokenHash}`]);
+  assert.deepEqual(failed, reserved);
+  assert.equal(reserved.some((key) => key.includes(SETUP_TOKEN) || key.includes('203.0.113.99') || key.includes('198.51.100.4')), false);
+});
+
+test('setup throttles both token reuse across sources and source spraying across random tokens', async () => {
+  const tokenA = Buffer.alloc(32, 31).toString('base64url');
+  const tokenB = Buffer.alloc(32, 32).toString('base64url');
+  const tokenC = Buffer.alloc(32, 33).toString('base64url');
+  let tokenAttempts = 0;
+  const tokenDeps = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { tokenAttempts += 1; return null; },
+  });
+  const firstTokenFlow = await beginSetup(tokenDeps, tokenA, { remoteAddress: '10.0.0.1' });
+  assert.equal((await call('POST', '/portal/setup', tokenDeps, setupPost(firstTokenFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.1' }))).statusCode, 400);
+  const secondTokenFlow = await beginSetup(tokenDeps, tokenA, { remoteAddress: '10.0.0.2' });
+  const tokenBlocked = await call('POST', '/portal/setup', tokenDeps, setupPost(secondTokenFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.2' }));
+  assert.equal(tokenBlocked.statusCode, 429);
+  assert.match(tokenBlocked.body, /invalid, expired or has already been used/i);
+  assert.equal(tokenAttempts, 1);
+
+  let sourceAttempts = 0;
+  const sourceDeps = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    completeSetup: async () => { sourceAttempts += 1; return null; },
+  });
+  const firstSourceFlow = await beginSetup(sourceDeps, tokenB, { remoteAddress: '10.0.0.3' });
+  assert.equal((await call('POST', '/portal/setup', sourceDeps, setupPost(firstSourceFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.3' }))).statusCode, 400);
+  const secondSourceFlow = await beginSetup(sourceDeps, tokenC, { remoteAddress: '10.0.0.3' });
+  const sourceBlocked = await call('POST', '/portal/setup', sourceDeps, setupPost(secondSourceFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.3' }));
+  assert.equal(sourceBlocked.statusCode, 429);
+  assert.equal(sourceAttempts, 1);
+});
+
+test('setup throttle bounds identifiers without letting random idle fingerprints lock every link', () => {
+  const throttle = new InMemorySetupThrottle(1, 60_000, 60_000, 2);
+  assert.equal(throttle.reserve('one', 1_000).allowed, true);
+  throttle.failure('one', 1_000);
+  assert.equal(throttle.reserve('two', 1_000).allowed, true);
+  throttle.failure('two', 1_000);
+  assert.equal(throttle.reserve('three', 1_000).allowed, true, 'oldest idle fingerprint is evicted');
+  assert.equal(throttle.check('one', 1_000).allowed, true);
+  assert.equal(throttle.check('two', 1_000).allowed, false);
+
+  const pending = new InMemorySetupThrottle(3, 60_000, 60_000, 2);
+  assert.equal(pending.reserve('one', 1_000).allowed, true);
+  assert.equal(pending.reserve('two', 1_000).allowed, true);
+  assert.equal(pending.reserve('three', 1_000).allowed, false, 'in-flight entries are never evicted');
+});
+
+test('default proxy peers cannot source-block unrelated setup tokens without an explicit resolver', async () => {
+  const tokenA = Buffer.alloc(32, 41).toString('base64url');
+  const tokenB = Buffer.alloc(32, 42).toString('base64url');
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; return null; },
+  });
+  for (const token of [tokenA, tokenB]) {
+    const flow = await beginSetup(d, token, { remoteAddress: '10.0.0.99' });
+    const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+      password: 'a-secure-password', confirm: 'a-secure-password',
+    }, { remoteAddress: '10.0.0.99', forwardedFor: '203.0.113.7' }));
+    assert.equal(response.statusCode, 400);
+  }
+  assert.equal(attempts, 2, 'the shared socket peer was deliberately omitted from throttle keys');
+});
+
+test('setup releases throttle reservations on service errors so capacity is never stranded', async () => {
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; throw new Error('identity store unavailable'); },
+  });
+  const flow = await beginSetup(d);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+      password: 'a-secure-password', confirm: 'a-secure-password',
+    }));
+    assert.equal(response.statusCode, 503);
+    assert.doesNotMatch(response.body, new RegExp(SETUP_TOKEN));
+  }
+  assert.equal(attempts, 2);
+});
+
+test('setup bounds concurrent expensive attempts before the setup service starts', async () => {
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(2, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; await gate; return null; },
+  });
+  const flow = await beginSetup(d);
+  const body = { password: 'a-secure-password', confirm: 'a-secure-password' };
+  const first = call('POST', '/portal/setup', d, setupPost(flow, body));
+  const second = call('POST', '/portal/setup', d, setupPost(flow, body));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const third = await call('POST', '/portal/setup', d, setupPost(flow, body));
+  assert.equal(third.statusCode, 429);
+  assert.equal(attempts, 2);
+  openGate();
+  assert.deepEqual((await Promise.all([first, second])).map((response) => response.statusCode), [400, 400]);
+});
+
+test('login throttles repeated failures without revealing whether an account exists', async () => {
+  const d = deps({ loginThrottle: new InMemoryLoginThrottle(2, 60_000, 60_000) });
+  assert.equal((await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad' }))).statusCode, 401);
+  assert.equal((await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad' }))).statusCode, 401);
+  const blocked = await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  assert.equal(blocked.statusCode, 429);
+  assert.equal(blocked.headers['retry-after'], '60');
+  assert.match(blocked.body, /Too many login attempts/i);
+});
+
+test('login source blocking is enabled only by an explicit trusted-address policy', async () => {
+  let defaultAttempts = 0;
+  const defaultDeps = deps({
+    loginThrottle: new InMemoryLoginThrottle(1, 60_000, 60_000),
+    login: async () => { defaultAttempts += 1; return null; },
+  });
+  for (const email of ['first@example.test', 'second@example.test']) {
+    const response = await call('POST', '/portal/login', defaultDeps, {
+      ...loginPost({ email, password: 'wrong-password' }),
+      remoteAddress: '10.0.0.99',
+      forwardedFor: '203.0.113.8',
+    });
+    assert.equal(response.statusCode, 401);
+  }
+  assert.equal(defaultAttempts, 2, 'a shared proxy peer was omitted without a trusted resolver');
+
+  let trustedAttempts = 0;
+  const trustedDeps = deps({
+    loginThrottle: new InMemoryLoginThrottle(1, 60_000, 60_000),
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    login: async () => { trustedAttempts += 1; return null; },
+  });
+  const first = await call('POST', '/portal/login', trustedDeps, {
+    ...loginPost({ email: 'first@example.test', password: 'wrong-password' }),
+    remoteAddress: '10.0.0.5',
+    forwardedFor: '203.0.113.10',
+  });
+  const second = await call('POST', '/portal/login', trustedDeps, {
+    ...loginPost({ email: 'second@example.test', password: 'wrong-password' }),
+    remoteAddress: '10.0.0.5',
+    forwardedFor: '198.51.100.11',
+  });
+  assert.equal(first.statusCode, 401);
+  assert.equal(second.statusCode, 429);
+  assert.equal(trustedAttempts, 1);
+});
+
+test('login rejects a cross-site form post without its signed pre-authentication token', async () => {
+  const res = await call('POST', '/portal/login', deps(), {
+    body: 'email=owner%40frayne.co&password=good',
+  });
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body, /Refresh the sign-in page/);
+  assert.match(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_LOGIN_CSRF_COOKIE}=`));
+});
+
+test('database login does not preflight a JSON dashboard before issuing its session', async () => {
+  const opaque = Buffer.alloc(32, 6).toString('base64url');
+  const revoked: string[] = [];
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }),
+    revoke: async (token) => { revoked.push(token); },
+  };
+  const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.headers.location, '/portal');
+  assert.deepEqual(revoked, []);
+  assert.match(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+});
+
+test('login throttle enforces a hard identifier cap under unique-key spraying', () => {
+  const throttle = new InMemoryLoginThrottle(1, 60_000, 60_000, 2);
+  throttle.failure('one', 1_000);
+  throttle.failure('two', 1_000);
+  throttle.failure('three', 1_000); // evicts insertion-order oldest to stay bounded
+  assert.equal(throttle.check('one', 1_000).allowed, true);
+  assert.equal(throttle.check('two', 1_000).allowed, false);
+  assert.equal(throttle.check('three', 1_000).allowed, false);
+});
+
+test('login throttle bounds concurrent password checks before slow verification starts', async () => {
+  let releaseVerification!: () => void;
+  const verificationGate = new Promise<void>((resolve) => { releaseVerification = resolve; });
+  let verificationCalls = 0;
+  const d = deps({
+    loginThrottle: new InMemoryLoginThrottle(2, 60_000, 60_000),
+    login: async () => {
+      verificationCalls += 1;
+      await verificationGate;
+      return null;
+    },
+  });
+  const first = call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad-1' }));
+  const second = call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad-2' }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const third = await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad-3' }));
+  assert.equal(third.statusCode, 429);
+  assert.equal(verificationCalls, 2);
+  releaseVerification();
+  const completed = await Promise.all([first, second]);
+  assert.deepEqual(completed.map((result) => result.statusCode), [401, 401]);
 });
 
 test('GET /portal with a valid session renders that tenant’s dashboard', async () => {
   const res = await call('GET', '/portal', deps(), { cookie: cookieFor('t1') });
   assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.match(res.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/);
   assert.match(res.body, /Frayne Electrical/);
   assert.match(res.body, /Priya Nair/);
 });
 
 test('POST /portal/run runs the manager and redirects back', async () => {
   let ran = 0;
-  const res = await call('POST', '/portal/run', deps({ runTick: async () => { ran++; return 4; } }), { cookie: cookieFor('t1') });
+  const res = await call('POST', '/portal/run', deps({ runTick: async () => { ran++; return 4; } }), { cookie: cookieFor('t1'), body: csrfBody() });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal');
   assert.equal(ran, 1);
@@ -98,7 +1387,7 @@ test('POST /portal/run runs the manager and redirects back', async () => {
 test('a forged/expired cookie is treated as logged out', async () => {
   const res = await call('GET', '/portal', deps(), { cookie: `${PORTAL_COOKIE}=not.a.valid.token` });
   assert.equal(res.statusCode, 302);
-  assert.equal(res.headers.location, '/portal/login');
+  assert.equal(res.headers.location, '/portal/login?reason=session-ended');
 });
 
 // ─── billing screen ──────────────────────────────────────────────────────────
@@ -112,9 +1401,10 @@ test('the dashboard shows a billing card when a billing resolver is wired', asyn
 test('GET /portal/billing renders the plans screen', async () => {
   const res = await call('GET', '/portal/billing', deps({ billing: async () => billingView() }), { cookie: cookieFor('t1') });
   assert.equal(res.statusCode, 200);
-  assert.match(res.body, /Choose a plan/);
+  assert.match(res.body, /Planned tiers/);
   assert.match(res.body, /\$299\/mo/);
-  assert.match(res.body, /action="\/portal\/subscribe"/);
+  assert.doesNotMatch(res.body, /action="\/portal\/subscribe"/);
+  assert.match(res.body, /Checkout paused/);
 });
 
 test('GET /portal/billing 404s when billing is not enabled', async () => {
@@ -129,7 +1419,7 @@ test('POST /portal/subscribe starts checkout and redirects to the Stripe URL', a
     billing: async () => billingView({ email: 'owner@frayne.co' }),
     subscribeUrl: async (plan, email) => { seen.push({ plan, email }); return 'https://pay.stripe.test/sub_1'; },
   });
-  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: 'plan=platform_growth' });
+  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: csrfBody('t1', { plan: 'platform_growth' }) });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, 'https://pay.stripe.test/sub_1');
   assert.deepEqual(seen, [{ plan: 'platform_growth', email: 'owner@frayne.co' }]);
@@ -137,9 +1427,80 @@ test('POST /portal/subscribe starts checkout and redirects to the Stripe URL', a
 
 test('POST /portal/subscribe redirects back with an error when checkout throws', async () => {
   const d = deps({ billing: async () => billingView(), subscribeUrl: async () => { throw new Error('bad plan'); } });
-  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: 'plan=nope' });
+  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: csrfBody('t1', { plan: 'nope' }) });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal/billing?error=1');
+});
+
+test('every authenticated effect, including logout, rejects a missing CSRF token', async () => {
+  let ran = 0;
+  const d = deps({ runTick: async () => { ran += 1; return 1; } });
+  const run = await call('POST', '/portal/run', d, { cookie: cookieFor('t1') });
+  assert.equal(run.statusCode, 403);
+  assert.equal(ran, 0);
+  assert.match(run.body, /Skip to main content/);
+
+  const logout = await call('POST', '/portal/logout', d, { cookie: cookieFor('t1') });
+  assert.equal(logout.statusCode, 403);
+  assert.equal(logout.headers['set-cookie'], undefined);
+});
+
+test('database logout revokes the exact opaque session before clearing its cookie', async () => {
+  const opaque = Buffer.alloc(32, 6).toString('base64url');
+  const revoked: string[] = [];
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token,
+      userId: USER_ID,
+      userEmail: 'owner@frayne.co',
+      workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async (token) => { revoked.push(token); },
+  };
+  const body = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, opaque) }).toString();
+  const res = await call('POST', '/portal/logout', postgresDeps(auth), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+    body,
+  });
+  assert.equal(res.statusCode, 302);
+  assert.deepEqual(revoked, [opaque]);
+  assert.match(res.headers['set-cookie'] ?? '', /Max-Age=0/);
+});
+
+test('database logout reports revocation failure and keeps the browser session', async () => {
+  const opaque = Buffer.alloc(32, 7).toString('base64url');
+  let resolveCalls = 0;
+  let revokeCalls = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolveCalls += 1; throw new Error('identity store unavailable'); },
+    login: async () => null,
+    revoke: async () => { revokeCalls += 1; throw new Error('identity store unavailable'); },
+  };
+  const body = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, opaque) }).toString();
+  const res = await call('POST', '/portal/logout', postgresDeps(auth), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+    body,
+  });
+
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.headers.location, undefined);
+  assert.equal(resolveCalls, 0);
+  assert.equal(revokeCalls, 1);
+  assert.equal(res.headers['set-cookie'], undefined);
+  assert.match(res.body, /still signed in/i);
+});
+
+test('POST /portal/subscribe never creates a second subscription for an active customer', async () => {
+  let checkouts = 0;
+  const d = deps({
+    billing: async () => billingView({ status: 'active', active: true, customerId: 'cus_existing' }),
+    subscribeUrl: async () => { checkouts++; return 'https://pay.stripe.test/should-not-happen'; },
+  });
+  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: csrfBody('t1', { plan: 'platform_pro' }) });
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.headers.location, '/portal/billing?active=1');
+  assert.equal(checkouts, 0);
 });
 
 test('POST /portal/manage opens the Stripe billing portal for the customer', async () => {
@@ -148,7 +1509,7 @@ test('POST /portal/manage opens the Stripe billing portal for the customer', asy
     billing: async () => billingView({ status: 'active', active: true, customerId: 'cus_9' }),
     manageUrl: async (cid) => { seen.push(cid); return 'https://billing.stripe.test/cus_9'; },
   });
-  const res = await call('POST', '/portal/manage', d, { cookie: cookieFor('t1') });
+  const res = await call('POST', '/portal/manage', d, { cookie: cookieFor('t1'), body: csrfBody() });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, 'https://billing.stripe.test/cus_9');
   assert.deepEqual(seen, ['cus_9']);
@@ -157,7 +1518,7 @@ test('POST /portal/manage opens the Stripe billing portal for the customer', asy
 test('POST /portal/run is soft by default — runs even without an active subscription', async () => {
   let ran = 0;
   const d = deps({ runTick: async () => { ran++; return 4; }, billing: async () => billingView({ status: 'none', active: false }) });
-  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1') });
+  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1'), body: csrfBody() });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal');
   assert.equal(ran, 1);
@@ -166,7 +1527,7 @@ test('POST /portal/run is soft by default — runs even without an active subscr
 test('POST /portal/run is gated to /portal/billing when enforcement is on and the sub is inactive', async () => {
   let ran = 0;
   const d = deps({ runTick: async () => { ran++; return 4; }, billingEnforced: true, billing: async () => billingView({ status: 'past_due', active: false }) });
-  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1') });
+  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1'), body: csrfBody() });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal/billing?need=1');
   assert.equal(ran, 0, 'the run must not fire without an active subscription');
@@ -175,8 +1536,100 @@ test('POST /portal/run is gated to /portal/billing when enforcement is on and th
 test('POST /portal/run under enforcement runs for an active subscriber', async () => {
   let ran = 0;
   const d = deps({ runTick: async () => { ran++; return 4; }, billingEnforced: true, billing: async () => billingView({ status: 'active', active: true }) });
-  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1') });
+  const res = await call('POST', '/portal/run', d, { cookie: cookieFor('t1'), body: csrfBody() });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal');
   assert.equal(ran, 1);
+});
+
+test('LeadRelay page and assets use existing portal sign-in and same-origin policy', async () => {
+  const opaque=Buffer.alloc(32,47).toString('base64url');
+  const auth: PortalAuthService={
+    resolve:async token=>token===opaque?{sessionToken:token,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'owner@example.com'}:null,
+    login:async()=>null,revoke:async()=>undefined,
+  };
+  const d=postgresDeps(auth);
+  const anonymous=await call('GET','/portal/leadrelay',d);
+  assert.equal(anonymous.statusCode,302);
+  const page=await call('GET','/portal/leadrelay',d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(page.statusCode,200);
+  assert.match(page.body,/id="leadrelay-panel"/);
+  assert.match(page.body,/data-csrf="[^"]+"/);
+  assert.match(page.headers['content-security-policy']!,/connect-src 'self'/);
+  assert.match(page.headers['content-security-policy']!,/style-src 'self'/);
+  assert.match(page.headers['content-security-policy']!,/(?:^|; )media-src 'self' blob:;/);
+  assert.doesNotMatch(page.headers['content-security-policy']!,/media-src[^;]*(?:data:|https?:|\*)/);
+  assert.doesNotMatch(page.body,/Bearer|LEADRELAY_GRANTS_JSON|LEADRELAY_INSTALLATIONS_JSON/);
+  const api=await call('GET','/portal/api/leadrelay/installations',d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(api.statusCode,200);
+  assert.deepEqual(JSON.parse(api.body),[]);
+});
+
+test('Native LeadRelay setup assets require the existing session and remain private no-store', async () => {
+  const opaque=Buffer.alloc(32,53).toString('base64url');
+  const auth:PortalAuthService={
+    resolve:async token=>token===opaque?{sessionToken:token,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'owner@example.com'}:null,
+    login:async()=>null,revoke:async()=>undefined,
+  };
+  const d=postgresDeps(auth);
+  for (const [path,module] of [
+    ['/portal/leadrelay/provider-setup.js','mountProviderSetup'],
+    ['/portal/leadrelay/agent-training.js','mountAgentTraining'],
+    ['/portal/leadrelay/voice-settings.js','mountVoiceSettings'],
+    ['/portal/leadrelay/agent-settings.js','mountAgentSettings'],
+    ['/portal/leadrelay/website-chat-settings.js','mountWebsiteChatSettings'],
+    ['/portal/leadrelay/panel.css',''],
+  ] as const) {
+    const anonymous=await call('GET',path,d);
+    assert.equal(anonymous.statusCode,302);
+    assert.equal(anonymous.headers.location,'/portal/login');
+    assert.doesNotMatch(anonymous.body,/mountProviderSetup|mountAgentTraining|mountVoiceSettings|mountAgentSettings|mountWebsiteChatSettings|provider-setup-card|agent-training|voice-settings|agent-settings|website-chat-settings/);
+    const asset=await call('GET',path,d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+    assert.equal(asset.statusCode,200);
+    assert.match(asset.headers['cache-control']!,/no-store/);
+    if (path.endsWith('.js')) {
+      assert.match(asset.headers['content-type']!,/javascript/);
+      assert.ok(asset.body.includes(`export async function ${module}`));
+      assert.doesNotMatch(asset.body,/LEADRELAY_INSTALLATIONS_JSON|LEADRELAY_GRANTS_JSON/);
+      if (module === 'mountAgentSettings') {
+        assert.match(asset.body,/from '\.\/voice-settings\.js'/);
+        assert.match(asset.body,/from '\.\/agent-training\.js'/);
+      }
+    } else {
+      assert.match(asset.headers['content-type']!,/text\/css/);
+      assert.match(asset.body,/\.lrhq/);
+      assert.match(asset.body,/\.agent-builder/);
+      assert.match(asset.body,/\.provider-setup/);
+      assert.match(asset.body,/\.agent-training/);
+      assert.match(asset.body,/\.voice-settings/);
+      assert.match(asset.body,/\.agent-settings/);
+      assert.match(asset.body,/\.website-chat-settings/);
+    }
+  }
+});
+
+test('LeadRelay setup identity refuses unauthenticated or legacy tenant authority',async()=>{
+  const auth:PortalAuthService={resolve:async()=>null,login:async()=>null,revoke:async()=>undefined};
+  const anonymous=await call('GET','/portal/api/leadrelay/identity',postgresDeps(auth));
+  assert.equal(anonymous.statusCode,401);
+  assert.equal(anonymous.headers['cache-control'],'no-store');
+  assert.deepEqual(JSON.parse(anonymous.body),{detail:'Sign in to Growth HQ'});
+  const legacy=await call('GET','/portal/api/leadrelay/identity',deps(),{cookie:cookieFor('t1')});
+  assert.equal(legacy.statusCode,401);
+});
+
+test('LeadRelay setup identity returns only server-resolved context, ignoring spoofed headers and query',async()=>{
+  const opaque=Buffer.alloc(32,51).toString('base64url');
+  const auth:PortalAuthService={resolve:async token=>token===opaque?{
+    sessionToken:opaque,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'private@example.com',
+  }:null,login:async()=>null,revoke:async()=>undefined};
+  const req=mkReq('GET','/portal/api/leadrelay/identity?userId=spoof&workspaceId=other',{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  req.headers['x-user-id']='spoof';req.headers['x-workspace-id']='other';req.headers.authorization='Bearer not-authority';
+  const res=mkRes();await handlePortal(req as never,res as never,postgresDeps(auth));
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(JSON.parse(res.body),{userId:USER_ID,workspaceId:WORKSPACE_ID});
+  assert.equal(res.headers['cache-control'],'no-store');
+  assert.doesNotMatch(res.body,/private@example|sessionToken|Bearer|spoof|other/);
+  const denied=await call('POST','/portal/api/leadrelay/identity',postgresDeps(auth),{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(denied.statusCode,405);assert.equal(denied.headers.allow,'GET');
 });

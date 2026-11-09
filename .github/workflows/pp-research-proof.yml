@@ -1,0 +1,21 @@
+name: Content research query exact-source gate
+on:
+  push:
+    branches: [codex/pp-rl72-research-20261106, codex/pp-rl72-standard-research-20261106, codex/pp-rl72-plan-contract-20261106, codex/pp-rl72-content-workbench-20261106, codex/pp-rl72-evidence-rebase-20261106, codex/pp-rl72-structured-plan-20261109, codex/pp-rl72-article-finish-20261109, codex/pp-rl72-article-quotes-20261109, codex/pp-rl72-article-quotes-v2-20261109, codex/pp-rl72-article-quotes-v3-20261109]
+permissions:
+  contents: read
+jobs:
+  research-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node scripts/supply-chain.mjs --check
+      - run: npm run typecheck
+      - run: npm test

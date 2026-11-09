@@ -30,15 +30,16 @@ async function seedRunDir(): Promise<string> {
 
 const action = (a: DueAction['action']): DueAction => ({ tenantId: 't', action: a, cadence: 'weekly', dueDate: '2026-08-03' });
 
-test('railRunner generates a Soro cluster and pushes it into the GHL sub-account', async () => {
+test('railRunner mock generates a Soro cluster without claiming a live push', async () => {
   const runDir = await seedRunDir();
   const tenant: Tenant = { id: 't', name: 'Test Co', runDir, rules: [] };
   const ghl = new MockGhlClient();
   const run = railRunner(ghl, { mock: true });
 
   const e = await run(tenant, action('content_cluster'));
-  assert.equal(e.status, 'ok', e.note);
-  assert.match(e.note ?? '', /articles → ghl-loc-t/);
+  assert.equal(e.status, 'skipped', e.note);
+  assert.match(e.note ?? '', /simulation only.*article briefs drafted/i);
+  assert.match(e.note ?? '', /no external account changed/i);
   assert.equal(ghl.artifacts.filter((a) => a.type === 'content_cluster').length, 1);
   assert.ok(fs.existsSync(path.join(runDir, 'cc.json')), 'cluster persisted to runDir');
 });
@@ -51,9 +52,27 @@ test('railRunner keyword_refresh reads the cluster and pushes a report', async (
 
   await run(tenant, action('content_cluster')); // writes cc.json
   const e = await run(tenant, action('keyword_refresh'));
-  assert.equal(e.status, 'ok', e.note);
-  assert.match(e.note ?? '', /queries priced/);
+  assert.equal(e.status, 'skipped', e.note);
+  assert.match(e.note ?? '', /simulated planning estimates.*not live search-volume data/i);
   assert.equal(ghl.artifacts.filter((a) => a.type === 'note').length, 1);
+});
+
+test('railRunner mock labels social and ad outputs as drafts, never scheduled or published', async () => {
+  const runDir = await seedRunDir();
+  fs.writeFileSync(path.join(runDir, 's4.json'), JSON.stringify(await mockStage('S4')));
+  fs.writeFileSync(path.join(runDir, 's8.json'), JSON.stringify(await mockStage('S8')));
+  const ghl = new MockGhlClient();
+  const run = railRunner(ghl, { mock: true });
+  const tenant: Tenant = { id: 't', name: 'Test Co', runDir, rules: [] };
+
+  const social = await run(tenant, action('social_batch'));
+  const ads = await run(tenant, action('ads_refresh'));
+
+  assert.equal(social.status, 'skipped');
+  assert.match(social.note ?? '', /schedule drafted; no post was scheduled or published/i);
+  assert.equal(ads.status, 'skipped');
+  assert.match(ads.note ?? '', /simulated ad drafts.*no ad account changed/i);
+  assert.match(ads.note ?? '', /no external account changed/i);
 });
 
 test('railRunner skips (does not crash) when the tenant has no brand brain', async () => {

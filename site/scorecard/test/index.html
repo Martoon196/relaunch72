@@ -9,10 +9,8 @@
   RELAUNCH72 — THE GENERIC SCORECARD (the quiz itself)
   Standalone, dependency-free. Lives at /scorecard/test/, behind the /scorecard/ landing page.
   Brand-matched to the Relaunch72 site (electric #3557ff, ink #0c1018).
-  Integration seams (search "SEAM"):
-   1. captureEmail() — stores the lead + POSTs to SUBSCRIBE_URL when set
-      (point it at the payments server's /api/subscribe, or an ESP).
-   2. AUTOPSY_URL    — the $97 autopsy checkout (wired to checkout.html?tier=autopsy).
+  Integration seam (search "SEAM"):
+   1. AUTOPSY_URL — the $97 autopsy checkout (wired to checkout.html?tier=autopsy).
 -->
 <style>
   :root{
@@ -40,17 +38,8 @@
   .opt:hover{border-color:var(--blue);background:#fff;}
   .opt:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
   .back{margin-top:16px;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:4px 0;font-family:inherit;}
-  .gate{text-align:center;padding:.5rem 0;}
-  .lockdot{width:52px;height:52px;border-radius:50%;background:var(--blue-bg);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;}
-  .gate h2{font-size:19px;font-weight:700;color:var(--text);margin:0 0 8px;}
-  .gate .sub{font-size:14px;color:var(--muted);line-height:1.6;max-width:420px;margin:0 auto 20px;}
-  .form{display:flex;flex-direction:column;gap:8px;max-width:340px;margin:0 auto;}
-  input[type=email]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:8px;font-size:15px;font-family:inherit;}
-  input[type=email]:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg);}
-  .err{font-size:12px;color:var(--red);min-height:16px;text-align:left;}
   .btn{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:650;cursor:pointer;font-family:inherit;}
   .btn:hover{filter:brightness(1.07);}
-  .fine{font-size:11px;color:var(--muted);margin-top:14px;}
   .rnum{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:12px;}
   .rtitle{font-size:22px;font-weight:700;color:var(--text);line-height:1.3;margin-bottom:6px;letter-spacing:-.01em;}
   .rlead{font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:22px;}
@@ -79,25 +68,15 @@
     <div class="track"><div class="fill" id="bar"></div></div>
     <div class="stage" id="stage"></div>
   </div>
-  <div class="foot">20 relaunches a week · human signed-off</div>
+  <div class="foot">Private browser diagnostic · no contact details collected</div>
 </div>
 
 <script>
 /* ===================== CONFIG ===================== */
 /* SEAM 2: the $97 autopsy checkout. Relative to /scorecard/test/ → up two to the site root. */
 var AUTOPSY_URL = "../../autopsy/";
-/* SEAM 1: the payments server's /api/subscribe — captures the lead into Brevo (nurture list). */
-var SUBSCRIBE_URL = "https://relaunch72-payments.onrender.com/api/subscribe";
-
-/* Stores the lead locally and POSTs it when a subscribe endpoint is configured.
-   Receives { email, answers, leakCount }. The UI proceeds regardless. */
-function captureEmail(payload){
-  try{ localStorage.setItem("r72_scorecard_lead", JSON.stringify(payload)); }catch(e){}
-  if(SUBSCRIBE_URL){
-    return fetch(SUBSCRIBE_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) }).catch(function(){});
-  }
-  return Promise.resolve();
-}
+/* The private sandbox intentionally collects no lead data. Public lead capture
+   and scorecard-email delivery need an explicit consent and delivery flow. */
 /* ================================================== */
 
 (function(){
@@ -142,39 +121,13 @@ function captureEmail(payload){
     if(i>0) h+='<button class="back" id="back">← back</button>';
     stage.innerHTML=h;
     Array.prototype.forEach.call(stage.querySelectorAll('.opt'),function(b){
-      b.onclick=function(){ ans[Q[i].k]=parseInt(b.getAttribute('data-v'),10); i++; i<Q.length?renderQ():renderGate(); };
+      b.onclick=function(){ ans[Q[i].k]=parseInt(b.getAttribute('data-v'),10); i++; i<Q.length?renderQ():renderResult(); };
     });
     var bk=document.getElementById('back'); if(bk) bk.onclick=function(){ i--; renderQ(); };
   }
 
-  function renderGate(){
-    bar.style.width='100%';
-    stage.innerHTML=
-      '<div class="gate">'+
-      '<div class="lockdot">🔒</div>'+
-      '<h2>Your scorecard’s ready.</h2>'+
-      '<div class="sub">Where should we send a copy? You’ll see your result on-screen straight away.</div>'+
-      '<div class="form">'+
-      '<input id="email" type="email" placeholder="name@yourbusiness.co.uk" />'+
-      '<div class="err" id="err"></div>'+
-      '<button class="btn" id="go">See my result →</button>'+
-      '</div>'+
-      '<div class="fine">No spam. Unsubscribe whenever. We’ll send a few things worth reading.</div>'+
-      '</div>';
-    var go=document.getElementById('go'), em=document.getElementById('email'), err=document.getElementById('err');
-    function submit(){
-      var v=(em.value||'').trim();
-      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ err.textContent='Enter a valid email so we can send your copy.'; return; }
-      var leakCount=Object.keys(ans).filter(function(k){return ans[k]>0;}).length;
-      try{ captureEmail({email:v, answers:ans, leakCount:leakCount}); }catch(e){ console.error(e); }
-      renderResult();
-    }
-    go.onclick=submit;
-    em.onkeydown=function(e){ if(e.key==='Enter') submit(); };
-    em.focus();
-  }
-
   function renderResult(){
+    bar.style.width='100%';
     var leaks=[]; Object.keys(ans).forEach(function(k){ if(ans[k]>0) leaks.push([k,ans[k]]); });
     leaks.sort(function(a,b){return b[1]-a[1];});
     var count=leaks.length;
@@ -200,7 +153,7 @@ function captureEmail(payload){
       green.forEach(function(k){ h+='<div class="mini" style="border-left:2px solid var(--green);">'+esc(LEAK[k][0].replace(/^Your |^You’re |^You /,''))+' — holding up</div>'; });
     }
     h+='<div class="cta-box"><h2>This shows where. Not how much.</h2>'+
-       '<p>The Marketing Autopsy takes these seven questions to forensic depth on your actual numbers — graded, no punches pulled — so you see exactly what’s leaving and what a fix takes. $97, and it credits in full against a full relaunch within 14 days.</p>'+
+       '<p>The proposed Marketing Autopsy would take these seven questions to forensic depth on your actual numbers. The current private checkout creates mock output only, and the proposed Core credit is not operational.</p>'+
        '<button class="btn" id="cta">Get the full autopsy — $97 →</button></div>';
     stage.innerHTML=h;
     document.getElementById('cta').onclick=function(){

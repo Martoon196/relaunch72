@@ -1,0 +1,29 @@
+import {randomUUID} from 'node:crypto';
+import {layout,SEO_BLOG_BASE,csrfField,type Shell} from './seo-blog-view.js';
+import {escapeHtml as e} from './ui.js';
+import {POSTING_PLATFORMS,currentPostDraft} from '../seo-blog/platform-drafts.js';
+import type {SeoBlogEngine} from '../seo-blog/engine.js';
+type Data=Awaited<ReturnType<SeoBlogEngine['getPostingDrafts']>>;
+const hidden=(name:string,value:string|number)=>`<input type="hidden" name="${name}" value="${e(String(value))}">`;
+export function postingDraftsPage(shell:Shell,data:Data):string {
+  const a=data.article,v=data.version,base=`${SEO_BLOG_BASE}/b/${shell.brand!.id}/articles/${a.id}`;
+  const common=()=>csrfField(shell.csrf)+hidden('versionId',v.id)+hidden('rowVersion',a.rowVersion);
+  return layout(shell,'Posting drafts & answers',`<h1>Posting drafts &amp; answers</h1><p><a href="${base}">Back to article</a> · <a href="${base}/campaign">LinkedIn &amp; Instagram campaign</a></p>
+<section class="card"><h2>One article, more places</h2><p>Newsletter, short-post and answer drafts are ready below. Edit the text, choose its destination, then copy it across. Each saved post keeps its own version history.</p><p class="muted">These locations use copy/export handoff. Opening a location does not publish. Preparing and editing these formats uses no extra writing allowance.</p><p>${POSTING_PLATFORMS.map(p=>`<a class="button secondary" href="#platform-${p.id}">${e(p.label)}</a>`).join(' ')}</p></section>
+${v.body.faqs.length?`<section class="card"><h2>Answer a question</h2><p>Start with an answer already written in this article. These are article FAQs, not discovered forum threads.</p><form method="post" action="${base}/post-answer">${common()}<label for="answer-question">Question</label><select id="answer-question" name="questionIndex">${v.body.faqs.map((f,i)=>`<option value="${i}">${e(f.q)}</option>`).join('')}</select><label for="answer-platform">Posting location</label><select id="answer-platform" name="platform"><option value="reddit">Reddit</option><option value="quora">Quora</option></select><button type="submit">Prepare this answer</button></form></section>`:''}
+${POSTING_PLATFORMS.map(platform=>`<section id="platform-${platform.id}"><h2>${e(platform.label)}</h2>${data.drafts.filter(x=>x.draft.platform===platform.id).map(entry=>{
+    const d=entry.draft,r=currentPostDraft(d),key=`post-${d.id}`;
+    return `<details class="card" id="${key}"${platform.id==='substack'?' open':''}><summary><strong>${e(r.title)}</strong> · ${entry.saved?`Version ${r.number}`:'Ready to edit'}${entry.stale?' · Earlier source':''}</summary>
+<p class="muted">${r.mode==='article'?'Prepared from article text':r.mode==='restored'?'Restored earlier text':'Edited post'} · ${entry.saved?'Saved privately':'Suggested format'} · Copy/export handoff</p>
+${entry.stale?'<p class="notice warn">The article or confirmed facts have changed since this post was prepared. Review its claims before using it. A fresh format from the current article is also available below.</p>':''}
+<form method="post" action="${base}/post-save">${common()}${hidden('draftId',d.id)}${hidden('revisionId',r.id)}${hidden('commandId',randomUUID())}
+<label for="title-${d.id}">Post title</label><input id="title-${d.id}" name="title" maxlength="300" value="${e(r.title)}" required>
+${r.question?`<label for="question-${d.id}">Question being answered</label><input id="question-${d.id}" name="question" maxlength="2000" value="${e(r.question)}"><small>If you change the question, edit the answer to match it.</small>`:hidden('question','')}
+<label for="body-${d.id}">Post text</label><textarea id="body-${d.id}" name="body" rows="14" maxlength="60000" required>${e(r.body)}</textarea>
+<label for="target-${d.id}">${platform.format==='answer'?'Question or community URL':'Publication or posting URL'}</label><input id="target-${d.id}" name="targetUrl" type="url" value="${e(r.targetUrl??'')}" placeholder="${e(platform.url||'https://your-publication.example/')}">
+<p><button type="submit">Save new post version</button> <button class="secondary" type="button" data-copy-post="body-${d.id}">Copy text</button> <span data-copy-status="body-${d.id}" role="status"></span></p></form>
+<p><a href="${base}/post-export?draft=${d.id}">Download saved ${entry.saved?'post':'suggested format'}</a>${r.targetUrl?` · <a href="${e(r.targetUrl)}" target="_blank" rel="noopener noreferrer">Open ${e(platform.label)}</a>`:''}</p>
+${d.revisions.length>1?`<details><summary>Post version history (${d.revisions.length})</summary>${[...d.revisions].reverse().map(old=>`<section><h3>Version ${old.number}${old.id===r.id?' · Current':''}</h3><p class="muted">${e(old.createdAt.slice(0,16).replace('T',' '))} UTC · ${e(old.mode)}</p><details><summary>Read this version</summary><h4>${e(old.title)}</h4><pre style="white-space:pre-wrap">${e(old.body)}</pre></details>${old.id!==r.id?`<form method="post" action="${base}/post-restore">${common()}${hidden('draftId',d.id)}${hidden('revisionId',r.id)}${hidden('restoreId',old.id)}${hidden('commandId',randomUUID())}<button class="secondary" type="submit">Restore as a new version</button></form>`:''}</section>`).join('')}</details>`:''}</details>`;
+  }).join('')}</section>`).join('')}<script src="${SEO_BLOG_BASE}/posting-drafts.js" defer></script>`);
+}
+export const POSTING_DRAFTS_SCRIPT=`document.addEventListener('click',async function(event){var button=event.target.closest('[data-copy-post]');if(!button)return;var id=button.getAttribute('data-copy-post'),field=document.getElementById(id),status=document.querySelector('[data-copy-status="'+id+'"]');if(!field)return;try{await navigator.clipboard.writeText(field.value);if(status)status.textContent='Copied';}catch(error){field.focus();field.select();if(status)status.textContent='Text selected. Use your device copy command.';}});`;

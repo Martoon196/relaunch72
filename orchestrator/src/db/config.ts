@@ -1,0 +1,440 @@
+export const DATABASE_ROLES = [
+  'migrator',
+  'web',
+  'identityCommand',
+  'abuseCommand',
+  'provisioningCommand',
+  'setupDeliveryCommand',
+  'setupReissueCommand',
+  'crmCommand',
+  'contentAdapter',
+  'contentCommand',
+  'importCommand',
+  'externalEventCommand',
+  'mailgunWorkerCommand',
+  'mailgunWebhookCommand',
+  'testInboxWebhookCommand',
+  'ownedSeedMessageCommand',
+  'ownedSeedCampaignCommand',
+  'publicSocialCommand',
+  'publicSocialWorkerCommand',
+  'publicSocialRevalidatorCommand',
+  'ownedSocialCommand',
+  'ownedSocialWorkerCommand',
+  'whatsAppLiveCommand',
+  'whatsAppLiveWorkerCommand',
+  'whatsAppLiveWebhookCommand',
+  'customerEmailCommand',
+  'customerEmailWorkerCommand',
+  'customerEmailWebhookCommand',
+  'smsCommand',
+  'smsWorkerCommand',
+  'smsWebhookCommand',
+  'affiliateReceiptCommand',
+  'founderPilotEvidenceCommand',
+  'zernioSocialCommand',
+  'zernioInboundWebhookCommand',
+  'dailyOutreachCommand',
+  'dailyOutreachRead',
+  'worker',
+  'webhook',
+  'public',
+  'readonly',
+] as const;
+
+export type DatabaseRole = (typeof DATABASE_ROLES)[number];
+export type DatabaseSslMode = 'disable' | 'require' | 'verify-full';
+
+const ROLE_URL_ENV: Record<DatabaseRole, string> = {
+  migrator: 'DATABASE_MIGRATOR_URL',
+  web: 'DATABASE_WEB_URL',
+  identityCommand: 'DATABASE_IDENTITY_COMMAND_URL',
+  abuseCommand: 'DATABASE_ABUSE_COMMAND_URL',
+  provisioningCommand: 'DATABASE_PROVISIONING_COMMAND_URL',
+  setupDeliveryCommand: 'DATABASE_SETUP_DELIVERY_COMMAND_URL',
+  setupReissueCommand: 'DATABASE_SETUP_REISSUE_COMMAND_URL',
+  crmCommand: 'DATABASE_CRM_COMMAND_URL',
+  contentAdapter: 'DATABASE_CONTENT_ADAPTER_URL',
+  contentCommand: 'DATABASE_CONTENT_COMMAND_URL',
+  importCommand: 'DATABASE_IMPORT_COMMAND_URL',
+  externalEventCommand: 'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
+  mailgunWorkerCommand: 'DATABASE_MAILGUN_WORKER_URL',
+  mailgunWebhookCommand: 'DATABASE_MAILGUN_WEBHOOK_URL',
+  testInboxWebhookCommand: 'DATABASE_TEST_INBOX_WEBHOOK_URL',
+  ownedSeedMessageCommand: 'DATABASE_OWNED_SEED_MESSAGE_URL',
+  ownedSeedCampaignCommand: 'DATABASE_OWNED_SEED_CAMPAIGN_URL',
+  publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
+  publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
+  publicSocialRevalidatorCommand: 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
+  ownedSocialCommand: 'DATABASE_OWNED_SOCIAL_COMMAND_URL',
+  ownedSocialWorkerCommand: 'DATABASE_OWNED_SOCIAL_WORKER_URL',
+  whatsAppLiveCommand: 'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
+  whatsAppLiveWorkerCommand: 'DATABASE_WHATSAPP_LIVE_WORKER_URL',
+  whatsAppLiveWebhookCommand: 'DATABASE_WHATSAPP_LIVE_WEBHOOK_URL',
+  customerEmailCommand: 'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
+  customerEmailWorkerCommand: 'DATABASE_CUSTOMER_EMAIL_WORKER_URL',
+  customerEmailWebhookCommand: 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
+  smsCommand: 'DATABASE_SMS_COMMAND_URL',
+  smsWorkerCommand: 'DATABASE_SMS_WORKER_URL',
+  smsWebhookCommand: 'DATABASE_SMS_WEBHOOK_URL',
+  affiliateReceiptCommand: 'DATABASE_AFFILIATE_RECEIPT_COMMAND_URL',
+  founderPilotEvidenceCommand: 'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL',
+  zernioSocialCommand: 'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
+  zernioInboundWebhookCommand: 'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL',
+  dailyOutreachCommand: 'DATABASE_DAILY_OUTREACH_COMMAND_URL',
+  dailyOutreachRead: 'DATABASE_DAILY_OUTREACH_READ_URL',
+  worker: 'DATABASE_WORKER_URL',
+  webhook: 'DATABASE_WEBHOOK_URL',
+  public: 'DATABASE_PUBLIC_URL',
+  readonly: 'DATABASE_READONLY_URL',
+};
+
+const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
+  web: 'r72_web',
+  identityCommand: 'r72_identity_command',
+  abuseCommand: 'r72_abuse_command',
+  provisioningCommand: 'r72_provisioning_command',
+  setupDeliveryCommand: 'r72_setup_delivery_command',
+  setupReissueCommand: 'r72_setup_reissue_command',
+  crmCommand: 'r72_crm_command',
+  contentAdapter: 'r72_content_adapter',
+  contentCommand: 'r72_content_command',
+  importCommand: 'r72_import_command',
+  externalEventCommand: 'r72_external_event_command',
+  mailgunWorkerCommand: 'r72_mailgun_worker_command',
+  mailgunWebhookCommand: 'r72_mailgun_webhook_command',
+  testInboxWebhookCommand: 'r72_test_inbox_webhook_command',
+  ownedSeedMessageCommand: 'r72_owned_seed_message_command',
+  ownedSeedCampaignCommand: 'r72_owned_seed_campaign_command',
+  publicSocialCommand: 'r72_public_social_command',
+  publicSocialWorkerCommand: 'r72_public_social_worker_command',
+  publicSocialRevalidatorCommand: 'r72_public_social_revalidator_command',
+  ownedSocialCommand: 'r72_owned_social_command',
+  ownedSocialWorkerCommand: 'r72_owned_social_worker_command',
+  whatsAppLiveCommand: 'r72_whatsapp_live_command',
+  whatsAppLiveWorkerCommand: 'r72_whatsapp_live_worker_command',
+  whatsAppLiveWebhookCommand: 'r72_whatsapp_live_webhook_command',
+  customerEmailCommand: 'r72_customer_email_command',
+  customerEmailWorkerCommand: 'r72_customer_email_worker_command',
+  customerEmailWebhookCommand: 'r72_customer_email_webhook_command',
+  smsCommand: 'r72_sms_command',
+  smsWorkerCommand: 'r72_sms_worker_command',
+  smsWebhookCommand: 'r72_sms_webhook_command',
+  affiliateReceiptCommand: 'r72_affiliate_receipt_command',
+  founderPilotEvidenceCommand: 'r72_founder_pilot_evidence_command',
+  zernioSocialCommand: 'r72_zernio_social_command',
+  zernioInboundWebhookCommand: 'r72_zernio_inbound_webhook_command',
+  dailyOutreachCommand: 'r72_daily_outreach_command',
+  dailyOutreachRead: 'r72_daily_outreach_read',
+  worker: 'r72_worker',
+  webhook: 'r72_webhook',
+  public: 'r72_public',
+  readonly: 'r72_readonly',
+};
+
+export interface DatabaseConfig {
+  role: DatabaseRole;
+  /** Secret. Never include this value in logs or error messages. */
+  connectionString: string;
+  sourceEnv: string;
+  production: boolean;
+  sslMode: DatabaseSslMode;
+  sslCa?: string;
+  /** Ask node-postgres to use SCRAM-SHA-256-PLUS when the server offers it. */
+  enableChannelBinding: boolean;
+  maxConnections: number;
+  connectionTimeoutMs: number;
+  idleTimeoutMs: number;
+  statementTimeoutMs: number;
+  applicationName: string;
+  /** Verified by the pool before a newly connected client can be checked out. */
+  expectedDatabaseUser?: string;
+}
+
+function parseBoundedInteger(
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  label: string,
+): number {
+  if (!raw?.trim()) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+function defaultSslMode(url: URL, production: boolean): DatabaseSslMode {
+  const isLoopback = /^(?:localhost|127(?:\.\d{1,3}){3}|::1)$/i.test(url.hostname);
+  return production || !isLoopback ? 'verify-full' : 'disable';
+}
+
+function parseSslMode(raw: string | undefined, fallback: DatabaseSslMode): DatabaseSslMode {
+  const value = raw?.trim().toLowerCase() || fallback;
+  if (value !== 'disable' && value !== 'require' && value !== 'verify-full') {
+    throw new Error('DATABASE_SSL_MODE must be disable, require, or verify-full');
+  }
+  return value;
+}
+
+/**
+ * Load one least-privilege database identity. Production never falls back to the
+ * generic DATABASE_URL: every process must receive the URL for its exact role.
+ */
+export function loadDatabaseConfig(
+  role: DatabaseRole,
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseConfig {
+  const production = env.NODE_ENV?.trim().toLowerCase() === 'production';
+  const roleEnv = ROLE_URL_ENV[role];
+  const roleUrl = env[roleEnv]?.trim();
+  const developmentUrl = production ? undefined : env.DATABASE_URL?.trim();
+  const rawUrl = roleUrl || developmentUrl;
+  const sourceEnv = roleUrl ? roleEnv : 'DATABASE_URL';
+
+  if (!rawUrl) {
+    const suffix = production
+      ? `; production does not accept the generic DATABASE_URL fallback`
+      : ` (or DATABASE_URL for local development)`;
+    throw new Error(`${roleEnv} is required${suffix}`);
+  }
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`${sourceEnv} must be a valid PostgreSQL URL`);
+  }
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
+    throw new Error(`${sourceEnv} must use the postgres or postgresql protocol`);
+  }
+  if (!url.hostname || !url.username || url.pathname === '/' || !url.pathname) {
+    throw new Error(`${sourceEnv} must include a host, database, and database user`);
+  }
+  if (role === 'migrator' && /-pooler\./i.test(url.hostname)) {
+    throw new Error(`${sourceEnv} must use a direct, non-pooled connection for migrations`);
+  }
+  const expectedDatabaseUser = EXPECTED_RUNTIME_USER[role];
+  const enforceRuntimeIdentity = Boolean(expectedDatabaseUser) && (production || Boolean(roleUrl));
+  if (enforceRuntimeIdentity && decodeURIComponent(url.username) !== expectedDatabaseUser) {
+    throw new Error(`${roleEnv} must authenticate as the least-privilege ${expectedDatabaseUser} role`);
+  }
+
+  // pg's connection-string parser can silently override a separately supplied
+  // TLS object. Resolve sslmode here, then remove it so pool.ts is authoritative.
+  const urlSslMode = url.searchParams.get('sslmode') ?? undefined;
+  const allowedConnectionOptions = new Set(['sslmode', 'sslnegotiation', 'channel_binding']);
+  for (const key of url.searchParams.keys()) {
+    if (!allowedConnectionOptions.has(key)) {
+      throw new Error(`${sourceEnv} contains unsupported connection option: ${key}`);
+    }
+  }
+  const sslMode = parseSslMode(
+    env.DATABASE_SSL_MODE ?? urlSslMode,
+    defaultSslMode(url, production),
+  );
+  const channelBinding = url.searchParams.get('channel_binding');
+  if (channelBinding !== null && channelBinding !== 'require') {
+    throw new Error(`${sourceEnv} channel_binding must be require when specified`);
+  }
+  url.searchParams.delete('sslmode');
+  url.searchParams.delete('channel_binding');
+  if (production && sslMode === 'disable') {
+    throw new Error('DATABASE_SSL_MODE=disable is forbidden in production');
+  }
+  if (url.searchParams.get('sslnegotiation') === 'direct' && sslMode === 'disable') {
+    throw new Error(`${sourceEnv} cannot use direct TLS negotiation when TLS is disabled`);
+  }
+  if (channelBinding === 'require' && sslMode === 'disable') {
+    throw new Error(`${sourceEnv} cannot require channel binding when TLS is disabled`);
+  }
+
+  const rolePoolKey = role === 'contentAdapter'
+    ? 'DATABASE_CONTENT_ADAPTER_POOL_MAX'
+    : role === 'contentCommand'
+      ? 'DATABASE_CONTENT_COMMAND_POOL_MAX'
+      : role === 'crmCommand'
+        ? 'DATABASE_CRM_COMMAND_POOL_MAX'
+        : role === 'importCommand'
+          ? 'DATABASE_IMPORT_COMMAND_POOL_MAX'
+          : role === 'externalEventCommand'
+            ? 'DATABASE_EXTERNAL_EVENT_COMMAND_POOL_MAX'
+            : role === 'mailgunWorkerCommand'
+              ? 'DATABASE_MAILGUN_WORKER_POOL_MAX'
+              : role === 'mailgunWebhookCommand'
+                ? 'DATABASE_MAILGUN_WEBHOOK_POOL_MAX'
+                : role === 'testInboxWebhookCommand'
+                  ? 'DATABASE_TEST_INBOX_WEBHOOK_POOL_MAX'
+                  : role === 'ownedSeedMessageCommand'
+                    ? 'DATABASE_OWNED_SEED_MESSAGE_POOL_MAX'
+                    : role === 'ownedSeedCampaignCommand'
+                      ? 'DATABASE_OWNED_SEED_CAMPAIGN_POOL_MAX'
+                    : role === 'publicSocialCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX'
+                  : role === 'publicSocialWorkerCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
+                    : role === 'publicSocialRevalidatorCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX'
+                    : role === 'ownedSocialCommand'
+                      ? 'DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX'
+                    : role === 'ownedSocialWorkerCommand'
+                      ? 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX'
+                    : role === 'zernioSocialCommand'
+                      ? 'DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX'
+                    : role === 'zernioInboundWebhookCommand'
+                      ? 'DATABASE_ZERNIO_INBOUND_WEBHOOK_POOL_MAX'
+                    : role === 'dailyOutreachCommand'
+                      ? 'DATABASE_DAILY_OUTREACH_COMMAND_POOL_MAX'
+                    : role === 'dailyOutreachRead'
+                      ? 'DATABASE_DAILY_OUTREACH_READ_POOL_MAX'
+                    : role === 'whatsAppLiveCommand'
+                      ? 'DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX'
+                    : role === 'whatsAppLiveWorkerCommand'
+                      ? 'DATABASE_WHATSAPP_LIVE_WORKER_POOL_MAX'
+                    : role === 'whatsAppLiveWebhookCommand'
+                      ? 'DATABASE_WHATSAPP_LIVE_WEBHOOK_POOL_MAX'
+                    : role === 'customerEmailCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX'
+                    : role === 'customerEmailWorkerCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_WORKER_POOL_MAX'
+                    : role === 'customerEmailWebhookCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_POOL_MAX'
+                    : role === 'smsCommand'
+                      ? 'DATABASE_SMS_COMMAND_POOL_MAX'
+                    : role === 'smsWorkerCommand'
+                      ? 'DATABASE_SMS_WORKER_POOL_MAX'
+                    : role === 'smsWebhookCommand'
+                      ? 'DATABASE_SMS_WEBHOOK_POOL_MAX'
+                    : role === 'affiliateReceiptCommand'
+                      ? 'DATABASE_AFFILIATE_RECEIPT_COMMAND_POOL_MAX'
+                    : role === 'founderPilotEvidenceCommand'
+                      ? 'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_POOL_MAX'
+                  : role === 'setupDeliveryCommand'
+                    ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
+                    : role === 'setupReissueCommand'
+                      ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
+                      : role === 'provisioningCommand'
+                        ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
+                        : role === 'abuseCommand'
+                          ? 'DATABASE_ABUSE_COMMAND_POOL_MAX'
+                          : role === 'identityCommand'
+                            ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
+                            : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
+  return {
+    role,
+    connectionString: url.toString(),
+    sourceEnv,
+    production,
+    sslMode,
+    sslCa: env.DATABASE_SSL_CA?.replace(/\\n/g, '\n').trim() || undefined,
+    enableChannelBinding: channelBinding === 'require',
+    maxConnections: parseBoundedInteger(
+      env[rolePoolKey] ?? env.DATABASE_POOL_MAX,
+      role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
+        || role === 'smsWorkerCommand'
+        ? 1 : role === 'worker' ? 10 : role === 'abuseCommand' ? 2 : 5,
+      1,
+      role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
+        || role === 'smsWorkerCommand'
+        ? 1 : 100,
+      rolePoolKey,
+    ),
+    connectionTimeoutMs: parseBoundedInteger(
+      env.DATABASE_CONNECTION_TIMEOUT_MS,
+      5_000,
+      250,
+      120_000,
+      'DATABASE_CONNECTION_TIMEOUT_MS',
+    ),
+    idleTimeoutMs: parseBoundedInteger(
+      env.DATABASE_IDLE_TIMEOUT_MS,
+      30_000,
+      1_000,
+      600_000,
+      'DATABASE_IDLE_TIMEOUT_MS',
+    ),
+    statementTimeoutMs: parseBoundedInteger(
+      role === 'abuseCommand'
+        ? env.DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS
+        : env.DATABASE_STATEMENT_TIMEOUT_MS,
+      role === 'migrator' ? 120_000 : role === 'abuseCommand' ? 1_000 : 15_000,
+      500,
+      role === 'abuseCommand' ? 1_000 : 600_000,
+      role === 'abuseCommand'
+        ? 'DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS'
+        : 'DATABASE_STATEMENT_TIMEOUT_MS',
+    ),
+    applicationName: role === 'contentAdapter'
+      ? 'relaunch72-content-adapter'
+      : role === 'contentCommand'
+        ? 'relaunch72-content-command'
+        : role === 'crmCommand'
+          ? 'relaunch72-crm-command'
+          : role === 'importCommand'
+            ? 'relaunch72-import-command'
+            : role === 'externalEventCommand'
+              ? 'relaunch72-external-event-command'
+              : role === 'mailgunWorkerCommand'
+                ? 'property-predator-mailgun-worker-command'
+                : role === 'mailgunWebhookCommand'
+                  ? 'property-predator-mailgun-webhook-command'
+                  : role === 'testInboxWebhookCommand'
+                    ? 'property-predator-test-inbox-webhook-command'
+                    : role === 'ownedSeedMessageCommand'
+                      ? 'property-predator-owned-seed-message-command'
+                      : role === 'ownedSeedCampaignCommand'
+                        ? 'property-predator-owned-seed-campaign-command'
+                      : role === 'publicSocialCommand'
+                        ? 'property-predator-public-social-command'
+                      : role === 'publicSocialWorkerCommand'
+                        ? 'property-predator-public-social-worker-command'
+                      : role === 'publicSocialRevalidatorCommand'
+                        ? 'property-predator-public-social-revalidator-command'
+                      : role === 'ownedSocialCommand'
+                        ? 'property-predator-owned-social-command'
+                      : role === 'ownedSocialWorkerCommand'
+                        ? 'property-predator-owned-social-worker-command'
+                      : role === 'whatsAppLiveCommand'
+                        ? 'property-predator-whatsapp-live-command'
+                      : role === 'whatsAppLiveWorkerCommand'
+                        ? 'property-predator-whatsapp-live-worker-command'
+                      : role === 'whatsAppLiveWebhookCommand'
+                        ? 'property-predator-whatsapp-live-webhook-command'
+                      : role === 'customerEmailCommand'
+                        ? 'property-predator-customer-email-command'
+                      : role === 'customerEmailWorkerCommand'
+                        ? 'property-predator-customer-email-worker-command'
+                      : role === 'customerEmailWebhookCommand'
+                        ? 'property-predator-customer-email-webhook-command'
+                      : role === 'smsCommand'
+                        ? 'property-predator-sms-command'
+                      : role === 'smsWorkerCommand'
+                        ? 'property-predator-sms-worker-command'
+                      : role === 'smsWebhookCommand'
+                        ? 'property-predator-sms-webhook-command'
+                      : role === 'affiliateReceiptCommand'
+                        ? 'property-predator-affiliate-receipt-command'
+                      : role === 'founderPilotEvidenceCommand'
+                        ? 'property-predator-founder-pilot-evidence-command'
+                      : role === 'zernioInboundWebhookCommand'
+                        ? 'property-predator-zernio-inbound-webhook-command'
+                      : role === 'dailyOutreachCommand'
+                        ? 'property-predator-daily-outreach-command'
+                      : role === 'dailyOutreachRead'
+                        ? 'property-predator-daily-outreach-read'
+                    : role === 'setupDeliveryCommand'
+                      ? 'relaunch72-setup-delivery-command'
+                      : role === 'setupReissueCommand'
+                        ? 'relaunch72-setup-reissue-command'
+                        : role === 'provisioningCommand'
+                          ? 'relaunch72-provisioning-command'
+                          : role === 'abuseCommand'
+                            ? 'relaunch72-abuse-command'
+                            : role === 'identityCommand'
+                              ? 'relaunch72-identity-command'
+                              : `relaunch72-${role}`,
+    expectedDatabaseUser: enforceRuntimeIdentity ? expectedDatabaseUser : undefined,
+  };
+}

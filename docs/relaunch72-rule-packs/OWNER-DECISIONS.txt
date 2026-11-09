@@ -1,0 +1,47 @@
+OWNER DECISIONS — RELAUNCH72 RULE PACKS
+Only the decisions Martin actually needs to make. Everything else is draft and can be
+changed by reviewers without you.
+
+1. Private-use approval. Do you approve these eight draft packs for your own brands once
+   Codex has validated and wired them? Nothing runs under them until you record this.
+   Recommendation: approve production-core, editorial-planning, blog-writing,
+   conversion-copy, social-repurposing and visual-briefing first; leave email-writing and
+   offer-design as contracts until a real path exists.
+
+2. Your private training and the newer manual. They were not given to this authoring
+   session, so the packs were written from general craft plus the platform's own rules.
+   Do you want someone with the corpus to compare the packs against it and list any method
+   you expected that is missing? Recommendation: yes, before private-use approval, and
+   record the comparison as private provenance; do not paste the corpus into the packs.
+
+3. Content mix. The old training's 40/30/20/10 mix is implemented as optional guidance
+   with a sensible default. Do you want a specific mix set for any brand? Recommendation:
+   leave it as guidance; set a mix per brand only if you have a reason.
+
+4. Public upgrade later. Which packs, if any, should become paid upgrades, per brand or
+   per workspace, and at what price? Not needed now. Recommendation: decide after the
+   packs have run privately for a while and after a recorded commercial-use review of the
+   underlying training.
+
+5. Product names. CATALOGUE.json proposes the family "RL72 Boosters" (alternatives: RL72 Super Boosters, RL72 Expansion Packs, RL72 Power Packs), the bundles "RL72 Super Booster", "RL72 Launch Booster" and "RL72 Growth Booster", and a name per pack (Engine Room, Brain Builder,
+   Editor's Desk, Longform Forge, Hook & Close, Multiplier, Art Director, Inbox Engine,
+   Deal Shaper, Funnel Scan, Focus Room, Word of Mouth Engine) with two alternatives each.
+   Pick, rename or reject; the method content does not change. Recommendation: choose names
+   that describe the job in your voice and avoid any name another marketing product already
+   uses.
+
+6. The DigitalMarketer plugins. They were read only to see which jobs to cover; nothing
+   was copied. Their own text says the tools are proprietary to Lab members. Before any
+   pack is SOLD, record a commercial-use review confirming that original method packs
+   covering the same jobs are yours to sell. Recommendation: get that confirmed in
+   writing (your own counsel or DigitalMarketer's terms) before public release; private
+   use for your own brands is a separate, lower-risk decision.
+
+7. Four new pack types. They need Codex to extend the schema's allowed ids and stages
+   (proposed file included). Do you want brand-context-building, journey-review,
+   audience-resonance and advocacy-and-referral in the library? Recommendation: yes for
+   the library; sell only the ones whose runtime path exists when you decide pricing.
+
+8. Social channels. The packs assume Instagram and LinkedIn only, because that is what the
+   platform supports. If you want other channels later, that is a platform capability
+   decision first, not a pack change.

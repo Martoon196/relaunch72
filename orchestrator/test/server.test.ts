@@ -7,17 +7,29 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createCheckoutSession, priceKeyFor, orderFromEvent, CheckoutError, type StripeLike, type StripeEvent } from '../src/server/stripe.js';
 import { loadStripeConfig, type StripeConfig } from '../src/server/config.js';
-import { fileOrderStore, type Order, type OrderStore } from '../src/server/orders.js';
+import {
+  fileOrderStore, fileWebhookReceiptStore, memoryWebhookReceiptStore,
+  type Order, type OrderStore,
+} from '../src/server/orders.js';
 import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
+import { PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH } from '../src/integrations/mailgun-webhook/router.js';
+import {
+  PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH,
+  PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH,
+} from '../src/integrations/simulated-inbound/router.js';
 import { validIntake } from './helpers.js';
+import { PORTAL_COOKIE } from '../src/portal/session.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
-    secretKey: 'sk_test_x', webhookSecret: 'whsec_x',
+    secretKey: 'sk_test_x', keyMode: 'test', webhookSecret: 'whsec_x',
     priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: 'price_cb', pro: 'price_p' },
     planIds: { platform_starter: 'price_ps', platform_growth: 'price_pg', platform_pro: 'price_pp' },
-    publicBaseUrl: 'https://relaunch72.test', port: 4242, liveMode: false,
+    platformSubscriptionsEnabled: false,
+    sandboxAccessToken: '',
+    publicLeadCaptureEnabled: true,
+    publicBaseUrl: 'https://relaunch72.test', host: '127.0.0.1', port: 4242, liveMode: false,
     dataDir: os.tmpdir(),
     ordersFile: path.join(os.tmpdir(), `r72-orders-${process.pid}-${Math.round(performance.now())}.jsonl`),
     subscriptionsFile: path.join(os.tmpdir(), `r72-subs-${process.pid}-${Math.round(performance.now())}.jsonl`),
@@ -35,6 +47,63 @@ function fakeStripe(created: Array<Record<string, unknown>>, opts: { url?: strin
 }
 
 // ─── pure logic ──────────────────────────────────────────────────────────────
+test('MHP owns every operational route on its exact host without PP payment fallthrough', async () => {
+  const handled: string[] = [];
+  const { handler, created } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    mhp: {
+      hostname: 'app.martinhowardproperty.co.uk',
+      readiness: async () => [],
+      handle: async (request, response) => {
+        handled.push(request.url!);
+        response.writeHead(404); response.end('MHP route only');
+      },
+    },
+  });
+  for (const route of ['/api/checkout', '/api/stripe/webhook', '/admin', '/portal']) {
+    const response = res();
+    await handler(req('POST', route, '{"tier":"core"}', { host: 'app.martinhowardproperty.co.uk' }), response);
+    assert.equal(response.statusCode, 404);
+    assert.equal(response._body, 'MHP route only');
+  }
+  assert.equal(created.length, 0);
+  assert.equal(handled.length, 4);
+  const pp = res();
+  await handler(req('GET', '/', '', { host: 'hq.propertypredator.com' }), pp);
+  assert.equal(pp.statusCode, 302);
+  assert.equal(pp._headers.location, '/portal');
+});
+
+test('MHP host cannot be selected with forwarded headers, hostname suffixes or whitespace', async () => {
+  let calls = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    mhp: { hostname: 'app.martinhowardproperty.co.uk', readiness: async () => [], handle: async () => { calls++; } },
+  });
+  for (const host of ['attacker.example', 'app.martinhowardproperty.co.uk.evil.test', ' app.martinhowardproperty.co.uk', 'app.martinhowardproperty.co.uk,hq.propertypredator.com']) {
+    const response = res();
+    await handler(req('GET', '/portal', '', { host, 'x-forwarded-host': 'app.martinhowardproperty.co.uk' }), response);
+    assert.equal(response.statusCode, 421);
+  }
+  assert.equal(calls, 0);
+});
+
+test('MHP readiness retains the shared dependency gate and adds its own failures', async () => {
+  let checks = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    runtimeReadinessProbe: async () => ['Shared database unavailable'],
+    mhp: { hostname: 'app.martinhowardproperty.co.uk', readiness: async () => { checks++; return ['MHP identity unavailable']; }, handle: async () => {} },
+  });
+  const response = res();
+  await handler(req('GET', '/ready', '', { host: 'app.martinhowardproperty.co.uk' }), response);
+  assert.equal(response.statusCode, 503);
+  const result = JSON.parse(response._body);
+  assert.ok(result.blockers.includes('Shared database unavailable'));
+  assert.ok(result.blockers.includes('MHP identity unavailable'));
+  assert.equal(checks, 1);
+});
+
 test('priceKeyFor: core + bump collapses to core_bump; others map 1:1', () => {
   assert.equal(priceKeyFor({ tier: 'core', bump: true }), 'core_bump');
   assert.equal(priceKeyFor({ tier: 'core' }), 'core');
@@ -54,11 +123,13 @@ test('createCheckoutSession builds the right Stripe params and returns the URL',
 
 test('createCheckoutSession refuses an unknown or unconfigured tier', async () => {
   await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'nope' }), CheckoutError);
+  await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'core_bump' }), CheckoutError);
+  await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'pro', bump: true }), CheckoutError);
   await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg({ priceIds: { core: '' } }), { tier: 'core' }), CheckoutError);
 });
 
 test('orderFromEvent maps a completed checkout; ignores other events', () => {
-  const ev: StripeEvent = { type: 'checkout.session.completed', data: { object: { id: 'cs_1', amount_total: 99700, currency: 'usd', metadata: { tier: 'core', bump: '1' }, customer_details: { email: 'a@b.com' } } } };
+  const ev: StripeEvent = { type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'payment', payment_status: 'paid', amount_total: 99700, currency: 'usd', metadata: { tier: 'core', bump: '1' }, customer_details: { email: 'a@b.com' } } } };
   const o = orderFromEvent(ev, 'T')!;
   assert.equal(o.session_id, 'cs_1');
   assert.equal(o.tier, 'core');
@@ -66,6 +137,16 @@ test('orderFromEvent maps a completed checkout; ignores other events', () => {
   assert.equal(o.email, 'a@b.com');
   assert.equal(o.status, 'paid_awaiting_intake');
   assert.equal(orderFromEvent({ type: 'payment_intent.created' }, 'T'), null);
+});
+
+test('orderFromEvent refuses unpaid and subscription-mode Checkout Sessions', () => {
+  const session = { id: 'cs_1', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } };
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, payment_status: 'unpaid' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, mode: 'subscription' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, id: '' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: {} } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: { tier: 'mystery' } } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: { tier: 'pro', bump: '1' } } } }, 'T'), null);
 });
 
 test('fileOrderStore records, finds, and updates by session', () => {
@@ -81,6 +162,17 @@ test('fileOrderStore records, finds, and updates by session', () => {
   fs.rmSync(f, { force: true });
 });
 
+test('fileWebhookReceiptStore persists event replay receipts across reopen', () => {
+  const f = path.join(os.tmpdir(), `r72-webhooks-${process.pid}-${Math.round(performance.now())}.jsonl`);
+  const first = fileWebhookReceiptStore(f);
+  assert.equal(first.has('evt_1'), false);
+  assert.equal(first.record({ event_id: 'evt_1', type: 'checkout.session.completed', processed_at: 'T' }), true);
+  assert.equal(fileWebhookReceiptStore(f).has('evt_1'), true);
+  assert.equal(fileWebhookReceiptStore(f).record({ event_id: 'evt_1', type: 'checkout.session.completed', processed_at: 'T2' }), false);
+  assert.equal(fs.readFileSync(f, 'utf8').trim().split('\n').length, 1);
+  fs.rmSync(f, { force: true });
+});
+
 // ─── routes (fake req/res harness) ───────────────────────────────────────────
 function req(method: string, url: string, body = '', headers: Record<string, string> = {}): IncomingMessage {
   const r = Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
@@ -89,34 +181,396 @@ function req(method: string, url: string, body = '', headers: Record<string, str
 function res(): ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> } {
   const r = { statusCode: 0, _body: '', _headers: {} as Record<string, string> } as {
     statusCode: number; _body: string; _headers: Record<string, string>;
-    setHeader: (k: string, v: string) => unknown; writeHead: (c: number) => unknown; end: (b?: string) => unknown;
+    setHeader: (k: string, v: string) => unknown;
+    writeHead: (c: number, headers?: Record<string, string>) => unknown;
+    end: (b?: string) => unknown;
   };
   r.setHeader = (k: string, v: string) => { r._headers[k.toLowerCase()] = v; return r; };
-  r.writeHead = (c: number) => { r.statusCode = c; return r; };
+  r.writeHead = (c: number, headers = {}) => {
+    r.statusCode = c;
+    for (const [key, value] of Object.entries(headers)) r._headers[key.toLowerCase()] = value;
+    return r;
+  };
   r.end = (b?: string) => { r._body = b ?? ''; return r; };
   return r as unknown as ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> };
 }
-function memStore(): OrderStore & { data: Map<string, Order> } {
+function memStore(): OrderStore & { data: Map<string, Order>; records: Order[] } {
   const data = new Map<string, Order>();
-  return { data, record: (o) => { data.set(o.session_id, o); }, find: (id) => data.get(id) ?? null, update: (id, p) => { const c = data.get(id); if (!c) return null; const n = { ...c, ...p }; data.set(id, n); return n; } };
+  const records: Order[] = [];
+  return { data, records, record: (o) => { records.push(o); data.set(o.session_id, o); }, find: (id) => data.get(id) ?? null, update: (id, p) => { const c = data.get(id); if (!c) return null; const n = { ...c, ...p }; data.set(id, n); return n; } };
 }
 function app(over: Partial<Parameters<typeof createApp>[0]> = {}) {
   const created: Array<Record<string, unknown>> = [];
-  const kicks: Array<{ session: string | null }> = [];
+  const kicks: Array<{ session: string; product: string; through: string }> = [];
+  const kickedIntakes: Array<Record<string, unknown>> = [];
   const store = memStore();
+  const webhookReceipts = memoryWebhookReceiptStore();
   const handler = createApp({
     stripe: fakeStripe(created), cfg: cfg(), orders: store,
-    kickPipeline: (_i, session) => { kicks.push({ session }); return '/runs/kicked'; },
-    now: () => 'T', ...over,
+    kickPipeline: (_i, order, entitlement) => {
+      kickedIntakes.push(_i);
+      kicks.push({ session: order.session_id, product: entitlement.product, through: entitlement.through });
+      return '/runs/kicked';
+    },
+    now: () => 'T', webhookReceipts, ...over,
   });
-  return { handler, created, kicks, store };
+  return { handler, created, kicks, kickedIntakes, store, webhookReceipts };
 }
 
 test('GET /health reports test mode + configured', async () => {
   const { handler } = app(); const r = res();
   await handler(req('GET', '/health'), r);
   assert.equal(r.statusCode, 200);
-  assert.deepEqual(JSON.parse(r._body), { ok: true, mode: 'test', configured: true });
+  assert.deepEqual(JSON.parse(r._body), {
+    ok: true,
+    mode: 'test',
+    configured: true,
+    accepting_checkout: true,
+    blockers: [],
+    accepting_subscriptions: false,
+    subscription_blockers: ['recurring platform subscriptions are preview-only and not accepting payment'],
+    accepting_public_leads: false,
+    build_mode: 'live',
+    service_ready: true,
+    service_readiness_blockers: [],
+    portal_ready: false,
+    portal_blockers: ['client portal is not mounted'],
+    approved_social_media_gateway: {
+      ready: false,
+      credential_exposure: false,
+      exact_bytes: true,
+    },
+  });
+});
+
+test('operational routes are pinned to the canonical host while probes remain available', async () => {
+  const { handler } = app({ canonicalHost: 'hq.propertypredator.co.uk' });
+  const wrong = res();
+  await handler(req('GET', '/portal', '', { host: 'attacker.example' }), wrong);
+  assert.equal(wrong.statusCode, 421);
+  assert.deepEqual(JSON.parse(wrong._body), { error: 'misdirected request' });
+
+  const health = res();
+  await handler(req('GET', '/health', '', { host: 'render-internal.example' }), health);
+  assert.equal(health.statusCode, 200);
+
+  const canonical = res();
+  await handler(req('GET', '/portal', '', { host: 'HQ.PROPERTYPREDATOR.CO.UK:443' }), canonical);
+  assert.equal(canonical.statusCode, 404);
+});
+
+test('Group HQ CRM read route is host-bound and cannot fall through to MHP', async () => {
+  let reads = 0;
+  let mhpCalls = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    groupHqCrm: { async handle(_request, response) { reads += 1; response.writeHead(200); response.end('pp'); } },
+    mhp: {
+      hostname: 'app.martinhowardproperty.co.uk',
+      readiness: async () => [],
+      async handle(_request, response) { mhpCalls += 1; response.writeHead(404); response.end('mhp'); },
+    },
+  });
+  const pp = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'hq.propertypredator.com' }), pp);
+  assert.equal(pp.statusCode, 200);
+  assert.equal(reads, 1);
+  const mhp = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'app.martinhowardproperty.co.uk' }), mhp);
+  assert.equal(mhp.statusCode, 404);
+  assert.equal(mhpCalls, 1);
+  assert.equal(reads, 1);
+  const wrong = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'attacker.example' }), wrong);
+  assert.equal(wrong.statusCode, 421);
+  assert.equal(reads, 1);
+});
+
+test('GET / sends a human visitor to the secure portal without caching the redirect', async () => {
+  const { handler } = app({ canonicalHost: 'hq.propertypredator.com' });
+  const response = res();
+  await handler(req('GET', '/', '', { host: 'hq.propertypredator.com' }), response);
+  assert.equal(response.statusCode, 302);
+  assert.equal(response._headers.location, '/portal');
+  assert.equal(response._headers['cache-control'], 'no-store');
+  assert.equal(response._body, '');
+});
+
+test('GET /ready fails closed until the secure portal is mounted', async () => {
+  const { handler } = app({ portalBlockers: ['required PostgreSQL portal services did not pass readiness'] });
+  const unavailable = res();
+  await handler(req('GET', '/ready'), unavailable);
+  assert.equal(unavailable.statusCode, 503);
+  assert.deepEqual(JSON.parse(unavailable._body), {
+    ready: false,
+    blockers: ['required PostgreSQL portal services did not pass readiness'],
+  });
+
+  const mounted = app({ portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']> }).handler;
+  const ready = res();
+  await mounted(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 200);
+  assert.deepEqual(JSON.parse(ready._body), { ready: true, blockers: [] });
+});
+
+test('portal process concurrency is bounded without queueing', async () => {
+  let releaseResolve!: () => void;
+  const blocked = new Promise<void>((resolve) => { releaseResolve = resolve; });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const portal = {
+    kind: 'postgres', sessionSecret: 'test-secret', secure: false,
+    auth: {
+      resolve: async () => { resolveStarted(); await blocked; return null; },
+      login: async () => null,
+      revoke: async () => undefined,
+    },
+    crm: {},
+  } as unknown as NonNullable<Parameters<typeof createApp>[0]['portal']>;
+  const { handler } = app({ portal, portalMaxConcurrentRequests: 1 });
+  const first = res();
+  const firstCall = handler(req('GET', '/portal', '', {
+    cookie: `${PORTAL_COOKIE}=opaque-session`,
+  }), first);
+  await started;
+  const second = res();
+  await handler(req('GET', '/portal'), second);
+  assert.equal(second.statusCode, 429);
+  assert.equal(second._headers['retry-after'], '1');
+  assert.equal(second._headers['cache-control'], 'no-store');
+  releaseResolve();
+  await firstCall;
+});
+
+test('unexpected portal failures are generic, no-store and retryable', async () => {
+  const portal = {
+    kind: 'legacy', sessionSecret: 'test-secret', secure: false,
+    now: () => { throw new Error('private database detail'); },
+    login: async () => null,
+    dashboard: async () => null,
+    runTick: async () => 0,
+  } as unknown as NonNullable<Parameters<typeof createApp>[0]['portal']>;
+  const { handler } = app({ portal });
+  const response = res();
+  await handler(req('GET', '/portal'), response);
+  assert.equal(response.statusCode, 503);
+  assert.equal(response._headers['cache-control'], 'no-store');
+  assert.equal(response._headers['retry-after'], '5');
+  assert.doesNotMatch(response._body, /private database detail/);
+});
+
+test('HTTP server entrypoint has bounded header, request, response and socket reuse limits', () => {
+  const source = fs.readFileSync(new URL('../src/server/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /server\.headersTimeout = 10_000/);
+  assert.match(source, /server\.requestTimeout = 30_000/);
+  assert.match(source, /server\.timeout = 30_000/);
+  assert.match(source, /server\.keepAliveTimeout = 5_000/);
+  assert.match(source, /server\.maxRequestsPerSocket = 100/);
+  assert.match(source, /server\.maxHeadersCount = 100/);
+});
+
+test('GET /ready fails closed on process-level production safety blockers', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    serviceReadinessBlockers: ['Outbound Mailgun credential is forbidden in the public web process'],
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: ['Outbound Mailgun credential is forbidden in the public web process'],
+  });
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.equal(JSON.parse(health._body).service_ready, false);
+});
+
+test('GET /ready awaits the bounded live dependency probe while health stays liveness-only', async () => {
+  let probes = 0;
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    runtimeReadinessProbe: async () => {
+      probes += 1;
+      return ['Protected PostgreSQL portal runtime is unavailable'];
+    },
+  });
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.equal(health.statusCode, 200);
+  assert.equal(probes, 0);
+
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.equal(probes, 1);
+  assert.deepEqual(JSON.parse(ready._body).blockers, [
+    'Protected PostgreSQL portal runtime is unavailable',
+  ]);
+});
+
+test('GET /ready fails closed when an enabled Property Predator bridge is degraded', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorExternalEvents: {
+      enabled: true,
+      ready: false,
+      blockers: ['receipt store is unavailable'],
+    },
+  });
+  const response = res();
+  await handler(req('GET', '/ready'), response);
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(JSON.parse(response._body), {
+    ready: false,
+    blockers: ['Property Predator external events: receipt store is unavailable'],
+  });
+});
+
+test('GET /ready and health expose an enabled but degraded Mailgun webhook without secrets', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorMailgunWebhook: {
+      enabled: true,
+      ready: false,
+      blockers: ['protected receipt store is unavailable'],
+    },
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: ['Mailgun webhook: protected receipt store is unavailable'],
+  });
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  const status = JSON.parse(health._body);
+  assert.deepEqual(status.property_predator_mailgun_webhook, {
+    enabled: true,
+    ready: false,
+    blockers: ['protected receipt store is unavailable'],
+  });
+});
+
+test('Mailgun webhook route is dark by default and delegates only when ready', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorMailgunWebhook: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"received":true}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(calls, 1);
+});
+
+test('simulated WhatsApp inbound stays dark by default and delegates only when ready', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorSimulatedWhatsAppInbound: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(202, { 'content-type': 'application/json' });
+        response.end('{"accepted":true,"environment":"test"}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 202);
+  assert.equal(calls, 1);
+});
+
+test('simulated Facebook/Instagram DM inbound stays dark and uses the same gated mount', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorSimulatedMetaDmInbound: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(202, { 'content-type': 'application/json' });
+        response.end('{"accepted":true,"environment":"test"}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 202);
+  assert.equal(calls, 1);
+});
+
+test('simulated WhatsApp inbound readiness and health expose only fixed safe blockers', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorSimulatedWhatsAppInbound: {
+      enabled: true,
+      ready: false,
+      blockers: ['durable test receipt service is unavailable'],
+    },
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: [
+      'Simulated WhatsApp inbound: durable test receipt service is unavailable',
+    ],
+  });
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.deepEqual(JSON.parse(health._body).property_predator_simulated_whatsapp_inbound, {
+    enabled: true,
+    ready: false,
+    blockers: ['durable test receipt service is unavailable'],
+  });
+});
+
+test('a required but unmounted portal returns a branded 503 and explicit health blocker', async () => {
+  const { handler } = app({ portalBlockers: ['required PostgreSQL portal services did not pass readiness'] });
+  const portal = res();
+  await handler(req('GET', '/portal'), portal);
+  assert.equal(portal.statusCode, 503);
+  assert.match(portal._headers['content-type'] ?? '', /text\/html/);
+  assert.match(portal._body, /temporarily unavailable/);
+  assert.doesNotMatch(portal._body, /PostgreSQL|database|credential/i);
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  const status = JSON.parse(health._body) as Record<string, unknown>;
+  assert.equal(status.portal_ready, false);
+  assert.deepEqual(status.portal_blockers, ['required PostgreSQL portal services did not pass readiness']);
 });
 
 test('with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)', async () => {
@@ -142,22 +596,200 @@ test('POST /api/checkout returns a Stripe URL', async () => {
   assert.match(JSON.parse(r._body).url, /pay\.stripe\.test/);
 });
 
-test('POST /api/checkout 400s an unknown tier', async () => {
+test('the admin outer boundary masks secret-bearing implementation errors', async () => {
+  const secret = 'ADMIN_DATABASE_PASSWORD=do-not-reflect-this';
+  const { handler } = app({
+    adminHandler: async () => { throw new Error(`filesystem failed with ${secret}`); },
+  });
+  const r = res();
+  await handler(req('GET', '/admin'), r);
+  assert.equal(r.statusCode, 500);
+  assert.deepEqual(JSON.parse(r._body), { error: 'internal server error' });
+  assert.doesNotMatch(r._body, /ADMIN_DATABASE_PASSWORD|filesystem failed|do-not-reflect-this/);
+});
+
+test('POST /api/checkout 400s an unknown tier without reflecting CheckoutError details', async () => {
+  const secret = 'CHECKOUT_PROVIDER_SECRET=do-not-reflect-this';
   const { handler } = app(); const r = res();
-  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'bogus' })), r);
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: secret })), r);
   assert.equal(r.statusCode, 400);
+  assert.deepEqual(JSON.parse(r._body), { error: 'invalid request' });
+  assert.doesNotMatch(r._body, /CHECKOUT_PROVIDER_SECRET|do-not-reflect-this|unknown tier/);
+});
+
+test('malformed JSON receives a stable generic 400 without parser or request details', async () => {
+  const secret = 'JSON_SECRET=do-not-reflect-this';
+  const { handler } = app(); const r = res();
+  await handler(req('POST', '/api/checkout', `{"tier":"core","token":"${secret}",`), r);
+  assert.equal(r.statusCode, 400);
+  assert.deepEqual(JSON.parse(r._body), { error: 'invalid request' });
+  assert.doesNotMatch(r._body, /JSON_SECRET|do-not-reflect-this|JSON|position|Unexpected/);
 });
 
 test('POST /api/stripe/webhook records the order on a good signature, 400s a bad one', async () => {
-  const { handler, store } = app(); const r = res();
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_hook', metadata: { tier: 'pro' } } } });
+  const { handler, store, webhookReceipts } = app(); const r = res();
+  const ev = JSON.stringify({ id: 'evt_hook', type: 'checkout.session.completed', data: { object: { id: 'cs_hook', mode: 'payment', payment_status: 'paid', metadata: { tier: 'pro' } } } });
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
   assert.equal(store.data.get('cs_hook')?.tier, 'pro');
+  assert.equal(webhookReceipts.has('evt_hook'), true);
 
   const r2 = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'bad' }), r2);
   assert.equal(r2.statusCode, 400);
+});
+
+test('API request bodies are bounded before parsing or side effects', async () => {
+  const { handler, created } = app();
+  const tooLarge = JSON.stringify({ tier: 'core', padding: 'x'.repeat(70 * 1024) });
+  const r = res();
+  await handler(req('POST', '/api/checkout', tooLarge, { 'content-length': String(Buffer.byteLength(tooLarge)) }), r);
+  assert.equal(r.statusCode, 413);
+  assert.deepEqual(JSON.parse(r._body), { error: 'request body too large' });
+  assert.doesNotMatch(r._body, /65536|bytes|exceeds/);
+  assert.equal(created.length, 0);
+});
+
+test('a deployed test sandbox requires its private access code on checkout and intake', async () => {
+  const token = 'private-founder-sandbox-code-123';
+  const productionTest = cfg({ production: true, sandboxAccessToken: token });
+  const { handler, created, store, kicks } = app({ cfg: productionTest });
+
+  const missing = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), missing);
+  assert.equal(missing.statusCode, 401);
+  assert.equal(created.length, 0);
+
+  const wrong = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' }), { 'x-relaunch72-sandbox-token': 'wrong' }), wrong);
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(created.length, 0);
+
+  const allowed = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' }), { 'x-relaunch72-sandbox-token': token }), allowed);
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(created.length, 1);
+
+  store.record({ session_id: 'cs_private', tier: 'core', bump: false, email: 'founder@x.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const intake = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), consent: true, _stripe_session: 'cs_private' })), intake);
+  assert.equal(intake.statusCode, 401);
+  assert.equal(kicks.length, 0);
+  assert.equal(store.find('cs_private')?.status, 'paid_awaiting_intake');
+});
+
+test('production test readiness fails closed when the private sandbox code is absent or weak', async () => {
+  const { handler } = app({ cfg: cfg({ production: true, sandboxAccessToken: 'short' }) });
+  const r = res();
+  await handler(req('GET', '/health'), r);
+  const health = JSON.parse(r._body);
+  assert.equal(health.accepting_checkout, false);
+  assert.match(health.blockers.join(' '), /SANDBOX_ACCESS_TOKEN/);
+});
+
+test('health and checkout fail closed when any advertised one-off price is missing', async () => {
+  const partial = cfg({ priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: '', pro: '' } });
+  const { handler, created } = app({ cfg: partial });
+  const h = res();
+  await handler(req('GET', '/health'), h);
+  const health = JSON.parse(h._body);
+  assert.equal(health.accepting_checkout, false);
+  assert.match(health.blockers.join(' '), /core_bump, pro/);
+
+  const c = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'autopsy' })), c);
+  assert.equal(c.statusCode, 503);
+  assert.equal(created.length, 0);
+});
+
+test('subscription checkout requires both explicit opt-in and the complete recurring catalogue', async () => {
+  const disabled = app();
+  const d = res();
+  await disabled.handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_starter' })), d);
+  assert.equal(d.statusCode, 503);
+  assert.equal(disabled.created.length, 0);
+
+  const partial = app({ cfg: cfg({
+    platformSubscriptionsEnabled: true,
+    planIds: { platform_starter: 'price_ps', platform_growth: '', platform_pro: '' },
+  }) });
+  const p = res();
+  await partial.handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_starter' })), p);
+  assert.equal(p.statusCode, 503);
+  assert.match(JSON.parse(p._body).blockers.join(' '), /platform_growth, platform_pro/);
+  assert.equal(partial.created.length, 0);
+});
+
+test('POST /api/checkout accepts the Core bump only as the literal boolean true', async () => {
+  const { handler, created } = app();
+  const response = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core', bump: 'false' })), response);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(created[0]!.line_items, [{ price: 'price_c', quantity: 1 }]);
+  assert.deepEqual(created[0]!.metadata, { tier: 'core', bump: '0' });
+});
+
+test('checkout readiness blocks missing webhook configuration and every live Stripe key', async () => {
+  const noWebhook = app({ cfg: cfg({ webhookSecret: '' }) });
+  const missing = res();
+  await noWebhook.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), missing);
+  assert.equal(missing.statusCode, 503);
+  assert.match(missing._body, /webhook secret/i);
+
+  const live = app({ cfg: cfg({ secretKey: 'rk_live_money', keyMode: 'live', liveMode: true }) });
+  const locked = res();
+  await live.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), locked);
+  assert.equal(locked.statusCode, 503);
+  assert.match(locked._body, /live checkout is locked/i);
+  live.store.record({ session_id: 'cs_live_external', tier: 'core', bump: false, email: null, amount_total: 99700, currency: 'gbp', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const liveIntake = res();
+  await live.handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_live_external', consent: true })), liveIntake);
+  assert.equal(liveIntake.statusCode, 503, 'an external live Payment Link cannot bypass the build lock');
+  assert.equal(live.store.find('cs_live_external')?.status, 'paid_awaiting_intake');
+
+  const unknown = app({ cfg: cfg({ secretKey: 'future_money_key', keyMode: 'unknown', liveMode: false }) });
+  const unrecognised = res();
+  await unknown.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), unrecognised);
+  assert.equal(unrecognised.statusCode, 503);
+  assert.match(unrecognised._body, /not recognised/i);
+});
+
+test('POST /api/stripe/webhook acknowledges a replay without repeating side effects', async () => {
+  const { handler, store } = app();
+  const ev = JSON.stringify({ id: 'evt_replay', type: 'checkout.session.completed', data: { object: { id: 'cs_replay', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } } } });
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), res());
+  const replay = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), replay);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(JSON.parse(replay._body), { received: true, replayed: true });
+  assert.equal(store.records.length, 1);
+});
+
+test('a distinct webhook event cannot regress an already-claimed order or sync a test customer', async () => {
+  const customers: string[] = [];
+  const { handler, store } = app({ marketing: { onCustomer: async (order) => { customers.push(order.session_id); } } });
+  const paid = (eventId: string) => JSON.stringify({ id: eventId, type: 'checkout.session.completed', data: { object: {
+    id: 'cs_monotonic', mode: 'payment', payment_status: 'paid', amount_total: 99700, currency: 'usd',
+    metadata: { tier: 'core', bump: '0' }, customer_details: { email: 'buyer@x.co' },
+  } } });
+
+  await handler(req('POST', '/api/stripe/webhook', paid('evt_first'), { 'stripe-signature': 'good' }), res());
+  store.update('cs_monotonic', { status: 'building', run_dir: '/runs/already-started' });
+  await handler(req('POST', '/api/stripe/webhook', paid('evt_distinct_duplicate'), { 'stripe-signature': 'good' }), res());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.find('cs_monotonic')?.status, 'building');
+  assert.equal(store.find('cs_monotonic')?.run_dir, '/runs/already-started');
+  assert.deepEqual(customers, []);
+});
+
+test('POST /api/stripe/webhook rejects a verified payload without an event id', async () => {
+  const { handler, store } = app();
+  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_no_event', mode: 'payment', payment_status: 'paid' } } });
+  const r = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+  assert.equal(r.statusCode, 400);
+  assert.equal(store.records.length, 0);
 });
 
 test('POST /api/intake accepts a full intake and kicks the build; nudges a thin one', async () => {
@@ -172,6 +804,13 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   assert.equal(kicks[0]!.session, 'cs_paid');
   assert.equal(store.data.get('cs_paid')?.status, 'building');
 
+  const replay = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), replay);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(JSON.parse(replay._body).duplicate, true);
+  assert.equal(JSON.parse(replay._body).run, '/runs/kicked');
+  assert.equal(kicks.length, 1, 'a repeated intake must not start another build');
+
   const thin = { A1: 'X' }; // missing almost everything
   const r2 = res();
   await handler(req('POST', '/api/intake', JSON.stringify(thin)), r2);
@@ -181,19 +820,154 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   assert.ok(Array.isArray(b.issues) && b.issues.length > 0);
 });
 
-test('an accepted intake fires onIntakeAccepted with the order email (portal provisioning)', async () => {
-  const seen: Array<{ email: string | null; name: unknown }> = [];
-  const { handler, store } = app({ onIntakeAccepted: (intake, email) => seen.push({ email, name: intake.A1 }) });
+test('POST /api/intake refuses a valid intake without an unconsumed paid order', async () => {
+  const provisioned: string[] = [];
+  const { handler, kicks, store } = app({ onIntakeAccepted: (_intake, order) => { provisioned.push(order.email ?? ''); } });
+  const good = { ...validIntake(), consent: true };
+
+  const noSession = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), noSession);
+  assert.equal(noSession.statusCode, 402);
+
+  const unknown = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...good, _stripe_session: 'cs_unknown' })), unknown);
+  assert.equal(unknown.statusCode, 402);
+
+  store.record({ session_id: 'cs_used', tier: 'core', bump: false, email: 'buyer@x.co', amount_total: null, currency: null, status: 'nudge_returned', paid_at: 'T' });
+  const used = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...good, _stripe_session: 'cs_used' })), used);
+  assert.equal(used.statusCode, 409);
+  assert.equal(kicks.length, 0);
+  assert.equal(provisioned.length, 0);
+});
+
+test('POST /api/intake enforces the acknowledgement server-side before claiming payment', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_consent', tier: 'core', bump: false, email: 'buyer@x.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const r = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_consent', consent: false })), r);
+  assert.equal(r.statusCode, 200);
+  const body = JSON.parse(r._body);
+  assert.equal(body.accepted, false);
+  assert.equal(body.issues[0].field, 'consent');
+  assert.equal(store.find('cs_consent')?.status, 'paid_awaiting_intake');
+  assert.equal(kicks.length, 0);
+});
+
+test('POST /api/intake restores the paid entitlement after a synchronous launch failure', async () => {
+  const secret = 'PIPELINE_DATABASE_URL=do-not-reflect-this';
+  const store = memStore();
+  store.record({ session_id: 'cs_retry', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
+  const { handler } = app({ orders: store, kickPipeline: () => { throw new Error(`launch failed: ${secret}`); } });
+  const r = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_retry', consent: true })), r);
+  assert.equal(r.statusCode, 500);
+  assert.deepEqual(JSON.parse(r._body), { error: 'internal server error' });
+  assert.doesNotMatch(r._body, /PIPELINE_DATABASE_URL|do-not-reflect-this|launch failed/);
+  assert.equal(store.find('cs_retry')?.status, 'paid_awaiting_intake');
+});
+
+test('paid product metadata controls build scope and Autopsy never provisions a full portal', async () => {
+  const provisioned: Array<string | null> = [];
+  const { handler, store, kicks } = app({ onIntakeAccepted: (_intake, order) => { provisioned.push(order.email); } });
+  store.record({ session_id: 'cs_autopsy', tier: 'autopsy', bump: false, email: 'audit@client.co', amount_total: 9700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_autopsy', consent: true })), response);
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(kicks, [{ session: 'cs_autopsy', product: 'autopsy', through: 'S1' }]);
+  assert.deepEqual(provisioned, [], 'Autopsy does not include the full client portal');
+});
+
+test('Core bump receives the full S1-S9 build and preserves its fulfilment product', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_bump', tier: 'core', bump: true, email: 'core@client.co', amount_total: 114400, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_bump', consent: true })), response);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(kicks, [{ session: 'cs_bump', product: 'core_bump', through: 'S9' }]);
+});
+
+test('an unknown legacy order product is not allowed to start a build', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_unknown_tier', tier: 'mystery', bump: false, email: null, amount_total: 1, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_unknown_tier', consent: true })), response);
+  assert.equal(response.statusCode, 409);
+  assert.equal(store.find('cs_unknown_tier')?.status, 'paid_awaiting_intake');
+  assert.deepEqual(kicks, []);
+});
+
+test('an accepted intake fires onIntakeAccepted with the verified order authority', async () => {
+  const seen: Array<{ sessionId: string; email: string | null; name: unknown }> = [];
+  const { handler, store } = app({
+    onIntakeAccepted: (intake, order) => {
+      seen.push({
+        sessionId: order.session_id,
+        email: order.email,
+        name: intake.A1,
+      });
+    },
+  });
   store.record({ session_id: 'cs_p', tier: 'core', bump: false, email: 'buyer@client.co', amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
 
   const good = { ...validIntake(), _stripe_session: 'cs_p', consent: true };
   await handler(req('POST', '/api/intake', JSON.stringify(good)), res());
   assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.sessionId, 'cs_p');
   assert.equal(seen[0]!.email, 'buyer@client.co');
+
+  // A repeated accepted intake returns the existing run and must NOT provision again.
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), res());
+  assert.equal(seen.length, 1);
 
   // A rejected (thin) intake must NOT provision.
   await handler(req('POST', '/api/intake', JSON.stringify({ A1: 'X' })), res());
   assert.equal(seen.length, 1);
+});
+
+test('portal provisioning never trusts a caller-supplied intake email', async () => {
+  const seen: Array<string | null> = [];
+  const { handler, store } = app({ onIntakeAccepted: (_intake, order) => { seen.push(order.email); } });
+  store.record({ session_id: 'cs_no_email', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
+
+  const body = { ...validIntake(), _stripe_session: 'cs_no_email', _email: 'attacker@example.com', consent: true };
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(body)), response);
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, [null]);
+});
+
+test('accepted intake strips checkout capabilities and non-contract fields before every side effect', async () => {
+  const provisioned: Array<Record<string, unknown>> = [];
+  const { handler, store, kickedIntakes } = app({ onIntakeAccepted: (intake) => { provisioned.push(intake); } });
+  store.record({ session_id: 'cs_sanitized', tier: 'core', bump: false, email: 'verified@client.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const body = {
+    ...validIntake(),
+    consent: true,
+    _stripe_session: 'cs_sanitized',
+    _tier: 'pro',
+    _generated_by: 'caller-controlled',
+    _email: 'attacker@example.com',
+    extra_junk: 'must not persist',
+  };
+
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(body)), response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(kickedIntakes.length, 1);
+  assert.equal(provisioned.length, 1);
+  for (const safe of [kickedIntakes[0]!, provisioned[0]!]) {
+    assert.equal(safe.A1, validIntake().A1);
+    assert.equal(safe.consent, true);
+    assert.equal('_stripe_session' in safe, false);
+    assert.equal('_tier' in safe, false);
+    assert.equal('_generated_by' in safe, false);
+    assert.equal('_email' in safe, false);
+    assert.equal('extra_junk' in safe, false);
+  }
 });
 
 // ─── CORS (the site calls this API cross-origin) ─────────────────────────────
@@ -232,20 +1006,63 @@ test('POST /api/subscribe calls onLead and reports synced', async () => {
   assert.deepEqual(leads, [{ email: 'lead@x.com', firstName: 'Jo' }]);
 });
 
-test('POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is off', async () => {
+test('POST /api/subscribe 400s a bad email when enabled and 503s when delivery is off', async () => {
   const bad = res();
-  await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'nope' })), bad);
+  await app({ marketing: { onLead: async () => undefined } }).handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'nope' })), bad);
   assert.equal(bad.statusCode, 400);
 
   const off = res(); // no marketing dep configured
   await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com' })), off);
-  assert.equal(off.statusCode, 200);
+  assert.equal(off.statusCode, 503);
   assert.equal(JSON.parse(off._body).synced, false);
+});
+
+test('integration failures never write exception secrets or customer data to service logs', async () => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...parts: unknown[]) => { warnings.push(parts.map(String).join(' ')); };
+  try {
+    const lead = app({
+      marketing: {
+        onLead: async () => {
+          throw new Error('postgresql://owner:password@private.example/customer@example.com');
+        },
+      },
+    });
+    const leadResponse = res();
+    await lead.handler(
+      req('POST', '/api/subscribe', JSON.stringify({ email: 'customer@example.com' })),
+      leadResponse,
+    );
+    assert.equal(leadResponse.statusCode, 502);
+
+    const intake = app({
+      onIntakeAccepted: async () => {
+        throw new Error('https://api.example.test/?token=render-secret');
+      },
+    });
+    intake.store.record({
+      session_id: 'cs_log_mask', tier: 'core', bump: false,
+      email: 'private-buyer@example.com', amount_total: 99700, currency: 'gbp',
+      status: 'paid_awaiting_intake', paid_at: 'T',
+    });
+    const intakeResponse = res();
+    await intake.handler(req('POST', '/api/intake', JSON.stringify({
+      ...validIntake(), _stripe_session: 'cs_log_mask', consent: true,
+    })), intakeResponse);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(intakeResponse.statusCode, 200);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.deepEqual(warnings, ['marketing onLead failed', 'onIntakeAccepted failed']);
+  assert.doesNotMatch(warnings.join('\n'), /password|token|customer@|private-buyer|postgresql|https:/i);
 });
 
 // ─── subscriptions (recurring billing) ───────────────────────────────────────
 test('POST /api/subscription returns a subscription-mode Stripe URL', async () => {
-  const { handler, created } = app();
+  const { handler, created } = app({ cfg: cfg({ platformSubscriptionsEnabled: true }) });
   const r = res();
   await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_growth', email: 'buyer@co.uk' })), r);
   assert.equal(r.statusCode, 200);
@@ -254,7 +1071,7 @@ test('POST /api/subscription returns a subscription-mode Stripe URL', async () =
 });
 
 test('POST /api/subscription 400s an unknown plan', async () => {
-  const { handler } = app(); const r = res();
+  const { handler } = app({ cfg: cfg({ platformSubscriptionsEnabled: true }) }); const r = res();
   await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'bogus' })), r);
   assert.equal(r.statusCode, 400);
 });
@@ -262,7 +1079,7 @@ test('POST /api/subscription 400s an unknown plan', async () => {
 test('webhook records a subscription lifecycle event when a store is wired', async () => {
   const subs = memorySubscriptionStore();
   const { handler } = app({ subscriptions: subs });
-  const ev = JSON.stringify({ type: 'customer.subscription.created', data: { object: {
+  const ev = JSON.stringify({ id: 'evt_sub_hook', type: 'customer.subscription.created', data: { object: {
     id: 'sub_hook', customer: 'cus_1', status: 'active',
     items: { data: [{ price: { id: 'price_pg' } }] }, metadata: { email: 'boss@acme.co' },
   } } });
@@ -276,21 +1093,44 @@ test('webhook records a subscription lifecycle event when a store is wired', asy
 
 test('webhook without a subscription store still records the order (subscriptions optional)', async () => {
   const { handler, store } = app(); // no subscriptions dep
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_ns', metadata: { tier: 'core' } } } });
+  const ev = JSON.stringify({ id: 'evt_ns', type: 'checkout.session.completed', data: { object: { id: 'cs_ns', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } } } });
   const r = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
   assert.equal(store.data.get('cs_ns')?.tier, 'core');
 });
 
-test('webhook syncs a paying customer via onCustomer', async () => {
+test('test-mode webhook never syncs an arbitrary checkout email to customer marketing', async () => {
   const customers: string[] = [];
   const { handler } = app({ marketing: { onCustomer: async (o) => { customers.push(o.email ?? ''); } } });
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_m', metadata: { tier: 'core' }, customer_details: { email: 'buyer@x.com' } } } });
+  const ev = JSON.stringify({ id: 'evt_m', type: 'checkout.session.completed', data: { object: { id: 'cs_m', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' }, customer_details: { email: 'buyer@x.com' } } } });
   const r = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
-  // onCustomer is fire-and-forget; let the microtask run before asserting.
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(customers, ['buyer@x.com']);
+  assert.deepEqual(customers, []);
+});
+
+test('live and unknown Stripe webhooks are acknowledged but quarantined without side effects', async () => {
+  for (const lockedCfg of [
+    cfg({ secretKey: 'sk_live_money', keyMode: 'live', liveMode: true }),
+    cfg({ secretKey: 'future_money_key', keyMode: 'unknown', liveMode: false }),
+  ]) {
+    const customers: string[] = [];
+    const subs = memorySubscriptionStore();
+    const { handler, store, webhookReceipts } = app({
+      cfg: lockedCfg,
+      subscriptions: subs,
+      marketing: { onCustomer: async (o) => { customers.push(o.email ?? ''); } },
+    });
+    const ev = JSON.stringify({ id: `evt_locked_${lockedCfg.keyMode}`, type: 'checkout.session.completed', data: { object: {
+      id: `cs_locked_${lockedCfg.keyMode}`, mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' }, customer_details: { email: 'victim@example.com' },
+    } } });
+    const r = res();
+    await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+    assert.equal(r.statusCode, 200);
+    assert.equal(JSON.parse(r._body).quarantined, true);
+    assert.equal(store.records.length, 0);
+    assert.equal(customers.length, 0);
+    assert.equal(webhookReceipts.has(`evt_locked_${lockedCfg.keyMode}`), true);
+  }
 });

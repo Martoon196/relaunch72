@@ -1,8 +1,7 @@
 /**
- * Boot-time wiring for the client portal: a persisted CRM store, an account
- * (login) store, a seeded demo tenant you can log into, and — the new bit — a
- * `provision` function that turns a real signup (an accepted intake + email) into
- * a working portal login with its own generated brand brain. Mock-first, £0.
+ * Portal composition boundaries. The legacy builder below is an explicit local
+ * development/demo path backed by JSON. The PostgreSQL builder composes only
+ * canonical auth + CRM services and never constructs those stores.
  */
 
 import fs from 'node:fs';
@@ -10,13 +9,42 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { JsonCrmStore } from '../crm/store.js';
 import { JsonAccountStore, type AccountStore } from './accounts.js';
+import { InMemoryLoginThrottle, InMemorySetupThrottle } from './session.js';
 import { makeDashboard } from './data.js';
 import { makeBilling } from './billing.js';
 import { generateBrandBrain, runTickReal } from './run.js';
 import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
-import type { PortalDeps } from './router.js';
+import type { LegacyPortalDeps, PortalInboxReadBoundary, PostgresPortalDeps } from './router.js';
+import type { PortalCrmService } from './crm-service.js';
+import type { PortalAuthService } from './auth-service.js';
+import type { PropertyPredatorSsoClient } from './property-predator-sso.js';
+import type { PortalJourneyManagerService } from './journey-manager-service.js';
+import type { PortalCompanyContentService } from './company-content-service.js';
+import type { PortalBrandBrainService } from './brand-brain-service.js';
+import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
+import type { PortalCompanyContentReviewService } from './company-content-review-service.js';
+import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
+import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import type { PortalConversionInboxOperationsService } from './conversion-inbox-operations-service.js';
+import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
+import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
+import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
+import type { PortalZernioSocialConnectionService } from './zernio-social-connection-service.js';
+import type { PortalZernioMessagingService } from './zernio-messaging-service.js';
+import type { PortalSmsBindingService } from './sms-binding-service.js';
+import type { PortalContactPermissionService } from './contact-permission-service.js';
+import type { PortalFounderEmailPilotService } from './founder-email-pilot-service.js';
+import type { PortalCampaignMachineService } from './campaign-machine-service.js';
+import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
+import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
+import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
+import type { PortalCompanyAssetsService } from './company-assets-service.js';
+import type { PortalDailyOutreachService } from './daily-outreach-service.js';
+import type { PortalCreatorWatchService } from './creator-watch-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
+import { canonicalIntake } from '../intake/canonical.js';
+import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
 export interface ProvisionArgs {
   email: string;
@@ -27,8 +55,9 @@ export interface ProvisionResult {
   tenantId: string;
   name: string;
   email: string;
-  /** The generated temp password (deliver to the customer; not stored in clear). */
-  password: string;
+  /** One-use, high-entropy setup token. Deliver it only in the setup email. */
+  setupToken: string;
+  setupExpiresAt: string;
   /** True if the brand brain generated; false = login works, artifacts deferred. */
   generated: boolean;
   /** True if this email already had an account (no new tenant created). */
@@ -42,8 +71,8 @@ function tenantIdFor(name: string, email: string): string {
   const h = crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 6);
   return `t-${slug(name)}-${h}`;
 }
-function tempPassword(): string {
-  return crypto.randomBytes(9).toString('base64url'); // 12 url-safe chars
+function setupToken(): string {
+  return crypto.randomBytes(32).toString('base64url');
 }
 
 /** Turn a signup into a working portal login with a generated brand brain. */
@@ -56,24 +85,36 @@ export async function provisionTenant(
   const email = args.email.trim().toLowerCase();
   const tenantId = tenantIdFor(args.name, email);
 
-  if (await accounts.has(email)) {
-    return { tenantId, name: args.name, email, password: '', generated: fs.existsSync(path.join(dataDir, 'portal-runs', tenantId, 's3.json')), existing: true };
+  const existingAccount = await accounts.findByEmail(email);
+  if (existingAccount) {
+    const existingTenant = await store.getTenant(existingAccount.tenantId);
+    const existingRunDir = existingTenant?.runDir ?? path.join(dataDir, 'portal-runs', existingAccount.tenantId);
+    return {
+      tenantId: existingAccount.tenantId,
+      name: existingTenant?.name ?? args.name,
+      email,
+      setupToken: '',
+      setupExpiresAt: '',
+      generated: fs.existsSync(path.join(existingRunDir, 's3.json')),
+      existing: true,
+    };
   }
 
   let runDir: string | undefined = path.join(dataDir, 'portal-runs', tenantId);
   let generated = true;
   try {
-    await generateBrandBrain(args.intake, runDir);
+    await generateBrandBrain(canonicalIntake(args.intake), runDir);
   } catch {
     generated = false;
     runDir = undefined; // login still works; the dashboard shows the CRM only
   }
 
   await store.upsertTenant({ id: tenantId, name: args.name, runDir });
-  const password = tempPassword();
-  await accounts.create(email, tenantId, password);
+  const token = setupToken();
+  const setupExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await accounts.createPending(email, tenantId, token, setupExpiresAt);
   if (generated) await runTickReal(store, tenantId); // record the first run to the timeline
-  return { tenantId, name: args.name, email, password, generated, existing: false };
+  return { tenantId, name: args.name, email, setupToken: token, setupExpiresAt, generated, existing: false };
 }
 
 export interface PortalConfig {
@@ -83,8 +124,12 @@ export interface PortalConfig {
   demoEmail?: string;
   demoPassword?: string;
   demoRunDir?: string;
-  /** Called after a NEW tenant is provisioned (e.g. email the login). Never blocks provisioning. */
+  /** Development/test fixture only. Production wiring must set this false. */
+  allowDemoSeed?: boolean;
+  /** Called after a NEW tenant is provisioned (e.g. deliver its setup link). */
   onProvisioned?: (result: ProvisionResult) => Promise<void>;
+  /** Roll back a pending login and reject provisioning if setup delivery fails. */
+  requireSetupDelivery?: boolean;
   /** Subscription store to drive the portal billing screen; absent = billing UI off. */
   subscriptions?: SubscriptionStore;
   /** Start a plan checkout (wired to Stripe in index.ts); returns the URL to redirect to. */
@@ -96,16 +141,176 @@ export interface PortalConfig {
 }
 
 export interface PortalBundle {
-  portal: PortalDeps;
+  portal: LegacyPortalDeps;
   provision: (args: ProvisionArgs) => Promise<ProvisionResult>;
+}
+
+export interface PostgresPortalConfig {
+  investors?: PostgresPortalDeps['investors'];
+  investorMail?: PostgresPortalDeps['investorMail'];
+  financeDrafts?: PostgresPortalDeps['financeDrafts'];
+  sessionSecret: string;
+  secure: boolean;
+  /** Optional sanitised service telemetry for fail-closed read paths. */
+  telemetry?: PostgresPortalDeps['telemetry'];
+  auth: PortalAuthService;
+  /** Optional, env-gated main-site identity bridge. It never carries provider tokens. */
+  propertyPredatorSso?: PropertyPredatorSsoClient;
+  crm: PortalCrmService;
+  journeys?: PortalJourneyManagerService;
+  /** Authoritative operator queue; assignment/snooze only, with no provider effects. */
+  operatorActions?: PortalOperatorActionCentreService;
+  /** Omitted unless the dedicated company-content command identity is ready. */
+  companyContent?: PortalCompanyContentService;
+  /** Native local flow authoring; no enrolment or provider capability. */
+  followupFlows?: PostgresPortalDeps['followupFlows'];
+  seoBlog?: PostgresPortalDeps['seoBlog'];
+  releasedSeoMedia?: PostgresPortalDeps['releasedSeoMedia'];
+  seoBlogVaultReady?: boolean;
+  /** Omitted unless both company-asset least-privilege identities are ready. */
+  companyAssets?: PortalCompanyAssetsService;
+  /** Effects-off company-owned source sync. */
+  companyContentSync?: PortalCompanyContentSyncService;
+  /** Manager-only exact-version source review. */
+  companyContentReview?: PortalCompanyContentReviewService;
+  /** Read-only Brand Brain metadata. Omitted until its RLS reader is ready. */
+  brandBrain?: PortalBrandBrainService;
+  /** Review-only, exact-evidence campaign draft generation; never outbound. */
+  campaignDrafts?: NonNullable<PostgresPortalDeps['campaignDrafts']>;
+  /** Fixture-only affiliate compliance evidence. Omitted outside explicit preview composition. */
+  affiliateCompliance?: PortalAffiliateComplianceService;
+  /** TEST-only conversion queue read boundary; no provider/send capability. */
+  inbox?: PortalInboxReadBoundary;
+  /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
+  inboxCommands?: PortalConversionInboxCommandService;
+  /** Provider-incapable operational Inbox commands. */
+  inboxOperations?: PortalConversionInboxOperationsService;
+  /** Sanitised evidence-only channel state for founder-facing consumers. */
+  liveChannelTruth?: PortalLiveChannelTruthService;
+  /** Engage-only durable emergency pause; no release command exists. */
+  liveChannelPause?: PortalLiveChannelPauseService;
+  /** Founder-only owned Ayrshare/X binding and approved-publication staging. */
+  ownedSocialBinding?: PortalOwnedSocialBindingService;
+  /** Founder-only Zernio account connection; no publishing operation. */
+  zernioSocial?: PortalZernioSocialConnectionService;
+  /** Read-only live Instagram conversation projection inside Messaging. */
+  zernioMessaging?: PortalZernioMessagingService;
+  /** Exact calendar-to-Zernio database staging; no provider client is exposed. */
+  zernioCalendar?: NonNullable<PostgresPortalDeps['zernioCalendar']>;
+  /** Founder-only Twilio SMS binding and owned-test staging. */
+  smsBinding?: PortalSmsBindingService;
+  contactPermission?: PortalContactPermissionService;
+  founderEmailPilot?: PortalFounderEmailPilotService;
+  /** Authenticated immutable Campaign Machine read boundary. */
+  campaignMachine?: PortalCampaignMachineService;
+  /** Fixed office-seed staging boundary; no provider/network capability. */
+  ownedSeedCampaign?: PortalOwnedSeedCampaignService;
+  /** Fixed office-seed LIVE draft and explicit message approval; no provider effect. */
+  ownedSeedMessages?: PortalOwnedSeedMessageService;
+  /** Durable TEST-only public-social planning boundary. */
+  publicSocial?: NonNullable<PostgresPortalDeps['publicSocial']>;
+  /** Table-blind authoritative Daily Outreach read/command boundary. */
+  dailyOutreach?: PortalDailyOutreachService;
+  /** Review-only Creator Watch relevance boundary; it has no provider client. */
+  creatorWatch?: PortalCreatorWatchService;
+  productProfile?: PortalProductProfile;
+  portalBaseUrl?: string;
+  /** Distributed fail-closed guard required by the PostgreSQL portal. */
+  abuse: NonNullable<PostgresPortalDeps['abuse']>;
+  /** Once-per-request trusted proxy/HMAC boundary. */
+  requestContext: NonNullable<PostgresPortalDeps['requestContext']>;
+  abuseHashSecret: string;
+  /** Explicit authenticated-proxy client address policy; omitted by default. */
+  trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
+  now?: () => number;
+  requestId?: () => string;
+}
+
+/**
+ * Compose the canonical portal without constructing a JSON account, CRM or
+ * billing store. PostgreSQL readiness is owned by buildPgPortalPlatform.
+ */
+export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPortalDeps {
+  const productProfile = cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+  if (!cfg.abuse
+      || typeof cfg.abuse.admit !== 'function'
+      || typeof cfg.abuse.complete !== 'function'
+      || typeof cfg.requestContext !== 'function'
+      || typeof cfg.abuseHashSecret !== 'string'
+      || cfg.abuseHashSecret.trim().length < 32
+      || cfg.abuseHashSecret.trim() === cfg.sessionSecret.trim()) {
+    throw new Error('PostgreSQL portal abuse boundary is incomplete');
+  }
+  if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
+      || cfg.ownedSeedMessages || cfg.ownedSeedCampaign || cfg.ownedSocialBinding
+      || cfg.zernioSocial || cfg.zernioMessaging || cfg.zernioCalendar
+      || cfg.smsBinding || cfg.dailyOutreach || cfg.creatorWatch)
+      && productProfile.id !== 'property_predator_growth') {
+    throw new Error(
+      'Property Predator company-content sync is forbidden outside property_predator_growth',
+    );
+  }
+  return {
+    kind: 'postgres',
+    sessionSecret: cfg.sessionSecret,
+    secure: cfg.secure,
+    telemetry: cfg.telemetry,
+    loginThrottle: new InMemoryLoginThrottle(),
+    setupThrottle: new InMemorySetupThrottle(),
+    abuse: cfg.abuse,
+    requestContext: cfg.requestContext,
+    abuseHashSecret: cfg.abuseHashSecret,
+    auth: cfg.auth,
+    propertyPredatorSso: cfg.propertyPredatorSso,
+    crm: cfg.crm,
+    financeDrafts: cfg.financeDrafts,
+    investors: cfg.investors,
+    investorMail: cfg.investorMail,
+    portalBaseUrl: cfg.portalBaseUrl,
+    journeys: cfg.journeys,
+    operatorActions: cfg.operatorActions,
+    companyContent: cfg.companyContent,
+    followupFlows: cfg.followupFlows,
+    seoBlog: cfg.seoBlog,
+    releasedSeoMedia: cfg.releasedSeoMedia,
+    seoBlogVaultReady: cfg.seoBlogVaultReady,
+    companyAssets: cfg.companyAssets,
+    companyContentSync: cfg.companyContentSync,
+    companyContentReview: cfg.companyContentReview,
+    brandBrain: cfg.brandBrain,
+    campaignDrafts: cfg.campaignDrafts,
+    affiliateCompliance: cfg.affiliateCompliance,
+    inbox: cfg.inbox,
+    inboxCommands: cfg.inboxCommands,
+    inboxOperations: cfg.inboxOperations,
+    liveChannelTruth: cfg.liveChannelTruth,
+    liveChannelPause: cfg.liveChannelPause,
+    ownedSocialBinding: cfg.ownedSocialBinding,
+    zernioSocial: cfg.zernioSocial,
+    zernioMessaging: cfg.zernioMessaging,
+    zernioCalendar: cfg.zernioCalendar,
+    smsBinding: cfg.smsBinding,
+    contactPermission: cfg.contactPermission,
+    founderEmailPilot: cfg.founderEmailPilot,
+    campaignMachine: cfg.campaignMachine,
+    ownedSeedCampaign: cfg.ownedSeedCampaign,
+    ownedSeedMessages: cfg.ownedSeedMessages,
+    publicSocial: cfg.publicSocial,
+    dailyOutreach: cfg.dailyOutreach,
+    creatorWatch: cfg.creatorWatch,
+    productProfile,
+    trustedClientAddress: cfg.trustedClientAddress,
+    now: cfg.now,
+    requestId: cfg.requestId,
+  };
 }
 
 export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> {
   const store = new JsonCrmStore(path.join(cfg.dataDir, 'portal-crm.json'));
   const accounts = new JsonAccountStore(path.join(cfg.dataDir, 'portal-accounts.json'));
 
-  // Seed the demo tenant + its account once (only if there are no tenants yet).
-  if ((await store.listTenants()).length === 0) {
+  // Seed the demo tenant only in explicitly allowed development/test contexts.
+  if (cfg.allowDemoSeed === true && (await store.listTenants()).length === 0) {
     const email = (cfg.demoEmail ?? 'owner@frayne-electrical.co.uk').toLowerCase();
     let runDir = cfg.demoRunDir;
     if (!runDir) {
@@ -134,10 +339,13 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     ? makeBilling(cfg.subscriptions, async (tid) => (await accounts.findByTenant(tid))?.email ?? null)
     : undefined;
 
-  const portal: PortalDeps = {
+  const portal: LegacyPortalDeps = {
+    kind: 'legacy',
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
     login: (e, pw) => accounts.verify(e, pw),
+    completeSetup: (token, password, now) => accounts.completeSetup(token, password, now),
+    loginThrottle: new InMemoryLoginThrottle(),
     dashboard: makeDashboard(store, (t) => t.runDir),
     runTick: (tid) => runTickReal(store, tid),
     billing,
@@ -147,9 +355,15 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);
-    if (!result.existing && result.password && cfg.onProvisioned) {
+    if (!result.existing && result.setupToken && cfg.onProvisioned) {
       try { await cfg.onProvisioned(result); }
-      catch (e) { console.warn(`onProvisioned failed for ${result.email}: ${(e as Error).message}`); }
+      catch (e) {
+        if (cfg.requireSetupDelivery) {
+          await accounts.discardPending(result.email, result.setupToken);
+          throw new Error(`account setup delivery failed for ${result.email}: ${(e as Error).message}`);
+        }
+        console.warn(`onProvisioned failed for ${result.email}: ${(e as Error).message}`);
+      }
     }
     return result;
   };

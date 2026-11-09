@@ -1,0 +1,142 @@
+import type {
+  BrandBrainReviewSummary,
+  BrandBrainSnapshot,
+  BrandBrainSourceSummary,
+  BrandBrainSpecialistSummary,
+} from '../brand-brain-pg/types.js';
+import type {
+  PortalBrandBrainSnapshot,
+} from './brand-brain-service.js';
+import {
+  PROPERTY_PREDATOR_BRAND_BRAIN_ADAPTED_METHOD_PACKS,
+  PROPERTY_PREDATOR_BRAND_BRAIN_EXTERNAL_PROFILES,
+} from './brand-brain-registry.js';
+
+const RUNTIME_BRAND_SHA256 = 'd77b0306d110075571dedd716d012c8752a302eb39ea9198e71ecd43cc089abc';
+
+function source(
+  sourceId: string,
+  assetRole: string,
+  digest: string,
+  consumerUse = 'runtime-authority-reference',
+): BrandBrainSourceSummary {
+  return Object.freeze({
+    sourceId,
+    assetRole,
+    authorityStatus: 'source_canonical',
+    contentSha256: digest,
+    ownershipStatus: 'founder_owned',
+    licenceStatus: 'confirmed_internal_use',
+    privacyClass: 'company_confidential',
+    consumerUse,
+  });
+}
+
+function specialist(input: Readonly<{
+  profileId: string;
+  name: string;
+  capabilities: readonly string[];
+}>): BrandBrainSpecialistSummary {
+  return Object.freeze({
+    profileId: input.profileId,
+    name: input.name,
+    capabilities: Object.freeze([...input.capabilities]),
+    runtimeBrandSha256: RUNTIME_BRAND_SHA256,
+    sourceStatus: 'source_inventory_verified',
+    hqActivationStatus: 'awaiting_governance_and_evaluation',
+    runtimeReady: false,
+    blockedReason: 'Brand review, evaluation and visual-policy resolution are incomplete.',
+  });
+}
+
+const SOURCES: readonly BrandBrainSourceSummary[] = Object.freeze([
+  source('propertypredator.brand.voice/v1', 'brand_voice', '10e76f10da9f6c27f12dfbc4da4bb09d1900d16fc1c747a77840e67658bf65a3'),
+  source('propertypredator.brand.policy/v1', 'brand_policy', '21ac8545fed7f24433ea7f0f52952f1c57ff750b4e926a2ecc8d12c14429c2d9'),
+  source('propertypredator.customer.avatars/v1', 'customer_avatars', '320e0923f2fc9ca2ea12191d53c23077807de207f55c5a732167332dc867635a'),
+  source('propertypredator.offers.catalogue/v1', 'offer_catalogue', '43cf120bc7225ec75d7f2e8a55a9f42e033703512a3fb25f19d1f78d710ce50f'),
+  source('propertypredator.content.examples/v1', 'approved_examples', '54d6128c9d32e987f49b02a723ff438e0dafb5631f679fa2b982f43741e4305e'),
+  source('propertypredator.visual.panther-rule/v1', 'visual_policy', '65fcbd8c8bf8f0f06b03f7af6332151f11e45933206d59b403fb9b8692599c74', 'quarantine-only'),
+  source('propertypredator.visual.no-animal-rule/v1', 'visual_policy', '769ce704433fed05995957215d15ca6d8f08a9cfb8c37f2bb0c5c2ef01efb42e', 'quarantine-only'),
+]);
+
+const SPECIALISTS: readonly BrandBrainSpecialistSummary[] = Object.freeze([
+  specialist({
+    profileId: 'propertypredator.owned.social/v1',
+    name: 'Source Social Media Manager',
+    capabilities: ['social planning', 'channel copy', 'engagement prompts'],
+  }),
+  specialist({
+    profileId: 'propertypredator.owned.content/v1',
+    name: 'Source Content Marketer',
+    capabilities: ['long-form content', 'campaign themes', 'content repurposing'],
+  }),
+  specialist({
+    profileId: 'propertypredator.owned.image/v1',
+    name: 'Source Image Maker',
+    capabilities: ['art direction', 'image briefs', 'format variants'],
+  }),
+  specialist({
+    profileId: 'propertypredator.owned.email/v1',
+    name: 'Source Email Marketer',
+    capabilities: ['email sequences', 'subject lines', 'follow-up drafts'],
+  }),
+  specialist({
+    profileId: 'propertypredator.owned.video/v1',
+    name: 'Source Video Scriptwriter',
+    capabilities: ['video scripts', 'hooks', 'shot briefs'],
+  }),
+  specialist({
+    profileId: 'propertypredator.owned.ad/v1',
+    name: 'Source Ad Copywriter',
+    capabilities: ['ad concepts', 'campaign copy', 'creative variants'],
+  }),
+]);
+
+const REVIEWS: readonly BrandBrainReviewSummary[] = Object.freeze([
+  Object.freeze({
+    dimension: 'ownership_licence',
+    decision: 'approved',
+    decisionId: 'b3000000-0000-4000-8000-000000000001',
+  }),
+  Object.freeze({
+    dimension: 'privacy_security',
+    decision: 'approved',
+    decisionId: 'b3000000-0000-4000-8000-000000000002',
+  }),
+]);
+
+/**
+ * Synthetic, metadata-only Growth HQ preview. It contains no prompts, source
+ * paths, knowledge bytes, storage keys, credentials or customer records.
+ */
+export function createPropertyPredatorBrandBrainFixture(): PortalBrandBrainSnapshot {
+  const brain: BrandBrainSnapshot = Object.freeze({
+    sourceReleaseId: 'b1000000-0000-4000-8000-000000000001',
+    manifestSha256: 'd55afac02ac995f6157749181cf230ea8acc23b7b129dd6f92f63bcd04b57300',
+    runtimeBrandSha256: RUNTIME_BRAND_SHA256,
+    sourceSystem: 'property-predator',
+    sources: SOURCES,
+    specialists: SPECIALISTS,
+    artworkCount: 18,
+    quarantineCount: 1,
+    visualPolicyConflict: true,
+    sourceFresh: true,
+    evaluationPassed: false,
+    reviews: REVIEWS,
+    activated: false,
+    providerEffects: false,
+    recordedAt: '2026-08-27T09:45:00.000Z',
+  });
+  return Object.freeze({
+    workspace: Object.freeze({
+      workspaceId: 'b2000000-0000-4000-8000-000000000001',
+      workspaceName: 'Property Predator Growth HQ',
+      snapshotAt: '2026-08-27T09:45:00.000Z',
+      canManage: true,
+    }),
+    brain,
+    externalProfiles: PROPERTY_PREDATOR_BRAND_BRAIN_EXTERNAL_PROFILES,
+    adaptedMethodPacks: PROPERTY_PREDATOR_BRAND_BRAIN_ADAPTED_METHOD_PACKS,
+    dataset: 'illustrative_fixture',
+  });
+}

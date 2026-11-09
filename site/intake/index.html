@@ -104,17 +104,29 @@
   var SPEC = JSON.parse(document.getElementById("intake-spec").textContent);
   var FIELDS = SPEC.fields, SECTIONS = SPEC.sections;
   var KEY = "relaunch72-intake-v1";
+  var SESSION_KEY = "relaunch72-checkout-session-v1";
+  var ACCESS_KEY = "relaunch72-sandbox-access-v1";
+  var ACCESS_PROMPTS = 0;
   var state = load();          // { answers:{}, step:0 }
   var app = document.getElementById("app");
 
-  // Purchase context carried from checkout (Stripe Payment Link success URL).
+  // Purchase context carried from the server-created Stripe Checkout success URL.
   var URLP = new URLSearchParams(location.search);
   var TIER = (URLP.get("tier") || "").toLowerCase();
-  var SESSION = URLP.get("session") || "";
+  var URL_SESSION = URLP.get("session") || "";
+  var SESSION = URL_SESSION;
+  try {
+    SESSION = URL_SESSION || sessionStorage.getItem(SESSION_KEY) || "";
+    if(URL_SESSION) sessionStorage.setItem(SESSION_KEY,URL_SESSION);
+  } catch(e) {}
+  if(URL_SESSION){
+    URLP.delete("session");
+    try{ history.replaceState(null,"",location.pathname+(URLP.toString()?"?"+URLP.toString():"")+location.hash); }catch(e){}
+  }
   var TIER_NAMES = { autopsy: "Marketing Autopsy", core: "Relaunch72 Core", pro: "Relaunch72 Pro" };
-  if (TIER || SESSION) { state.tier = TIER || state.tier; state.session = SESSION || state.session; save(); }
+  if (TIER) { state.tier = TIER; save(); }
 
-  function load(){ try{ return JSON.parse(localStorage.getItem(KEY)) || {answers:{},step:0}; }catch(e){ return {answers:{},step:0}; } }
+  function load(){ try{ var saved=JSON.parse(localStorage.getItem(KEY)) || {answers:{},step:0}; if("session" in saved){ delete saved.session; localStorage.setItem(KEY,JSON.stringify(saved)); } return saved; }catch(e){ return {answers:{},step:0}; } }
   function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
   function words(s){ return String(s||"").split(/\s+/).filter(Boolean).length; }
@@ -157,7 +169,7 @@
     out.consent = !!state.answers.consent;
     out._generated_by = "relaunch72-deep-intake-form";
     if (state.tier) out._tier = state.tier;
-    if (state.session) out._stripe_session = state.session;
+    if (SESSION) out._stripe_session = SESSION;
     return out;
   }
 
@@ -213,8 +225,6 @@
       var loaded=0;
       FIELDS.forEach(function(f){ if(parsed[f.id]!=null && parsed[f.id]!==""){ state.answers[f.id]=parsed[f.id]; loaded++; } });
       if("consent" in parsed) state.answers.consent=!!parsed.consent;
-      if(parsed._tier) state.tier=parsed._tier;
-      if(parsed._stripe_session) state.session=parsed._stripe_session;
       if(!loaded){ alert("Couldn’t find any answers in that file."); return; }
       save();
       renderReview();
@@ -240,7 +250,7 @@
           '<a href="#" id="resume-trigger" style="color:var(--electric);font-weight:600;text-decoration:none">Load it and skip to Send →</a>'+
           '<input type="file" id="resume" accept="application/json,.json" style="display:none"/></p>'+
       '</div>'+
-      '<p class="foot">Your 72-hour clock starts only when we accept your completed intake — not before.</p>'+
+      '<p class="foot">Private sandbox: acceptance tests the mock workflow only. It does not start a live delivery clock or customer fulfilment.</p>'+
     '</div>';
     document.getElementById("start").onclick=function(){ go(0); };
     var rf=document.getElementById("resume"), rt=document.getElementById("resume-trigger");
@@ -326,14 +336,14 @@
         allErrs.map(function(x){return '<li data-jump="'+x.f.section+'"><b>'+x.f.id+' · '+esc(x.f.label)+'</b> — '+esc(x.m)+'</li>';}).join("")+
         '</ul></div>';
     } else {
-      body='<p class="lede">Everything checks out. '+answeredCount()+' of '+FIELDS.length+' fields answered. Send it and your 72-hour clock starts the moment we accept it.</p>';
+      body='<p class="lede">Everything checks out. '+answeredCount()+' of '+FIELDS.length+' fields answered. Sending tests the private mock workflow; it does not start live customer work.</p>';
     }
     app.innerHTML='<div class="wrap"><div class="sec-head"><div class="n">Final step</div><h2>Review &amp; send</h2></div>'+
       body+
-      '<label class="consent"><input type="checkbox" id="consent" '+(consentOk?'checked':'')+'/><span>I confirm my answers are accurate. I understand my marketing pack is produced with AI assistance and a human review before delivery, and that my data is handled per the privacy policy.</span></label>'+
+      '<label class="consent"><input type="checkbox" id="consent" '+(consentOk?'checked':'')+'/><span>I confirm my answers are accurate. This is a private test sandbox, so I will not include sensitive personal data. I understand the pack is AI-assisted and live privacy and fulfilment terms must be agreed before customer work.</span></label>'+
       '<div class="nav"><button class="btn ghost" id="back">← Back to sections</button>'+
-        '<button class="btn" id="send" '+((allErrs.length||!consentOk)?'disabled':'')+'>Send my intake →</button></div>'+
-      '<div class="foot">Sending submits your answers to Relaunch72 — your 72-hour clock starts the moment we accept them.</div></div>';
+        '<button class="btn" id="send" '+((allErrs.length||!consentOk)?'disabled':'')+'>Send test intake →</button></div>'+
+      '<div class="foot">Sandbox acceptance creates mock workflow state only — no live delivery clock or customer fulfilment.</div></div>';
     document.getElementById("back").onclick=function(){ go(SECTIONS.length-1); };
     document.getElementById("consent").onchange=function(e){ state.answers.consent=e.target.checked; save(); renderReview(); };
     app.querySelectorAll("[data-jump]").forEach(function(li){ li.onclick=function(){ var sid=li.getAttribute("data-jump"); go(SECTIONS.map(function(s){return s.id;}).indexOf(sid)); }; });
@@ -345,14 +355,32 @@
     var send=document.getElementById("send");
     if(SPEC.submitEndpoint){
       if(send){ send.disabled=true; send.textContent="Sending…"; }
-      fetch(SPEC.submitEndpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})
-        .then(function(r){ return r.json().catch(function(){ return {}; }); })
-        .then(function(res){
-          if(res&&res.accepted===false){ renderRejected(res.issues||[]); return; }
-          try{ localStorage.removeItem(KEY); }catch(e){}
-          renderDone();
+      var headers={"Content-Type":"application/json"};
+      try{ var access=sessionStorage.getItem(ACCESS_KEY)||""; if(access)headers["x-relaunch72-sandbox-token"]=access; }catch(e){}
+      fetch(SPEC.submitEndpoint,{method:"POST",headers:headers,body:JSON.stringify(data)})
+        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(body){ return {ok:r.ok,status:r.status,body:body}; }); })
+        .then(function(result){
+          var res=result.body||{};
+          if(result.status===401&&ACCESS_PROMPTS<2){
+            ACCESS_PROMPTS++;
+            var entered=window.prompt("Private Relaunch72 test access code");
+            if(entered&&entered.trim()){
+              try{ sessionStorage.setItem(ACCESS_KEY,entered.trim()); }catch(e){}
+              if(send){ send.disabled=false; }
+              submit();
+              return;
+            }
+          }
+          if(result.ok&&res.accepted===true){
+            try{ localStorage.removeItem(KEY); }catch(e){}
+            try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){}
+            renderDone();
+            return;
+          }
+          if(res.accepted===false&&Array.isArray(res.issues)&&res.issues.length){ renderRejected(res.issues); return; }
+          renderSubmitError(data,res.error||("The server could not accept this intake (HTTP "+result.status+")."));
         })
-        .catch(function(){ downloadCopy(data); });
+        .catch(function(){ renderSubmitError(data,"We could not reach Relaunch72. Your answers are still saved in this browser."); });
     } else {
       // No backend wired (dev/preview) — keep a local copy so nothing is lost.
       downloadCopy(data);
@@ -361,8 +389,8 @@
   }
 
   function renderDone(){
-    app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>That’s the hard part done.</h1>'+
-      '<p class="lede">Your intake is in. We review it (usually within a few hours) and your 72-hour build clock starts the moment we accept it. Keep an eye on your inbox.</p>'+
+    app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>Sandbox test accepted.</h1>'+
+      '<p class="lede">The private mock workflow has accepted this test intake. No live delivery clock, human fulfilment or customer email has started.</p>'+
       '<p class="foot" style="margin-top:24px">You can close this tab.</p></div>';
   }
 
@@ -378,9 +406,21 @@
     document.getElementById("reback").onclick=function(){ go(SECTIONS.length-1); };
   }
 
+  function renderSubmitError(data,message){
+    app.innerHTML='<div class="wrap"><div class="sec-head"><div class="n">Not sent</div><h2>Your intake has not been accepted yet</h2></div>'+
+      '<div class="nudge"><p>'+esc(message)+'</p></div>'+
+      '<p class="lede">Nothing has been cleared. You can try again or download a backup copy.</p>'+
+      '<div class="nav"><button class="btn ghost" id="savecopy">Download backup</button><button class="btn" id="retry">Try again →</button></div></div>';
+    document.getElementById("savecopy").onclick=function(){ downloadCopy(data); };
+    document.getElementById("retry").onclick=function(){ renderReview(); };
+  }
+
   function downloadCopy(data){
     var name=(data.A1||"intake").toString().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"intake";
-    var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    var backup={};
+    FIELDS.forEach(function(f){ if(data[f.id]!=null) backup[f.id]=data[f.id]; });
+    backup.consent=!!data.consent;
+    var blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json"});
     var url=URL.createObjectURL(blob), a=document.createElement("a"); a.href=url; a.download=name+"-intake.json"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>Answers saved to your device.</h1>'+
       '<p class="lede">We couldn’t reach the server just now, so your answers downloaded as a file. Email it to <b>hello@relaunch72.com</b> and we’ll pick it straight up — nothing’s lost.</p>'+

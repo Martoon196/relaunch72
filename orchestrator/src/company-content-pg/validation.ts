@@ -1,0 +1,609 @@
+import { createHash } from 'node:crypto';
+import type { DatabaseRequestContext } from '../db/rls.js';
+import { validateDatabaseContext } from '../db/rls.js';
+import {
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+  COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+  CompanyContentValidationError,
+  type CompanyContentEmailDraftPayload,
+  type CompanyContentExactSocialReview,
+  type CompanyContentApprovalDecision,
+  type CompanyContentKind,
+  type CompanyContentOrigin,
+  type CreateCompanyContentEmailDraftVersionCommand,
+  type CreateCompanyContentVersionCommand,
+  type DecideCompanyContentApprovalCommand,
+  type RefreshCompanyContentSourceAttestationCommand,
+  type RequestCompanyContentApprovalCommand,
+} from './types.js';
+import {
+  COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS,
+  companyContentAttestationMaxAgeMs,
+} from './property-predator-owned-seed-attestation-policy.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256 = /^[0-9a-f]{64}$/;
+const COMMAND_KEY = /^[\x21-\x7e]{1,200}$/;
+const SOURCE_SYSTEM = /^[A-Za-z][A-Za-z0-9_.:-]{0,99}$/;
+const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+const ORIGINS = new Set<CompanyContentOrigin>(['imported', 'generated', 'edited']);
+const KINDS = new Set<CompanyContentKind>([
+  'article', 'document', 'email', 'image', 'social_post',
+  'video', 'webinar', 'other',
+]);
+const DECISIONS = new Set<CompanyContentApprovalDecision>([
+  'approved', 'rejected', 'changes_requested',
+]);
+
+function exactText(value: unknown, field: string, maximum: number): string {
+  if (typeof value !== 'string' || value !== value.trim()
+      || value.length < 1 || value.length > maximum) {
+    throw new CompanyContentValidationError(
+      `${field} must be trimmed and contain 1-${maximum} characters`,
+    );
+  }
+  return value;
+}
+
+function optionalText(value: unknown, field: string, maximum: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return exactText(value, field, maximum);
+}
+
+function uuid(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !UUID.test(value)) {
+    throw new CompanyContentValidationError(`${field} must be a UUID`);
+  }
+  return value.toLowerCase();
+}
+
+function digest(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !SHA256.test(value)) {
+    throw new CompanyContentValidationError(`${field} must be a lowercase SHA-256 hex digest`);
+  }
+  return value;
+}
+
+function timestamp(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new CompanyContentValidationError(`${field} must be an ISO timestamp`);
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw new CompanyContentValidationError(`${field} must be a canonical UTC ISO timestamp`);
+  }
+  return value;
+}
+
+function commandKey(value: unknown): string {
+  if (typeof value !== 'string' || value !== value.trim() || !COMMAND_KEY.test(value)) {
+    throw new CompanyContentValidationError(
+      'commandKey must be 1-200 printable ASCII characters without surrounding space',
+    );
+  }
+  return value;
+}
+
+function jsonValue(value: unknown, path: string, seen: Set<object>): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new CompanyContentValidationError(`${path} contains a non-finite number`);
+    }
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) throw new CompanyContentValidationError(`${path} contains a cycle`);
+    seen.add(value);
+    const encoded = `[${value.map((child, index) => jsonValue(child, `${path}[${index}]`, seen)).join(',')}]`;
+    seen.delete(value);
+    return encoded;
+  }
+  if (typeof value === 'object') {
+    if (seen.has(value)) throw new CompanyContentValidationError(`${path} contains a cycle`);
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new CompanyContentValidationError(`${path} must contain only plain JSON objects`);
+    }
+    seen.add(value);
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, child]) => {
+        if (child === undefined) {
+          throw new CompanyContentValidationError(`${path}.${key} must not be undefined`);
+        }
+        return `${JSON.stringify(key)}:${jsonValue(child, `${path}.${key}`, seen)}`;
+      });
+    seen.delete(value);
+    return `{${entries.join(',')}}`;
+  }
+  throw new CompanyContentValidationError(`${path} contains a non-JSON value`);
+}
+
+export function canonicalCompanyContentJson(value: unknown): string {
+  return jsonValue(value, 'value', new Set<object>());
+}
+
+const EMAIL_SUBJECT_UNSAFE = /[\r\n\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u;
+const EMAIL_BODY_UNSAFE = /[\u0000\u202a-\u202e\u2066-\u2069]/u;
+
+function emailSubject(value: unknown): string {
+  if (typeof value !== 'string' || value !== value.trim()
+      || value.length < 1 || value.length > 500 || EMAIL_SUBJECT_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      'subject must be one safe trimmed line containing 1-500 characters',
+    );
+  }
+  return value;
+}
+
+function emailBody(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length < 1
+      || Buffer.byteLength(value, 'utf8') > 900_000 || EMAIL_BODY_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      'bodyText must contain 1-900000 safe UTF-8 bytes',
+    );
+  }
+  return value;
+}
+
+/** Build the only canonical email payload accepted by the exact-review parser. */
+export function canonicalCompanyContentEmailDraft(
+  subject: unknown,
+  bodyText: unknown,
+): string {
+  return canonicalCompanyContentJson(Object.freeze<CompanyContentEmailDraftPayload>({
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: emailSubject(subject),
+    bodyText: emailBody(bodyText),
+  }));
+}
+
+/**
+ * Converts generated or operator-provided copy into the generic immutable
+ * version command without placing the subject outside the hashed content body.
+ */
+export function companyContentEmailDraftVersionCommand(
+  command: CreateCompanyContentEmailDraftVersionCommand,
+): CreateCompanyContentVersionCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Company content email draft command is required');
+  }
+  return Object.freeze({
+    commandKey: command.commandKey,
+    contentItemId: command.contentItemId,
+    previousVersionId: command.previousVersionId,
+    origin: command.origin,
+    kind: 'email' as const,
+    title: command.title,
+    contentMimeType: COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+    content: canonicalCompanyContentEmailDraft(command.subject, command.bodyText),
+    source: command.source,
+    blob: command.blob,
+    brand: command.brand,
+    attestation: command.attestation,
+    metadata: command.metadata,
+  });
+}
+
+/** Strict parser: extra/missing fields fail closed instead of becoming review copy. */
+export function parseCompanyContentEmailDraft(
+  canonicalContent: string,
+): CompanyContentEmailDraftPayload {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(canonicalContent) as unknown;
+  } catch {
+    throw new CompanyContentValidationError('Email draft content is not valid canonical JSON');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)
+      || Object.keys(decoded).sort().join(',') !== 'bodyText,schema,subject') {
+    throw new CompanyContentValidationError('Email draft content has an invalid shape');
+  }
+  const candidate = decoded as Record<string, unknown>;
+  if (candidate.schema !== COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA) {
+    throw new CompanyContentValidationError('Email draft content has an invalid schema');
+  }
+  const payload = Object.freeze<CompanyContentEmailDraftPayload>({
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: emailSubject(candidate.subject),
+    bodyText: emailBody(candidate.bodyText),
+  });
+  if (canonicalCompanyContentJson(payload) !== canonicalContent) {
+    throw new CompanyContentValidationError('Email draft content is not canonical');
+  }
+  return payload;
+}
+
+const SOCIAL_TEXT_UNSAFE = /[\u0000\u202a-\u202e\u2066-\u2069]/u;
+
+function socialText(value: unknown, field: string, maximumBytes: number): string {
+  if (typeof value !== 'string' || value.trim().length < 1
+      || Buffer.byteLength(value, 'utf8') > maximumBytes || SOCIAL_TEXT_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      `${field} must contain 1-${maximumBytes} safe UTF-8 bytes`,
+    );
+  }
+  return value;
+}
+
+function nullableSocialText(value: unknown, field: string, maximumBytes: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return socialText(value, field, maximumBytes);
+}
+
+/**
+ * Parse the immutable Property Predator social payload into human review fields.
+ * Both the original combined-body shape and the split artwork shape remain
+ * byte-verifiable; newly edited versions always use the split shape.
+ */
+import { parseCompanyContentSocialImage, type CompanyContentSocialImage } from './social-image.js';
+
+export function parseCompanyContentSocialDraft(
+  canonicalContent: string,
+): Omit<CompanyContentExactSocialReview,
+  'publicationCopySha256' | 'artworkInstructionsSha256'> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(canonicalContent) as unknown;
+  } catch {
+    throw new CompanyContentValidationError('Social draft content is not valid canonical JSON');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new CompanyContentValidationError('Social draft content has an invalid shape');
+  }
+  const candidate = decoded as Record<string, unknown>;
+  const required = ['body', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type'];
+  const allowed = new Set([...required, 'artwork_instructions', 'contextSha256', 'image']);
+  const keys = Object.keys(candidate);
+  if (required.some((key) => !(key in candidate)) || keys.some((key) => !allowed.has(key))) {
+    throw new CompanyContentValidationError('Social draft content has an invalid shape');
+  }
+  if (candidate.schema !== COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA) {
+    throw new CompanyContentValidationError('Social draft content has an invalid schema');
+  }
+  const ctaUrl = nullableSocialText(candidate.cta_url, 'cta_url', 2_048);
+  if (ctaUrl && !/^https:\/\/[^\s]+$/u.test(ctaUrl)) {
+    throw new CompanyContentValidationError('cta_url must be an HTTPS URL');
+  }
+  const contextSha256 = nullableSocialText(candidate.contextSha256, 'contextSha256', 64);
+  if (contextSha256 && !SHA256.test(contextSha256)) {
+    throw new CompanyContentValidationError('contextSha256 must be a lowercase SHA-256 digest');
+  }
+  const artworkInstructions = nullableSocialText(
+    candidate.artwork_instructions,
+    'artwork_instructions',
+    50_000,
+  );
+  if (canonicalCompanyContentJson(candidate) !== canonicalContent) {
+    throw new CompanyContentValidationError('Social draft content is not canonical');
+  }
+  return Object.freeze({
+    schema: COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+    type: socialText(candidate.type, 'type', 100),
+    kind: socialText(candidate.kind, 'kind', 100),
+    platform: socialText(candidate.platform, 'platform', 100),
+    title: socialText(candidate.title, 'title', 500),
+    publicationCopy: socialText(candidate.body, 'body', 900_000),
+    artworkInstructions,
+    ...(candidate.image !== undefined ? { image: parseCompanyContentSocialImage(candidate.image) } : {}),
+    ctaUrl,
+    contextSha256,
+    legacyCombined: !Object.prototype.hasOwnProperty.call(candidate, 'artwork_instructions'),
+  });
+}
+
+export function canonicalCompanyContentSocialDraft(input: Readonly<{
+  type: string;
+  kind: string;
+  platform: string;
+  title: string;
+  publicationCopy: string;
+  artworkInstructions?: string | null;
+  ctaUrl?: string | null;
+  contextSha256?: string | null;
+  image?: CompanyContentSocialImage | null;
+}>): string {
+  const contextSha256 = nullableSocialText(input.contextSha256, 'contextSha256', 64);
+  if (contextSha256 && !SHA256.test(contextSha256)) {
+    throw new CompanyContentValidationError('contextSha256 must be a lowercase SHA-256 digest');
+  }
+  const ctaUrl = nullableSocialText(input.ctaUrl, 'cta_url', 2_048);
+  if (ctaUrl && !/^https:\/\/[^\s]+$/u.test(ctaUrl)) {
+    throw new CompanyContentValidationError('cta_url must be an HTTPS URL');
+  }
+  return canonicalCompanyContentJson({
+    artwork_instructions: nullableSocialText(
+      input.artworkInstructions,
+      'artwork_instructions',
+      50_000,
+    ) ?? '',
+    body: socialText(input.publicationCopy, 'body', 900_000),
+    ...(input.image ? { image: parseCompanyContentSocialImage(input.image) } : {}),
+    cta_url: ctaUrl ?? '',
+    ...(contextSha256 ? { contextSha256 } : {}),
+    kind: socialText(input.kind, 'kind', 100),
+    platform: socialText(input.platform, 'platform', 100),
+    schema: COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+    title: socialText(input.title, 'title', 500),
+    type: socialText(input.type, 'type', 100),
+  });
+}
+
+function deepFreezeCanonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const child of value) deepFreezeCanonicalJson(child);
+    return Object.freeze(value);
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreezeCanonicalJson(child);
+    }
+    return Object.freeze(value);
+  }
+  return value;
+}
+
+export function validateCompanyContentUserContext(context: DatabaseRequestContext): void {
+  validateDatabaseContext(context);
+  if (context.actorKind !== 'user' || !context.userId) {
+    throw new CompanyContentValidationError(
+      'Company content commands require an authenticated workspace member',
+    );
+  }
+}
+
+export interface NormalizedCompanyContentVersionCommand {
+  readonly commandKey: string;
+  readonly contentItemId: string | null;
+  readonly previousVersionId: string | null;
+  readonly origin: CompanyContentOrigin;
+  readonly kind: CompanyContentKind;
+  readonly title: string;
+  readonly contentMimeType: string;
+  readonly content: string;
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly blobStorageKey: string;
+  readonly blobSha256: string;
+  readonly brandSnapshotRef: string;
+  readonly brandSha256: string;
+  readonly sourceCatalogSha256: string;
+  readonly sourceCheckedAt: string;
+  readonly sourceExpiresAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly contentSha256: string;
+}
+
+export function normalizeCompanyContentVersionCommand(
+  command: CreateCompanyContentVersionCommand,
+): NormalizedCompanyContentVersionCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Company content version command is required');
+  }
+  if (!ORIGINS.has(command.origin)) {
+    throw new CompanyContentValidationError('origin is invalid');
+  }
+  if (!KINDS.has(command.kind)) {
+    throw new CompanyContentValidationError('kind is invalid');
+  }
+  const contentItemId = command.contentItemId === undefined || command.contentItemId === null
+    ? null : uuid(command.contentItemId, 'contentItemId');
+  const previousVersionId = command.previousVersionId === undefined || command.previousVersionId === null
+    ? null : uuid(command.previousVersionId, 'previousVersionId');
+  if ((contentItemId === null) !== (previousVersionId === null)) {
+    throw new CompanyContentValidationError(
+      'contentItemId and previousVersionId must either both be supplied or both be omitted',
+    );
+  }
+  if (contentItemId === null && command.origin === 'edited') {
+    throw new CompanyContentValidationError('An edited version must identify its predecessor');
+  }
+  const title = exactText(command.title, 'title', 300);
+  const contentMimeType = exactText(command.contentMimeType, 'contentMimeType', 100);
+  if (contentMimeType !== contentMimeType.toLowerCase() || !MIME_TYPE.test(contentMimeType)) {
+    throw new CompanyContentValidationError('contentMimeType must be a lowercase MIME type');
+  }
+  if (typeof command.content !== 'string'
+      || Buffer.byteLength(command.content, 'utf8') < 1
+      || Buffer.byteLength(command.content, 'utf8') > 1_048_576) {
+    throw new CompanyContentValidationError('content must contain 1-1048576 UTF-8 bytes');
+  }
+  const sourceSystem = exactText(command.source?.system, 'source.system', 100);
+  if (!SOURCE_SYSTEM.test(sourceSystem)) {
+    throw new CompanyContentValidationError('source.system is invalid');
+  }
+  const sourceItemId = exactText(command.source?.itemId, 'source.itemId', 500);
+  const sourceVersion = exactText(command.source?.version, 'source.version', 500);
+  const metadata = command.metadata ?? {};
+  if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
+    throw new CompanyContentValidationError('metadata must be a JSON object');
+  }
+  const canonicalMetadata = canonicalCompanyContentJson(metadata);
+  if (Buffer.byteLength(canonicalMetadata, 'utf8') > 65_536) {
+    throw new CompanyContentValidationError('metadata must not exceed 65536 UTF-8 bytes');
+  }
+  const metadataSnapshot = deepFreezeCanonicalJson(
+    JSON.parse(canonicalMetadata) as unknown,
+  ) as Readonly<Record<string, unknown>>;
+  const contentSha256 = createHash('sha256').update(command.content, 'utf8').digest('hex');
+  const sourceCheckedAt = timestamp(command.attestation?.checkedAt, 'attestation.checkedAt');
+  const sourceExpiresAt = timestamp(command.attestation?.expiresAt, 'attestation.expiresAt');
+  if (sourceExpiresAt <= sourceCheckedAt) {
+    throw new CompanyContentValidationError('attestation.expiresAt must be after checkedAt');
+  }
+  const attestationMaxAgeMs = companyContentAttestationMaxAgeMs({
+    sourceSystem,
+    sourceItemId,
+    sourceVersion,
+    contentSha256,
+    metadata: metadataSnapshot,
+  });
+  if (new Date(sourceExpiresAt).getTime() - new Date(sourceCheckedAt).getTime()
+      > attestationMaxAgeMs) {
+    throw new CompanyContentValidationError(
+      attestationMaxAgeMs === COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS
+        ? 'Source attestation freshness may not exceed 15 minutes'
+        : 'Owned-seed proof attestation freshness may not exceed 24 hours',
+    );
+  }
+  return Object.freeze({
+    commandKey: commandKey(command.commandKey),
+    contentItemId,
+    previousVersionId,
+    origin: command.origin,
+    kind: command.kind,
+    title,
+    contentMimeType,
+    content: command.content,
+    sourceSystem,
+    sourceItemId,
+    sourceVersion,
+    blobStorageKey: exactText(command.blob?.storageKey, 'blob.storageKey', 1024),
+    blobSha256: digest(command.blob?.sha256, 'blob.sha256'),
+    brandSnapshotRef: exactText(command.brand?.snapshotRef, 'brand.snapshotRef', 1024),
+    brandSha256: digest(command.brand?.sha256, 'brand.sha256'),
+    sourceCatalogSha256: digest(
+      command.attestation?.catalogSha256,
+      'attestation.catalogSha256',
+    ),
+    sourceCheckedAt,
+    sourceExpiresAt,
+    metadata: metadataSnapshot,
+    contentSha256,
+  });
+}
+
+export interface NormalizedRefreshCompanyContentSourceAttestationCommand {
+  readonly commandKey: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly contentSha256: string;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
+  readonly sourceCatalogSha256: string;
+  readonly sourceCheckedAt: string;
+  readonly sourceExpiresAt: string;
+}
+
+export function normalizeRefreshCompanyContentSourceAttestationCommand(
+  command: RefreshCompanyContentSourceAttestationCommand,
+): NormalizedRefreshCompanyContentSourceAttestationCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Source attestation refresh command is required');
+  }
+  const sourceSystem = exactText(command.expected?.source?.system, 'expected.source.system', 100);
+  if (!SOURCE_SYSTEM.test(sourceSystem)) {
+    throw new CompanyContentValidationError('expected.source.system is invalid');
+  }
+  const sourceCheckedAt = timestamp(command.attestation?.checkedAt, 'attestation.checkedAt');
+  const sourceExpiresAt = timestamp(command.attestation?.expiresAt, 'attestation.expiresAt');
+  if (sourceExpiresAt <= sourceCheckedAt) {
+    throw new CompanyContentValidationError('attestation.expiresAt must be after checkedAt');
+  }
+  if (new Date(sourceExpiresAt).getTime() - new Date(sourceCheckedAt).getTime()
+      > COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS) {
+    throw new CompanyContentValidationError(
+      'Source attestation freshness may not exceed 15 minutes',
+    );
+  }
+  return Object.freeze({
+    commandKey: commandKey(command.commandKey),
+    contentItemId: uuid(command.contentItemId, 'contentItemId'),
+    contentVersionId: uuid(command.contentVersionId, 'contentVersionId'),
+    sourceSystem,
+    sourceItemId: exactText(command.expected?.source?.itemId, 'expected.source.itemId', 500),
+    sourceVersion: exactText(command.expected?.source?.version, 'expected.source.version', 500),
+    contentSha256: digest(command.expected?.contentSha256, 'expected.contentSha256'),
+    blobSha256: digest(command.expected?.blobSha256, 'expected.blobSha256'),
+    brandSha256: digest(command.expected?.brandSha256, 'expected.brandSha256'),
+    sourceCatalogSha256: digest(
+      command.attestation?.catalogSha256,
+      'attestation.catalogSha256',
+    ),
+    sourceCheckedAt,
+    sourceExpiresAt,
+  });
+}
+
+export interface NormalizedApprovalRequestCommand {
+  readonly commandKey: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly reviewNote: string | null;
+}
+
+export function normalizeApprovalRequestCommand(
+  command: RequestCompanyContentApprovalCommand,
+): NormalizedApprovalRequestCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Approval request command is required');
+  }
+  return Object.freeze({
+    commandKey: commandKey(command.commandKey),
+    contentItemId: uuid(command.contentItemId, 'contentItemId'),
+    contentVersionId: uuid(command.contentVersionId, 'contentVersionId'),
+    reviewNote: optionalText(command.reviewNote, 'reviewNote', 2000),
+  });
+}
+
+export interface NormalizedApprovalDecisionCommand {
+  readonly commandKey: string;
+  readonly approvalRequestId: string;
+  readonly decision: CompanyContentApprovalDecision;
+  readonly decisionNote: string | null;
+}
+
+export function normalizeApprovalDecisionCommand(
+  command: DecideCompanyContentApprovalCommand,
+): NormalizedApprovalDecisionCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Approval decision command is required');
+  }
+  if (!DECISIONS.has(command.decision)) {
+    throw new CompanyContentValidationError('decision is invalid');
+  }
+  const decisionNote = optionalText(command.decisionNote, 'decisionNote', 4000);
+  if (command.decision !== 'approved' && decisionNote === null) {
+    throw new CompanyContentValidationError(
+      'Rejected and changes-requested decisions require a note',
+    );
+  }
+  return Object.freeze({
+    commandKey: commandKey(command.commandKey),
+    approvalRequestId: uuid(command.approvalRequestId, 'approvalRequestId'),
+    decision: command.decision,
+    decisionNote,
+  });
+}
+
+export function companyContentRequestHash(
+  context: DatabaseRequestContext,
+  commandName: string,
+  payload: unknown,
+): Buffer {
+  validateCompanyContentUserContext(context);
+  return createHash('sha256').update(canonicalCompanyContentJson({
+    actorKind: context.actorKind,
+    actorUserId: context.userId!.toLowerCase(),
+    commandName,
+    payload,
+  }), 'utf8').digest();
+}
+
+export function sha256HexToBuffer(value: string): Buffer {
+  return Buffer.from(digest(value, 'sha256'), 'hex');
+}
+
+export function sha256BytesToHex(value: Uint8Array): string {
+  if (value.byteLength !== 32) {
+    throw new Error('Database returned a non-SHA-256 digest');
+  }
+  return Buffer.from(value).toString('hex');
+}

@@ -82,7 +82,11 @@ async function main(): Promise<number> {
     console.log(`   ${e.status === 'ok' ? '→' : '✗'} ${e.tenantId.padEnd(10)} ${e.action.padEnd(16)} ${e.note ?? ''}`);
   }
   if (result.due === 0) console.log('   (nothing due today)');
-  console.log('\nNOTE: mock tick — nothing was generated or published; this shows what the manager WOULD run.');
+  if (args.mock) {
+    console.log('\nNOTE: simulation only — nothing was scheduled, published or pushed to a live account.');
+  } else {
+    console.log('\nNOTE: live adapters were selected. Read each entry for the exact draft/record created; no entry implies publication unless it explicitly says so.');
+  }
   return 0;
 }
 

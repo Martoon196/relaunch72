@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "conversion-copy",
+  "summary": "How to write and test copy that asks for an action honestly (landing sections, ads, calls to action, polishes of existing copy): identify the reader's awareness, lead with the benefit that matters to them, order proof the brand can actually support, answer the objections that stop this audience, pick a persuasion structure that fits, write meaningfully different hooks when useful, and end with one clear action; with all rationale kept out of the copy.",
+  "supportedStages": [
+    "copy",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Audiences, positioning, voice and tone boundaries.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "approvedOffer",
+      "purpose": "The exact approved offer or page the copy supports: what it is, what it includes, who it is for, any approved price or terms.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "verifiedProof",
+      "purpose": "Proof the brand may use: approved claims, verified credentials, permissioned testimonials with consent recorded, verified figures.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "copyBrief",
+      "purpose": "Placement (landing section, ad, CTA block, email call to action), length limits, required elements and the single desired action.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "knownObjections",
+      "purpose": "Objections the owner has heard from this audience.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "hookVariantCount",
+      "purpose": "How many hook options the task wants, if any.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "existingCopy",
+      "purpose": "Copy to improve, when the brief is a polish rather than a new piece, plus what in it must be kept.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "channelSpecs",
+      "purpose": "Character limits and format rules for the channel the copy will run on, supplied by the runtime for supported channels only.",
+      "missingBehaviour": "use-explicit-task-default"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "copy.assess-awareness",
+      "instruction": "Classify the reader's awareness for this placement: unaware of the problem, aware of the problem, aware that solutions exist, aware of this brand's solution, or ready to act. Use the placement and brief to decide; record the evidence for the classification.",
+      "produces": [
+        "awarenessLevel",
+        "awarenessRationale"
+      ]
+    },
+    {
+      "id": "copy.select-angle",
+      "instruction": "Choose one angle matched to awareness: for problem-aware readers lead with the consequence they feel; for solution-aware readers lead with the difference of this approach; for ready readers lead with removal of friction. Record two rejected angles.",
+      "produces": [
+        "angle",
+        "rejectedAngles"
+      ]
+    },
+    {
+      "id": "copy.order-benefits",
+      "instruction": "List the offer's benefits, each tied to a feature in approvedOffer, ordered by what this audience values first according to the profile. Remove any benefit that depends on an unverified claim.",
+      "produces": [
+        "benefitOrder"
+      ]
+    },
+    {
+      "id": "copy.select-proof",
+      "instruction": "From verifiedProof choose the two or three items most relevant to the leading benefit. Testimonials require recorded consent; figures require verification; credentials require the fact id. If none qualifies, the copy uses mechanism explanation in place of proof and the sidecar records 'no proof available'.",
+      "produces": [
+        "proofSelection"
+      ]
+    },
+    {
+      "id": "copy.answer-objections",
+      "instruction": "Pick the one to three objections most likely to stop this reader at this awareness level and decide where each is answered: in the body, in a short reassurance line, or deliberately left to a later page. Each answer must rest on an approved fact or a mechanism, never on a new promise.",
+      "produces": [
+        "objectionPlan"
+      ]
+    },
+    {
+      "id": "copy.choose-structure",
+      "instruction": "Choose the persuasion structure that fits the length and awareness: problem → consequence → mechanism → offer → action for problem-aware long copy; difference → proof → action for solution-aware short copy; action-first with reassurance for ready readers. Record the choice.",
+      "produces": [
+        "structure"
+      ]
+    },
+    {
+      "id": "copy.write-hooks",
+      "instruction": "When the brief requests variants or the placement benefits from them, write the requested number of hooks that differ in angle or awareness entry point, not merely in wording. Mark one as recommended with the reason.",
+      "produces": [
+        "hookOptions",
+        "recommendedHook"
+      ]
+    },
+    {
+      "id": "copy.build-test-set",
+      "instruction": "When the brief asks for an ad or a testable short piece, write one primary version plus up to three alternatives that differ in entry point, not wording: one opening on the problem the reader feels and its consequence, one opening on the outcome and the mechanism that delivers it, and one opening on a short hypothetical before-and-after situation that is explicitly illustrative. Each alternative keeps the same offer, proof and action.",
+      "produces": [
+        "primaryVersion",
+        "alternatives"
+      ]
+    },
+    {
+      "id": "copy.polish-existing",
+      "instruction": "When existingCopy is supplied, first record what must be kept (an opening that is known to work, an approved claim, a required phrase), then apply the same decision steps to the rest. Changes are listed as before/after pairs with the rule that motivated each; nothing kept is altered.",
+      "produces": [
+        "keptElements",
+        "changeList"
+      ]
+    },
+    {
+      "id": "copy.adapt-to-channel",
+      "instruction": "Only when channelSpecs are supplied, produce the channel's required fields within its limits (for example headline and description lengths) from the approved primary version, without adding claims. Do not produce fields for channels the runtime did not specify.",
+      "produces": [
+        "channelAdaptations"
+      ]
+    },
+    {
+      "id": "copy.handoff",
+      "instruction": "Hand the copy to the existing approval path with the receipt. If the copy supports an offer proposal from offer-design, hand back any term the copy could not state because it was unapproved, as an owner decision. Never hand copy to a send, ad or publish step; those remain separately authorised.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "copy.benefit-tied-to-feature",
+      "instruction": "Every benefit statement names or clearly implies the feature or mechanism that delivers it, drawn from approvedOffer. Free-floating benefits ('transform your business') are not acceptable.",
+      "appliesWhen": "Any benefit statement.",
+      "check": "Each benefit maps to an offer element in benefitOrder."
+    },
+    {
+      "id": "copy.proof-must-be-permissioned",
+      "instruction": "A testimonial, logo, name, number or result appears only if verifiedProof includes it with permission recorded. Paraphrasing an unpermissioned quote or implying a customer base ('trusted by hundreds') is forbidden.",
+      "appliesWhen": "Any proof element.",
+      "check": "Each proof element cites its verifiedProof id."
+    },
+    {
+      "id": "copy.no-manufactured-urgency",
+      "instruction": "Scarcity, deadlines and limited availability appear only when approvedOffer states them with dates or quantities. No countdowns, 'only a few left' or 'offer ends soon' without an approved fact.",
+      "appliesWhen": "Always.",
+      "check": "Any urgency phrase traces to an approved offer term with a date or number."
+    },
+    {
+      "id": "copy.one-action-one-verb",
+      "instruction": "The copy asks for exactly one action, stated once at the end and optionally once early for long copy, using a specific verb and the real destination or step. No competing secondary asks.",
+      "appliesWhen": "Writing calls to action.",
+      "check": "Exactly one distinct action is present; its destination is allowed."
+    },
+    {
+      "id": "copy.plain-promise-free-language",
+      "instruction": "No guaranteed outcomes, no absolute claims ('best', 'only', 'number one') without an approved fact, no comparative claims naming competitors unless the owner approved them explicitly, and no medical, legal or financial outcome claims.",
+      "appliesWhen": "Always.",
+      "check": "Superlative and guarantee scan returns nothing unsupported."
+    },
+    {
+      "id": "copy.objection-answered-by-fact-or-mechanism",
+      "instruction": "Each objection answer rests on an approved fact (with id) or a mechanism explanation. If neither exists the objection is acknowledged honestly or left unanswered; it is never answered with a new claim.",
+      "appliesWhen": "Addressing an objection.",
+      "check": "objectionPlan shows the basis of each answer."
+    },
+    {
+      "id": "copy.price-terms-exact",
+      "instruction": "Prices, inclusions, trial lengths, cancellation and refund terms appear only as stated in approvedOffer, verbatim in substance. If the brief asks for a price not in approvedOffer, the copy omits it and the sidecar flags the gap.",
+      "appliesWhen": "Any commercial term.",
+      "check": "Each commercial term matches approvedOffer exactly."
+    },
+    {
+      "id": "copy.hooks-differ-in-substance",
+      "instruction": "Hook options must differ in angle, entry awareness or the benefit led with. Three rewordings of the same idea are one option, not three.",
+      "appliesWhen": "Hook variants are requested.",
+      "check": "Each hook is labelled with its angle and the labels differ."
+    },
+    {
+      "id": "copy.rationale-stays-internal",
+      "instruction": "Awareness, angle, structure names, proof reasoning and objection plans never appear in the copy. The copy reads as the brand speaking to the reader.",
+      "appliesWhen": "Always.",
+      "check": "Copy contains no methodological vocabulary from this pack."
+    },
+    {
+      "id": "copy.length-and-placement",
+      "instruction": "Respect the brief's placement and length limits exactly. Short placements get one benefit, one proof or mechanism, one action. Long placements follow the chosen structure in full.",
+      "appliesWhen": "Always.",
+      "check": "Word or character count within the brief's limit; elements match placement."
+    },
+    {
+      "id": "copy.rubric-guides-revision-only",
+      "instruction": "A pre-delivery rubric (clarity of promise, concreteness, relevance to the named audience, proof present and permissioned, readability, single action) may be scored to decide revisions. Scores live in the sidecar; they are never shown as evidence of quality or expected performance.",
+      "appliesWhen": "A quality pass scores the draft.",
+      "check": "Rubric scores appear in the sidecar only and each low score maps to a revision or a recorded reason."
+    },
+    {
+      "id": "copy.no-unspecified-channels",
+      "instruction": "Channel-specific formats, limits, emoji conventions or placement advice are applied only for channels the runtime names in channelSpecs; the copy never implies an ad account, platform or placement exists.",
+      "appliesWhen": "Always.",
+      "check": "Channel fields present only for specified channels; no platform named otherwise."
+    },
+    {
+      "id": "copy.one-structure-not-all",
+      "instruction": "Use the single structure chosen in copy.choose-structure. Never stack several persuasion frameworks into one asset or add elements (story, objection block, proof block) that the placement and awareness do not call for.",
+      "appliesWhen": "Always.",
+      "check": "The sidecar names one structure and the copy's parts correspond to it alone."
+    }
+  ],
+  "internalReceiptFields": [
+    "audience",
+    "awarenessLevel",
+    "awarenessRationale",
+    "angle",
+    "rejectedAngles",
+    "benefitOrder",
+    "proofSelection",
+    "objectionPlan",
+    "structure",
+    "hookOptions",
+    "recommendedHook",
+    "primaryNextAction",
+    "omittedUnsupportedClaims",
+    "primaryVersion",
+    "alternatives",
+    "keptElements",
+    "changeList",
+    "channelAdaptations",
+    "rubricScores",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "copy.check-benefits-mapped",
+      "criterion": "Every benefit maps to an approved offer element.",
+      "passingEvidence": "benefitOrder with feature references.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "copy.check-proof-permissioned",
+      "criterion": "Every proof element has a verifiedProof id with permission.",
+      "passingEvidence": "proofSelection ids listed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "copy.check-no-urgency-or-superlatives",
+      "criterion": "No manufactured urgency, guarantee, unsupported superlative or competitor comparison.",
+      "passingEvidence": "Pattern scan recorded clear.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "copy.check-single-action",
+      "criterion": "One action, specific verb, allowed destination.",
+      "passingEvidence": "Action enumerated.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "copy.check-commercial-terms",
+      "criterion": "All prices and terms match approvedOffer.",
+      "passingEvidence": "Term-by-term match recorded.",
+      "failureAction": "block-task"
+    },
+    {
+      "id": "copy.check-internal-prose",
+      "criterion": "No methodological vocabulary in the copy.",
+      "passingEvidence": "Vocabulary scan recorded clear.",
+      "failureAction": "revise"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 2,
+    "stopWhen": "All checks pass or the remaining findings need an owner decision on proof or price.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "The copy in the existing stage's output format for its placement (for example a landing section, ad text or call-to-action block), with no rationale.",
+    "internalSidecar": "Awareness, angle, benefit order, proof selection, objection plan, structure, hook options with recommendation, omitted claims and findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Placement: landing-page hero for an annual maintenance plan. approvedOffer: four seasonal visits, priority call-outs, price 'from an illustrative monthly amount' recorded as approved. verifiedProof: one consented testimonial about reliability. knownObjections: 'I can just call someone when something breaks'.",
+      "expectedBehaviour": "Awareness: problem-aware. Angle: small faults found early cost less than emergency repairs (mechanism). Lead benefit: fewer emergencies, tied to the four visits. Proof: the consented testimonial, attributed as recorded. Objection answered by the mechanism of early detection, not by a savings figure. One action: 'See what the plan covers' to the plan page. Price appears only as approved.",
+      "forbiddenBehaviour": "'Save £400 a year' with no verified figure, 'rated 5 stars by 2,000 homeowners', or 'offer ends Friday' with no approved deadline."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Placement: 60-word ad. approvedOffer: online booking with automatic reminders, 14-day free trial recorded as approved. verifiedProof: none. hookVariantCount: 3.",
+      "expectedBehaviour": "Awareness: solution-aware. Three hooks that differ in substance: one leads with wasted admin time, one with customers' expectation of self-booking, one with the trial itself for ready readers; one recommended with reason. Body: one benefit (fewer missed appointments via reminders, mechanism stated), no proof (recorded as unavailable), one action: start the free trial. Trial length exactly 14 days.",
+      "forbiddenBehaviour": "Inventing 'cuts no-shows by 40%', naming a competitor, or three hooks that are the same claim reworded."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Intended for copy placements the platform already represents; it adds no sender, ad platform or payment capability. Not approved or installable.",
+    "originalityNotes": "Original design: the awareness-to-angle mapping, benefit-to-feature binding, permissioned-proof rule, objection basis rule and substantive-hook-difference test were written for this platform using general persuasion craft; no private corpus or licensed framework text was copied.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

@@ -13,6 +13,7 @@ import path from 'node:path';
 import './config.js'; // loads .env before anything reads process.env
 import { FIXTURES_DIR } from './paths.js';
 import type { Intake, RunManifest } from './types.js';
+import { canonicalIntake } from './intake/canonical.js';
 import { runS0 } from './intake/s0.js';
 import { STAGES, STAGE_ORDER } from './stages/defs.js';
 import { runStage } from './stages/runner.js';
@@ -90,7 +91,7 @@ async function main(): Promise<number> {
   if (args.resume) {
     runDir = path.resolve(args.resume);
     manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8')) as RunManifest;
-    intake = JSON.parse(fs.readFileSync(path.join(runDir, 'intake.json'), 'utf8')) as Intake;
+    intake = canonicalIntake(JSON.parse(fs.readFileSync(path.join(runDir, 'intake.json'), 'utf8')) as Record<string, unknown>);
     // Keep only the passed stage records; preload their outputs as prior.
     manifest.stages = manifest.stages.filter((s) => s.status === 'passed' && s.output_file);
     for (const s of manifest.stages) {
@@ -103,7 +104,7 @@ async function main(): Promise<number> {
     console.log(`  already passed: ${manifest.stages.map((s) => s.stage).join(', ') || '(none)'}`);
   } else {
     const loaded = loadIntake(args);
-    intake = loaded.intake;
+    intake = canonicalIntake(loaded.intake);
     const created = createRun(loaded.source, args.mock ? 'mock' : 'live', args.through);
     runDir = created.runDir;
     manifest = created.manifest;

@@ -18,16 +18,18 @@ export const mockRunner: ActionRunner = async (tenant, action) => ({
   tenantId: tenant.id,
   action: action.action,
   at: action.dueDate,
-  status: 'ok',
-  note: `mock: would run ${action.action} (${action.cadence}) for ${tenant.name}`,
+  // A simulation is not a successfully executed rail. Marking it skipped keeps
+  // ingestTick from turning a dry-run plan into a customer-facing success event.
+  status: 'skipped',
+  note: `simulation only: would run ${action.action} (${action.cadence}) for ${tenant.name}; no external action occurred`,
 });
 
 /** How each rail action lands as a GHL artifact pushed into the client's sub-account. */
 const ARTIFACT_FOR: Record<RailAction, GhlArtifact> = {
-  content_cluster: { type: 'content_cluster', title: 'Content cluster (Soro)' },
-  social_batch: { type: 'social_post', title: 'Scheduled social batch' },
-  keyword_refresh: { type: 'note', title: 'Keyword report' },
-  ads_refresh: { type: 'ad_campaign', title: 'Ad campaign (paused drafts)' },
+  content_cluster: { type: 'content_cluster', title: 'Content-cluster draft (Soro)' },
+  social_batch: { type: 'social_post', title: 'Social schedule draft — not scheduled' },
+  keyword_refresh: { type: 'note', title: 'Keyword-planning draft — data source not attached' },
+  ads_refresh: { type: 'ad_campaign', title: 'Ad-campaign draft — not created or published' },
 };
 
 /**
@@ -42,13 +44,15 @@ export function ghlRunner(ghl: GhlClient): ActionRunner {
     const loc = await ghl.ensureLocation({ id: tenant.id, name: tenant.name });
     const artifact = ARTIFACT_FOR[action.action];
     const res = await ghl.pushArtifact(loc.locationId, artifact);
-    const pushed = res.artifactId ? `${artifact.type} → ${loc.locationId} (${res.artifactId})` : `${artifact.type} NOT pushed (GHL not fully configured)`;
+    const pushed = res.artifactId
+      ? `${artifact.type} draft record → ${loc.locationId} (${res.artifactId}); nothing was scheduled or published`
+      : `${artifact.type} draft NOT recorded (GHL not fully configured)`;
     return {
       tenantId: tenant.id,
       action: action.action,
       at: action.dueDate,
-      status: res.artifactId ? 'ok' : 'skipped',
-      note: `ghl[${ghl.mode}]: ${pushed}${loc.created ? ' [new sub-account]' : ''}`,
+      status: ghl.mode === 'live' && res.artifactId ? 'ok' : 'skipped',
+      note: `${ghl.mode === 'mock' ? 'simulation only — ' : ''}ghl[${ghl.mode}]: ${pushed}${loc.created ? ` [${ghl.mode === 'mock' ? 'simulated' : 'new'} sub-account]` : ''}`,
     };
   };
 }

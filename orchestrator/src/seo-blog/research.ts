@@ -1,0 +1,337 @@
+/**
+ * Application-owned, replaceable research: a web-search provider seam plus
+ * guarded page retrieval that records URL, title, retrieval time and a bounded
+ * supporting passage for each source.
+ *
+ * Live provider: DataForSEO Google organic SERP (the supplier the keyword rail
+ * already rents — no new plan). When no provider is configured the engine
+ * reports research as unavailable; it never fabricates sources.
+ */
+
+import { randomUUID } from 'node:crypto';
+import {gunzipSync,inflateSync,brotliDecompressSync} from 'node:zlib';
+import { parseHtmlPage } from './html.js';
+import { topicTokens } from './dedupe.js';
+import { sameSite } from './inventory.js';
+import type { FetchTransport } from './safe-fetch.js';
+import type { ResearchSource } from './types.js';
+import { SeoBlogError } from './types.js';
+import type { KeywordMetric, KeywordProvider } from '../keyword/types.js';
+import { researchDiagnostic, type ResearchDiagnostic, type ResearchSearchReceipt } from './programme.js';
+
+export interface SearchHit {
+  readonly url: string;
+  readonly title: string;
+  readonly snippet: string;
+}
+
+export interface SearchProvider {
+  readonly id: string;
+  readonly mode: 'live' | 'unconfigured';
+  search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]>;
+  searchReceipt?(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt>;
+  submitTask?(query: string, options: { readonly locale: string; readonly limit: number }): Promise<{ readonly taskId: string; readonly providerReportedCost: number | null }>;
+  readTask?(taskId: string, options: { readonly limit: number }): Promise<ResearchSearchReceipt | null>;
+}
+
+export class ResearchUnavailableError extends SeoBlogError {
+  constructor(message = 'No research provider is connected. Connect one before planning content.') {
+    super(409, message, 'research_unavailable');
+  }
+}
+
+export class ResearchProviderError extends ResearchUnavailableError {
+  constructor(readonly diagnostic: ResearchDiagnostic, readonly providerReportedCost: number | null = null) {
+    super(`${diagnostic.summary} ${diagnostic.remedy}`);
+  }
+}
+
+export class UnconfiguredSearchProvider implements SearchProvider {
+  readonly id = 'none';
+  readonly mode = 'unconfigured' as const;
+  async search(): Promise<SearchHit[]> {
+    throw new ResearchUnavailableError();
+  }
+}
+
+/** UK location by default; overridable per deployment. */
+const LOCATION_FOR_LOCALE: Record<string, number> = { 'en-GB': 2826, 'en-US': 2840, 'en-IE': 2372, 'en-AU': 2036, 'en-CA': 2124 };
+
+export class DataForSeoSerpProvider implements SearchProvider {
+  readonly id = 'dataforseo-serp';
+  readonly mode = 'live' as const;
+  constructor(
+    private readonly login: string,
+    private readonly password: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {
+    if (!login || !password) throw new ResearchUnavailableError('Research credentials are not configured.');
+  }
+
+  async search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]> {
+    return [...(await this.searchReceipt(query, options)).hits];
+  }
+
+  /** Standard priority resolves GoTo destinations; Live is retained for non-programme callers. */
+  async submitTask(query: string, options: { readonly locale: string; readonly limit: number }): Promise<{ taskId: string; providerReportedCost: number | null }> {
+    const { task, cost, status } = await this.taskRequest('task_post', [{
+      keyword: query.slice(0, 200), location_code: LOCATION_FOR_LOCALE[options.locale] ?? 2826,
+      language_code: options.locale.slice(0, 2) || 'en', depth: Math.min(Math.max(options.limit, 1), 20), priority: 1,
+    }]);
+    const taskId = researchDiagnostic(null, status, task.id).taskId;
+    if (task.status_code !== 20100 || !taskId) throw new ResearchProviderError(researchDiagnostic(task.status_code ?? null, status, task.id), cost);
+    return { taskId, providerReportedCost: cost };
+  }
+
+  /** GET is free. A pending result is not a failed paid request or permission to POST again. */
+  async readTask(taskId: string, options: { readonly limit: number }): Promise<ResearchSearchReceipt | null> {
+    if (researchDiagnostic(null, null, taskId).taskId !== taskId) throw new ResearchProviderError(researchDiagnostic(null));
+    const { task, cost, status } = await this.taskRequest(`task_get/regular/${taskId}`);
+    if (task.id !== taskId) throw new ResearchProviderError(researchDiagnostic(null, status, taskId), cost);
+    if (task.status_code === 40601 || task.status_code === 40602) return null;
+    if (task.status_code !== 20000 || !Array.isArray(task.result?.[0]?.items)) throw new ResearchProviderError(researchDiagnostic(task.status_code ?? null, status, taskId), cost);
+    return { taskId, providerReportedCost: cost, hits: task.result[0]!.items!
+      .filter((i) => i.type === 'organic' && typeof i.url === 'string' && typeof i.title === 'string')
+      .slice(0, options.limit).map((i) => ({ url: i.url!, title: i.title!.slice(0, 300), snippet: String(i.description ?? '').slice(0, 500) })) };
+  }
+
+  private async taskRequest(path: string, body?: unknown): Promise<{ task: { id?: unknown; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }; cost: number | null; status: number }> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`https://api.dataforseo.com/v3/serp/google/organic/${path}`, {
+        method: body ? 'POST' : 'GET', headers: { authorization: `Basic ${Buffer.from(`${this.login}:${this.password}`).toString('base64')}`, 'content-type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
+      });
+    } catch { throw new ResearchProviderError(researchDiagnostic(null)); }
+    if (!res.ok) throw new ResearchProviderError(researchDiagnostic(null, res.status));
+    const json = await res.json().catch(() => ({})) as { status_code?: number; cost?: number; tasks?: { id?: unknown; cost?: number; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }[] };
+    const task = json.tasks?.[0]; const raw = task?.cost ?? json.cost;
+    const cost = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 1_000_000 ? raw : null;
+    if (json.status_code !== 20000 || !task) throw new ResearchProviderError(researchDiagnostic(json.status_code ?? null, res.status, task?.id), cost);
+    return { task, cost, status: res.status };
+  }
+
+  async searchReceipt(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt> {
+    const body = [{
+      keyword: query.slice(0, 200),
+      location_code: LOCATION_FOR_LOCALE[options.locale] ?? 2826,
+      language_code: options.locale.slice(0, 2) || 'en',
+      depth: Math.min(Math.max(options.limit, 1), 20),
+    }];
+    let res: Response;
+    try {
+      res = await this.fetchImpl('https://api.dataforseo.com/v3/serp/google/organic/live/regular', {
+        method: 'POST',
+        headers: {
+          authorization: `Basic ${Buffer.from(`${this.login}:${this.password}`).toString('base64')}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new ResearchProviderError(researchDiagnostic(null));
+    }
+    if (!res.ok) throw new ResearchProviderError(researchDiagnostic(null, res.status));
+    const json = (await res.json().catch(() => ({}))) as {
+      status_code?: number;
+      cost?: number;
+      tasks?: { id?: unknown; cost?: number; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }[];
+    };
+    const task = json.tasks?.[0];
+    const rawCost = task?.cost ?? json.cost;
+    const providerReportedCost = typeof rawCost === 'number' && Number.isFinite(rawCost) && rawCost >= 0 && rawCost <= 1_000_000 ? rawCost : null;
+    if (json.status_code !== undefined && json.status_code >= 40000) throw new ResearchProviderError(researchDiagnostic(json.status_code, res.status, task?.id), providerReportedCost);
+    if (!task || (task.status_code !== undefined && task.status_code >= 40000)) {
+      throw new ResearchProviderError(researchDiagnostic(task?.status_code ?? null, res.status, task?.id), providerReportedCost);
+    }
+    if(task.status_code!==20000 || !Array.isArray(task.result) || !task.result[0] || !Array.isArray(task.result[0].items)) throw new ResearchProviderError(researchDiagnostic(null,res.status,task.id),providerReportedCost);
+    const items = task.result?.[0]?.items ?? [];
+    const hits = items
+      .filter((i) => i.type === 'organic' && typeof i.url === 'string' && typeof i.title === 'string')
+      .slice(0, options.limit)
+      .map((i) => ({ url: i.url!, title: i.title!.slice(0, 300), snippet: String(i.description ?? '').slice(0, 500) }));
+    return { hits, taskId: researchDiagnostic(null, res.status, task.id).taskId, providerReportedCost };
+  }
+}
+
+export function configuredSearchProvider(env: NodeJS.ProcessEnv = process.env): SearchProvider {
+  const login = env.SEO_BLOG_DATAFORSEO_LOGIN ?? env.DATAFORSEO_LOGIN ?? '';
+  const password = env.SEO_BLOG_DATAFORSEO_PASSWORD ?? env.DATAFORSEO_PASSWORD ?? '';
+  if (env.SEO_BLOG_RESEARCH_PROVIDER === 'none' || !login || !password) return new UnconfiguredSearchProvider();
+  return new DataForSeoSerpProvider(login, password);
+}
+
+const PRIMARY_HOSTS = [
+  /(^|\.)gov\.uk$/, /(^|\.)gov\.scot$/, /(^|\.)gov\.wales$/, /(^|\.)legislation\.gov\.uk$/, /(^|\.)nidirect\.gov\.uk$/,
+  /(^|\.)ons\.gov\.uk$/, /(^|\.)bankofengland\.co\.uk$/, /(^|\.)fca\.org\.uk$/, /(^|\.)nhs\.uk$/, /(^|\.)parliament\.uk$/,
+  /(^|\.)ac\.uk$/, /(^|\.)gov$/, /(^|\.)europa\.eu$/, /(^|\.)police\.uk$/,
+];
+
+export function isPrimarySource(url: string, brandWebsite: string | null): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (brandWebsite && sameSite(url, brandWebsite)) return true;
+    return PRIMARY_HOSTS.some((re) => re.test(host));
+  } catch {
+    return false;
+  }
+}
+
+/** Choose the passage of `text` that best supports `query` (bounded, ≤ 600 chars). */
+export function supportingPassage(text: string, query: string, max = 600): string {
+  const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+(?=[A-Z0-9£“"])/).filter((s) => s.length > 30);
+  if (sentences.length === 0) return text.slice(0, max).trim();
+  const wanted = topicTokens(query);
+  let best = 0;
+  let bestScore = -1;
+  for (let i = 0; i < sentences.length; i++) {
+    const window = `${sentences[i]} ${sentences[i + 1] ?? ''}`;
+    const tokens = topicTokens(window);
+    let score = 0;
+    for (const t of wanted) if (tokens.has(t)) score++;
+    if (/\d/.test(window)) score += 0.5; // factual sentences tend to carry figures
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  let passage = sentences[best]!;
+  for (let j = best + 1; j < sentences.length && passage.length + sentences[j]!.length < max; j++) passage += ` ${sentences[j]}`;
+  return passage.slice(0, max).trim();
+}
+
+export interface ResearchBundle {
+  readonly sources: ResearchSource[];
+  readonly searchCalls: number;
+  readonly notes: string[];
+  readonly keywordMetrics: KeywordMetric[];
+}
+
+/** Search for customer subjects, not ambiguous commercial plan names or a pitch.
+ * Keep complete words and a small keyword phrase: slicing a brand paragraph at
+ * 120 characters produced irrelevant SERPs and supplier errors in the live run.
+ * These are search terms only, never product claims or invented source evidence.
+ */
+export function researchQuerySeeds(input: {
+  readonly focus?: string | null;
+  readonly audiences: readonly string[];
+  readonly positioning: string;
+  readonly categories?: readonly string[];
+  readonly limit?: number;
+}): string[] {
+  const stop = new Set(['a', 'an', 'the', 'and', 'or', 'to', 'of', 'for', 'with', 'who', 'that', 'their', 'your', 'our', 'is', 'are', 'in', 'on', 'by', 'under']);
+  const phrase = (text: string): string => {
+    const words = text.normalize('NFKC').replace(/\([^)]*\)/gu, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/u)
+      .filter((word) => word.length > 1 && !stop.has(word.toLowerCase()));
+    const kept: string[] = [];
+    for (const word of words) {
+      if (kept.length === 8 || [...kept, word].join(' ').length > 90) break;
+      kept.push(word);
+    }
+    return kept.join(' ');
+  };
+  const context = phrase(input.audiences.find((a) => phrase(a).length > 3) ?? input.positioning);
+  const candidates = [
+    input.focus ?? '',
+    ...input.audiences.slice(0, 3),
+    ...(input.categories ?? []).slice(0, 3).map((label) => `${label} ${context}`),
+  ];
+  if (!candidates.some((value) => phrase(value).length > 3)) candidates.push(input.positioning);
+  const queries = new Map<string, string>();
+  for (const value of candidates) {
+    const query = phrase(value);
+    if (query.length > 3) queries.set(query.toLowerCase(), query);
+  }
+  return [...queries.values()].slice(0, Math.max(0, Math.min(8, input.limit ?? 8)));
+}
+
+export async function researchQueries(input: {
+  readonly queries: readonly string[];
+  readonly search: SearchProvider;
+  readonly transport: FetchTransport;
+  readonly locale: string;
+  readonly brandWebsite: string | null;
+  readonly now: () => string;
+  readonly perQuery?: number;
+  readonly maxSources?: number;
+  readonly keywordProvider?: KeywordProvider | null;
+  readonly excludeHosts?: readonly string[];
+}): Promise<ResearchBundle> {
+  if (input.search.mode !== 'live') throw new ResearchUnavailableError();
+  const perQuery = input.perQuery ?? 4;
+  const maxSources = input.maxSources ?? 18;
+  const sources: ResearchSource[] = [];
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  const batches: {query:string;hits:SearchHit[]}[]=[];
+  let searchCalls = 0;
+  for (const query of input.queries.slice(0, 8)) {
+    let hits: SearchHit[];
+    try {
+      hits = await input.search.search(query, { locale: input.locale, limit: perQuery + 2 });
+      searchCalls++;
+    } catch (error) {
+      if (error instanceof ResearchUnavailableError) throw error;
+      notes.push(`Search for “${query}” failed.`);
+      continue;
+    }
+    batches.push({query,hits});
+  }
+  // Queued searches can yield between claims. Read pages only once all search
+  // receipts are available, so earlier pages are not fetched on every poll.
+  for(const {query,hits} of batches) {
+    let kept = 0;
+    // Prefer primary sources first within each query.
+    const ordered = [...hits].sort((a, b) => Number(isPrimarySource(b.url, input.brandWebsite)) - Number(isPrimarySource(a.url, input.brandWebsite)));
+    for (const hit of ordered) {
+      if (kept >= perQuery || sources.length >= maxSources) break;
+      let key: string;
+      try { key = new URL(hit.url).toString(); } catch { continue; }
+      if (seen.has(key)) continue;
+      if ((input.excludeHosts ?? []).some((h) => sameSite(key, `https://${h}`))) continue;
+      seen.add(key);
+      try {
+        const page = await input.transport.fetch(key, { maxBytes: 1_500_000 });
+        if (page.status !== 200 || !/html|text\/plain/i.test(page.contentType)) { notes.push(`${key} could not be read (HTTP ${page.status}).`); continue; }
+        const encoding=(page.headers['content-encoding']??'identity').toLowerCase().trim();
+        const options={maxOutputLength:1_500_000};
+        const bytes=encoding==='gzip'?gunzipSync(page.body,options):encoding==='deflate'?inflateSync(page.body,options):encoding==='br'?brotliDecompressSync(page.body,options):encoding==='identity'?page.body:null;
+        if(!bytes){notes.push(`${key} used an unsupported text encoding.`);continue;}
+        const rawText=bytes.toString('utf8');
+        // Refuse binary/corrupt responses even if a server labels them HTML.
+        if(rawText.includes('\ufffd')&&rawText.split('\ufffd').length>Math.max(10,rawText.length/100)){notes.push(`${key} did not contain readable text.`);continue;}
+        const parsed = /html/i.test(page.contentType) ? parseHtmlPage(rawText, page.finalUrl) : null;
+        // HTML can contain literal NUL padding. PostgreSQL JSONB cannot store
+        // it; use a space so adjacent words do not silently merge.
+        const text = (parsed ? parsed.text : rawText).replace(/\u0000/gu,' ');
+        const passage = supportingPassage(text, query);
+        if (passage.length < 60) { notes.push(`${key} had no usable text.`); continue; }
+        sources.push({
+          id: randomUUID(),
+          url: key,
+          title: (parsed?.title ?? hit.title).replace(/\u0000/gu,' ').slice(0, 300),
+          retrievedAt: input.now(),
+          publishedAt: parsed?.publishedAt??null,
+          observedPeriod: null,
+          confidence: 'unknown',
+          passage,
+          provider: input.search.id,
+          primary: isPrimarySource(key, input.brandWebsite),
+          query,
+        });
+        kept++;
+      } catch (error) {
+        notes.push(`${key} could not be fetched (${(error as Error).message}).`);
+      }
+    }
+  }
+  let keywordMetrics: KeywordMetric[] = [];
+  if (input.keywordProvider && input.keywordProvider.mode === 'live') {
+    try {
+      // Only genuine provider rows are kept; mock metrics never become demand evidence.
+      keywordMetrics = (await input.keywordProvider.metrics([...input.queries].slice(0, 20))).filter((m) => m.source !== 'mock');
+    } catch {
+      notes.push('Keyword metrics were unavailable; demand is assessed qualitatively.');
+    }
+  }
+  return { sources, searchCalls, notes, keywordMetrics };
+}

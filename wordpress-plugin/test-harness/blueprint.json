@@ -1,0 +1,7 @@
+{
+  "landingPage": "/wp-admin/",
+  "steps": [
+    { "step": "activatePlugin", "pluginPath": "relaunch72-publisher/relaunch72-publisher.php" },
+    { "step": "runPHP", "code": "<?php require '/wordpress/wp-load.php'; update_option('permalink_structure','/%postname%/'); update_option('blogname','Disposable Test Site'); $u = wp_insert_user(array('user_login'=>'r72author','user_pass'=>wp_generate_password(24),'role'=>'author','display_name'=>'R72 Author','user_email'=>'author@example.invalid')); $p = wp_insert_post(array('post_type'=>'page','post_title'=>'Investor Insights','post_name'=>'investor-insights','post_status'=>'publish')); update_option('show_on_front','page'); $f = wp_insert_post(array('post_type'=>'page','post_title'=>'Home','post_name'=>'home','post_status'=>'publish')); update_option('page_on_front',$f); update_option('page_for_posts',$p); R72Pub_Settings::update(array('author_id'=>$u)); global $wp_rewrite; $wp_rewrite->init(); $wp_rewrite->flush_rules(); echo 'ok';" }
+  ]
+}

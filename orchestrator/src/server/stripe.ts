@@ -7,6 +7,7 @@
 import type { StripeConfig } from './config.js';
 import { TIER_PRICE_ENV, PLAN_PRICE_ENV } from './config.js';
 import type { Order } from './orders.js';
+import { isCheckoutTier } from './entitlements.js';
 
 /** The slice of the Stripe SDK we touch. The real client is structurally assignable. */
 export interface StripeLike {
@@ -17,6 +18,7 @@ export interface StripeLike {
 }
 
 export interface StripeEvent {
+  id?: string;
   type: string;
   data?: { object?: Record<string, unknown> };
 }
@@ -35,7 +37,7 @@ export async function createCheckoutSession(
   cfg: StripeConfig,
   req: CheckoutRequest,
 ): Promise<{ url: string }> {
-  if (!req.tier || !(priceKeyFor(req) in cfg.priceIds)) {
+  if (!isCheckoutTier(req.tier) || (req.bump && req.tier !== 'core')) {
     throw new CheckoutError(`unknown tier "${req.tier}"`);
   }
   const key = priceKeyFor(req);
@@ -103,16 +105,25 @@ export function verifyEvent(stripe: StripeLike, cfg: StripeConfig, rawBody: stri
   return stripe.webhooks.constructEvent(rawBody, sig, cfg.webhookSecret);
 }
 
-/** Map a completed-checkout event to an Order; null for every other event type. */
+/**
+ * Map a successfully paid, one-off Checkout Session to an Order. Subscription
+ * Checkout emits the same event type, so both mode and payment state are hard
+ * requirements before this can become a build entitlement.
+ */
 export function orderFromEvent(event: StripeEvent, at: string): Order | null {
   if (event.type !== 'checkout.session.completed') return null;
   const s = (event.data?.object ?? {}) as Record<string, unknown>;
+  if (s.mode !== 'payment' || s.payment_status !== 'paid') return null;
+  if (typeof s.id !== 'string' || !s.id.trim()) return null;
   const meta = (s.metadata ?? {}) as Record<string, string>;
+  const tier = typeof meta.tier === 'string' ? meta.tier : '';
+  const bump = meta.bump === '1';
+  if (!isCheckoutTier(tier) || (bump && tier !== 'core')) return null;
   const cust = (s.customer_details ?? {}) as Record<string, unknown>;
   return {
-    session_id: String(s.id ?? ''),
-    tier: meta.tier ?? 'core',
-    bump: meta.bump === '1',
+    session_id: s.id,
+    tier,
+    bump,
     email: (typeof cust.email === 'string' ? cust.email : (s.customer_email as string)) ?? null,
     amount_total: typeof s.amount_total === 'number' ? s.amount_total : null,
     currency: typeof s.currency === 'string' ? s.currency : null,

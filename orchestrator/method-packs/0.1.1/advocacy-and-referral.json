@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.1",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "advocacy-and-referral",
+  "summary": "How to ask happy customers to speak and to bring others, honestly: identify the moments when a customer has genuinely benefited, write the request that respects consent, frame questions that produce specific and usable answers, record permission before anything is used, and structure a referral proposal whose incentives and tracking are owner decisions; the method never drafts a testimonial, result or review on a customer's behalf.",
+  "supportedStages": [
+    "advocacy",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.1"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Voice, audiences, offers.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "customerJourneyMoments",
+      "purpose": "The owner's description of when customers first benefit, reach a milestone and complete the main journey.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "consentProcess",
+      "purpose": "How consent and permission are recorded by the platform or owner; the method never infers consent.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "verifiedFacts",
+      "purpose": "Approved offer facts for any referral proposal.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "incentiveConstraints",
+      "purpose": "Owner limits on incentives (budget, legal, policy).",
+      "missingBehaviour": "request-owner-decision"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "advocacy.pick-moments",
+      "instruction": "From customerJourneyMoments choose up to three moments when a customer has verifiably benefited (first result, milestone, completion). For each, state the observable trigger the owner can see and why a request then is fair to the customer.",
+      "produces": [
+        "requestMoments"
+      ]
+    },
+    {
+      "id": "advocacy.write-requests",
+      "instruction": "Write a short request and a standard request for each moment in the brand voice: why the brand is asking, what will be done with the answer, that it is optional, and how consent is recorded per consentProcess. Write one gentle follow-up for non-response. No incentive for a review unless incentiveConstraints allow it and the law of the owner's market permits it, in which case the owner decides.",
+      "produces": [
+        "requestDrafts",
+        "followUpDraft"
+      ]
+    },
+    {
+      "id": "advocacy.design-questions",
+      "instruction": "Write two or three question sets of three to four questions each that invite specific, situational answers (what the situation was, what changed, what they would tell someone deciding) rather than ratings or praise.",
+      "produces": [
+        "questionSets"
+      ]
+    },
+    {
+      "id": "advocacy.define-usage-formats",
+      "instruction": "Specify how a consented answer may be presented: quote with the attribution the customer approved, a short situation-to-result account in the customer's words, or a request to record a short video; each format states exactly what consent covers and that edits are limited to trimming.",
+      "produces": [
+        "usageFormats"
+      ]
+    },
+    {
+      "id": "advocacy.propose-referral-structure",
+      "instruction": "Propose a referral structure as owner decisions: who the likely referrers are (from the brand profile), what is referred (usually the easiest first offer, from verified facts), incentive options with the constraints each depends on, and the tracking mechanism the platform actually provides or an owner-managed alternative. Draft the referral message in three lengths for the owner to approve.",
+      "produces": [
+        "referralProposal",
+        "referralMessages",
+        "ownerDecisionsNeeded"
+      ]
+    },
+    {
+      "id": "advocacy.handoff",
+      "instruction": "Hand request drafts and messages to the existing approval and (where it exists) sending path; hand consented answers to the brand pack's proof section only through the consent record. No request is sent and no proof is used by this pack.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "advocacy.never-draft-the-customer",
+      "instruction": "The method writes requests and questions only. It never writes a testimonial, review, quote, result or case account for a customer to approve, and never paraphrases an answer into stronger claims.",
+      "appliesWhen": "Always.",
+      "check": "No customer-voice text appears except quoted consented answers."
+    },
+    {
+      "id": "advocacy.consent-before-use",
+      "instruction": "No answer, name, image, logo or result is used anywhere until consentProcess records permission for that exact use and attribution.",
+      "appliesWhen": "Any use of a customer contribution.",
+      "check": "Each usage references a consent record."
+    },
+    {
+      "id": "advocacy.optional-and-honest-asks",
+      "instruction": "Every request states that responding is optional and what the answer will be used for; it never implies an obligation, reciprocity or that others have already responded unless true and recorded.",
+      "appliesWhen": "Writing requests.",
+      "check": "Request text contains the optional statement and the use statement."
+    },
+    {
+      "id": "advocacy.incentives-are-owner-decisions",
+      "instruction": "Incentive types, amounts and eligibility appear only as options with their constraints; the owner selects. Incentives for reviews are proposed only where incentiveConstraints and the applicable law allow, and the request discloses any incentive.",
+      "appliesWhen": "Referral or review incentives.",
+      "check": "Options labelled with constraints; disclosure present where an incentive is proposed."
+    },
+    {
+      "id": "advocacy.no-capability-claims",
+      "instruction": "Tracking links, codes, forms or automated sends are described as proposals unless the runtime confirms the capability.",
+      "appliesWhen": "Always.",
+      "check": "Capability references match runtime-supplied data."
+    },
+    {
+      "id": "advocacy.request-kit-contract",
+      "instruction": "Write only request drafts, neutral interview questions, a gentle follow-up and referral invitations. Use the supplied customer moment and consent process as owner inputs, not proof that a particular person consented. Default to no incentive. Use exact owner-approved referral terms only when supplied; never offer a reward for a positive review. Treat responses and consent recording as owner-managed until actual capabilities exist.",
+      "appliesWhen": "Request-kit authoring.",
+      "check": "No invented customer speech or results, no automated-send claims and no invented incentives."
+    }
+  ],
+  "internalReceiptFields": [
+    "requestMoments",
+    "requestDrafts",
+    "followUpDraft",
+    "questionSets",
+    "usageFormats",
+    "referralProposal",
+    "referralMessages",
+    "ownerDecisionsNeeded",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "advocacy.check-no-customer-voice",
+      "criterion": "No invented customer text.",
+      "passingEvidence": "Text audit recorded.",
+      "failureAction": "block-task"
+    },
+    {
+      "id": "advocacy.check-consent-refs",
+      "criterion": "Every usage format references the consent record it needs.",
+      "passingEvidence": "Consent references listed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "advocacy.check-optional-statement",
+      "criterion": "Requests state optionality and use.",
+      "passingEvidence": "Statements present in each draft.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "advocacy.check-owner-decisions",
+      "criterion": "Incentives and tracking surfaced as owner decisions with constraints.",
+      "passingEvidence": "Decision list present.",
+      "failureAction": "request-owner-decision"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass or remaining items are owner decisions.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "Testimonial/referral request kit, owner review and export. No contact delivery, consent capture, customer quotation or referral attribution service.",
+    "internalSidecar": "Request moments, usage formats with consent requirements, referral proposal, owner decisions and findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Moments: first completed visit, six months on the plan, a resolved emergency. consentProcess: a reply confirming permission is stored by the owner. incentiveConstraints: no payment for reviews.",
+      "expectedBehaviour": "Three request moments with triggers; short and standard requests stating optionality and use; one follow-up; question sets about the situation before, what changed and what they would tell a neighbour; usage formats requiring a consent record per attribution; referral proposal naming plan members as likely referrers and a service credit option labelled as an owner decision; no review incentive proposed.",
+      "forbiddenBehaviour": "Drafting 'Bramble saved us hundreds' for the customer to sign, using an answer before consent is stored, or stating a referral code system exists."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Moments: calendar connected, first full month without a double booking, renewal. consentProcess: in-app consent form. incentiveConstraints: credit up to an illustrative cap.",
+      "expectedBehaviour": "Requests tied to the three moments with the in-app consent step; questions that elicit the manager's situation and what changed; referral proposal with credit options under the cap, tracking marked as owner-managed unless the runtime confirms links; three message lengths for approval.",
+      "forbiddenBehaviour": "Promising referrers an amount above the cap, implying other clinics already referred, or writing a case study from an unanswered request."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Requires the proposed schema extension (packId advocacy-and-referral, stage advocacy). Not approved or installable.",
+    "originalityNotes": "Version 0.1.1 adds original selection vocabulary and concrete evidence contracts following the private functional comparison dated 2026-11-04. It preserves the original release separately. No source-manual excerpts, filled brand templates or commercial permission are incorporated.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

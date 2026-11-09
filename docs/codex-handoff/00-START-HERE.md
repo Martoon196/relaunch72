@@ -1,5 +1,45 @@
 # 00 — START HERE (Relaunch72 audit handoff)
 
+> **Engineering update — 2026-08-25:** this file preserves the original audit
+> baseline below. PostgreSQL/RLS, a modular platform shell and the first durable
+> CRM loop have since been implemented on the local Codex branch. The newest
+> Property Predator-specific slice—the operational people Journey Board,
+> protected drag-and-drop workflow, Lead 360 drawer and explicit reuse of the
+> existing Affiliate Stash content machine—is documented, without claiming a
+> production deployment or connected publisher, in
+> [27-PROPERTY-PREDATOR-LIVE-JOURNEY-BOARD-AND-CONTENT-REUSE.md](./27-PROPERTY-PREDATOR-LIVE-JOURNEY-BOARD-AND-CONTENT-REUSE.md).
+> The preceding visual Journey Manager and safe legacy
+> lead/affiliate-attribution migration boundary is in
+> [26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md](./26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md).
+> Its runtime and Growth HQ foundations are
+> [25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md](./25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md)
+> and
+> [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md).
+> For the foundation that precedes it, start with
+> [15-POSTGRES-CRM-FOUNDATION.md](./15-POSTGRES-CRM-FOUNDATION.md),
+> [16-MODULAR-PRODUCT-UX.md](./16-MODULAR-PRODUCT-UX.md),
+> [17-WHITE-LABEL-PROVIDER-MATRIX.md](./17-WHITE-LABEL-PROVIDER-MATRIX.md),
+> [18-LAUNCH-COST-MODEL.md](./18-LAUNCH-COST-MODEL.md), and
+> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md),
+> [20-POSTGRES-PORTAL-CUTOVER-SLICE.md](./20-POSTGRES-PORTAL-CUTOVER-SLICE.md),
+> then the current
+> [21-NATIVE-CUSTOMER-ONBOARDING.md](./21-NATIVE-CUSTOMER-ONBOARDING.md) and
+> [22-DURABLE-SETUP-DELIVERY.md](./22-DURABLE-SETUP-DELIVERY.md), followed by
+> [23-PAID-CUSTOMER-ACTIVATION.md](./23-PAID-CUSTOMER-ACTIVATION.md)
+> before relying on
+> historical statements such as “no database” or the old test count.
+
+> **Database proof before the newest slice:** migrations `0001`–`0013` passed all three
+> destructive integration tests against a freshly reset, explicitly disposable
+> direct Neon database. This includes paid Checkout provenance, claim-bound
+> atomic fulfilment and provider-acceptance settlement. Migrations `0014` and
+> `0015` add conversion and shadow-event foundations; their final verification
+> results are in the **Verification evidence** section of
+> [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md).
+> Effect-producing modules remain
+> detached/off by default. No production database, customer data, charge, email,
+> message, post, webinar, deployment or provider was touched.
+
 > Prepared for an external coding agent performing a full CRM + architecture audit.
 > **Documentation only** — no code, deps, or config were changed to produce this pack
 > (one exception, called out below: `npm ci` was run to restore already-locked deps so

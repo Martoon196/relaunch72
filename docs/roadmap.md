@@ -51,6 +51,44 @@ customer), just stored and re-run on a timer. The AI-management core ≈ the exi
 schedule; the **biggest new piece is real metrics** — connecting each customer's Instagram/social via
 the Meta Graph API (or self-report) — plus optional auto-posting.
 
+### Activation-critical Growth HQ channel rails *(current)*
+
+The shared Conversion Inbox and consent model cover email, WhatsApp, SMS and
+social conversations. A channel is not launch-ready merely because its type,
+fixture or inbox filter exists. Each live rail needs a permission-bound command,
+isolated worker, authenticated receipt path, calling fence, caps and one
+founder-owned acceptance target.
+
+- ✅ Customer email — Mailgun EU foundation, worker and signed receipt path built;
+  provider account/domain evidence and an owned test recipient remain required.
+- ✅ WhatsApp — direct Meta Cloud foundation, worker and raw signed webhook path
+  built; app/WABA/phone/template evidence and an owned test number remain required.
+  A zero-send activation readiness probe now binds one supplied owned target to
+  real binding, template, consent, suppression, cap and pause evidence without
+  enqueueing or calling Meta. See `docs/property-predator-whatsapp-activation.md`.
+- ✅ Owned social — Ayrshare/X foundation and isolated worker built; exact owned
+  profile evidence, credentials and one approved test post remain required.
+  A zero-publication activation readiness probe now binds one supplied owned X
+  account to real profile, ownership, approval, attestation, publishable-text,
+  cap and pause evidence, and a deterministic rehearsal fixes the idempotency
+  and request digests without publishing. Founder command wiring is still the
+  open blocker. See `docs/property-predator-owned-social-activation.md`.
+- ✅ UK SMS — Twilio Messaging foundation, worker and signed webhook path built;
+  provider account, Messaging Service, UK regulatory bundle and an owned test
+  number remain required. Reuse the existing Conversion Inbox,
+  consent, suppression and Lead 360 models. Build exact least-privilege command,
+  one-at-a-time worker and signed inbound/status webhook identities; preserve raw
+  callback authentication and replay conflict evidence; enforce current consent at
+  enqueue and immediately before the provider call; process STOP/START without
+  weakening manual suppression; add initial daily/monthly segment caps and
+  outcome-unknown quarantine; expose readiness, cap usage, blockers and bounded
+  receipts to Live Channels; prove the complete lifecycle only against a nominated
+  founder-owned UK test number.
+
+No provider credential, production deployment, customer message or live effect is
+authorised by this roadmap entry. Activation still requires the exact account,
+sending identity, regulatory evidence, owned target and founder-approved message.
+
 ---
 
 ## Backlog (captured ideas, not yet scheduled)

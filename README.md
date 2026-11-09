@@ -1,5 +1,9 @@
 # Relaunch72
 
+> **Property Predator Growth HQ, 7 September 2026:** start with
+> [`docs/overnight-2026-09-07.md`](docs/overnight-2026-09-07.md) for the current
+> source, deployment and migration baseline. Older handoffs remain dated history.
+
 AI-powered done-for-you marketing system. Customer pays → completes the 45-question
 Deep Intake → an orchestrated pipeline of chained Claude API calls generates 9
 marketing deliverables → automated QA → human sign-off → branded delivery within 72 hours.

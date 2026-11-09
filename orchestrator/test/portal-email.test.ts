@@ -4,22 +4,113 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loginEmail } from '../src/portal/emails.js';
-import { buildPortalDeps } from '../src/portal/provision.js';
+import { buildPortalDeps, buildPostgresPortalDeps } from '../src/portal/provision.js';
 import type { ProvisionResult } from '../src/portal/provision.js';
 import { validIntake } from './helpers.js';
+import { JsonCrmStore } from '../src/crm/store.js';
+import { JsonAccountStore } from '../src/portal/accounts.js';
+import type { PortalAuthService } from '../src/portal/auth-service.js';
+import type { PortalCrmService } from '../src/portal/crm-service.js';
+import type { PortalCompanyContentService } from '../src/portal/company-content-service.js';
+import type { PortalInboxReadBoundary } from '../src/portal/router.js';
+import type { PortalAbuseGuard } from '../src/portal/abuse.js';
 
-test('loginEmail builds a valid message carrying the password + portal link', () => {
-  const m = loginEmail({ to: 'a@b.co', tenantName: 'Acme Ltd', loginEmail: 'a@b.co', password: 'PW-123', portalUrl: 'https://r72.test/portal' });
+test('PostgreSQL portal composition has no JSON dashboard, login or campaign dependency', () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const crm: PortalCrmService = {
+    snapshot: async () => null,
+    createLead: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  };
+  const companyContent: PortalCompanyContentService = {
+    snapshot: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    requestApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    decideApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  };
+  const inbox: PortalInboxReadBoundary = {
+    listConversations: async () => null,
+  };
+  const abuse: PortalAbuseGuard = {
+    admit: async () => ({ allowed: true, retryAfterSeconds: 0, leaseHash: null }),
+    complete: async () => undefined,
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const requestContext = () => ({
+    requestId: 'request-1',
+    requestHash: Buffer.alloc(32, 1),
+    clientAddress: '127.0.0.1',
+    sourceHash: Buffer.alloc(32, 2),
+  });
+  const abuseConfig = {
+    abuse,
+    requestContext,
+    abuseHashSecret: 'dedicated-test-abuse-secret-at-least-32-characters',
+  };
+
+  const trustedClientAddress = (req: Parameters<NonNullable<ReturnType<typeof buildPostgresPortalDeps>['trustedClientAddress']>>[0]) => req.socket.remoteAddress;
+  const portal = buildPostgresPortalDeps({
+    sessionSecret: 'secret', secure: true, auth, crm, companyContent, inbox, trustedClientAddress,
+    ...abuseConfig,
+  });
+  const safeDefault = buildPostgresPortalDeps({
+    sessionSecret: 'secret', secure: true, auth, crm, ...abuseConfig,
+  });
+  assert.throws(
+    () => buildPostgresPortalDeps({
+      sessionSecret: 'same-secret-that-is-at-least-32-characters',
+      secure: true,
+      auth,
+      crm,
+      ...abuseConfig,
+      abuseHashSecret: 'same-secret-that-is-at-least-32-characters',
+    }),
+    /abuse boundary is incomplete/,
+  );
+
+  assert.equal(portal.kind, 'postgres');
+  assert.equal(portal.auth, auth);
+  assert.equal(portal.crm, crm);
+  assert.equal(portal.companyContent, companyContent);
+  assert.equal(portal.inbox, inbox);
+  assert.equal(portal.trustedClientAddress, trustedClientAddress);
+  assert.equal(safeDefault.companyContent, undefined, 'an uncomposed content command module stays absent');
+  assert.equal(safeDefault.inbox, undefined, 'an uncomposed inbox read module stays absent');
+  assert.equal(safeDefault.trustedClientAddress, undefined, 'no socket or proxy inference is configured implicitly');
+  assert.equal('login' in portal, false);
+  assert.equal('dashboard' in portal, false);
+  assert.equal('runTick' in portal, false);
+  assert.equal('billing' in portal, false);
+});
+
+test('loginEmail builds a truthful generated-draft message carrying a one-time setup link, not a password', () => {
+  const m = loginEmail({ to: 'a@b.co', tenantName: 'Acme Ltd', setupUrl: 'https://r72.test/portal/setup?token=one-use', generated: true });
   assert.equal(m.to, 'a@b.co');
-  assert.match(m.subject, /ready/i);
-  assert.match(m.textBody, /PW-123/);
-  assert.match(m.textBody, /r72\.test\/portal/);
-  assert.match(m.htmlBody ?? '', /Open your dashboard/);
+  assert.match(m.subject, /set up/i);
+  assert.match(m.textBody, /token=one-use/);
+  assert.match(m.textBody, /only be used once/i);
+  assert.match(m.textBody, /draft content cluster/i);
+  assert.match(m.textBody, /simulated keyword research/i);
+  assert.match(m.textBody, /paused ad drafts/i);
+  assert.doesNotMatch(m.textBody, /temporary password|change your password/i);
+  assert.match(m.htmlBody ?? '', /Choose your password/);
   assert.equal(m.messageStream, 'outbound');
 });
 
+test('loginEmail says the draft pack is unavailable when generation was deferred', () => {
+  const m = loginEmail({ to: 'a@b.co', tenantName: 'Acme Ltd', setupUrl: 'https://r72.test/portal/setup?token=one-use', generated: false });
+  assert.match(m.textBody, /could not be generated automatically/i);
+  assert.match(m.textBody, /not available yet/i);
+  assert.doesNotMatch(m.textBody, /already built|ready for you to review/i);
+});
+
 test('loginEmail refuses an invalid recipient', () => {
-  assert.throws(() => loginEmail({ to: 'nope', tenantName: 'x', loginEmail: 'x', password: 'p', portalUrl: 'u' }), /valid recipient/);
+  assert.throws(() => loginEmail({ to: 'nope', tenantName: 'x', setupUrl: 'u', generated: false }), /valid recipient/);
 });
 
 test('provision fires onProvisioned once for a new signup, never for a repeat', async () => {
@@ -36,8 +127,32 @@ test('provision fires onProvisioned once for a new signup, never for a repeat', 
   assert.equal(seen.length, 1, 'emailed once');
   assert.equal(seen[0]!.email, 'brand@new.co');
   assert.equal(seen[0]!.name, 'Brand New Co');
-  assert.ok(seen[0]!.password.length >= 8);
+  assert.ok(seen[0]!.setupToken.length >= 40);
 
   await provision({ email: 'brand@new.co', name: 'Brand New Co', intake: validIntake() });
   assert.equal(seen.length, 1, 'no second email on a repeat signup');
+});
+
+test('portal boot defaults to no demo tenant unless a caller explicitly enables seeding', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pe-prod-'));
+  await buildPortalDeps({ dataDir, sessionSecret: 's', secure: true });
+  const store = new JsonCrmStore(path.join(dataDir, 'portal-crm.json'));
+  assert.deepEqual(await store.listTenants(), []);
+});
+
+test('required setup delivery failure rolls back the pending login instead of orphaning it', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pe-delivery-'));
+  const { provision } = await buildPortalDeps({
+    dataDir,
+    sessionSecret: 's',
+    secure: true,
+    requireSetupDelivery: true,
+    onProvisioned: async () => { throw new Error('Postmark unavailable'); },
+  });
+  await assert.rejects(
+    provision({ email: 'delivery@new.co', name: 'Delivery Co', intake: validIntake() }),
+    /account setup delivery failed/,
+  );
+  const accounts = new JsonAccountStore(path.join(dataDir, 'portal-accounts.json'));
+  assert.equal(await accounts.has('delivery@new.co'), false);
 });

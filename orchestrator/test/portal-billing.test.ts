@@ -51,16 +51,23 @@ test('billingPage marks the current plan and shows a manage button only when all
   assert.match(withManage, /Your current plan/);
   assert.match(withManage, /action="\/portal\/manage"/);
   assert.match(withManage, /renews 2026-09-01/);
+  assert.doesNotMatch(withManage, /action="\/portal\/subscribe"/);
+  assert.match(withManage, /Use Manage billing/);
 
   const noManage = billingPage('Acme', active, { canManage: false });
   assert.doesNotMatch(noManage, /action="\/portal\/manage"/);
 });
 
-test('billingPage on no plan shows subscribe CTAs and an optional notice', () => {
+test('billingPage only shows subscribe CTAs when checkout is explicitly enabled', () => {
   const none = { status: 'none' as const, active: false, planKey: null, planName: null, currentPeriodEnd: null, customerId: null, email: 'x@y.co', options: planOptions() };
-  const html = billingPage('Acme', none, { notice: 'A subscription is needed to run your marketing.' });
+  const html = billingPage('Acme', none, { canSubscribe: true, notice: 'A subscription is needed to run your marketing.' });
   assert.match(html, /Choose a plan/);
   assert.match(html, /Subscribe →/);
   assert.match(html, /A subscription is needed/);
   assert.doesNotMatch(html, /Your current plan/);
+
+  const preview = billingPage('Acme', none);
+  assert.match(preview, /Plan preview only/);
+  assert.match(preview, /Checkout paused/);
+  assert.doesNotMatch(preview, /action="\/portal\/subscribe"/);
 });

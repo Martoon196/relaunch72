@@ -1,0 +1,49 @@
+{
+  "version": "0.1.1",
+  "pins": [
+    {
+      "packId": "advocacy-and-referral",
+      "version": "0.1.1",
+      "hash": "5f5445da6dbbc471d4b16df7fced6fa37a64526fb44faecc5652efdf1e9730ea"
+    },
+    {
+      "packId": "blog-writing",
+      "version": "0.1.1",
+      "hash": "3c43d95d51651ff8af8389bb40eb35f7afb8dac267fe476e7c579aa73e8fd063"
+    },
+    {
+      "packId": "conversion-copy",
+      "version": "0.1.1",
+      "hash": "10777fa8331f1e1dc7cc6431cc91ef4baea08d88f548af675d52c5a0e50ecc34"
+    },
+    {
+      "packId": "editorial-planning",
+      "version": "0.1.1",
+      "hash": "6663021c521271bfd9aa9b83f9585facccec2763fcac9dccfbb259d2504eae2d"
+    },
+    {
+      "packId": "email-writing",
+      "version": "0.1.1",
+      "hash": "a2a314dad44b48fdac700e2ef29f814ad4647c6328ca3faca7a125a763fe6fc5"
+    },
+    {
+      "packId": "production-core",
+      "version": "0.1.1",
+      "hash": "7bcc918952b1d6f56363e61ae0723f9cd48e3e4926eeb5c421aedfbc8cb9826e"
+    },
+    {
+      "packId": "social-repurposing",
+      "version": "0.1.1",
+      "hash": "b0bd8597873769cedfdac9cf28d574363d64ededcdcb00342064902ceea7cc28"
+    },
+    {
+      "packId": "visual-briefing",
+      "version": "0.1.1",
+      "hash": "b310bd14ba857190bfe035eb5a497533f119b4330cf8bdf5f6cff21e2e11514f"
+    }
+  ],
+  "publicCommercialUse": "blocked",
+  "privateUse": "approved subject to validation",
+  "migration138LfSha256": "84f1abb3a152ac93800edbfd92b281d34d31e8ffe4e4ec5b0df2019e806898d8",
+  "migration139LfSha256": "30dd3672ae8fb89e2397b8f18145f87dffc36ff20e702480989909fd017a4643"
+}

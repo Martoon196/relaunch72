@@ -1,0 +1,182 @@
+{
+  "note": "Proposed Relaunch72-branded names for the upgrade catalogue. Names are the owner's decision; the method content is independent of naming and pricing (architecture section 1D). Nothing here sets a tier or a price.",
+  "family": {
+    "proposedName": "RL72 Boosters",
+    "alternatives": [
+      "RL72 Super Boosters",
+      "RL72 Expansion Packs",
+      "RL72 Power Packs"
+    ],
+    "pattern": "Each upgrade is sold as 'RL72 <Pack Name> Booster'; the base plan is 'RL72 Engine Room' and is never sold separately."
+  },
+  "bundles": [
+    {
+      "proposedName": "RL72 Super Booster",
+      "includes": [
+        "conversion-copy",
+        "visual-briefing",
+        "email-writing",
+        "offer-design",
+        "journey-review",
+        "audience-resonance",
+        "advocacy-and-referral"
+      ],
+      "benefit": "Every expansion pack in one upgrade.",
+      "placementNote": "Proposal only; include a pack only when its runtime path exists."
+    },
+    {
+      "proposedName": "RL72 Launch Booster",
+      "includes": [
+        "conversion-copy",
+        "email-writing",
+        "offer-design"
+      ],
+      "benefit": "Shape the offer, write the page and the sequence, ask for the sale honestly.",
+      "placementNote": "Proposal only."
+    },
+    {
+      "proposedName": "RL72 Growth Booster",
+      "includes": [
+        "journey-review",
+        "audience-resonance",
+        "advocacy-and-referral"
+      ],
+      "benefit": "Find the gaps, pressure-test the words, turn happy customers into the next ones.",
+      "placementNote": "Proposal only."
+    }
+  ],
+  "entries": [
+    {
+      "packId": "production-core",
+      "proposedName": "Engine Room",
+      "productName": "RL72 Engine Room",
+      "alternatives": [
+        "Backbone",
+        "Groundwork"
+      ],
+      "benefit": "The discipline every piece of work runs on: who it is for, what it must do, only facts you can back, one next step.",
+      "placementNote": "Included in every plan; not a separately sold upgrade."
+    },
+    {
+      "packId": "brand-context-building",
+      "proposedName": "Brain Builder",
+      "productName": "RL72 Brain Builder Booster",
+      "alternatives": [
+        "Identity Lab",
+        "Who & Why"
+      ],
+      "benefit": "Turns your answers into a confirmed picture of your buyer, their words, their hesitations and your plain statement of value.",
+      "placementNote": "Onboarding; the brand pack it produces is separate from methods."
+    },
+    {
+      "packId": "editorial-planning",
+      "proposedName": "Editor's Desk",
+      "productName": "RL72 Editor's Desk Booster",
+      "alternatives": [
+        "The Planner",
+        "Calendar Brain"
+      ],
+      "benefit": "Decides what to say next: real questions, useful formats, grounded angles, a plan that is never a quota.",
+      "placementNote": "Core content planning."
+    },
+    {
+      "packId": "blog-writing",
+      "proposedName": "Longform Forge",
+      "productName": "RL72 Longform Forge Booster",
+      "alternatives": [
+        "Deep Draft",
+        "The Writer's Room"
+      ],
+      "benefit": "Articles that answer first, explain why things work and cite every figure.",
+      "placementNote": "Core blog production."
+    },
+    {
+      "packId": "conversion-copy",
+      "proposedName": "Hook & Close",
+      "productName": "RL72 Hook & Close Booster",
+      "alternatives": [
+        "Ask Engine",
+        "Page Turner"
+      ],
+      "benefit": "Copy that asks for one action honestly, with test versions that differ in substance.",
+      "placementNote": "Candidate upgrade."
+    },
+    {
+      "packId": "social-repurposing",
+      "proposedName": "Multiplier",
+      "productName": "RL72 Multiplier Booster",
+      "alternatives": [
+        "Echo",
+        "One-to-Many"
+      ],
+      "benefit": "One approved article becomes channel-native posts that stand on their own.",
+      "placementNote": "Core social production; dispatch stays gated separately."
+    },
+    {
+      "packId": "visual-briefing",
+      "proposedName": "Art Director",
+      "productName": "RL72 Art Director Booster",
+      "alternatives": [
+        "Picture Brief",
+        "Framed"
+      ],
+      "benefit": "Image briefs that show the point, keep real evidence separate and never pretend an image exists.",
+      "placementNote": "Candidate upgrade when image paths exist."
+    },
+    {
+      "packId": "email-writing",
+      "proposedName": "Inbox Engine",
+      "productName": "RL72 Inbox Engine Booster",
+      "alternatives": [
+        "Sequence Studio",
+        "The Mailroom"
+      ],
+      "benefit": "Welcome, onboarding and promotion sequences with honest subjects and one job per email.",
+      "placementNote": "Authoring contract until an email path exists."
+    },
+    {
+      "packId": "offer-design",
+      "proposedName": "Deal Shaper",
+      "productName": "RL72 Deal Shaper Booster",
+      "alternatives": [
+        "Offer Bench",
+        "The Ladder"
+      ],
+      "benefit": "Structures offers, free entry offers and the offer ladder as proposals you approve.",
+      "placementNote": "Authoring contract until an offer workflow exists."
+    },
+    {
+      "packId": "journey-review",
+      "proposedName": "Funnel Scan",
+      "productName": "RL72 Funnel Scan Booster",
+      "alternatives": [
+        "Journey X-Ray",
+        "Gap Finder"
+      ],
+      "benefit": "Scores your whole buyer journey and a page on evidence, picks three levers, plans 90 days you can actually do.",
+      "placementNote": "Candidate upgrade."
+    },
+    {
+      "packId": "audience-resonance",
+      "proposedName": "Focus Room",
+      "productName": "RL72 Focus Room Booster",
+      "alternatives": [
+        "Reader Panel",
+        "Resonance Check"
+      ],
+      "benefit": "Your own reader personas pressure-test a draft and hand back exact rewrite directives.",
+      "placementNote": "Candidate upgrade; needs personas in the brand pack."
+    },
+    {
+      "packId": "advocacy-and-referral",
+      "proposedName": "Word of Mouth Engine",
+      "productName": "RL72 Word of Mouth Engine Booster",
+      "alternatives": [
+        "Advocate Loop",
+        "Pass It On"
+      ],
+      "benefit": "Asks happy customers to speak and to refer, with consent recorded and incentives you decide.",
+      "placementNote": "Candidate upgrade; sending and tracking need platform capabilities."
+    }
+  ]
+}

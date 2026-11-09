@@ -1,0 +1,875 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+#
+# Property Predator Growth HQ — CONTROLLED PRODUCTION PILOT ONLY.
+#
+# This is intentionally separate from render.yaml, which remains the Relaunch72
+# test-payments sandbox. In Render, create a NEW Blueprint and explicitly select
+# this file. Never point the existing sandbox Blueprint at this manifest.
+#
+# The public web service remains unable to send. Only the isolated Mailgun
+# worker is configured for the one-address internal-seed pilot; this Blueprint
+# does not stage a job, autoDeploy is off, and a human must still review the
+# exact commit, sync the secret slots, and trigger the worker deploy manually.
+services:
+  - type: web
+    name: property-predator-growth-hq
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run serve
+    # /health remains process liveness. /ready must fail unless the protected
+    # PostgreSQL portal and locked production runtime are genuinely ready.
+    healthCheckPath: /ready
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    domains:
+      - hq.propertypredator.com
+    # The canonical domain is the only public origin. Render still exposes the
+    # generated target in its dashboard so DNS can be configured.
+    renderSubdomainPolicy: disabled
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+
+      # Product and canonical origins.
+      - key: PORTAL_POSTGRES_ENABLED
+        value: "true"
+      - key: PORTAL_PRODUCT_PROFILE
+        value: property_predator_growth
+      - key: PORTAL_BASE_URL
+        value: https://hq.propertypredator.com
+      - key: PUBLIC_BASE_URL
+        value: https://propertypredator.com
+      - key: ALLOWED_ORIGINS
+        value: https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com
+      - key: SESSION_SECRET
+        generateValue: true
+      # Render's edge overwrites CF-Connecting-IP; that strict single value is
+      # source authority and appendable X-Forwarded-For is ignored. Addresses
+      # are HMACed with a key independent from the session-signing secret.
+      - key: PORTAL_PROXY_MODE
+        value: render
+      - key: PORTAL_ABUSE_HASH_SECRET
+        generateValue: true
+
+      # The legacy control room remains disabled when ADMIN_PASSWORD is empty.
+      # Before deploying an existing password, store the same base32 setup key
+      # in the founder's authenticator and this secret slot. Incrementing the
+      # epoch below revokes every previously issued admin cookie.
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOTP_SECRET
+        sync: false
+      - key: ADMIN_SESSION_EPOCH
+        sync: false
+
+      # Shared Property Predator identity bridge. The enable switch is owned by
+      # the web-service dashboard so a later Blueprint sync cannot overwrite an
+      # explicitly reviewed activation or emergency deactivation.
+      - key: PROPERTY_PREDATOR_SSO_ENABLED
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_ISSUER
+        value: https://propertypredator.com
+      - key: PROPERTY_PREDATOR_SSO_AUTHORIZE_URL
+        value: https://propertypredator.com/sso.html
+      - key: PROPERTY_PREDATOR_SSO_TOKEN_URL
+        value: https://propertypredator.com/api/auth/sso/token
+      - key: PROPERTY_PREDATOR_SSO_CLIENT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_CLIENT_SECRET
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_REDIRECT_URI
+        value: https://hq.propertypredator.com/portal/auth/property-predator/callback
+      # First-link authority is explicit server configuration. The user UUID
+      # must be the pre-existing office@propertypredator.com HQ founder; the
+      # allowlist is the verified main-site Google identity, confirmed by hand.
+      - key: PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS
+        sync: false
+
+      # Payments, public capture, demo data, automatic imports and legacy rails
+      # remain unavailable. Provider credentials for those systems are absent.
+      - key: PLATFORM_SUBSCRIPTIONS_ENABLED
+        value: "false"
+      - key: PUBLIC_LEAD_CAPTURE_ENABLED
+        value: "false"
+      - key: BILLING_ENFORCED
+        value: "false"
+      - key: PORTAL_DEMO_SEED
+        value: "false"
+      - key: RELAUNCH72_FORCE_MOCK_BUILDS
+        value: "true"
+      - key: RELAUNCH72_MAX_CONCURRENT_BUILDS
+        value: "1"
+      # Property Predator conversion-event receiver. The switch is dashboard-
+      # owned so the operator can turn it on after binding and preflight. A
+      # Blueprint literal would overwrite that operated value on every deploy.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED
+        sync: false
+      # Dedicated source key identity. It must match the exact key id the
+      # Property Predator dispatcher signs with, and it is not a shared
+      # credential: the loader refuses a secret that exactly reuses the Stripe,
+      # session, sandbox, Postmark or Brevo values.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_KEY_ID
+        sync: false
+      # The exact workspace this source key is trusted to write shadow events
+      # into. One key maps to one workspace; nothing in the signed body may
+      # choose or override it.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_WORKSPACE_ID
+        sync: false
+      # Dedicated base64url HMAC secret, 32..1024 bytes decoded. Never a
+      # Blueprint value, never logged, and never returned by readiness output.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_HMAC_SECRET_BASE64URL
+        sync: false
+      # Exact socket peer addresses permitted to assert X-Forwarded-Proto.
+      # Empty is correct unless a reviewed proxy terminates TLS in front.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES
+        sync: false
+
+      # Read-only, exact-origin company-content source used by the protected
+      # Source Sync control. The credential can read only approved company
+      # resources; it is not a generate/admin/provider token.
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN
+        value: https://propertypredator.com
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID
+        value: relaunch72
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN
+        sync: false
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS
+        value: "8000"
+
+      # One bounded company-content model call may create an immutable,
+      # source-review-required campaign draft. The source service owns the
+      # durable per-client quota and idempotency ledger. This web process has
+      # no send, schedule or publish adapter.
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_PROVIDER_EFFECTS_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_EMERGENCY_PAUSED
+        value: "false"
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN
+        sync: false
+
+      # Neon production web identities. Each URL is issued for exactly the
+      # named NOINHERIT login role. Owner, migrator and outbound-worker URLs
+      # never enter the internet-facing service.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WEB_URL
+        sync: false
+      - key: DATABASE_IDENTITY_COMMAND_URL
+        sync: false
+      - key: DATABASE_CRM_COMMAND_URL
+        sync: false
+      - key: DATABASE_ABUSE_COMMAND_URL
+        sync: false
+      - key: DATABASE_CONTENT_COMMAND_URL
+        sync: false
+      # Dedicated metadata-only company-asset reader. It cannot approve,
+      # quarantine, publish, generate content or perform provider operations.
+      - key: DATABASE_CONTENT_ADAPTER_URL
+        sync: false
+      # Signed Property Predator source events use two disjoint runtime
+      # identities: receipt-only command storage and projection-only webhook.
+      # Both values are dashboard-owned and may never fall back to DATABASE_URL.
+      - key: DATABASE_EXTERNAL_EVENT_COMMAND_URL
+        sync: false
+      - key: DATABASE_WEBHOOK_URL
+        sync: false
+      # Migration 0040 campaign planning uses its own function-only command
+      # role. This identity can append TEST planning intent evidence; it cannot
+      # call a social provider or use the worker/revalidator functions.
+      - key: DATABASE_PUBLIC_SOCIAL_COMMAND_URL
+        sync: false
+      # 0052 founder command seam for exact owned X profile evidence and
+      # approved enqueue only. It has no worker or provider-call capability.
+      - key: DATABASE_OWNED_SOCIAL_COMMAND_URL
+        sync: false
+      # Current Zernio connection, calendar-stage and reply-approval seam. It
+      # has function-only command authority and no worker claim capability.
+      - key: DATABASE_ZERNIO_SOCIAL_COMMAND_URL
+        sync: false
+      # 0090/0091 Daily Outreach and Creator Watch use disjoint table-blind
+      # read/command identities. Neither identity can call a provider.
+      - key: DATABASE_DAILY_OUTREACH_READ_URL
+        sync: false
+      - key: DATABASE_DAILY_OUTREACH_COMMAND_URL
+        sync: false
+      # 0092 receives signed Zernio DMs/comments through an inbound-only
+      # identity. It is deliberately independent of the outbound API key.
+      - key: DATABASE_ZERNIO_INBOUND_WEBHOOK_URL
+        sync: false
+      # Function-only 0053 founder command seam. It can bind encrypted Meta
+      # evidence, register one approved template and enqueue only after exact
+      # consent/PECR/operator evidence. It cannot claim or call a provider.
+      - key: DATABASE_WHATSAPP_LIVE_COMMAND_URL
+        sync: false
+      # Function-only 0054 founder command seam. It resolves the exact person,
+      # endpoint, campaign step, approvals and current permission evidence in
+      # one serializable transaction; it cannot claim or call Mailgun.
+      - key: DATABASE_CUSTOMER_EMAIL_COMMAND_URL
+        sync: false
+      # Function-only 0056 founder command seam. It authorizes and enqueues one
+      # permission-bound SMS job only after exact consent, PECR and approval
+      # evidence; it cannot claim a job or call Twilio.
+      - key: DATABASE_SMS_COMMAND_URL
+        sync: false
+      # Dedicated r72_affiliate_receipt_command identity from 0032. It inserts
+      # the operator's own permission-use receipt during the authorising
+      # request, which 0054 requires and binds to that exact request id. It is
+      # append-only into three compliance ledgers: it cannot enqueue, reach a
+      # provider, read a secret, or alter consent or suppression. Never point
+      # this at the CRM, web or customer-email credentials.
+      - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_URL
+        sync: false
+      # Dedicated r72_founder_pilot_evidence_command identity from 0065. It
+      # records the policy publication and PECR route decisions the founder
+      # attests, bound to the exact action scope the enqueue rebuilds. It holds
+      # one function and nothing else: it cannot enqueue, prepare content,
+      # reach a provider, or move consent or suppression.
+      - key: DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL
+        sync: false
+      # Dedicated r72_mailgun_webhook_command identity. This is deliberately
+      # narrower than the platform's generic webhook role.
+      - key: DATABASE_MAILGUN_WEBHOOK_URL
+        sync: false
+      # Receipt-only 0054 identity. It is invoked only after the canonical
+      # Mailgun route has authenticated and journalled the untouched event.
+      - key: DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL
+        sync: false
+      # Primary connection target remains in the existing dashboard variable.
+      # Additional provider profiles are an explicit bounded allowlist so a
+      # personal account and its company page can coexist in one HQ workspace.
+      - key: PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_IDS
+        sync: false
+      - key: DATABASE_WEB_POOL_MAX
+        value: "4"
+      - key: DATABASE_IDENTITY_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_CRM_COMMAND_POOL_MAX
+        value: "3"
+      - key: DATABASE_ABUSE_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS
+        value: "1000"
+      - key: DATABASE_CONTENT_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONTENT_ADAPTER_POOL_MAX
+        value: "2"
+      - key: DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_DAILY_OUTREACH_READ_POOL_MAX
+        value: "2"
+      - key: DATABASE_DAILY_OUTREACH_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_ZERNIO_INBOUND_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_SMS_COMMAND_POOL_MAX
+        value: "2"
+      # One receipt per authorising request, and a founder authorises one send
+      # at a time. Two is headroom, not throughput.
+      - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_POOL_MAX
+        value: "2"
+      # Evidence is recorded once per pilot, by one person, deliberately.
+      - key: DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CUSTOMER_EMAIL_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+
+      # Internal seed-pilot boundary. The workspace UUID is server-owned config,
+      # not browser input. No customer records are imported by this Blueprint.
+      - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_MAILGUN_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
+        sync: false
+      # 0052/0059/0080 owned Ayrshare founder command and Instagram/LinkedIn
+      # calendar seam. The connection id binds both to one exact connection.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
+        sync: false
+      # The owned-social profile-key encryption contract. These stay UNSET.
+      # The portal needs them only during a reviewed profile-binding window and
+      # renders an honest disabled control while they are absent. Remove them
+      # again once the owned profile is bound: the worker, not the web service,
+      # is what needs this key to run.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION
+        sync: false
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PILOT_STAGE
+        value: internal-seed
+      - key: PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE
+        value: owned-internal-seeds-only
+      - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
+        value: "10"
+
+      # Social read/reply and calendar effects are explicitly activated for the
+      # bound Zernio accounts. Email, WhatsApp, SMS and payment rails retain
+      # their own disabled switches and isolated credentials.
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_PROVIDER
+        value: zernio
+      # Zernio connection/account truth. These dashboard-owned values are
+      # copied from the already connected owned profile and never logged.
+      - key: PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS
+        sync: false
+      - key: ZERNIO_API_KEY
+        sync: false
+      # Signed inbound DMs/comments remain a separate no-effect boundary.
+      # Activation requires a dedicated HMAC secret and exact connected-account
+      # binding; it never reads ZERNIO_API_KEY.
+      - key: PROPERTY_PREDATOR_DAILY_OUTREACH_PROGRAMME_KEY
+        value: founder_daily_linkedin
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_PROVIDER_PROFILE_ID
+        sync: false
+      - key: ZERNIO_INBOUND_WEBHOOK_CREDENTIAL_VERSION
+        sync: false
+      - key: ZERNIO_INBOUND_WEBHOOK_SECRET
+        sync: false
+      # Shared only with the isolated Zernio calendar worker. It signs a
+      # short-lived exact-asset URL; the company-content READ bearer stays in
+      # this web service and never enters the worker or URL.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS
+        value: "900"
+      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
+        value: mailgun
+
+      # Mailgun EU INGRESS slots only. The public web service never receives the
+      # outbound API key. Signed provider test events are permitted; they cause
+      # no outbound provider effect.
+      - key: PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED
+        value: "true"
+      # 0054 projection remains independently dark. Enabling it sends nothing;
+      # it only adds the receipt-only projector to this already signed route.
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED
+        value: "false"
+      # Exposes only the signed owned-office reply endpoint. A separately
+      # configured Mailgun Route is still required; this setting sends nothing.
+      - key: PROPERTY_PREDATOR_MAILGUN_INBOUND_ENABLED
+        value: "true"
+      - key: MAILGUN_SIGNING_KEY
+        sync: false
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_EVENT_WEBHOOK_URL
+        value: https://hq.propertypredator.com/api/provider-webhooks/mailgun/events
+      - key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED
+        value: "true"
+
+  # 0053 one-at-a-time Meta WhatsApp dispatch worker. It deploys dark, proves
+  # its exact function boundary and makes no startup provider call. The Meta
+  # access token remains inside the job-bound encrypted database envelope.
+  - type: worker
+    name: property-predator-meta-whatsapp-live-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-worker
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WHATSAPP_LIVE_WORKER_URL
+        sync: false
+      - key: DATABASE_WHATSAPP_LIVE_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_BASE64
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_VERSION
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID
+        value: meta_whatsapp_cloud
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_WHATSAPP_EMERGENCY_PAUSED
+        value: "true"
+
+  # Public Meta callback surface. This process owns only the webhook login,
+  # app-signature secret and verification token. It never receives the outbound
+  # access token, envelope key, portal session secret or any other database URL.
+  - type: web
+    name: property-predator-meta-whatsapp-live-webhook
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-webhook
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WHATSAPP_LIVE_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_WHATSAPP_LIVE_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_WEBHOOK_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID
+        value: meta_whatsapp_cloud
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_BINDING_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_APP_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_WABA_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_APP_SECRET
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_VERIFY_TOKEN
+        sync: false
+
+  # 0054 permission-bound customer-email worker. It deploys dark and proves
+  # its exact database boundary without constructing the Mailgun adapter or
+  # making a startup provider call. Activation is a separate reviewed change.
+  - type: worker
+    name: property-predator-customer-email-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:customer-email-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_CUSTOMER_EMAIL_WORKER_URL
+        sync: false
+      - key: DATABASE_CUSTOMER_EMAIL_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID
+        value: mailgun_eu
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED
+        value: "true"
+      # Operator attestation only: release this after the separate web receipt
+      # projector is deployed and its protected readiness is green.
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED
+        value: "false"
+      # Mailgun EU egress only. The signing key and broad account API key are
+      # absent; the secret slot is scoped to this one sending domain.
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_SENDING_DOMAIN
+        value: mg.propertypredator.com
+      - key: MAILGUN_KEY_SCOPE
+        value: domain-sending
+      - key: MAILGUN_DOMAIN_SENDING_KEY
+        sync: false
+      - key: MAILGUN_FROM_EMAIL
+        sync: false
+
+  # This isolated worker is the only process that may receive the domain-scoped
+  # Mailgun outbound key and verified sender. The Blueprint starts the reviewed
+  # worker composition but never stages an email job.
+  - type: worker
+    name: property-predator-email-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:property-predator-email-worker
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # The worker receives only r72_mailgun_worker_command, never portal,
+      # webhook, owner, migrator, import or generic database credentials.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_MAILGUN_WORKER_URL
+        sync: false
+      - key: DATABASE_MAILGUN_WORKER_POOL_MAX
+        value: "3"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+
+      # Exact controlled live mode. Startup fails closed unless every switch,
+      # recipient and cap below matches the reviewed one-address seed pilot.
+      - key: PROPERTY_PREDATOR_EMAIL_WORKER_MODE
+        value: internal-seed-live
+
+      # These switches affect only the isolated email worker. The public web
+      # service remains effects-off and paused; social/WhatsApp/DM/webinar rails
+      # receive no credential or activation switch.
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
+        value: mailgun
+      - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_MAILGUN_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PILOT_STAGE
+        value: internal-seed
+      - key: PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE
+        value: owned-internal-seeds-only
+      - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
+        value: "1"
+      - key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS
+        sync: false
+      - key: PROPERTY_PREDATOR_EMAIL_RUN_MESSAGE_CAP
+        value: "1"
+      - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_MESSAGE_CAP
+        value: "3"
+      # USD micros: one conservative unit estimate, one unit/run, three/month.
+      - key: PROPERTY_PREDATOR_EMAIL_ESTIMATED_RECIPIENT_COST_USD_MICROS
+        value: "1000"
+      - key: PROPERTY_PREDATOR_EMAIL_RUN_SPEND_CAP_USD_MICROS
+        value: "1000"
+      - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_SPEND_CAP_USD_MICROS
+        value: "3000"
+
+      # Mailgun EU egress only. The outbound worker receives a key scoped to
+      # this single sending domain and a separately verified From identity.
+      # The broad account API key and webhook signing key remain absent.
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_SENDING_DOMAIN
+        value: mg.propertypredator.com
+      - key: MAILGUN_KEY_SCOPE
+        value: domain-sending
+      - key: MAILGUN_DOMAIN_SENDING_KEY
+        sync: false
+      - key: MAILGUN_FROM_EMAIL
+        sync: false
+
+  # Retired 26 October 2026 by the owner: the 0039/0040 TEST social
+  # revalidator/simulator pair. Keep the source and database evidence, but omit
+  # their service definitions so a later Blueprint sync cannot recreate them.
+  # The separate 0085 Zernio live worker below remains unchanged.
+  # 0085 Zernio calendar worker. One lease-fenced process handles the two owned
+  # networks, selects the exact account from each job and publishes at most one
+  # due operation per cycle. Historical Ayrshare code remains dormant.
+  - type: worker
+    name: property-predator-owned-public-social-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:zernio-calendar-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # One exact 0085 function-only login. It can claim/load/begin/settle one
+      # Zernio calendar job and has no direct table, web or planner capability.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_OWNED_SOCIAL_WORKER_URL
+        sync: false
+      - key: DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+
+      # Tenant and provider account bindings are secret-manager values. The
+      # Zernio key is independently supplied to this isolated worker; the web
+      # service also receives it for the separately gated OAuth/inbox seam.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID
+        sync: false
+      - key: ZERNIO_API_KEY
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN
+        sync: false
+      # Same canonical 32-byte base64url key as the Growth HQ web slot. This
+      # worker can mint short-lived exact-media URLs but cannot read the private
+      # company-content source directly.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS
+        value: "900"
+
+      # Current provider activation. Runtime account hashes, database binding,
+      # caps and emergency pause must still agree before any provider call.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE
+        value: zernio_live
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID
+        value: zernio
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK
+        value: instagram_linkedin
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "false"
+
+  # 0056 permission-bound Twilio SMS worker. It deploys dark and proves its
+  # exact database boundary without constructing the Twilio adapter or making
+  # a startup provider call. Activation is a separate reviewed change.
+  - type: worker
+    name: property-predator-twilio-sms-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:twilio-sms-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_SMS_WORKER_URL
+        sync: false
+      - key: DATABASE_SMS_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_SMS_PROVIDER_ID
+        value: twilio_messaging
+      - key: PROPERTY_PREDATOR_SMS_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SMS_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SMS_EMERGENCY_PAUSED
+        value: "true"
+      # Operator attestation only: release this after the separate webhook
+      # surface is deployed and its signed status route is green.
+      - key: PROPERTY_PREDATOR_SMS_RECEIPTS_CONFIRMED
+        value: "false"
+      # Twilio egress only. The account auth token is absent; the restricted
+      # API key pair is scoped to this one Messaging Service.
+      - key: TWILIO_KEY_SCOPE
+        value: restricted-api-key
+      - key: PROPERTY_PREDATOR_SMS_ACCOUNT_SID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_SENDER_NUMBER
+        sync: false
+      - key: TWILIO_API_KEY_SID
+        sync: false
+      - key: TWILIO_API_KEY_SECRET
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+
+  # Public Twilio callback surface. This process owns only the webhook login
+  # and the Twilio signature auth token. It never receives the restricted API
+  # key secret, messaging service SID, portal session secret or any other
+  # database URL.
+  - type: web
+    name: property-predator-twilio-sms-live-webhook
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:twilio-sms-live-webhook
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_SMS_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_SMS_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_WEBHOOK_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_SMS_PROVIDER_ID
+        value: twilio_messaging
+      - key: PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_ACCOUNT_SID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_WEBHOOK_PUBLIC_ORIGIN
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false

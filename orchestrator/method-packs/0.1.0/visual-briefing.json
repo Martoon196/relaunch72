@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "visual-briefing",
+  "summary": "How to specify a useful visual for an asset: decide what the image must help the reader do, choose a composition that shows the point, keep genuine product or property evidence separate from illustrative images, specify brand assets only when they exist, and write alt text and dimensions that the existing image-brief path can carry; without implying generation, logos or spend.",
+  "supportedStages": [
+    "visual-brief",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Visual identity notes, tone, audience.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "parentAsset",
+      "purpose": "The article, post or copy the visual supports.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "availableBrandAssets",
+      "purpose": "Verified brand assets actually available at runtime (logo files, approved photos, colour values).",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "placementSpec",
+      "purpose": "Where the image appears and the required dimensions or ratio.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "generationCapability",
+      "purpose": "Runtime statement of whether image generation is available for this brand.",
+      "missingBehaviour": "use-explicit-task-default"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "visual.state-job",
+      "instruction": "Write one sentence stating what the image must help the reader do: recognise the situation, understand a mechanism, see a step, or compare options. If the honest answer is 'decorate', choose the simplest neutral illustration and say so.",
+      "produces": [
+        "visualJob"
+      ]
+    },
+    {
+      "id": "visual.choose-subject-and-composition",
+      "instruction": "Choose a subject that depicts the job directly (for a mechanism, show the cause and effect; for a step, show the hands-on action; for a comparison, show the options side by side). Specify framing, focal point, background simplicity and whether text overlay is needed.",
+      "produces": [
+        "subject",
+        "composition"
+      ]
+    },
+    {
+      "id": "visual.classify-evidence",
+      "instruction": "Decide whether the visual is illustrative or evidential. Evidential visuals (a real product screen, a real property, a real result) are allowed only when availableBrandAssets includes the actual asset; otherwise the visual is illustrative and must be described as such.",
+      "produces": [
+        "evidenceClass"
+      ]
+    },
+    {
+      "id": "visual.specify-assets-and-text",
+      "instruction": "Specify logo placement, colours and typography only from availableBrandAssets. Keep overlay text to one short line drawn from the parent asset. Record what was not specified because the asset does not exist.",
+      "produces": [
+        "brandAssetUse",
+        "overlayText",
+        "unavailableAssets"
+      ]
+    },
+    {
+      "id": "visual.write-alt-and-dimensions",
+      "instruction": "Write alt text that describes the image content for a reader who cannot see it, and state the dimensions or ratio from placementSpec or the stage default.",
+      "produces": [
+        "altText",
+        "dimensions"
+      ]
+    },
+    {
+      "id": "visual.offer-concepts",
+      "instruction": "When the brief asks for creative options, specify two concepts that differ in treatment (one photographic and realistic, one illustrated or minimal), each with focal subject, setting, the one brand element from availableBrandAssets if any, and the feeling to convey; both remain illustrative unless an evidential asset exists.",
+      "produces": [
+        "conceptOptions"
+      ]
+    },
+    {
+      "id": "visual.handoff",
+      "instruction": "Hand the brief to whichever existing path the runtime provides: an owner-supplied image upload, or image generation only where generationCapability is available. The brief waits as a held item otherwise. The parent asset's approval is never implied by the existence of a brief.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "visual.illustrative-never-evidential",
+      "instruction": "An illustrative image must never be described, captioned or alt-texted as a real customer, property, product screen, team member or result. Phrases such as 'our work at', 'a client's home', 'actual dashboard' are forbidden unless evidenceClass is evidential with the asset present.",
+      "appliesWhen": "Always.",
+      "check": "altText and brief contain no evidential phrasing when evidenceClass is illustrative."
+    },
+    {
+      "id": "visual.no-people-as-proof",
+      "instruction": "Depicted people are generic and never implied to be customers, staff or endorsers. No depiction of identifiable real individuals.",
+      "appliesWhen": "People appear in the brief.",
+      "check": "Brief describes people generically with no implied relationship to the brand."
+    },
+    {
+      "id": "visual.brand-assets-only-if-present",
+      "instruction": "Logos, brand photos, exact colours and fonts are specified only when they exist in availableBrandAssets. Do not invent hex values or describe a logo from memory.",
+      "appliesWhen": "Any brand element.",
+      "check": "Each brand element references an available asset id."
+    },
+    {
+      "id": "visual.no-generation-claim",
+      "instruction": "The brief is a specification. It never states that an image was generated, uploaded, purchased or attached. If generationCapability is unavailable, the sidecar says the brief awaits an owner-supplied image.",
+      "appliesWhen": "Always.",
+      "check": "No past-tense generation or attachment claim; capability state recorded."
+    },
+    {
+      "id": "visual.one-point-per-image",
+      "instruction": "Each image shows one point from the parent asset. Collages of several points are not specified unless the placement is explicitly a multi-panel format.",
+      "appliesWhen": "Always.",
+      "check": "Subject names one point and its source section."
+    },
+    {
+      "id": "visual.alt-text-functional",
+      "instruction": "Alt text describes what is shown in one or two sentences, without 'image of', without keywords stuffing, and without claims the image does not depict.",
+      "appliesWhen": "Writing altText.",
+      "check": "Alt text length and content review."
+    },
+    {
+      "id": "visual.overlay-text-sourced",
+      "instruction": "Any text overlay is a short line taken from the parent asset's title or a key point, with no new claims, figures or urgency.",
+      "appliesWhen": "Overlay text is specified.",
+      "check": "Overlay text appears in the parent asset."
+    },
+    {
+      "id": "visual.exclusions-and-safety",
+      "instruction": "No excluded topics, no unsafe practices depicted as normal (for example working at height without protection), and nothing that could be read as a guarantee of outcome.",
+      "appliesWhen": "Always.",
+      "check": "Exclusion and safety scan recorded clear."
+    }
+  ],
+  "internalReceiptFields": [
+    "visualJob",
+    "subject",
+    "composition",
+    "evidenceClass",
+    "brandAssetUse",
+    "unavailableAssets",
+    "overlayText",
+    "altText",
+    "dimensions",
+    "generationCapabilityState",
+    "conceptOptions",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "visual.check-evidence-class",
+      "criterion": "Illustrative images carry no evidential phrasing; evidential images reference a present asset.",
+      "passingEvidence": "evidenceClass and phrasing scan recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "visual.check-assets-exist",
+      "criterion": "Every brand element references an available asset.",
+      "passingEvidence": "Asset id list.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "visual.check-no-generation-claim",
+      "criterion": "No claim of generation, upload or attachment.",
+      "passingEvidence": "Pattern scan recorded clear.",
+      "failureAction": "block-task"
+    },
+    {
+      "id": "visual.check-alt-text",
+      "criterion": "Alt text functional, truthful, within two sentences.",
+      "passingEvidence": "Alt text reviewed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "visual.check-stage-fit",
+      "criterion": "Brief fits the existing image-brief fields (alt text, instructions, dimensions) without new fields.",
+      "passingEvidence": "Field mapping recorded.",
+      "failureAction": "revise"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "The existing image-brief fields (artwork instructions, alt text and, where the stage carries them, dimensions); no new fields.",
+    "internalSidecar": "Visual job, evidence class, asset availability, unavailable assets and capability state.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Parent asset: the condensation how-to. availableBrandAssets: a logo file and two colour values. generationCapability: unavailable. placementSpec: blog hero 16:9.",
+      "expectedBehaviour": "Visual job: help the reader recognise the situation. Subject: a generic window with condensation at dawn, simple background, no people. Illustrative. Logo bottom-right from the asset id; colours from the two values; no font specified because none exists. Overlay: the article title. Alt text: 'Condensation droplets on the inside of a bedroom window in the early morning.' Dimensions 16:9. Sidecar: awaiting owner-supplied image.",
+      "forbiddenBehaviour": "'Photo of a customer's bedroom in Leeds after our treatment', inventing a brand font, or stating the hero image has been generated."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Parent asset: the deposit-policy comparison. availableBrandAssets: none. placementSpec: LinkedIn 1:1.",
+      "expectedBehaviour": "Visual job: help compare options. Subject: three simple labelled columns (no deposit, partial, full) with neutral icons, no product screenshot because none is available. No logo or colours specified; unavailableAssets lists them. Overlay: 'Which deposit policy fits your bookings?' taken from the article. Alt text describes the three columns. 1:1.",
+      "forbiddenBehaviour": "A mock product dashboard presented as the real app, a customer face implied as a user, or a testimonial overlay."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Applies to the current image-brief path only; it adds no generation, logo or spend capability. Not approved or installable.",
+    "originalityNotes": "Original design: the visual-job statement, illustrative/evidential classification and asset-presence rules were written for this platform; no private corpus or licensed material was consulted.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

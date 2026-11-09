@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.1",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "editorial-planning",
+  "summary": "How to decide what a brand should say next: audience questions first, one purpose per piece, a useful format and a grounded angle, real sources, an editorial mix treated as guidance rather than a quota, and (when asked) owned themes, an opening bank, a dated plan or a campaign content plan; blog clusters stay inside the existing one-pillar-plus-six-supporting contract.",
+  "supportedStages": [
+    "planning",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.1"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Audiences, offers, positioning and voice used to judge topic fit.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "planningMode",
+      "purpose": "Which planning job the brief asks for: blog cluster (default), owned themes, opening bank, dated plan, or campaign content plan.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "websiteInventory",
+      "purpose": "The brand's existing pages so the plan fills gaps instead of repeating subjects.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "researchSources",
+      "purpose": "Candidate sources with ids; topics must be supportable.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "existingPlansAndBacklog",
+      "purpose": "Previously planned or written articles to avoid duplicates.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "editorialMixGuidance",
+      "purpose": "Optional owner guidance on the balance of learn/compare/buy pieces, expressed as guidance.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "conversionPages",
+      "purpose": "Pages that may serve as cta_url values.",
+      "missingBehaviour": "omit-affected-claim"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "plan.harvest-questions",
+      "instruction": "From the brand profile's audiences and offers, write 12–20 real questions those audiences ask, phrased the way they would type or say them. Discard any question the inventory already answers directly. Keep the remainder with the audience and intent (learn, compare, buy) each belongs to.",
+      "produces": [
+        "candidateQuestions"
+      ]
+    },
+    {
+      "id": "plan.select-pillar",
+      "instruction": "Pick as the pillar the one question that (a) sits upstream of the most other candidates, (b) can be supported by at least two supplied sources, and (c) connects to an offer without being a sales page. Record the two runner-up pillars and why they lost.",
+      "produces": [
+        "pillarQuestion",
+        "pillarRationale"
+      ]
+    },
+    {
+      "id": "plan.build-supporting-set",
+      "instruction": "Choose six distinct supporting questions with at least two intents unless owner guidance says otherwise. Use any evidence-eligible format from the original catalogue, not a fixed list. Record formatPerArticle for all seven articles as {slug,formatId,rationale}. A format choice is part of the downstream brief, not an instruction to invent supporting material.",
+      "produces": [
+        "supportingQuestions",
+        "formatPerArticle"
+      ]
+    },
+    {
+      "id": "plan.ground-angles",
+      "instruction": "For every article write an angle that is specific to this brand's positioning or audience situation and could not be swapped onto a competitor unchanged. An angle is a point of view on the question, not a restatement of it.",
+      "produces": [
+        "anglePerArticle"
+      ]
+    },
+    {
+      "id": "plan.assign-sources-and-links",
+      "instruction": "Attach to each article the research source ids it will rely on, preferring primary sources for anything factual, plus internal links only to existing inventory URLs or other slugs in this cluster, and a cta_url only from conversionPages or null.",
+      "produces": [
+        "sourceIdsPerArticle",
+        "internalLinksPerArticle",
+        "ctaPerArticle"
+      ]
+    },
+    {
+      "id": "plan.check-balance",
+      "instruction": "Compare the cluster against the editorial mix guidance. If the guidance is a percentage mix, treat it as a target to approach, not a quota; note any deviation and the reason rather than forcing an unsuitable topic.",
+      "produces": [
+        "mixAssessment"
+      ]
+    },
+    {
+      "id": "plan.define-owned-themes",
+      "instruction": "When the brief asks for a content system rather than one cluster, derive three to five owned themes from the brand profile: each is a subject the brand can speak on repeatedly because its audience keeps asking about it and its offers relate to it. For each theme record why it belongs (which audience question or offer it serves) and three concrete starting angles. Themes are a planning aid; they never replace the cluster contract for blog work.",
+      "produces": [
+        "ownedThemes"
+      ]
+    },
+    {
+      "id": "plan.build-opening-bank",
+      "instruction": "When the brief asks for openings (hooks) for social or short content, write an opening bank of ten to fifteen first lines in the brand's voice, each tagged with its device: the reader's own question, a concrete number drawn from a supplied source, a plain contradiction of a common assumption, a short before-and-after situation framed as hypothetical, a specific mistake to avoid, or a direct 'if you are X, do Y' instruction. Every opening must be usable without a figure the brand cannot cite.",
+      "produces": [
+        "openingBank"
+      ]
+    },
+    {
+      "id": "plan.sequence-the-month",
+      "instruction": "When the brief asks for a dated content plan, arrange the chosen pieces across the period so that recognising-the-problem pieces come before explaining-the-cause pieces, which come before what-to-do pieces, which come before what-good-looks-like pieces; this arc is guidance, not a quota, and dates are proposals for the calendar, never publication commitments. Each slot records platform (supported networks only), theme, the opening to use, content type, the one idea and the next action.",
+      "produces": [
+        "datedPlan"
+      ]
+    },
+    {
+      "id": "plan.frame-campaign-content",
+      "instruction": "When the brief names a launch, event or promotion with a date range, plan content in three phases: before (anticipation and the problem the launch addresses), during (the offer and the action, using only approved offer facts) and after (follow-through and what happens next, with urgency only where an approved deadline exists). Record the phases with their openings and next actions; the offer facts come from the brief or verified facts only.",
+      "produces": [
+        "campaignContentPlan"
+      ]
+    },
+    {
+      "id": "plan.handoff-to-writing",
+      "instruction": "Hand each article to blog-writing as its brief: role, target_query, intent, angle, outline, key_points, cta_url, internal_links and source_ids, plus the sidecar's source-gap note for that article. Hand nothing that is not in the cluster output; scheduling dates remain proposals for the calendar, never publication commitments.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "plan.question-not-keyword",
+      "instruction": "Each article's target_query is a real question or need in the audience's words. A bare keyword or a topic label is not acceptable.",
+      "appliesWhen": "Writing target_query for any article.",
+      "check": "Every target_query reads as something a person would ask or search for and names the need, not just the subject."
+    },
+    {
+      "id": "plan.no-inventory-repeat",
+      "instruction": "No proposed article may have the same subject as an existing inventory page. If a related subject is unavoidable, the angle must differ clearly and the existing page must be listed in internal_links.",
+      "appliesWhen": "An inventory is present.",
+      "check": "For each article the sidecar names the closest inventory page and states the difference in angle."
+    },
+    {
+      "id": "plan.supportable-topics-only",
+      "instruction": "Do not propose an article whose central factual content has no supplied source. A topic that is desirable but unsupported is recorded in the sidecar as a source gap for the owner instead of being planned.",
+      "appliesWhen": "Always.",
+      "check": "Each article lists at least one source id and the pillar lists at least two; the sidecar's source-gap list explains omitted topics."
+    },
+    {
+      "id": "plan.case-study-needs-evidence",
+      "instruction": "A case-study, results or 'how we did it' piece may be planned only when verified brand facts include the evidence it would need. Otherwise plan a how-to or explainer on the same question.",
+      "appliesWhen": "A candidate question invites a results story.",
+      "check": "No planned article promises results, examples or stories that the verified facts cannot support."
+    },
+    {
+      "id": "plan.one-intent-per-article",
+      "instruction": "Each article serves one search_intent. A piece that tries to teach, compare and sell at once is split or narrowed.",
+      "appliesWhen": "Assigning search_intent.",
+      "check": "Each article's outline headings all serve its single intent."
+    },
+    {
+      "id": "plan.cluster-contract-exact",
+      "instruction": "Return exactly one pillar and six supporting articles with every field the platform's cluster format requires: role, slug, working_title, target_query, search_intent, related_questions, angle, outline, key_points, why_fit, cta_url, internal_links, source_ids. Do not add fields or networks the format does not define.",
+      "appliesWhen": "Producing the planning output.",
+      "check": "Output parses under the existing cluster schema with one pillar and six supporting entries."
+    },
+    {
+      "id": "plan.outline-is-answer-shaped",
+      "instruction": "Each outline's H2 headings follow the order in which the audience would need the answer: the situation, the decision or steps, the pitfalls, the next step. Three to eight headings; no heading that merely names a subheading of the title.",
+      "appliesWhen": "Writing outline.",
+      "check": "Headings read in sequence as a path to the answer; count within range."
+    },
+    {
+      "id": "plan.why-fit-names-the-brand-reason",
+      "instruction": "why_fit states the specific reason this brand (its audience, offer or positioning) should publish the piece, referencing a profile element. Generic reasons such as 'high search volume' are not sufficient on their own.",
+      "appliesWhen": "Writing why_fit.",
+      "check": "Each why_fit cites a profile element by name or paraphrase."
+    },
+    {
+      "id": "plan.mix-is-guidance",
+      "instruction": "Editorial mix guidance shapes selection but never forces an unsupported or duplicated topic. Deviation from the guidance is recorded with the reason. Where no guidance is supplied, aim for a majority of learn pieces with at least one compare or buy piece per cluster, and record that this default was used.",
+      "appliesWhen": "Mix guidance is present or absent.",
+      "check": "mixAssessment lists actual counts per intent against guidance or the recorded default and explains gaps."
+    },
+    {
+      "id": "plan.system-outputs-are-plans-not-promises",
+      "instruction": "Themes, opening banks, dated plans and campaign plans describe what the brand intends to produce. They contain no claims, figures or proof that the brand cannot already cite, and no date is a publication commitment until the existing scheduling path records it.",
+      "appliesWhen": "A content-system brief (themes, openings, dated plan, campaign plan).",
+      "check": "Every opening and slot idea is figure-free or cites a supplied source; every date is labelled proposed."
+    },
+    {
+      "id": "plan.trend-topics-need-current-sources",
+      "instruction": "A topic framed around something new, changing or current (a rule change, a market shift, 'this year') is planned only when a supplied source is dated recently enough to support it. Evergreen questions may be planned from evergreen sources without a fresh trend search.",
+      "appliesWhen": "Choosing topics and angles.",
+      "check": "Each time-sensitive topic lists a source the sidecar records as current; evergreen topics carry no recency framing."
+    }
+  ],
+  "internalReceiptFields": [
+    "candidateQuestions",
+    "pillarQuestion",
+    "pillarRationale",
+    "rejectedPillars",
+    "formatPerArticle",
+    "anglePerArticle",
+    "sourceIdsPerArticle",
+    "sourceGaps",
+    "closestInventoryPagePerArticle",
+    "mixAssessment",
+    "ownedThemes",
+    "openingBank",
+    "datedPlan",
+    "campaignContentPlan",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "plan.check-cluster-shape",
+      "criterion": "One pillar, six supporting, all required fields present, slugs unique and kebab-case.",
+      "passingEvidence": "Schema validation of the cluster output.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "plan.check-no-duplicates",
+      "criterion": "No article duplicates an inventory page, a backlog item or another article in the cluster.",
+      "passingEvidence": "Pairwise subject comparison recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "plan.check-sources",
+      "criterion": "Every article has valid supplied source ids; the pillar has at least two; factual topics prefer primary sources.",
+      "passingEvidence": "Source id list per article resolved against supplied sources.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "plan.check-angles-specific",
+      "criterion": "No angle could be applied unchanged to another brand in the same category.",
+      "passingEvidence": "Each angle references the profile's audience situation or positioning.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "plan.check-links-allowed",
+      "criterion": "internal_links contain only inventory URLs or cluster slugs; cta_url is a conversion page or null.",
+      "passingEvidence": "Link resolution recorded.",
+      "failureAction": "revise"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass or the only failures are source gaps that need owner-supplied research.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "The existing topic-cluster object (pillar plus six supporting articles) in the platform's cluster format.",
+    "internalSidecar": "Candidate questions, pillar rationale, rejected pillars, source gaps, inventory proximity notes and mix assessment.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Profile audiences: first-time homeowners and landlords with older properties. Inventory already has a page on gutter cleaning. Sources: an illustrative local-authority damp guidance passage and an illustrative insulation standard passage. Mix guidance: mostly learn pieces.",
+      "expectedBehaviour": "Pillar: 'How do I stop damp and condensation in an older house?' Supporting six include a checklist, a comparison of ventilation options, an FAQ, a mistakes piece, a seasonal how-to and a decision guide on when to call a professional. Gutter cleaning is not re-planned; the existing page is linked from the relevant article. Each article cites one of the two sources; the pillar cites both.",
+      "forbiddenBehaviour": "Planning 'Our 500 happy damp-proofing customers' with no evidence, or adding a seventh supporting article because the mix guidance seemed to need another compare piece."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Profile audiences: clinic managers and tutoring agencies. Inventory has pricing and a feature list. Sources: an illustrative industry survey passage on appointment no-shows with an id. Mix guidance absent.",
+      "expectedBehaviour": "Pillar: 'How do service businesses reduce missed appointments without annoying customers?' Supporting pieces cover reminder timing, deposit policies as a comparison, rescheduling etiquette as an FAQ, staffing-around-cancellations how-to, a mistakes piece and a decision guide on self-booking. Angles reference the two audiences explicitly. cta_url points at the existing pricing page only where intent is buy or compare.",
+      "forbiddenBehaviour": "Using the survey figure in a working title as if it were the brand's own data, or planning a 'case study' with no customer evidence in the verified facts."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Compatible with the recorded Relaunch72 planning contract (one pillar, six supporting). Not approved or installable.",
+    "originalityNotes": "Version 0.1.1 adds original selection vocabulary and concrete evidence contracts following the private functional comparison dated 2026-11-04. It preserves the original release separately. No source-manual excerpts, filled brand templates or commercial permission are incorporated.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

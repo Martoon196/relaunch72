@@ -1,5 +1,10 @@
 # Relaunch72 — Full Offer Ecosystem
 
+> **Historical strategy draft — do not publish verbatim.** The automatic $97
+> Core credit and discounted checkout described below are not implemented. Until
+> server-side eligibility exists, public copy must require manual verification
+> and must never send a customer to standard $997 checkout while promising $900.
+
 *Built with offer-architect + direct-response-copywriter + DM ARCHITECT / Excite-stage frameworks. Every asset written in Relaunch72's voice: operator-to-operator, British, no hype, no filler.*
 
 **Standing assumptions** (correct me if any are off):

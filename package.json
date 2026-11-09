@@ -4,8 +4,7 @@
   "private": true,
   "description": "Relaunch72 — AI-powered done-for-you marketing system. Monorepo: orchestrator, prompts, site, admin.",
   "workspaces": [
-    "orchestrator",
-    "webinars"
+    "orchestrator"
   ],
   "scripts": {
     "pipeline": "npm run --workspace orchestrator pipeline --",
@@ -17,10 +16,24 @@
     "test": "npm run --workspace orchestrator test",
     "typecheck": "npm run --workspace orchestrator typecheck",
     "serve": "npm run --workspace orchestrator serve",
+    "serve:property-predator-email-worker": "npm run --workspace orchestrator serve:property-predator-email-worker",
+    "serve:meta-whatsapp-live-worker": "npm run --workspace orchestrator serve:meta-whatsapp-live-worker",
+    "serve:meta-whatsapp-live-webhook": "npm run --workspace orchestrator serve:meta-whatsapp-live-webhook",
+    "serve:customer-email-live": "npm run --workspace orchestrator serve:customer-email-live",
+    "serve:twilio-sms-live": "npm run --workspace orchestrator serve:twilio-sms-live",
+    "serve:twilio-sms-live-webhook": "npm run --workspace orchestrator serve:twilio-sms-live-webhook",
+    "serve:omnichannel-test-rail": "npm run --workspace orchestrator serve:omnichannel-test-rail",
+    "pilot:preflight": "npm run --workspace orchestrator pilot:preflight",
+    "pilot:rehearse-targets": "npm run --workspace orchestrator pilot:rehearse-targets",
+    "founder:bootstrap": "npm run --workspace orchestrator founder:bootstrap --",
+    "snapshot:preview": "npm run --workspace orchestrator snapshot:preview --",
     "stripe:setup": "npm run --workspace orchestrator stripe:setup",
-    "webinars:test": "npm run --workspace webinars test",
-    "webinars:typecheck": "npm run --workspace webinars typecheck",
-    "webinars:dev": "npm run --workspace webinars dev"
+    "db:migrate": "npm run --workspace orchestrator db:migrate",
+    "db:check": "npm run --workspace orchestrator db:check",
+    "test:db": "npm run --workspace orchestrator test:db",
+    "test:db:integration": "npm run --workspace orchestrator test:db:integration",
+    "supply-chain:check": "node scripts/supply-chain.mjs --check",
+    "sbom:write": "node scripts/supply-chain.mjs --write"
   },
   "engines": {
     "node": ">=20"

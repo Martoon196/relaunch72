@@ -1,0 +1,187 @@
+/**
+ * Least-privilege runtime boundary probes for the three 0056 SMS database
+ * identities. Each probe proves the exact login role, its allowed and
+ * forbidden SECURITY DEFINER functions, complete table-blindness and the
+ * absence of elevated role memberships — in one read-only statement.
+ */
+
+import type { Pool, QueryResultRow } from 'pg';
+
+export const SMS_COMMAND_DATABASE_ROLE = 'r72_sms_command' as const;
+export const SMS_WORKER_DATABASE_ROLE = 'r72_sms_worker_command' as const;
+export const SMS_WEBHOOK_DATABASE_ROLE = 'r72_sms_webhook_command' as const;
+
+type SmsRuntimeRole =
+  | typeof SMS_COMMAND_DATABASE_ROLE
+  | typeof SMS_WORKER_DATABASE_ROLE
+  | typeof SMS_WEBHOOK_DATABASE_ROLE;
+
+interface BoundaryRow extends QueryResultRow {
+  exactRole: unknown;
+  schemaUsage: unknown;
+  runtimeLedger: unknown;
+  installationIdentity: unknown;
+  requiredFunctions: unknown;
+  forbiddenFunctions: unknown;
+  tableBlind: unknown;
+  elevatedRolesDenied: unknown;
+}
+
+const AUTHORIZE =
+  'app_private.authorize_and_enqueue_sms_live_job(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamp with time zone,uuid,uuid,uuid,bytea,bytea,integer)';
+const CLAIM =
+  'app_private.claim_sms_live_job(uuid,uuid,bytea,integer)';
+const LOAD =
+  'app_private.load_sms_live_job(uuid,uuid,bigint,bytea)';
+const BEGIN =
+  'app_private.begin_sms_live_call(uuid,uuid,bigint,bytea,boolean,boolean,boolean)';
+const SETTLE =
+  'app_private.settle_sms_live_call(uuid,uuid,bigint,bytea,text,text,timestamp with time zone,boolean,text,text,bytea)';
+const STATUS_RECEIPT =
+  'app_private.record_sms_live_status_receipt(uuid,uuid,text,text,text,text,bytea,timestamp with time zone)';
+const INBOUND_PROJECTION =
+  'app_private.record_sms_live_inbound_projection(uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)';
+const SESSION_LOCK =
+  'app_private.lock_active_portal_session(bytea,uuid,uuid)';
+const SESSION_READ =
+  'app_private.active_portal_session(bytea,uuid,uuid)';
+const VERIFY_REQUEST = 'app_private.request_sms_phone_challenge(uuid,uuid,text,text)';
+const VERIFY_CONFIRM = 'app_private.confirm_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_CLAIM = 'app_private.claim_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_ARM = 'app_private.arm_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_SETTLE = 'app_private.settle_sms_phone_challenge(uuid,uuid,text,text)';
+// MHP009B scheduled event reminders (0131). Each role receives only its own set.
+export const MHP_EVENT_OWNER_FUNCTIONS = Object.freeze([
+  'app_private.mhp_event_phone_review(bytea,uuid)',
+  'app_private.mhp_event_phone_activate(bytea,uuid,uuid,bytea,uuid[],jsonb,bytea,text,boolean,boolean)',
+  'app_private.mhp_event_phone_control(bytea,uuid,text,uuid,bytea,text)',
+]);
+export const MHP_EVENT_WORKER_FUNCTIONS = Object.freeze([
+  'app_private.mhp_prepare_event_sms(uuid,uuid,integer)',
+  'app_private.claim_event_sms_job(uuid,uuid,bytea,integer)',
+  'app_private.load_event_sms_job(uuid,uuid,bigint,bytea)',
+  'app_private.begin_event_sms_call(uuid,uuid,bigint,bytea,boolean,boolean,boolean)',
+  'app_private.mhp_hold_event_sms()',
+]);
+export const MHP_EVENT_WEBHOOK_FUNCTIONS = Object.freeze([
+  'app_private.mhp_record_event_sms_inbound(uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)',
+]);
+
+interface RoleContract {
+  readonly role: SmsRuntimeRole;
+  readonly required: readonly string[];
+  readonly forbidden: readonly string[];
+}
+
+const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze({
+  [SMS_COMMAND_DATABASE_ROLE]: Object.freeze({
+    role: SMS_COMMAND_DATABASE_ROLE,
+    required: Object.freeze([AUTHORIZE, SESSION_LOCK, VERIFY_REQUEST, VERIFY_CONFIRM]),
+    forbidden: Object.freeze([
+      CLAIM, LOAD, BEGIN, SETTLE, STATUS_RECEIPT, INBOUND_PROJECTION, SESSION_READ,
+      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE, ...MHP_EVENT_WORKER_FUNCTIONS, ...MHP_EVENT_WEBHOOK_FUNCTIONS,
+    ]),
+  }),
+  [SMS_WORKER_DATABASE_ROLE]: Object.freeze({
+    role: SMS_WORKER_DATABASE_ROLE,
+    required: Object.freeze([CLAIM, LOAD, BEGIN, SETTLE,
+      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE]),
+    forbidden: Object.freeze([
+      AUTHORIZE, SESSION_LOCK, SESSION_READ, STATUS_RECEIPT, INBOUND_PROJECTION,
+      VERIFY_REQUEST, VERIFY_CONFIRM, ...MHP_EVENT_OWNER_FUNCTIONS, ...MHP_EVENT_WEBHOOK_FUNCTIONS,
+    ]),
+  }),
+  [SMS_WEBHOOK_DATABASE_ROLE]: Object.freeze({
+    role: SMS_WEBHOOK_DATABASE_ROLE,
+    required: Object.freeze([STATUS_RECEIPT, INBOUND_PROJECTION]),
+    forbidden: Object.freeze([
+      AUTHORIZE, SESSION_LOCK, SESSION_READ, CLAIM, LOAD, BEGIN, SETTLE,
+      VERIFY_REQUEST, VERIFY_CONFIRM, VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
+      ...MHP_EVENT_OWNER_FUNCTIONS, ...MHP_EVENT_WORKER_FUNCTIONS,
+    ]),
+  }),
+});
+
+function privilegeAnd(functions: readonly string[], expected: boolean): string {
+  if (functions.length === 0) return expected ? 'TRUE' : 'FALSE';
+  return functions.map((signature) => `${expected ? '' : 'NOT '}
+    pg_catalog.has_function_privilege(current_user, '${signature}', 'EXECUTE')`).join('\n    AND ');
+}
+
+async function assertBoundary(
+  pool: Pick<Pool, 'query'>,
+  contract: RoleContract,
+): Promise<void> {
+  let rows: readonly BoundaryRow[];
+  try {
+    const result = await pool.query<BoundaryRow>(
+      `/* twilio-sms-live.${contract.role}.runtime-boundary */
+       SELECT
+         current_user = '${contract.role}' AS "exactRole",
+         pg_catalog.has_schema_privilege(current_user, 'app_private', 'USAGE') AS "schemaUsage",
+         pg_catalog.has_function_privilege(
+           current_user, 'app_private.runtime_schema_migrations()', 'EXECUTE'
+         ) AS "runtimeLedger",
+         pg_catalog.has_function_privilege(
+           current_user, 'app_private.runtime_database_installation_id()', 'EXECUTE'
+         ) AS "installationIdentity",
+         (${privilegeAnd(contract.required, true)}) AS "requiredFunctions",
+         (${privilegeAnd(contract.forbidden, false)}) AS "forbiddenFunctions",
+         NOT EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_class AS relation
+           JOIN pg_catalog.pg_namespace AS schema_name
+             ON schema_name.oid = relation.relnamespace
+           WHERE schema_name.nspname IN ('app', 'app_private')
+             AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+             AND (
+               pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT')
+               OR pg_catalog.has_table_privilege(current_user, relation.oid, 'INSERT')
+               OR pg_catalog.has_table_privilege(current_user, relation.oid, 'UPDATE')
+               OR pg_catalog.has_table_privilege(current_user, relation.oid, 'DELETE')
+               OR pg_catalog.has_table_privilege(current_user, relation.oid, 'TRUNCATE')
+             )
+         ) AS "tableBlind",
+         NOT (
+           pg_catalog.pg_has_role(current_user, 'r72_owner', 'MEMBER')
+           OR pg_catalog.pg_has_role(current_user, 'r72_security_definer', 'MEMBER')
+           OR pg_catalog.pg_has_role(current_user, 'r72_sms_definer', 'MEMBER')
+         ) AS "elevatedRolesDenied"`,
+    );
+    rows = result.rows;
+  } catch {
+    throw new Error(`Twilio SMS ${contract.role} database boundary could not be verified`);
+  }
+  const row = rows[0];
+  if (rows.length !== 1 || !row
+      || row.exactRole !== true || row.schemaUsage !== true
+      || row.runtimeLedger !== true || row.installationIdentity !== true
+      || row.requiredFunctions !== true || row.forbiddenFunctions !== true
+      || row.tableBlind !== true || row.elevatedRolesDenied !== true) {
+    throw new Error(`Twilio SMS ${contract.role} database boundary is not exact`);
+  }
+}
+
+export function assertSmsCommandBoundaryReady(pool: Pick<Pool, 'query'>): Promise<void> {
+  return assertBoundary(pool, CONTRACTS[SMS_COMMAND_DATABASE_ROLE]);
+}
+
+export function assertSmsWorkerBoundaryReady(pool: Pick<Pool, 'query'>): Promise<void> {
+  return assertBoundary(pool, CONTRACTS[SMS_WORKER_DATABASE_ROLE]);
+}
+
+export function assertSmsWebhookBoundaryReady(pool: Pick<Pool, 'query'>): Promise<void> {
+  return assertBoundary(pool, CONTRACTS[SMS_WEBHOOK_DATABASE_ROLE]);
+}
+
+const EVENT_ROLE_FUNCTIONS: Readonly<Record<SmsRuntimeRole, readonly string[]>> = Object.freeze({
+  [SMS_COMMAND_DATABASE_ROLE]: MHP_EVENT_OWNER_FUNCTIONS,
+  [SMS_WORKER_DATABASE_ROLE]: MHP_EVENT_WORKER_FUNCTIONS,
+  [SMS_WEBHOOK_DATABASE_ROLE]: MHP_EVENT_WEBHOOK_FUNCTIONS,
+});
+
+/** Additive 0131 probe: the role's existing exact boundary plus its own event functions. */
+export function assertMhpEventSmsBoundaryReady(pool: Pick<Pool, 'query'>, role: SmsRuntimeRole): Promise<void> {
+  const base = CONTRACTS[role];
+  return assertBoundary(pool, Object.freeze({ role, required: Object.freeze([...base.required, ...EVENT_ROLE_FUNCTIONS[role]]), forbidden: base.forbidden }));
+}

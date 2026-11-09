@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "journey-review",
+  "summary": "How to review a brand's whole buyer journey and one page at a time with inspectable scores and a bounded improvement plan: a stage-by-stage review from first contact to referral using the owner's answers and evidence, a page review graded on what a reader can see and do, a short list of highest-leverage changes chosen by a stated decision rule, and a 90-day plan paced to the owner's available time; scores guide priorities and are never evidence of results.",
+  "supportedStages": [
+    "review",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Audiences, offers and current approved offers.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "ownerJourneyAnswers",
+      "purpose": "The owner's answers per journey stage (what exists today, what evidence they have), collected by form.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "pageUnderReview",
+      "purpose": "For a page review: the page copy and structure as data, plus its offer and price band.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "availableMeasures",
+      "purpose": "Which measures the owner can actually read (traffic, sign-ups, sales, replies), without inventing values.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "ownerCapacity",
+      "purpose": "Hours per week the owner can give to marketing work.",
+      "missingBehaviour": "request-owner-decision"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "review.map-stages",
+      "instruction": "Describe the journey in eight stages in plain words: being found, earning attention, gaining permission to follow up, the first purchase, the first good experience, the next purchase, happy customers speaking up, and customers bringing others. For each stage record what the owner says exists today, what evidence supports it, and what is absent.",
+      "produces": [
+        "stageMap"
+      ]
+    },
+    {
+      "id": "review.score-stages",
+      "instruction": "Give each stage a whole-number score from 1 to 4 against a fixed rubric: 1 nothing in place, 2 something exists but is unmeasured or ad hoc, 3 a repeatable mechanism exists with some evidence, 4 a repeatable mechanism with evidence and a next step. State the evidence behind each score; a score with no evidence is capped at 2.",
+      "produces": [
+        "stageScores",
+        "scoreEvidence"
+      ]
+    },
+    {
+      "id": "review.review-page",
+      "instruction": "When a page is supplied, grade eight observable aspects 1 to 4: what the first screen says and asks, headline and subheading clarity, the single action, visual order and legibility, phone layout, trust elements that are verified, the path from arrival to action, and supporting content such as answers to objections. Weight the depth expected by the offer's price band (a low-price page needs simplicity; a high-consideration page needs objection answers and verified proof). Quote the element behind every grade.",
+      "produces": [
+        "pageGrades",
+        "pageStrengths",
+        "pageFixes"
+      ]
+    },
+    {
+      "id": "review.choose-levers",
+      "instruction": "Choose up to three changes by this rule in order: first, a stage scoring 1 or 2 that sits directly before the owner's main goal in the journey; second, the earliest stage scoring 1; third, the cheapest fix among stages scoring 2. Record why each was chosen over the alternatives.",
+      "produces": [
+        "levers",
+        "leverRationale"
+      ]
+    },
+    {
+      "id": "review.plan-ninety-days",
+      "instruction": "Lay the levers across three monthly phases: establish what is missing, then increase what feeds it, then improve conversion between stages. Each month gets one focus, three to five named actions sized to ownerCapacity, one measure from availableMeasures to watch, and which method packs apply. Add one action for the first week that can be finished in that week.",
+      "produces": [
+        "ninetyDayPlan",
+        "firstWeekAction"
+      ]
+    },
+    {
+      "id": "review.handoff",
+      "instruction": "Hand the plan to the owner as decisions and to the relevant packs as briefs (for example a lead-capture gap to offer-design, a page fix to conversion-copy). No action is started by this pack.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "review.scores-need-evidence",
+      "instruction": "Every score and grade cites the owner answer, evidence item or page element behind it. Unsupported scores are capped and the gap is listed.",
+      "appliesWhen": "Always.",
+      "check": "Each score has a cited basis; capped scores are marked."
+    },
+    {
+      "id": "review.no-benchmarks-no-forecasts",
+      "instruction": "The review states no industry benchmarks, typical conversion rates, expected uplifts or revenue projections. It compares the brand only with its own stated goal and evidence.",
+      "appliesWhen": "Always.",
+      "check": "No percentage or figure appears that was not supplied by the owner or a cited source."
+    },
+    {
+      "id": "review.plan-sized-to-capacity",
+      "instruction": "Total planned hours per week never exceed ownerCapacity; if the levers need more, the plan drops the lowest-priority actions and says so.",
+      "appliesWhen": "Writing the plan.",
+      "check": "Hours summed and compared; dropped actions listed."
+    },
+    {
+      "id": "review.actions-are-named-tasks",
+      "instruction": "Each action names a concrete deliverable (a page, a sequence, an offer step), not a category such as 'improve content'.",
+      "appliesWhen": "Writing actions.",
+      "check": "Each action maps to a producible asset or decision."
+    },
+    {
+      "id": "review.page-review-reads-what-is-there",
+      "instruction": "Page grades describe what is present in the supplied copy and structure. Design and behaviour the review cannot see (load time, live tracking) are marked not assessed, never guessed.",
+      "appliesWhen": "Page review.",
+      "check": "Each grade quotes the element; unseen aspects marked not assessed."
+    },
+    {
+      "id": "review.levers-by-rule",
+      "instruction": "Levers follow the stated decision rule; an owner preference may override it only when recorded as the owner's decision.",
+      "appliesWhen": "Choosing levers.",
+      "check": "leverRationale cites the rule step for each lever."
+    }
+  ],
+  "internalReceiptFields": [
+    "stageMap",
+    "stageScores",
+    "scoreEvidence",
+    "pageGrades",
+    "pageStrengths",
+    "pageFixes",
+    "levers",
+    "leverRationale",
+    "ninetyDayPlan",
+    "firstWeekAction",
+    "capacityReconciliation",
+    "notAssessed",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "review.check-evidence",
+      "criterion": "Every score and grade has a cited basis.",
+      "passingEvidence": "Basis column complete.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "review.check-no-invented-figures",
+      "criterion": "No benchmark, rate or forecast appears.",
+      "passingEvidence": "Figure scan recorded clear.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "review.check-capacity",
+      "criterion": "Plan hours within owner capacity.",
+      "passingEvidence": "capacityReconciliation recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "review.check-actions-concrete",
+      "criterion": "All actions are named deliverables.",
+      "passingEvidence": "Action list reviewed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "review.check-owner-decisions",
+      "criterion": "Capacity, overrides and gaps that need the owner are surfaced.",
+      "passingEvidence": "Owner-decision list present.",
+      "failureAction": "request-owner-decision"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass or remaining items are owner decisions.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "A review document in whatever existing report format the runtime provides: stage map and scores with evidence, optional page grades with quoted elements, levers, and a 90-day plan with a first-week action. Nothing customer-facing is published.",
+    "internalSidecar": "Score bases, capacity reconciliation, not-assessed items and owner decisions.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Owner answers: website and word of mouth bring enquiries; no lead capture; quotes convert by phone; no follow-up after jobs; two reviews collected manually. ownerCapacity: 3 hours a week. No page supplied.",
+      "expectedBehaviour": "Scores with cited answers: permission-to-follow-up 1, first-good-experience 2 (unmeasured), speaking-up 2. Levers by rule: lead capture first (stage before the goal of more quotes), then a post-job follow-up, then a review ask. Plan sized to 3 hours; first-week action: write the post-job follow-up message brief for email-writing. No benchmark percentages.",
+      "forbiddenBehaviour": "'Typical trades businesses convert 30% of leads', a 10-hour-a-week plan, or 'improve social presence' as an action."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Owner answers across all stages with a trial sign-up flow. pageUnderReview: the trial landing page copy, mid price band. availableMeasures: sign-ups and activations.",
+      "expectedBehaviour": "Page grades quoting elements: first screen asks for the trial but does not say who it is for (2); headline clear (3); single action (4); trust elements: two unverified logos marked not assessed. Fixes handed to conversion-copy as a brief. Levers chosen by rule from the stage scores; plan watches sign-ups and activations.",
+      "forbiddenBehaviour": "Grading page speed it cannot see, forecasting activation uplift, or renaming a stage after a third-party framework."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Requires the proposed schema extension (packId journey-review, stage review). Not approved or installable.",
+    "originalityNotes": "Original design: the evidence-capped scoring rubric, the three-step lever decision rule, capacity-sized planning and the not-assessed rule were written for this platform. Reviewing a buyer journey stage by stage and grading a page are common practice; no third-party stage names, question scripts, rubrics or plan templates were reused.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

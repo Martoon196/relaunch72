@@ -2,8 +2,8 @@
  * Portal run engine — the live "Run this week" behind the button, and one-time
  * brand-brain provisioning for a tenant. Everything is mock-first (£0): the same
  * stages/rails the pipeline uses, run against a tenant's own run dir, writing
- * real artifacts (cluster, keyword report, ad campaign) and recording each run to
- * the CRM timeline. Swap MockClient → AnthropicClient and it's live, no rewrite.
+ * draft artifacts and recording only work that actually happened to the CRM
+ * timeline. Mock outputs must never be presented as published/live operations.
  */
 
 import fs from 'node:fs';
@@ -22,17 +22,21 @@ import type { ActivityEntry } from '../manager/types.js';
 function readJson<T>(file: string): T { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; }
 function has(dir: string, f: string): boolean { return fs.existsSync(path.join(dir, f)); }
 
-/** Price a cluster's fan-out queries and write keyword-report.json (mock volumes). */
+/** Write deterministic planning estimates for a cluster (never live keyword data). */
 async function writeKeywordReport(dir: string, cluster: { pillar: { target_query: string }; supporting: { target_query: string }[] }): Promise<number> {
   const queries = [cluster.pillar.target_query, ...cluster.supporting.map((s) => s.target_query)];
   const metrics = await new MockKeywordProvider().metrics(queries);
-  fs.writeFileSync(path.join(dir, 'keyword-report.json'), JSON.stringify({ queries: metrics.map((m) => ({ query: m.keyword, volume: m.volume, source: m.source })) }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'keyword-report.json'), JSON.stringify({
+    mode: 'simulated',
+    disclaimer: 'Planning estimates only — not live search-volume data.',
+    queries: metrics.map((m) => ({ query: m.keyword, volume: m.volume, source: m.source })),
+  }, null, 2), 'utf8');
   return metrics.length;
 }
 
 /**
  * Generate a tenant's brand brain + first artifacts into `dir`: the full S1–S9
- * pipeline, then a Soro cluster, a keyword report and an ad campaign. Mock LLM.
+ * pipeline, then draft cluster, simulated keyword estimates and draft ads. Mock LLM.
  */
 export async function generateBrandBrain(intake: Intake, dir: string): Promise<void> {
   fs.mkdirSync(dir, { recursive: true });
@@ -52,22 +56,24 @@ export async function generateBrandBrain(intake: Intake, dir: string): Promise<v
 }
 
 /**
- * The live "Run this week": regenerate this period's content/keyword/ads for a
- * tenant from their run dir and record each to their CRM timeline. Falls back to
- * recording a simulated run if the tenant has no brand brain yet.
+ * "Run this week": regenerate this period's draft content/keyword/ads for a
+ * tenant from their run dir and record each completed operation to their CRM
+ * timeline. If the brand brain is missing, record an honest no-op note.
  */
 export async function runTickReal(store: CrmStore, tenantId: string): Promise<number> {
   const tenant = await store.getTenant(tenantId);
   const dir = tenant?.runDir;
   const at = new Date().toISOString();
 
-  if (!dir || !fs.existsSync(dir) || !has(dir, 's3.json') || !has(dir, 'intake.json')) {
-    // No brand brain — record a mock run so the button still does something visible.
-    const sim: ActivityEntry[] = [
-      { tenantId, action: 'content_cluster', at, status: 'ok', note: 'Generated this week’s content cluster' },
-      { tenantId, action: 'social_batch', at, status: 'ok', note: 'Scheduled the next 30 social posts' },
-    ];
-    return ingestTick(store, sim);
+  if (!dir || !fs.existsSync(dir) || !has(dir, 's2.json') || !has(dir, 's3.json') || !has(dir, 'intake.json')) {
+    await store.addActivity({
+      tenantId,
+      at,
+      kind: 'note',
+      channel: 'system',
+      summary: 'Run not started: the brand brain is not ready. Nothing was generated, scheduled or published.',
+    });
+    return 1;
   }
 
   const intake = readJson<Intake>(path.join(dir, 'intake.json'));
@@ -80,16 +86,15 @@ export async function runTickReal(store: CrmStore, tenantId: string): Promise<nu
   const cc = await runStage(CONTENT_CLUSTER_STAGE, intake, { S2, S3 }, { runDir: dir, client });
   if (cc.output) {
     const cluster = cc.output as { pillar: { target_query: string }; supporting: { target_query: string }[] };
-    entries.push({ tenantId, action: 'content_cluster', at, status: 'ok', note: `Generated a ${cluster.supporting.length + 1}-article content cluster` });
+    entries.push({ tenantId, action: 'content_cluster', at, status: 'ok', note: `Drafted a ${cluster.supporting.length + 1}-article content cluster; nothing was published` });
     const priced = await writeKeywordReport(dir, cluster);
-    entries.push({ tenantId, action: 'keyword_refresh', at, status: 'ok', note: `Priced ${priced} fan-out queries by search volume` });
+    entries.push({ tenantId, action: 'keyword_refresh', at, status: 'ok', note: `Created simulated search-volume estimates for ${priced} queries (planning only)` });
   }
-  if (has(dir, 's8.json')) entries.push({ tenantId, action: 'social_batch', at, status: 'ok', note: 'Scheduled 30 days of on-brand social posts' });
   if (S4) {
     const ad = await runStage(AD_STAGE, intake, { S2, S3, S4 }, { runDir: dir, client });
     if (ad.output) {
       const camp = ad.output as { platforms: string[] };
-      entries.push({ tenantId, action: 'ads_refresh', at, status: 'ok', note: `Prepared ${camp.platforms.length} ad campaign(s) as paused drafts` });
+      entries.push({ tenantId, action: 'ads_refresh', at, status: 'ok', note: `Prepared ${camp.platforms.length} simulated ad campaign draft(s); paused and not published` });
     }
   }
   await ingestTick(store, entries);

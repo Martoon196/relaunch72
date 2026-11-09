@@ -1,0 +1,26 @@
+# MHP calculator provenance
+
+The five calculators share `orchestrator/src/mhp/calculators.ts`. Version `mhp-2026-10-28.1` takes explicit user assumptions and returns normalized inputs, finite results (or an explicit null), source references and status notes. The server must call `calculateMhpDeal` again when saving a deal file; client totals are not evidence. Monetary inputs/outputs are GBP, percent fields are percentage points, and ICR is a ratio. Formatting rounds display amounts to two decimal places; calculations retain precision, with the auction ceiling rounded down to a penny.
+
+| Calculator | Source pinned for this port | Preserved model |
+| --- | --- | --- |
+| BRRR | `Martoon196/kpuk-deal-portal` at `0526f9f07992f18cd0719b4d47051cae0b2fda89`, `src/calc.js` lines 187–220; blob `ae18412567c66e2d0e9434b57ecc3e341d3783c1` | Cash purchase + acquisition costs + works; gross refinance loan; separate rent-cover comparison; explicit management/running-cost overrides. |
+| HMO | `Martoon196/propertypredator` at `20834b6861d8b6d0bdad1139d27dfd14c2b6749a`, `frontend/pp-hmo.js` lines 14–35; blob `4c49a3d937609bedf36fb7167c0d6fa221945fd5` | Room rent × 52 weeks, bills × 12 months; net or gross income divided by an explicit matching yield. |
+| Serviced accommodation | Same PP commit, `frontend/sa.html` lines 179–197; blob `a0e6aae3ed54c8ef65def63c9064f7e9b68cb451` | 30.4-night month, per-stay cleaning, per-night consumables, owner/rental fixed costs and setup/deposit. |
+| Auction maximum bid | Same PP commit, `frontend/deal-analyser.html` lines 556–569; blob `c9755ae9001051d850be27157cbc8a45f6c472ae` | Maximum hammer = (GDV × (1 − target profit/GDV) − supplied fixed costs) / (1 + premium). |
+| Residual land | Same PP file, lines 571–579 | GDV / (1 + target profit/cost) − non-land costs, with planning counted once. |
+
+## Explicit differences at the port boundary
+
+- No tax engine, rate table, lender offer, market lookup or automated investment recommendation is included. Acquisition-tax, CIL and Section 106 values are user-supplied cost allowances. Their liabilities are not calculated. This is the authorised non-tax extraction from the source formulas.
+- All required values must be entered, including zero costs. Source defaults such as HMO yield 8%, SA stay three nights or target margin 20% are not silently substituted. HMO rooms must be a whole number and yield must be positive. SA stay must be positive. Input values must be finite, nonnegative decimals within the metadata's technical bounds.
+- BRRR's source returns infinite ROCE after all cash is returned; the shared parity file's Python result can be a negative ratio. This port stores `all_money_out: true` and `roce_pct: null`. No positive cashflow with remaining capital gives `months_to_recycle: null`, rather than a misleading zero. The model's `equity` retains the source meaning of end value less purchase/works costs; UI says that directly. The gross refinance loan is not net cash after clearing an existing purchase mortgage. The requested LTV loan remains the cashflow basis; the entered ICR/stress-rate comparison is shown separately.
+- HMO retains the source's nonnegative income-based value: nonpositive selected income gives zero. Net operating income can still be negative and remains visible. No room-count licensing/commercial-valuation heuristic is copied.
+- SA break-even occupancy is not capped at 100% or 101%. A requirement above 100% is shown with `cannot_break_even`; nonpositive contribution with uncovered costs gives a null break-even instead of a fabricated percentage. Source labels such as STRONG/VIABLE are not ported as personal advice or Martin's One Lane Verdict. An owner setup ROI is explicitly not a return on the whole property investment.
+- Auction removes the source's iterative tax callback and uses the fixed user allowance. The exact maximum is rounded down to the penny (source rounded to the nearest pound) so the suggested maximum cannot exceed the chosen target solely because of rounding. A zero ceiling with costs already exceeding available funds is explicitly unaffordable. The target basis is profit/GDV.
+- Residual land uses the browser's itemised cost build-up, not the Python alternative that duplicates planning costs. Zero target profit is honoured. The target basis is profit/total cost, distinct from auction. Negative residual values remain visible.
+- There is no sixth/EPC calculator in this release. No existing PP/KPUK calculator is replaced by this module.
+
+## Focused evidence
+
+`orchestrator/test/mhp-calculators.test.ts` binds two BRRR cases to the existing shared parity fixture blob `f2a701280255477b9b0f9c0d3b716d4459b75b06`, supplying its precomputed acquisition allowance rather than implementing tax. Other fixtures verify explicit weekly/monthly units, cost reconciliation, management override, zero/blank distinctions, all-money-out JSON, rent-cover comparison, per-stay cleaning, impossible occupancy, premium/manual-cost maximum bid, separate margin bases, planning counted once, zero targets, invalid/coerced inputs, source/version and finite serialization. These are arithmetic regression checks, not evidence of market assumptions, legal eligibility, live access control or production deployment.

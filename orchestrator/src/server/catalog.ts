@@ -14,10 +14,10 @@ export interface CatalogItem {
 }
 
 export const CATALOG: CatalogItem[] = [
-  { key: 'autopsy',   lookupKey: 'r72_autopsy',   name: 'Relaunch72 — Marketing Autopsy',          description: 'The marketing audit & scorecard. Credits against Core within 14 days.', amount: 9700 },
-  { key: 'core',      lookupKey: 'r72_core',      name: 'Relaunch72 — Core',                       description: 'All nine deliverables in 72 hours, human signed-off, one revision included.', amount: 99700 },
-  { key: 'core_bump', lookupKey: 'r72_core_bump', name: 'Relaunch72 — Core + 90-Day Content Engine', description: 'Core plus 60 more days of social and 12 more emails.', amount: 114400 },
-  { key: 'pro',       lookupKey: 'r72_pro',       name: 'Relaunch72 — Pro',                         description: 'Core plus a strategy session, hand-written hero assets, roadmap and 30 days of support.', amount: 249700 },
+  { key: 'autopsy',   lookupKey: 'r72_autopsy',   name: 'Relaunch72 — Marketing Autopsy',          description: 'Private test catalogue. Proposed $97 Core credit is not operational and requires a future customer-bound checkout.', amount: 9700 },
+  { key: 'core',      lookupKey: 'r72_core',      name: 'Relaunch72 — Core',                       description: 'Private test catalogue. Mock preview of the proposed nine-deliverable workflow; no live fulfilment.', amount: 99700 },
+  { key: 'core_bump', lookupKey: 'r72_core_bump', name: 'Relaunch72 — Core + 90-Day Content Engine', description: 'Private test catalogue. Mock preview only; no live content delivery.', amount: 114400 },
+  { key: 'pro',       lookupKey: 'r72_pro',       name: 'Relaunch72 — Pro',                         description: 'Private test catalogue. Mock preview only; no strategy session, hand rewrite or support fulfilment.', amount: 249700 },
 ];
 
 export interface PlanItem extends CatalogItem {
@@ -31,9 +31,9 @@ export interface PlanItem extends CatalogItem {
  * customer as a quote (they exist only to create Stripe recurring prices).
  */
 export const PLANS: PlanItem[] = [
-  { key: 'platform_starter', lookupKey: 'r72_platform_starter', name: 'Relaunch72 Platform — Starter', description: 'Your AI marketing manager: a fresh content cluster, keyword research and ad drafts every month.', amount: 14900, interval: 'month' },
-  { key: 'platform_growth',  lookupKey: 'r72_platform_growth',  name: 'Relaunch72 Platform — Growth',  description: 'Starter plus scheduled social publishing and a live campaign each month.',              amount: 29900, interval: 'month' },
-  { key: 'platform_pro',     lookupKey: 'r72_platform_pro',     name: 'Relaunch72 Platform — Pro',     description: 'Growth plus managed ad spend and priority human review.',                                amount: 59900, interval: 'month' },
+  { key: 'platform_starter', lookupKey: 'r72_platform_starter', name: 'Relaunch72 Platform — Starter', description: 'Planned: monthly content-cluster, keyword-planning and ad-draft workflows. Not yet for sale.', amount: 14900, interval: 'month' },
+  { key: 'platform_growth',  lookupKey: 'r72_platform_growth',  name: 'Relaunch72 Platform — Growth',  description: 'Planned: Starter plus connected social publishing and campaign operations. Not yet for sale.', amount: 29900, interval: 'month' },
+  { key: 'platform_pro',     lookupKey: 'r72_platform_pro',     name: 'Relaunch72 Platform — Pro',     description: 'Planned: Growth plus managed-ad and human-review operations. Not yet for sale.', amount: 59900, interval: 'month' },
 ];
 
 /** The slice of the Stripe SDK the provisioner needs (real client satisfies it). */

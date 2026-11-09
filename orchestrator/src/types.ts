@@ -4,7 +4,7 @@
  */
 
 /** A raw intake keyed by canonical field IDs (A1…H4), as delivered by the intake webhook. */
-export type FieldValue = string | number | string[] | Record<string, unknown> | null;
+export type FieldValue = string | number | boolean | string[] | Record<string, unknown> | null;
 export type Intake = Record<string, FieldValue>;
 
 export interface QAIssue {

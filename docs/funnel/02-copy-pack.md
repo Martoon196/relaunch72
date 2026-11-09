@@ -1,5 +1,10 @@
 # Relaunch72 — Copy Pack
 
+> **Historical copy draft — do not publish verbatim.** The automatic $97 Core
+> credit described below is not implemented. Current public copy requires manual
+> verification from the paid purchase address; standard Core checkout charges
+> its configured full price.
+
 *Full email bodies + two sales pages. Brand voice throughout — operator-to-operator, British, no hype, no filler. Martin Howard appears only as the human who signs off every relaunch (as on the landing page). No personal backstory. Every price and claim is placeholder-free where possible; anything in [brackets] is a real detail for you to drop in.*
 
 ---
