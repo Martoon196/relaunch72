@@ -2468,7 +2468,10 @@ export class SeoBlogEngine {
       if (latest.state === 'cancelled') return latest;
       if(isArticleWriteJob(job)&&(latest.leaseOwner!==job.leaseOwner||latest.attempts!==job.attempts))return latest;
       const known = error instanceof SeoBlogError;
-      const blocked = known && [409, 503].includes(error.status);
+      // The model has already used its bounded correction and recorded known
+      // usage. Replaying a deterministic writing rejection buys another draft;
+      // hold it for the normal explicit Retry after its cause is reviewed.
+      const blocked = known && ([409, 503].includes(error.status) || job.kind==='write'&&error instanceof GenerationRejectedError);
       const exhausted = latest.attempts >= latest.maxAttempts;
       const message = known ? error.message : 'An unexpected error stopped this task. It will retry automatically.';
       const next = await this.store.updateJob({

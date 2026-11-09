@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
+import {GenerationRejectedError} from '../src/seo-blog/generation.js';
 import { UnconfiguredSearchProvider } from '../src/seo-blog/research.js';
 import { programmeRun } from '../src/seo-blog/programme.js';
 import type { Brand } from '../src/seo-blog/types.js';
@@ -42,6 +43,19 @@ async function connectGithub(h: Harness, brand: Brand) {
     config: { repository: 'acme/site', branch: 'main', publicBaseUrl: 'https://harbour.example', blogPath: 'blog', sitemapPath: 'sitemap.xml' },
   });
 }
+
+test('a known article validation rejection holds after its bounded correction instead of buying another automatic draft',async()=>{
+ const h=harness(),brand=await readyBrand(h,'Harbour Lettings','https://harbour.example','lettings checks');
+ await h.engine.requestPlan(OWNER,brand.id,{commandId:randomUUID()});await h.engine.tick('worker-1');
+ const plans=await h.engine.listPlans(OWNER,brand.id);const {plan,briefs}=plans[0]!;await h.engine.acceptPlan(OWNER,brand.id,plan.id);
+ await h.engine.requestArticles(OWNER,brand.id,[briefs[0]!.id]);
+ let calls=0;h.engine.runWrite=async()=>{calls++;throw new GenerationRejectedError('The retained draft failed concrete evidence checks.',{mode:'live',model:'fixture',promptVersion:'fixture',tokensIn:100,tokensOut:50,methodReceiptId:randomUUID()},'method');};
+ await h.engine.tick('worker-1');const job=(await h.store.listJobs(brand.id)).find(j=>j.kind==='write')!;
+ assert.equal(calls,1);assert.equal(job.state,'blocked');assert.match(job.error!,/concrete evidence/);
+ h.clock.advance(3600000);await h.engine.tick('worker-2');assert.equal(calls,1);
+ await h.engine.retryJob(OWNER,brand.id,job.id);await h.engine.tick('worker-2');assert.equal(calls,2);
+ assert.equal((await h.store.getJob(brand.id,job.id))!.state,'blocked');
+});
 
 test('A1: Add brand creates separate workspaces; a retried command does not duplicate; strangers cannot see them', async () => {
   const h = harness();
