@@ -129,6 +129,19 @@ export class PgMhpEventWhatsAppRepository {
         templateName: row.template_name, languageCode: row.language_code };
     });
   }
+  async beginManualReply() {
+    const [row]=await this.#run<Record<string,unknown>>('direct-begin','SELECT * FROM app_private.mhp_wa_direct_begin($1,$2,$3)',
+      [MHP_EVENT_WHATSAPP_WORKSPACE_ID,this.#bindingId,this.#connectionId]);
+    if (!row) return null;
+    if(typeof row.reply_id!=='string' || !UUID.test(row.reply_id) || typeof row.recipient!=='string' || !E164.test(row.recipient)
+       || typeof row.body!=='string' || !row.body.trim() || Buffer.byteLength(row.body)>4096) fail('returned invalid manual reply material');
+    return {id:row.reply_id,recipient:row.recipient,body:row.body,binding:bindingOf(row,MHP_EVENT_WHATSAPP_WORKSPACE_ID),envelope:envelopeOf(row)};
+  }
+  async finishManualReply(id:string,state:MetaWhatsAppDispatchResult['state'],providerId:string|null) {
+    const [row]=await this.#run<{settled:boolean}>('direct-finish','SELECT app_private.mhp_wa_direct_finish($1,$2,$3,$4,$5) AS settled',
+      [MHP_EVENT_WHATSAPP_WORKSPACE_ID,this.#bindingId,id,state,state==='accepted'?providerId:null]);
+    if(!row?.settled) fail('could not settle manual reply');
+  }
   async recordObservation(metaTemplateId: string, o: MetaTemplateObservation): Promise<void> {
     await this.#run('observe', 'SELECT app_private.record_mhp_whatsapp_template_observation($1,$2,$3,$4,$5,$6,$7,$8,decode($9,\'hex\'),decode($10,\'hex\'),decode($11,\'hex\'))',
       [MHP_EVENT_WHATSAPP_WORKSPACE_ID, this.#bindingId, metaTemplateId, o.name, o.language, o.category, o.status, o.parameterCount, o.bodySha256, o.componentsSha256, o.responseSha256]);
@@ -179,7 +192,7 @@ export type MhpEventWhatsAppCycle = 'idle' | 'accepted' | 'failed_or_attention';
 export async function runMhpEventWhatsAppOnce(input: Readonly<{
   repository: PgMhpEventWhatsAppRepository; encryptionKey: Buffer; encryptionKeyVersion: string; leaseToken: Buffer; fetch: typeof fetch;
   createTransport: (input: Readonly<{ binding: MetaWhatsAppBinding; credentials: MetaWhatsAppDispatchCredentials; providerEffectsEnabled: true; emergencyPaused: false }>) => MetaWhatsAppLiveTransport;
-  observeNow: boolean;
+  observeNow: boolean; manualReplies?: boolean;
 }>): Promise<MhpEventWhatsAppCycle> {
   const decrypt = (target: Target) => decryptMetaWhatsAppDispatchCredentials({ binding: target.binding, envelope: target.envelope,
     encryptionKey: input.encryptionKey, expectedKeyVersion: input.encryptionKeyVersion });
@@ -194,7 +207,21 @@ export async function runMhpEventWhatsAppOnce(input: Readonly<{
   if (input.observeNow) for (const target of await input.repository.observationTargets()) await observe(target, decrypt(target));
   await input.repository.prepareDue();
   const claim = await input.repository.claim(input.leaseToken);
-  if (!claim) return 'idle';
+  if (!claim) {
+    if(!input.manualReplies) return 'idle';
+    const reply=await input.repository.beginManualReply();
+    if(!reply) return 'idle';
+    let state:MetaWhatsAppDispatchResult['state']='outcome_unknown',providerId:string|null=null;
+    try {
+      const credentials=decryptMetaWhatsAppDispatchCredentials({binding:reply.binding,envelope:reply.envelope,encryptionKey:input.encryptionKey,expectedKeyVersion:input.encryptionKeyVersion});
+      const transport=input.createTransport({binding:reply.binding,credentials,providerEffectsEnabled:true,emergencyPaused:false});
+      if (!transport.sendManualReply) throw Error('Manual reply transport unavailable');
+      const result=await transport.sendManualReply({recipient:reply.recipient,body:reply.body});
+      state=result.state;providerId=result.providerMessageId;
+    } catch { /* A begun provider operation is never retried. */ }
+    await input.repository.finishManualReply(reply.id,state,providerId);
+    return state==='accepted'?'accepted':'failed_or_attention';
+  }
   const material = await input.repository.load(claim, input.leaseToken);
   if (!material) return 'failed_or_attention';
   const credentials = decrypt(material);

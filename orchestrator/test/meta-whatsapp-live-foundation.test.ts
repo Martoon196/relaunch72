@@ -210,6 +210,26 @@ test('direct Graph transport is explicit-fetch, one-recipient, one-template and 
     && error.code === 'provider_response_invalid');
 });
 
+test('MHP service reply uses a single bound text request and requires matching recipient evidence', async()=>{
+  const recipient='447700900123',body='The information you requested.';
+  let calls=0;
+  const transport=(workspaceId:string,replyId:string)=>createMetaWhatsAppLiveTransport({
+    binding:{...BINDING,workspaceId},credentials:DISPATCH_CREDENTIALS,providerEffectsEnabled:true,emergencyPaused:false,
+    fetch:async (url,init)=>{
+      calls++;
+      assert.equal(String(url),'https://graph.facebook.com/v24.0/'+BINDING.phoneNumberId+'/messages');
+      assert.deepEqual(JSON.parse(String(init?.body)),{messaging_product:'whatsapp',to:recipient,type:'text',text:{preview_url:false,body}});
+      return Response.json({messaging_product:'whatsapp',contacts:[{input:recipient,wa_id:replyId}],messages:[{id:'wamid.direct'}]});
+    }
+  });
+  const workspace='2789228d-55a6-4688-b1e8-2f70abca990b';
+  await assert.rejects(transport(BINDING.workspaceId,recipient).sendManualReply!({recipient,body}));
+  assert.equal(calls,0);
+  assert.equal((await transport(workspace,recipient).sendManualReply!({recipient,body})).state,'accepted');
+  assert.equal((await transport(workspace,'447700900124').sendManualReply!({recipient,body})).state,'outcome_unknown');
+  assert.equal(calls,2);
+});
+
 function signedWebhook(payload: unknown): Readonly<{
   rawBody: Buffer;
   xHubSignature256: string;

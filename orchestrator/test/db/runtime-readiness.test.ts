@@ -457,8 +457,11 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
 });
 
 test('payments142 release is ready before and after its exact additive 0142, and strict otherwise', async () => {
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const prefix=(await discoverMigrations()).slice(0,142);
+  const directory=await mkdtemp(path.join(tmpdir(),'r72-payments142-'));
+  await Promise.all(prefix.map(m=>writeFile(path.join(directory,m.filename),m.sql,'utf8')));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, directory, {});
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,142);
   assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
@@ -474,4 +477,15 @@ test('payments142 release is ready before and after its exact additive 0142, and
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('MHP inbox 143 cutover and recovery accept only the exact adjacent ledgers', async()=>{
+  const rows=(await discoverMigrations()).slice(0,142).map(({filename,checksum})=>({filename,checksum}));
+  const successor={filename:'0143_mhp_whatsapp_direct_inbox.sql',checksum:'69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e'};
+  const check=(dbRows:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(dbRows),undefined,{});
+  await check(rows);
+  await check([...rows,successor]);
+  await assert.rejects(check([...rows,{...successor,checksum:'a'.repeat(64)}]));
+  await assert.rejects(check([...rows.slice(0,-1),successor]));
+  await assert.rejects(check([...rows,successor,{filename:'0144_unreviewed.sql',checksum:'a'.repeat(64)}]));
 });

@@ -31,30 +31,46 @@ export async function readOwnerWhatsapp(pool: Pick<Pool, 'connect'>, context: Da
           AND i.channel='whatsapp' AND i.environment='live' AND i.status='active')) AS allowed`,
       [context.userId, context.workspaceId, actorEmail, inboxId]);
     if (access.rows[0]?.allowed !== true) return null;
+    // Preserve the established signed transcript. 0143 adds unlinked first contacts and manual
+    // replies; a mirrored legacy receipt is displayed once, under its private sender thread.
+    const schema=await tx.query("SELECT to_regprocedure('app_private.mhp_wa_direct_history(uuid,uuid)') IS NOT NULL AS installed");
+    const directInstalled=schema.rows[0]?.installed===true;
+    const direct=directInstalled?'SELECT * FROM app_private.mhp_wa_direct_history($1::uuid,$2::uuid)':
+      'SELECT NULL::uuid AS thread_id,NULL::uuid AS id,NULL::text AS label,NULL::text AS body,NULL::timestamptz AS occurred_at,NULL::text AS direction,NULL::text AS reply_state,NULL::uuid AS native_thread_id WHERE false';
+    const history=`WITH direct AS MATERIALIZED (
+      ${direct}
+    ), transcript AS (
+      SELECT d.thread_id,d.id,CASE WHEN d.thread_id=d.native_thread_id THEN coalesce(c.id,d.thread_id) ELSE d.thread_id END AS participant_id,c.id AS contact_id,
+        coalesce(c.display_name,d.label) AS name,d.body,d.occurred_at,d.direction,d.reply_state
+      FROM direct d LEFT JOIN app.conversations t ON t.id=d.native_thread_id AND t.inbox_id=$1 AND t.workspace_id=app_private.current_workspace_id()
+      LEFT JOIN app.contacts c ON c.workspace_id=t.workspace_id AND c.id=t.contact_id AND c.deleted_at IS NULL
+      UNION ALL
+      SELECT coalesce((SELECT d.thread_id FROM direct d WHERE d.native_thread_id=m.conversation_id LIMIT 1),m.conversation_id),m.id,
+        coalesce((SELECT d.thread_id FROM direct d WHERE d.native_thread_id=m.conversation_id AND d.thread_id<>m.conversation_id LIMIT 1),m.contact_id),
+        m.contact_id,c.display_name,v.body_text,m.occurred_at,'incoming',NULL::text
+      ${projected} AND ($2::uuid IS NULL OR m.conversation_id=$2 OR EXISTS(SELECT 1 FROM direct d WHERE d.native_thread_id=m.conversation_id))
+      AND NOT EXISTS(SELECT 1 FROM direct d WHERE d.id=m.id)
+    )`;
     if (!threadId) {
-      const result = await tx.query(`
+      const result = await tx.query(`${history}
         SELECT * FROM (
-          SELECT DISTINCT ON (m.conversation_id) m.conversation_id AS id, m.contact_id AS "participantId",
-            c.display_name AS name, left(v.body_text,180) AS preview, m.occurred_at AS "updatedAt"
-          ${projected}
-          ORDER BY m.conversation_id,m.occurred_at DESC,m.id DESC
-        ) threads ORDER BY "updatedAt" DESC,id DESC LIMIT 101`, [inboxId]);
+          SELECT DISTINCT ON (thread_id) thread_id AS id,participant_id AS "participantId",
+            contact_id AS "contactId",name,left(body,180) AS preview,occurred_at AS "updatedAt"
+          FROM transcript ORDER BY thread_id,occurred_at DESC,id DESC
+        ) threads ORDER BY "updatedAt" DESC,id DESC LIMIT 101`, [inboxId,null]);
       return {brand:'mhp', accountId:inboxId, threads:result.rows.slice(0,100), hasMore:result.rows.length>100};
     }
-    const result = await tx.query(`
-      SELECT m.id, m.contact_id AS "participantId", v.body_text AS body,
-        c.display_name AS name, m.occurred_at AS "occurredAt"
-      ${projected} AND m.conversation_id=$2::uuid
-        AND ($3::uuid IS NULL OR (m.occurred_at,m.id) < (
-          SELECT anchor.occurred_at,anchor.id FROM app.messages anchor
-          JOIN LATERAL app_private.operational_inbox_live_message_provenance(anchor.workspace_id,anchor.conversation_id,anchor.id) a
-            ON a.provider_family='meta_whatsapp_live' AND a.network='whatsapp'
-          WHERE anchor.workspace_id=m.workspace_id AND anchor.conversation_id=m.conversation_id AND anchor.id=$3::uuid))
+    const result = await tx.query(`${history}
+      SELECT m.id,m.participant_id AS "participantId",m.contact_id AS "contactId",m.body,m.name,m.direction,
+        m.reply_state AS "replyState",m.occurred_at AS "occurredAt" FROM transcript m
+      WHERE $3::uuid IS NULL OR (m.occurred_at,m.id) < (
+        SELECT a.occurred_at,a.id FROM transcript a WHERE a.thread_id=m.thread_id AND a.id=$3::uuid)
       ORDER BY m.occurred_at DESC,m.id DESC LIMIT 33`, [inboxId,threadId,beforeId??null]);
     // An unknown/foreign conversation or cursor discloses no existence information.
     if (!result.rows.length) return null;
     const rows=result.rows.slice(0,32);
-    return {brand:'mhp', accountId:inboxId, threadId, messages:rows,
+    const canReply=directInstalled && (await tx.query('SELECT app_private.mhp_wa_direct_can_reply($1,$2) AS available',[inboxId,threadId])).rows[0]?.available===true;
+    return {brand:'mhp', accountId:inboxId, threadId, messages:rows,canReply,
       nextCursor:result.rows.length>32 ? rows[rows.length-1]!.id : null};
   }, {readOnly:true});
 }

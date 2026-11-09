@@ -1,7 +1,7 @@
 name: Growth HQ inbox CRM exact-source gate
 on:
   push:
-    branches: [codex/ghq-inbox-crm-20261106, codex/r72-ghq-wa-004-integration]
+    branches: [codex/ghq-inbox-crm-20261106, codex/r72-ghq-wa-004-integration, codex/mhp-wa-inbox-005a-bridge, codex/mhp-wa-inbox-005a-release]
 permissions:
   contents: read
 jobs:
@@ -33,7 +33,10 @@ jobs:
       - name: Existing CRM neighbours and inbox command boundary
         working-directory: orchestrator
         run: node --import tsx --test test/group-hq-inbox-crm.test.ts test/crm-pg.test.ts test/portal-crm-pg-service.test.ts test/group-hq-crm-read.test.ts
-      - name: Prepare disposable localhost database only
+      - name: WhatsApp transports and database compatibility
+        working-directory: orchestrator
+        run: node --import tsx --test test/meta-whatsapp-live-foundation.test.ts test/meta-whatsapp-live-worker.test.ts test/db/runtime-readiness.test.ts
+      - name: Apply exact migrations
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
@@ -44,7 +47,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx --test test/db/group-hq-inbox-crm.integration.test.ts
+        run: node --import tsx --test --test-concurrency=1 test/db/group-hq-inbox-crm.integration.test.ts test/db/mhp-wa-direct-inbox.integration.test.ts
       - name: Signed WhatsApp transcript and messaging evidence under the web role
         working-directory: orchestrator
         env:
