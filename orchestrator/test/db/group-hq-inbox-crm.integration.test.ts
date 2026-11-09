@@ -54,6 +54,31 @@ test('owner inbox creates, links and records messages under real web/CRM roles w
       await seed.query('INSERT INTO app.contacts(id,workspace_id,display_name) VALUES($1,$2,\'Other business\')',[foreignContact,foreignWorkspace]);
       await assert.rejects(service.execute({...input,action:'link',source:{...source,threadId:'foreign-link'},contactId:foreignContact}),
         e=>e instanceof InboxCrmError&&e.status===404);
+      // The sales-board listing: this workspace only, newest change first, paged by keyset, with the latest opportunity.
+      type LeadsPage={brand:string;workspaceId:string;nextCursor:string|null;leads:{id:string;name:string;lifecycle:string;createdAt:string;
+        opportunity:{status:string;stage:string;stagePosition:number;valueMinor:number;currency:string;stageChangedAt:string;closedAt:string|null}|null}[]};
+      const listed=await service.execute({...input,requestId:randomUUID(),action:'leads'}) as LeadsPage;
+      assert.equal(listed.brand,'kp');assert.equal(listed.workspaceId,workspace);assert.equal(listed.nextCursor,null);
+      assert.deepEqual(listed.leads.map(l=>l.id).sort(),[created.contactId,raced[0]!.contactId].sort());
+      assert.ok(!listed.leads.some(l=>l.id===foreignContact),'another workspace is never listed');
+      const mine=listed.leads.find(l=>l.id===created.contactId)!;
+      assert.equal(mine.name,'Durham role-test contact');assert.equal(mine.lifecycle,'lead');assert.ok(Date.parse(mine.createdAt)<=Date.now());
+      assert.deepEqual({status:mine.opportunity?.status,stage:mine.opportunity?.stage,position:mine.opportunity?.stagePosition,
+        value:mine.opportunity?.valueMinor,currency:mine.opportunity?.currency,closed:mine.opportunity?.closedAt},
+        {status:'open',stage:'New',position:1,value:0,currency:'GBP',closed:null});
+      assert.ok(Date.parse(mine.opportunity!.stageChangedAt)<=Date.now());
+      const firstPage=await service.execute({...input,requestId:randomUUID(),action:'leads',limit:1}) as LeadsPage;
+      assert.equal(firstPage.leads.length,1);assert.ok(firstPage.nextCursor);
+      const secondPage=await service.execute({...input,requestId:randomUUID(),action:'leads',limit:1,cursor:firstPage.nextCursor}) as LeadsPage;
+      assert.equal(secondPage.leads.length,1);assert.equal(secondPage.nextCursor,null);
+      assert.notEqual(secondPage.leads[0]!.id,firstPage.leads[0]!.id);
+      const bare=randomUUID();
+      await seed.query('INSERT INTO app.contacts(id,workspace_id,display_name,lifecycle_status) VALUES($1,$2,\'No opportunity yet\',\'customer\')',[bare,workspace]);
+      const withBare=await service.execute({...input,requestId:randomUUID(),action:'leads'}) as LeadsPage;
+      assert.deepEqual(withBare.leads.find(l=>l.id===bare),{id:bare,name:'No opportunity yet',source:null,lifecycle:'customer',
+        createdAt:withBare.leads.find(l=>l.id===bare)!.createdAt,updatedAt:(withBare.leads.find(l=>l.id===bare) as unknown as {updatedAt:string}).updatedAt,opportunity:null});
+      await assert.rejects(service.execute({...input,requestId:randomUUID(),action:'leads',actorEmail:'stranger@example.test'}),
+        e=>e instanceof InboxCrmError&&e.status===403);
       const activity=await seed.query('SELECT contact_id,channel,actor_user_id,metadata FROM app.activities WHERE id=$1',[first.activityId]);
       assert.equal(activity.rows[0].contact_id,created.contactId);assert.equal(activity.rows[0].channel,'social');
       assert.equal(activity.rows[0].actor_user_id,owner);assert.equal(activity.rows[0].metadata.providerEvidence,'connector_assertion');
