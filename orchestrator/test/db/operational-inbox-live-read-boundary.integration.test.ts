@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Pool, type QueryResultRow } from 'pg';
 import '../../src/config.js';
+import { readOwnerWhatsapp } from '../../src/integrations/group-hq-crm/whatsapp-reader.js';
+import { requestDatabaseContext } from '../../src/db/rls.js';
 import {
   expectPostgresError,
   openTestDatabase,
@@ -528,6 +530,29 @@ test('0062 exposes exact live rail evidence and nothing beside it', { skip }, as
       recorded: await recordSms(),
     },
   ] as const;
+
+  await t.test('the signed bridge owner reads the canonical WhatsApp inbox using only web privileges', async () => {
+    const web = new Pool({connectionString:process.env.TEST_DATABASE_URL, options:'-c role=r72_web', max:1});
+    try {
+      assert.equal((await web.query('SELECT current_user AS role')).rows[0].role,'r72_web');
+      const ctx=requestDatabaseContext({...context,requestId:'whatsapp-owner-read'});
+      const email=`inbox-0062-member-${identity.userId.slice(0,8)}@example.test`;
+      const page=await readOwnerWhatsapp(web,ctx,email,whatsappRail.inboxId);
+      assert.equal(page?.threads?.length,1);
+      assert.equal(page?.threads?.[0].id,rails[0].recorded.conversationId);
+      assert.equal(page?.threads?.[0].participantId,whatsappRail.contactId);
+      const result=await readOwnerWhatsapp(web,ctx,email,whatsappRail.inboxId,rails[0].recorded.conversationId);
+      assert.equal(result?.messages?.[0].id,rails[0].recorded.messageId);
+      assert.equal(result?.messages?.[0].body,'Signed WhatsApp reply for the 0062 boundary proof.');
+      assert.equal(result?.nextCursor,null);
+      assert.equal(await readOwnerWhatsapp(web,ctx,'other@example.test',whatsappRail.inboxId),null);
+      assert.equal(await readOwnerWhatsapp(web,ctx,email,smsRail.inboxId),null);
+      assert.equal(await readOwnerWhatsapp(web,ctx,email,whatsappRail.inboxId,rails[1].recorded.conversationId),null);
+      assert.equal(await readOwnerWhatsapp(web,ctx,email,whatsappRail.inboxId,rails[0].recorded.conversationId,rails[1].recorded.messageId),null);
+    } finally {
+      await web.end();
+    }
+  });
 
   for (const rail of rails) {
     const { recorded } = rail;

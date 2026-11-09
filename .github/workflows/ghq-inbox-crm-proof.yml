@@ -1,7 +1,7 @@
 name: Growth HQ inbox CRM exact-source gate
 on:
   push:
-    branches: [codex/ghq-inbox-crm-20261106]
+    branches: [codex/ghq-inbox-crm-20261106, codex/r72-ghq-wa-004-integration]
 permissions:
   contents: read
 jobs:
@@ -45,3 +45,10 @@ jobs:
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test test/db/group-hq-inbox-crm.integration.test.ts
+      - name: Signed WhatsApp transcript and messaging evidence under the web role
+        working-directory: orchestrator
+        env:
+          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test --test-name-pattern '0062 exposes exact live rail evidence' test/db/operational-inbox-live-read-boundary.integration.test.ts

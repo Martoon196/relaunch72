@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { GROUP_HQ_INBOX_CRM_PATH,GroupHqInboxCrmService,InboxCrmError,createGroupHqInboxCrmMount,
   inboxSignature,inboxSocialPoint,loadInboxCrmConfig,verifyInboxSignature,type InboxCrmConfig } from '../src/integrations/group-hq-crm/inbox.js';
 import type { CrmTransactionRunner } from '../src/crm-pg/types.js';
+import { MHP_MARKETING_WORKSPACE_ID } from '../src/mhp/marketing-workspace-service.js';
 
 const ID=(n:string)=>`${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`;
 const scope={label:'Key Properties',workspaceId:ID('1'),organizationId:ID('2'),ownerUserId:ID('3'),
@@ -30,6 +31,35 @@ test('signature binds exact bytes, timestamp, method and path',()=>{
   for(const [s,b,t] of [[signature,Buffer.from('{}'),stamp],[signature,bytes,String(Number(stamp)-301)],
     ['0'.repeat(64),bytes,stamp],[signature,bytes,stamp+'.5']] as const) assert.equal(verifyInboxSignature(config.secret,t,s,b,now),false);
   assert.equal(verifyInboxSignature(config.secret,stamp,inboxSignature(config.secret,stamp,'GET',GROUP_HQ_INBOX_CRM_PATH,bytes),bytes,now),false);
+});
+test('signed WhatsApp path binds MHP, owner identity and exact inbox, with only read-only transactions', async()=>{
+  const inboxId=ID('7'), actorId=ID('8'), email='owner@example.test';
+  const waScope={...scope,workspaceId:MHP_MARKETING_WORKSPACE_ID,whatsappOwnerIds:{[email]:actorId}};
+  const waConfig={...config, scopes:{kp:scope,mhp:waScope},mhpWhatsappInboxId:inboxId};
+  const statements:string[]=[];
+  const readPool={connect:async()=>({query:async(sql:string,values:unknown[])=>{
+    statements.push(sql);
+    if (sql.includes('group-hq.inbox.scope')) return {rows:[{allowed:true}]};
+    if (sql.includes('group-hq.whatsapp.owner')) {
+      assert.deepEqual(values,[actorId,MHP_MARKETING_WORKSPACE_ID,email,inboxId]);
+      return {rows:[{allowed:true}]};
+    }
+    return {rows:[]};
+  },release(){}})} as unknown as Pick<Pool,'connect'>;
+  const runner:CrmTransactionRunner={async run(){throw Error('unexpected CRM command');}};
+  const service=new GroupHqInboxCrmService(readPool,runner,waConfig);
+  const request={...input,brand:'mhp',accountId:inboxId,action:'whatsappThreads'};
+  const loaded=loadInboxCrmConfig({R72_GROUP_HQ_INBOX_SECRET:config.secret,R72_GROUP_HQ_INBOX_SCOPES:JSON.stringify({mhp:{...scope,workspaceId:MHP_MARKETING_WORKSPACE_ID}}),
+    GHQ_MHP_WHATSAPP_OWNER_IDS:JSON.stringify({[email]:actorId}), GHQ_MHP_WHATSAPP_INBOX_ID:inboxId});
+  assert.deepEqual(loaded?.scopes.mhp?.whatsappOwnerIds,{[email]:actorId});
+  assert.deepEqual(await service.execute(request),{brand:'mhp',accountId:inboxId,threads:[],hasMore:false});
+  assert.ok(statements.some(s=>s.includes('operational_inbox_live_message_provenance')));
+  assert.ok(statements.filter(s=>s.startsWith('BEGIN')).every(s=>s.endsWith('READ ONLY')));
+  for (const mismatch of [{brand:'kp'},{accountId:ID('2')},{actorEmail:'stranger@example.test'}]) {
+    await assert.rejects(service.execute({...request,...mismatch}),e=>e instanceof InboxCrmError && e.status===403);
+  }
+  const foreign=new GroupHqInboxCrmService(readPool,runner,{...waConfig,scopes:{mhp:{...waScope,workspaceId:ID('4')}}});
+  await assert.rejects(foreign.execute(request),e=>e instanceof InboxCrmError && e.status===403);
 });
 test('social identity uses exact native account and participant IDs without fabricated email',()=>{
   const point=inboxSocialPoint(source);
