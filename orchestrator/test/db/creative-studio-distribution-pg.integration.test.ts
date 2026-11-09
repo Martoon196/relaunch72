@@ -98,11 +98,13 @@ test('Milestone 4 on real PostgreSQL: verified hand-off routes, receipt-derived 
       await seed(`INSERT INTO app.seo_blog_creator_campaigns(workspace_id,id,kind,input_hash,brief,profile_version,facts_sha,assignment_revision,method_receipt_id,reserved_tokens,state,created_by)
         VALUES($1,$2,'acquisition',$3,'{}'::jsonb,1,$4,1,$5,0,'draft',$6)`, [a.brand.id, campaignId, 'a'.repeat(64), 'f'.repeat(64), randomUUID(), a.actor]);
       const utmCampaign = `spring-plan-${campaignId.replace(/-/gu, '').slice(0, 8)}`, utmContent = creativeUtmContent(0, portrait.id);
-      const url = `https://home.example/book?utm_source=instagram&utm_medium=social&utm_campaign=${utmCampaign}&utm_content=${utmContent}`;
+      const url = `https://hearth.example/request?utm_source=instagram&utm_medium=social&utm_campaign=${utmCampaign}&utm_content=${utmContent}`;
       const tgt = { kind: 'creator_campaign' as const, campaignId, concept: 0, channel: 'instagram' };
       await assert.rejects(record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url, utmCampaign, utmContent: creativeUtmContent(0, randomUUID()), channel: 'instagram', concept: 0 } })), /check the artwork/iu, 'another artwork id');
-      await assert.rejects(record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url: 'https://home.example/book', utmCampaign, utmContent, channel: 'instagram', concept: 0 } })), /check the artwork/iu, 'tags not in the link');
+      await assert.rejects(record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url: 'https://hearth.example/request', utmCampaign, utmContent, channel: 'instagram', concept: 0 } })), /check the artwork/iu, 'tags not in the link');
       await assert.rejects(record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url, utmCampaign: 'spring-plan-00000000', utmContent, channel: 'instagram', concept: 0 } })), /check the artwork/iu, 'another campaign');
+      await assert.rejects(record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url: url.replace('hearth.example', 'elsewhere.example'), utmCampaign, utmContent, channel: 'instagram', concept: 0 } })), /check the artwork/iu, 'a host that is not a confirmed conversion page');
+      await assert.rejects(record(handoff({ target: { ...tgt, concept: 1 }, route: 'tracked_link', trackedLink: { url, utmCampaign, utmContent, channel: 'instagram', concept: 1 } })), /check the artwork/iu, 'concept index does not match the tag');
       assert.equal((await record(handoff({ target: tgt, route: 'tracked_link', trackedLink: { url, utmCampaign, utmContent, channel: 'instagram', concept: 0 } }))).replayed, false);
     });
 
@@ -133,6 +135,13 @@ test('Milestone 4 on real PostgreSQL: verified hand-off routes, receipt-derived 
       const crossed = new PgCreativeDistributionReader(pool, { ...b.principal, selectedWorkspaceId: a.brand.id });
       await assert.rejects(crossed.delivery(a.brand.id, [q1]), /permission|Sign in/u);
       await assert.rejects(pool.query('SELECT * FROM app.property_predator_owned_social_jobs'), /permission denied/u);
+      await assert.rejects(a.reader.delivery(a.brand.id, ['not-a-uuid']), /Check the distribution request/u, 'malformed queue ids are refused with a plain error');
+      // A plan replaced by a newer one is reported as superseded even though no cancel command exists.
+      const q3 = randomUUID(), q4 = randomUUID();
+      await cmd(a.brand.id, q3, 'authorize_campaign_queue', 'user', a.actor, { queueIntentId: q3 });
+      await cmd(a.brand.id, q4, 'authorize_campaign_queue', 'user', a.actor, { queueIntentId: q4, supersedesQueueIntentId: q3 });
+      const replaced = await a.reader.delivery(a.brand.id, [q3, q4]);
+      assert.deepEqual(replaced.map((r) => [r.queueIntentId, r.superseded, r.cancelled]).sort(), [[q3, true, false], [q4, false, false]].sort());
     });
 
     await t.test('outcomes count each tagged contact once from existing CRM, journey and commerce rows, per brand', async () => {
@@ -166,7 +175,9 @@ test('Milestone 4 on real PostgreSQL: verified hand-off routes, receipt-derived 
         [{ c: tag, leads: 3, q: 1, b: 1, s: 1, cu: 1 }], 'c4 (other campaign), c5 (other brand) and c6 (deleted) are excluded; c2 counted once');
       assert.equal(read.buckets[0]!.firstAt, '2026-11-03T09:00:00.000Z');
       assert.deepEqual((await b.reader.outcomes(b.brand.id, utmCampaign)).buckets.map((x) => x.leads), [1], 'brand B sees only its own contact');
-      await assert.rejects(a.reader.outcomes(a.brand.id, "x' OR 1=1 --"), /check the artwork|Invalid|22023/iu);
+      await assert.rejects(a.reader.outcomes(a.brand.id, "x' OR 1=1 --"), /Check the distribution request/u);
+      // The outcome counter is internal: the runtime role cannot call it directly, only through the owner-checked boundary.
+      await assert.rejects(pool.query('SELECT app_private.creative_studio_outcome_buckets($1,$2)', [a.brand.id, utmCampaign]), /permission denied/u);
       await assert.rejects(pool.query('SELECT * FROM app.contact_import_attribution_facts'), /permission denied/u);
       const writes = await admin.query('SELECT (SELECT count(*) FROM app.seo_blog_jobs WHERE workspace_id=$1)::int AS jobs, (SELECT count(*) FROM app.outbox_events WHERE workspace_id=$1)::int AS outbox', [a.brand.id]);
       assert.deepEqual(writes.rows[0], { jobs: 0, outbox: 0 }, 'reading outcomes queued or sent nothing');

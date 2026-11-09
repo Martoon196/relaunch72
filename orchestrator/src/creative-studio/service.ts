@@ -17,6 +17,7 @@ import { MOTIONS, parseHex, RendererUnavailableError, VIDEO_LIMITS, type Artwork
 import { campaignUtm } from '../seo-blog/acquisition-assembly.js';
 import type { AcquisitionChannel, AcquisitionProposal, CampaignCreatorStore, CreatorRecord } from '../seo-blog/campaign-creator.js';
 import type { ArticleLocalImageProposal, LocalImageOrigin } from '../seo-blog/image-campaign.js';
+import type { ArticleCampaign } from '../seo-blog/campaign.js';
 import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
   type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
 import { buildLearning, findingsText, generalPatternIssues, type LearningSnapshot, type LearningStore, type PatternRow, type RecordedFinding } from './learning.js';
@@ -658,9 +659,23 @@ export class CreativeStudioService {
         const blob = await this.deps.brands.getBlob(brandId, found.version.render.blobId);
         if (!blob || sha(blob.bytes) !== found.version.render.sha256) throw new SeoBlogError(409, 'The stored artwork failed its integrity check.');
         const profile = ARTICLE_MEDIA_PROFILE[found.version.placement]!;
-        // Deterministic per hand-off command: a retry replays the same media receipt instead of adding another image.
-        const proposal = await this.deps.articleMedia.importApproved(actorId, brandId, target.articleId, derivedId(`creative-handoff-media:${commandId}`), Buffer.from(blob.bytes), profile,
-          { kind: 'creative_studio', creativeVersionId: versionId, creativeSha256: found.version.render.sha256, placement: found.version.placement });
+        const origin = { kind: 'creative_studio' as const, creativeVersionId: versionId, creativeSha256: found.version.render.sha256, placement: found.version.placement };
+        // One private image per exact version and article: a retry with a new page command reuses the image already imported,
+        // and the import command itself is derived from the same identity so the media receipts replay rather than duplicate.
+        const article = await this.deps.brands.getArticle(brandId, target.articleId);
+        const existing = article?.localImageProposals?.find((p) => p.origin?.kind === 'creative_studio' && p.origin.creativeVersionId === versionId && p.origin.creativeSha256 === found.version.render.sha256
+          && p.variants.some((v) => v.profile === profile));
+        let proposal: ArticleLocalImageProposal;
+        if (existing) proposal = existing;
+        else {
+          try {
+            proposal = await this.deps.articleMedia.importApproved(actorId, brandId, target.articleId, derivedId(`creative-handoff-media:${target.articleId}:${versionId}:${profile}`), Buffer.from(blob.bytes), profile, origin);
+          } catch (error) {
+            if (error instanceof SeoBlogError && error.status === 400) throw new SeoBlogError(409, `The article could not store this artwork as a ${profile} image (${error.message}) Download it instead; nothing was added.`);
+            if (error instanceof SeoBlogError && error.status === 409) throw new SeoBlogError(409, `Article images: ${error.message} Nothing was handed off.`);
+            throw error;
+          }
+        }
         const variant = proposal.variants.find((v) => v.profile === profile);
         if (!variant) throw new SeoBlogError(409, 'The article image was not prepared. Nothing was added.');
         handoff = Object.freeze({ ...base, articleMedia: Object.freeze({ candidateAssetId: proposal.candidateAssetId, candidateSha256: proposal.candidateSha256, variantAssetId: variant.assetId, variantSha256: variant.sha256, profile }) });
@@ -706,8 +721,7 @@ export class CreativeStudioService {
       if (h.route === 'article_media' && h.articleMedia && h.target.kind === 'article_campaign') {
         const article = await this.deps.brands.getArticle(brandId, h.target.articleId);
         const campaign = article?.campaign;
-        const uses = (campaign?.variants ?? []).flatMap((variant) => variant.revisions.filter((r) => r.media?.assetId === h.articleMedia!.variantAssetId)
-          .map((r) => ({ variant, revision: r, plan: campaign?.queueInstructions?.filter((q) => q.instruction.variantId === variant.id && q.instruction.variantRevisionId === r.id).at(-1) ?? null })));
+        const uses = campaign ? postUses(campaign, h.articleMedia.variantAssetId) : [];
         const queues = uses.flatMap((u) => u.plan ? [u.plan.instruction.queueIntentId] : []);
         const rows = queues.length && this.deps.distribution ? await this.deps.distribution.delivery(brandId, queues).catch(() => [] as DeliveryRecord[]) : [];
         const posts = uses.length ? uses.map((u) => ({ label: `${u.variant.network === 'instagram' ? 'Instagram' : 'LinkedIn'} post · ${u.variant.angle.replace('_', ' ')}`,
@@ -780,8 +794,9 @@ export class CreativeLearning {
     const { context } = await this.studio.context(actorId, brandId);
     const brand = await this.deps.brands.getBrand(brandId);
     const profile = await this.deps.brands.latestProfile(brandId);
-    const host = brand?.website ? new URL(brand.website).hostname.replace(/^www\./u, '') : '';
-    const issues = generalPatternIssues(statement, [context.brandName, brand?.name ?? '', host, ...(profile?.offers ?? []).map((o) => o.name)]);
+    let host = '';
+    try { host = brand?.website ? new URL(brand.website).hostname.replace(/^www\./u, '') : ''; } catch { host = brand?.website ?? ''; }
+    const issues = generalPatternIssues(statement, [context.brandName, brand?.name ?? '', host, ...(profile?.offers ?? []).map((o) => o.name), ...(profile?.conversionPages ?? []).map((c) => c.label)]);
     if (issues.length) throw new SeoBlogError(400, issues.join(' '));
     if (!UUID.test(commandId) || !UUID.test(findingId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
     const decision = { id: this.deps.newId(), patternId: this.deps.newId(), findingId, statement: statement.trim(), state: 'shared' as const, decidedBy: actorId, decidedAt: this.deps.now() };
@@ -808,8 +823,26 @@ export class CreativeLearning {
     const { record } = await this.campaign(actorId, brandId, campaignId);
     const finding = (await this.deps.learning.listFindings(brandId, campaignId)).find((f) => f.id === findingId);
     if (!finding) throw new SeoBlogError(404, 'That recorded finding was not found.');
-    return this.deps.guidance.saveAudienceNote(actorId, brandId, `Campaign findings · ${record.brief.name} · ${finding.recordedAt.slice(0, 10)}`.slice(0, 160), findingsText(finding.snapshot, finding.recordedAt, record.brief.name));
+    const title = `Campaign findings · ${record.brief.name} · ${finding.recordedAt.slice(0, 10)}`.slice(0, 160), text = findingsText(finding.snapshot, finding.recordedAt, record.brief.name);
+    // A refresh or double submit must not add a second document: the same recorded finding set copies once.
+    const existing = (await this.deps.brands.listKnowledge(brandId)).filter((d) => d.active && d.title === title && d.text === text).sort((a, b) => b.version - a.version)[0];
+    if (existing) return { documentId: existing.id };
+    return this.deps.guidance.saveAudienceNote(actorId, brandId, title, text);
   }
+}
+
+/**
+ * One row per post (variant) that carries the hand-off image: the revision with a live posting plan wins, otherwise the
+ * current revision, otherwise the latest carrying revision. Superseded revisions are never repeated as separate posts.
+ */
+export function postUses(campaign: Pick<ArticleCampaign, 'variants' | 'queueInstructions'>, variantAssetId: string) {
+  return campaign.variants.flatMap((variant) => {
+    const carrying = variant.revisions.filter((r) => r.media?.assetId === variantAssetId)
+      .map((r) => ({ variant, revision: r, plan: campaign.queueInstructions?.filter((q) => q.instruction.variantId === variant.id && q.instruction.variantRevisionId === r.id).at(-1) ?? null }));
+    if (!carrying.length) return [];
+    const planned = carrying.filter((u) => u.plan && !u.plan.cancelled), current = carrying.find((u) => u.revision.id === variant.currentRevisionId);
+    return [planned.at(-1) ?? current ?? carrying.at(-1)!];
+  });
 }
 
 function acquisitionProposal(record: CreatorRecord | null): AcquisitionProposal | null {

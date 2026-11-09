@@ -52,7 +52,7 @@ const MHP_EVENT_WHATSAPP_CHECKSUM = 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d
 const MHP_PAYMENTS_LIVE_MIGRATION = '0142_mhp_payments_live.sql';
 const MHP_PAYMENTS_LIVE_CHECKSUM = '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d';
 const CREATIVE_STUDIO_MIGRATION = '0143_creative_studio_library.sql';
-const CREATIVE_STUDIO_CHECKSUM = 'f731c8ee8d06337c3ef1b0f360a89c789aa56fc0d8f069c8d0e7ccfe60d83e12';
+const CREATIVE_STUDIO_CHECKSUM = '57be028af152c523d5b2e4172636808bdbc52dffc62006b37a9d2bc7c225eb81';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled

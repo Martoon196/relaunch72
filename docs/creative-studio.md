@@ -221,7 +221,7 @@ Approved creative now reaches the **existing** integrations, and the studio repo
 
 ## Database (still inside unreleased 0143)
 
-Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies for the existing NOLOGIN `r72_creative_studio_definer` on the existing media, calendar-job, CRM, journey and commerce tables, and one `STABLE SECURITY DEFINER` function, `app_private.creative_studio_distribution(workspace, session, 'delivery'|'outcomes', input)`, executable only by `r72_content_command` with a genuine managing-owner session. The hand-off branch of `creative_studio_command` gained the route checks above. (Checksum superseded by Milestone 5, below.)
+Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies for the existing NOLOGIN `r72_creative_studio_definer` on the existing media, calendar-job, CRM, journey and commerce tables, and one `SECURITY DEFINER` function, `app_private.creative_studio_distribution(workspace, session, 'delivery'|'outcomes', input)`, executable only by `r72_content_command` with a genuine managing-owner session. The hand-off branch of `creative_studio_command` gained the route checks above. (Checksum superseded by the audit below.)
 
 ## Checks
 
@@ -233,8 +233,8 @@ Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies
 ## Limits and owner decisions
 
 - **No live lead form records campaign tags today.** `contact_attribution_facts` only accepts affiliate rows (0016 CHECK), and the portal form, Growth HQ inbox and MHP capture do not read `utm_*`. Until one capture path stores them (a change to a live, shared workflow — owner and release-owner decision), live leads show as zero. Imported contacts with tags are counted now.
-- Subscription starts are not recorded in this database (only cancellations); the billing branch work is separate.
-- No LeadRelay qualification event exists in the canonical catalogue; "qualified" means the CRM `qualified` stage (or won).
+- Subscription starts are not recorded against CRM contacts in the outcome tables (only payments and cancellations are; MHP purchase records hold Stripe subscription ids but are not contact-linked).
+- No LeadRelay qualification event exists in the canonical catalogue; "qualified" means the CRM pipeline stage whose slug is `qualified` (the seeded stage) or a won opportunity. Nothing guards that slug if a workspace ever renames it.
 - Video has no connected social path for these brands; videos hand off as exports.
 - Long renders still run in-request (D-070 stop-gap); the durable render job is not part of this milestone.
 - Release: 0143 still waits for the 0142 payments cut-over and must be renumbered if the stopped Apollo branch's `0143_apollo_private_discovery` lands first.
@@ -266,7 +266,7 @@ and never starts, funds or schedules anything.
 
 ## Database (still inside unreleased 0143)
 
-Section 4 adds two append-only, workspace-scoped tables, `app.creative_studio_findings` and `app.creative_studio_patterns`, owned by the existing NOLOGIN definer, with no runtime table privilege. It also adds one owner command boundary, `app_private.creative_studio_learning`, and extends the command action list. Pattern reads across brands are limited by `app_private.can_manage_workspace` for the current person and to rows whose latest state is *shared*. New 0143 checksum: `f731c8ee8d06337c3ef1b0f360a89c789aa56fc0d8f069c8d0e7ccfe60d83e12`.
+Section 4 adds two append-only, workspace-scoped tables, `app.creative_studio_findings` and `app.creative_studio_patterns`, owned by the existing NOLOGIN definer, with no runtime table privilege. It also adds one owner command boundary, `app_private.creative_studio_learning`, and extends the command action list. Pattern reads across brands are limited by `app_private.can_manage_workspace` for the current person and to rows whose latest state is *shared*. (Checksum superseded by the audit below.)
 
 ## Checks
 
@@ -286,4 +286,35 @@ Section 4 adds two append-only, workspace-scoped tables, `app.creative_studio_fi
 - Findings are observations from tagged contacts; overlapping ranges, small samples and unrecorded reach mean most early campaigns will honestly show *Not enough data*.
 - Patterns travel only between brands the same person manages; there is no organisation-wide or cross-customer sharing.
 - Copying findings into brand guidance is deliberately manual because of the profile re-confirmation it causes.
+
+# Audit of Milestones 4–5
+
+Six independent reviews (SQL security, Milestone 4 logic, Milestone 5 logic and statistics, routes and views, factual claims, the article-media integration path) produced 30 findings; none was high severity and none was a cross-brand leak. All were addressed except those recorded as accepted.
+
+| Finding | Fix |
+|---|---|
+| A posting plan replaced by a newer one leaves its calendar job `cancelled` with no cancel command; the ladder showed it as still waiting | The SQL read now reports `superseded`; the ladder treats superseded or `cancelled` jobs as *stopped*, except a plan that already published. |
+| Every revision carrying the hand-off image became its own "post" row, so an edited post appeared twice | One row per post: the revision with a live plan, else the current revision (`postUses`, unit-tested). |
+| A retry from a freshly rendered page used a new command id, so a failed hand-off after a successful import would add a second identical private image | The hand-off reuses an existing Creative Studio import for the same exact version, and the import command is derived from version + article + format. Tested. |
+| "Never cropped" was enforced only by hiding the control; `POST image-crop` still accepted a studio candidate | `crop()` refuses candidates whose proposal came from the Creative Studio. Tested. |
+| Tracked-link route did not check the link host or that the concept index matched the target | SQL now requires a confirmed conversion-page host and `concept-<n>` equal to the target concept. Tested on PostgreSQL. |
+| `finding_record` interpolated the campaign id into a regex before proving it was a UUID (a malformed id became a raw regex error) | UUID check first. Tested. |
+| Observations or comparisons with an empty evidence list could be journaled unanchored | SQL requires evidence for every non-gap finding and an allowed `kind`. Tested. |
+| Malformed queue ids in the delivery read and bad campaign tags surfaced as raw database errors | Validated in SQL; the reader maps 42501/22023/22P02 to 403/400. Tested. |
+| `creative_studio_distribution` was marked STABLE while calling the VOLATILE session lock | Marked VOLATILE with a comment. |
+| "No clear difference" was explained as "the concepts perform similarly" (overlapping intervals do not show equivalence) | Reworded; the note now states the rule is deliberately cautious. |
+| One arm with fewer than 20 leads blocked every comparison | Only arms with 20+ leads are compared; smaller arms are named as excluded. |
+| With three or more arms only the extremes were described | Statement says "highest and lowest observed rates" and lists the others. |
+| Copying findings into brand guidance was not idempotent (a double submit added two documents) | The same recorded finding set copies once (matching active document reused). Tested. |
+| After copying, Setup still shows the profile as confirmed (audience notes are not "factual" for blog writing) while the studio and creators refuse it | The success message now says exactly that and points at *Re-extract from current guidance*. |
+| Pattern guard did not consider conversion-page labels; `new URL()` on an unparsable stored website would 500 | Labels added to the brand terms; URL parse guarded. |
+| The journal accepts at most 40 findings; many tags could exceed it | `buildLearning` caps at 40 with a summarising gap finding. |
+| A failed CRM read on the proposal page showed "No results recorded. This is a plan." | Only a missing proposal shows plan-only; read failures show a "could not be read" notice. Same for acquisition targets and other-brand patterns. |
+| Wording: subscription starts, the meaning of "qualified", article URLs "without campaign parameters" | Corrected to what the code does (see Limits above). |
+| Landscape 1200×628 → LinkedIn 1200×627 was proved only by reading | Covered by the unit test (candidate digest, one exact-size format). |
+| Small UI items: undefined `.small` class on the campaign page, oversized checkbox override, cramped paid-channels table on phones, contradictory "read just now" note | Fixed. |
+
+Accepted as-is: the 600 KB article-variant cap could reject a photo-heavy full-bleed render (the hand-off now reports it plainly and suggests download); the orphan candidate blob on a 409 is pre-existing behaviour of the owner-upload path; substring brand-term matching can over-refuse a pattern (the message names the term).
+
+Test gaps closed on real PostgreSQL: the internal outcome counter is not callable by the runtime role; foreign-host and concept-mismatch links refused; malformed ids refused; a non-managing (viewer) membership in another owner's brand reveals nothing; re-sharing a pattern id refused; patterns append-only. Current 0143 checksum: `57be028af152c523d5b2e4172636808bdbc52dffc62006b37a9d2bc7c225eb81`.
 

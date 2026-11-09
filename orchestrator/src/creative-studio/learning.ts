@@ -11,6 +11,8 @@ import { parseCreativeUtmContent, type OutcomeBucket, type OutcomeRead } from '.
 export const LEARNING_RULES = 'r72-creative-learning-v1' as const;
 /** Below this many tagged leads in an arm, rates are shown but no comparison is drawn. */
 export const MIN_ARM_LEADS = 20;
+/** Mirrors the SQL journal's limit per recorded finding set. */
+export const MAX_FINDINGS = 40;
 
 export type FindingStrength = 'insufficient_data' | 'no_clear_difference' | 'observed_difference' | 'not_applicable';
 export interface FindingEvidence {
@@ -92,29 +94,43 @@ export function buildLearning(read: OutcomeRead, proposal: AcquisitionProposal |
     findings.push({ id: id('stray', read.utmCampaign, b), kind: 'gap', strength: 'not_applicable', period: { from: b.firstAt, to: b.lastAt }, observedAt: read.readAt, evidence: [evidenceOf(read, b)],
       statement: `${b.leads} contact${b.leads === 1 ? '' : 's'} carried this campaign tag without a recognised concept/artwork tag (${b.utmContent ? `“${b.utmContent}”` : 'none'}), so they cannot be compared.` });
   }
-  const notCompared = [
+  const notCompared: string[] = [
     'Lead volumes are not compared between concepts: impressions, reach and spend per link are not recorded, so more leads may only mean a link was used more.',
     'No revenue, return on ad spend, cost per acquisition or overall winner is calculated.',
   ];
+  // Comparisons use only arms with enough tagged leads; smaller arms are named as excluded rather than blocking everything.
+  const small = arms.filter((b) => b.leads < MIN_ARM_LEADS);
   if (arms.length >= 2) {
     for (const [metric, label] of [['qualified', 'qualified rate'], ['booked', 'booking rate'], ['sold', 'sale rate']] as const) {
       const rated = arms.map((b) => ({ b, w: wilson(b[metric], b.leads) })).sort((x, y) => y.w.rate - x.w.rate);
-      const top = rated[0]!, bottom = rated.at(-1)!, small = rated.filter((r) => r.b.leads < MIN_ARM_LEADS);
-      const describe = (r: typeof top) => `${armLabel(r.b.utmContent, proposal)} ${pct(r.w.rate)} (95% range ${pct(r.w.low)}–${pct(r.w.high)}, ${r.b[metric]}/${r.b.leads})`;
+      const compared = rated.filter((r) => r.b.leads >= MIN_ARM_LEADS);
+      const describe = (r: typeof rated[number]) => `${armLabel(r.b.utmContent, proposal)} ${pct(r.w.rate)} (95% range ${pct(r.w.low)}–${pct(r.w.high)}, ${r.b[metric]}/${r.b.leads})`;
+      const excluded = small.length ? ` Not compared (fewer than ${MIN_ARM_LEADS} tagged leads): ${small.map((b) => armLabel(b.utmContent, proposal)).join(', ')}.` : '';
+      const Label = `${label[0]!.toUpperCase()}${label.slice(1)}`;
       let strength: FindingStrength, statement: string;
-      if (small.length) {
+      if (compared.length < 2) {
         strength = 'insufficient_data';
-        statement = `${label[0]!.toUpperCase()}${label.slice(1)} not compared yet: ${small.map((r) => armLabel(r.b.utmContent, proposal)).join(', ')} ha${small.length === 1 ? 's' : 've'} fewer than ${MIN_ARM_LEADS} tagged leads. Observed so far: ${rated.map(describe).join('; ')}.`;
-      } else if (top.w.low > bottom.w.high) {
-        strength = 'observed_difference';
-        statement = `Observed difference in ${label}: ${describe(top)} versus ${describe(bottom)}. The ranges do not overlap, but this is an observation from tagged contacts, not proof that the creative caused it.`;
+        statement = `${Label} not compared yet: at least two concepts need ${MIN_ARM_LEADS} or more tagged leads each. Observed so far: ${rated.map(describe).join('; ')}.`;
       } else {
-        strength = 'no_clear_difference';
-        statement = `No clear difference in ${label}: ${rated.map(describe).join('; ')}. The ranges overlap.`;
+        const top = compared[0]!, bottom = compared.at(-1)!, others = compared.slice(1, -1);
+        if (top.w.low > bottom.w.high) {
+          strength = 'observed_difference';
+          statement = `Observed difference in ${label} between the highest and lowest observed rates: ${describe(top)} versus ${describe(bottom)}.${others.length ? ` Also observed: ${others.map(describe).join('; ')}.` : ''} The two ranges do not overlap, but this is an observation from tagged contacts, not proof that the creative caused it.${excluded}`;
+        } else {
+          strength = 'no_clear_difference';
+          statement = `No clear difference in ${label} can be read yet: ${compared.map(describe).join('; ')}. The ranges overlap, which does not show the rates are the same.${excluded}`;
+        }
       }
       findings.push({ id: id('cmp', read.utmCampaign, metric, rated.map((r) => [r.b.utmContent, r.b[metric], r.b.leads])), kind: 'comparison', metric, strength, period, observedAt: read.readAt,
         evidence: rated.map((r) => evidenceOf(read, r.b)), statement });
     }
+    notCompared.push(`Comparisons are deliberately cautious: a difference is reported only when two 95% ranges do not overlap, and only between concepts with at least ${MIN_ARM_LEADS} tagged leads each.`);
+  }
+  // The journal accepts at most 40 findings; observations beyond that are summarised rather than dropped silently.
+  if (findings.length > MAX_FINDINGS) {
+    const kept = findings.slice(0, MAX_FINDINGS - 1), dropped = findings.length - kept.length;
+    findings.splice(0, findings.length, ...kept, { id: id('truncated', read.utmCampaign, dropped), kind: 'gap', strength: 'not_applicable', period, observedAt: read.readAt, evidence: [],
+      statement: `${dropped} further finding${dropped === 1 ? '' : 's'} were not listed because this campaign carries more than ${MAX_FINDINGS} distinct tags.` });
   }
   return Object.freeze({ rules: LEARNING_RULES, utmCampaign: read.utmCampaign, readAt: read.readAt, findings: Object.freeze(findings), nextTests: Object.freeze(nextTests(findings, proposal)), notCompared });
 }
@@ -142,7 +158,7 @@ export function nextTests(findings: readonly Finding[], proposal: AcquisitionPro
   } else if (qualified?.strength === 'no_clear_difference') {
     out.push({ id: id('t-distinct', qualified.id), title: 'Try a more distinct angle', basedOn: [qualified.id], reviewAfterDays: review, budget: NO_BUDGET,
       change: 'Write one new concept with a clearly different angle and keep the best-documented current concept running as the control.', keepTheSame: 'Offer, destination, audience and channel.',
-      measure: 'Qualified rate per tagged artwork, compared once each has at least 20 tagged leads.', why: 'The current concepts perform similarly, so small wording changes are unlikely to show a difference.' });
+      measure: 'Qualified rate per tagged artwork, compared once each has at least 20 tagged leads.', why: 'The ranges overlap, so no difference can be read yet. A clearly different angle is more likely to show one than a small wording change, and the current concept stays as the control.' });
   }
   const observed = findings.filter((f) => f.kind === 'observation');
   if (observed.length === 1) out.push({ id: id('t-second', observed[0]!.id), title: 'Add one variant to compare against', basedOn: [observed[0]!.id], reviewAfterDays: review, budget: NO_BUDGET,

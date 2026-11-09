@@ -51,7 +51,7 @@ test('findings: dated and evidence-linked; comparisons only with enough data; di
   assert.ok(small.findings.some((f) => f.kind === 'gap' && /“spring”/u.test(f.statement)), 'unrecognised tags are reported, not guessed');
   const cmp = small.findings.filter((f) => f.kind === 'comparison');
   assert.deepEqual(cmp.map((f) => [f.metric, f.strength]), [['qualified', 'insufficient_data'], ['booked', 'insufficient_data'], ['sold', 'insufficient_data']]);
-  assert.match(cmp[0]!.statement, new RegExp(`fewer than ${MIN_ARM_LEADS} tagged leads`, 'u'));
+  assert.match(cmp[0]!.statement, new RegExp(`at least two concepts need ${MIN_ARM_LEADS} or more tagged leads each`, 'u'));
   assert.ok(small.nextTests.some((t) => t.title === 'Keep the current concepts running unchanged'));
   assert.ok(small.nextTests.some((t) => t.title === 'Use the artwork-tagged links'));
 

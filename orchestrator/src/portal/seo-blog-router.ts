@@ -245,7 +245,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
-        const otherPatterns = await studio.learning().otherBrandPatterns(actor.userId, brandId).catch(() => []);
+        const otherPatterns = await studio.learning().otherBrandPatterns(actor.userId, brandId).catch(() => null);
         return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       if (rest === 'creative/kit') {
@@ -254,7 +254,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       if (parts[1] === 's' && parts[2] && parts.length === 3) {
         const [found, articles, saved, distribution, acquisitions] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview(),
-          studio.distribution(actor.userId, brandId, parts[2]).catch(() => null), studio.acquisitionTargets(actor.userId, brandId).catch(() => [])]);
+          studio.distribution(actor.userId, brandId, parts[2]).catch(() => null), studio.acquisitionTargets(actor.userId, brandId).catch(() => null)]);
         return send(res, 200, creativeSetPage(shell('creative'), { ...found, articles: articles.map((a) => ({ id: a.article.id, title: a.title })), savedImages: saved, newCommand: () => randomUUID(), rendererReady: studio.rendererReady,
           distribution, acquisitions }));
       }
@@ -276,7 +276,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return send(res,200,format==='json'?json:creatorTextExport(record,JSON.parse(json).content),format==='json'?'application/json; charset=utf-8':'text/plain; charset=utf-8',{'content-disposition':`attachment; filename="campaign.${format}"`});
       }
       const studio=record.brief.kind==='acquisition'?input.service.creativeFor?.(identity,input.requestId,engine)??null:null;
-      const learning=studio?await studio.learning().view(actor.userId,brandId,record.id).catch(()=>null):null;
+      // undefined = studio off; null = read failed (shown as such); a 404 means no proposal exists yet and is also plan-only.
+      const learning=studio?await studio.learning().view(actor.userId,brandId,record.id).catch((error:unknown)=>error instanceof SeoBlogError&&error.status===404?undefined:null):undefined;
       return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId),learning));
     }
     if (rest === 'authority') {
@@ -501,7 +502,7 @@ async function handlePost(
         if(parts[2]==='pattern'){await learning.sharePattern(actor.userId,brandId,f('findingId')??'',f('statement')??'',f('commandId')??'');return ok(here,'General pattern shared with your other brands. It carries no figures, names or offers, and you can withdraw it.');}
         if(parts[2]==='pattern-withdraw'){await learning.withdrawPattern(actor.userId,brandId,f('patternId')??'',f('commandId')??'');return ok(here,'Pattern withdrawn. Your other brands no longer see it.');}
         await learning.copyToGuidance(actor.userId,brandId,id,f('findingId')??'',f('acknowledge')==='1');
-        return ok(back('setup'),'Findings saved to brand guidance as audience notes. Refresh and confirm the brand profile before they are used in new campaigns.');
+        return ok(back('setup'),'Findings saved to brand guidance as an audience note. Setup still shows the profile as confirmed for blog writing; use “Re-extract from current guidance”, then confirm, before the creative studio and campaign creators can use this brand again.');
       }
       if(parts[2]==='approve'){
         await creator.approve(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',f('reviewed')==='1');

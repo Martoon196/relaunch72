@@ -10,7 +10,8 @@ import jpeg from 'jpeg-js';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
 import { ArticleMediaReviewService, canonicalImageQualityApproval } from '../src/seo-blog/media-review.js';
 import { GithubStaticPublisher } from '../src/seo-blog/publishers/github-static.js';
-import { CreativeStudioService, type DistributionReadPort } from '../src/creative-studio/service.js';
+import { CreativeStudioService, postUses, type DistributionReadPort } from '../src/creative-studio/service.js';
+import type { ArticleCampaign } from '../src/seo-blog/campaign.js';
 import { MemoryCreativeLibraryStore } from '../src/creative-studio/store.js';
 import type { ArtworkInput, ArtworkRenderer, RenderedArtwork } from '../src/creative-studio/renderer.js';
 import { ATTRIBUTION_LIMITS, creativeTrackedLink, creativeUtmContent, handoffRoute, parseCreativeUtmContent, PAID_CHANNELS, postLadder, trackedLinkLadder,
@@ -66,15 +67,15 @@ async function setup() {
     articleMedia: { importApproved: (actor, brand, article, command, bytes, profile, origin) => engine.importCreativeImage({ userId: actor }, brand, article, command, bytes, profile, origin) },
     creators: { get: async (_b, id) => (id === campaignId ? record : null), list: async () => [record] }, distribution, now: h.clock.now });
   const draft = await studio.draft(OWNER.userId, f.brand.id, randomUUID(), { purpose: 'organic_social', source_kind: 'brief', brief: 'Harbour Compliance Plan costs £49 per month.', audience: '', destination: '',
-    placements: ['portrait', 'square'], concepts: '1' }, { kind: 'neutral' });
+    placements: ['portrait', 'square', 'landscape'], concepts: '1' }, { kind: 'neutral' });
   const set = await studio.getSet(OWNER.userId, f.brand.id, draft.setId);
   const byPlacement = (p: string) => set.view.concepts[0]!.variants.find((v) => v.version.placement === p)!.version;
-  for (const p of ['portrait', 'square']) { const v = byPlacement(p); await studio.approve(OWNER.userId, f.brand.id, v.id, randomUUID(), v.render.sha256, true); }
+  for (const p of ['portrait', 'square', 'landscape']) { const v = byPlacement(p); await studio.approve(OWNER.userId, f.brand.id, v.id, randomUUID(), v.render.sha256, true); }
   return { f, h, engine, studio, set, byPlacement, campaignId, reads, setDelivery: (rows: DeliveryRecord[]) => { deliveryRows = rows; }, outcomes };
 }
 
 test('an approved portrait enters the existing article media path unchanged in size, with provenance, idempotently', { timeout: 120_000 }, async () => {
-  const { f, h, studio, set, byPlacement } = await setup();
+  const { f, h, engine, studio, set, byPlacement } = await setup();
   const portrait = byPlacement('portrait'), command = randomUUID(), target = { kind: 'article_campaign' as const, articleId: f.articleId };
   const before = (await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals?.length ?? 0;
   const first = await studio.handoff(OWNER.userId, f.brand.id, portrait.id, command, target);
@@ -93,13 +94,27 @@ test('an approved portrait enters the existing article media path unchanged in s
   const replay = await studio.handoff(OWNER.userId, f.brand.id, portrait.id, command, target);
   assert.equal(replay.replayed, true);
   assert.equal((await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals!.length, before + 1);
+  // A retry from a freshly rendered page carries a new command id: the image already imported is reused, not duplicated.
+  const retry = await studio.handoff(OWNER.userId, f.brand.id, portrait.id, randomUUID(), target);
+  assert.equal(retry.replayed, false);
+  assert.equal(retry.handoff?.articleMedia?.variantAssetId, imported.variants[0]!.assetId);
+  assert.equal((await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals!.length, before + 1, 'no second private image for the same exact version');
+  // Approved artwork is never re-cropped through the article's crop control.
+  await assert.rejects(engine.cropCampaignImage({ userId: OWNER.userId }, f.brand.id, f.articleId, article.currentVersionId!, randomUUID(), imported.candidateAssetId, imported.candidateSha256, { x: 0.2, y: 0.8 }), /cannot be re-cropped/u);
+  // Landscape 1200×628 becomes the LinkedIn 1200×627 format with half a pixel trimmed top and bottom, never upscaled or re-framed.
+  const landscape = await studio.handoff(OWNER.userId, f.brand.id, byPlacement('landscape').id, randomUUID(), target);
+  assert.equal(landscape.handoff?.route, 'article_media');
+  const linkedin = (await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals!.at(-1)!;
+  assert.equal(linkedin.candidateSha256, byPlacement('landscape').render.sha256);
+  assert.deepEqual(linkedin.variants.map((v) => [v.profile, v.width, v.height]), [['linkedin', 1200, 627]]);
   // Square has no exact article format: recorded for download, never cropped.
   const square = await studio.handoff(OWNER.userId, f.brand.id, byPlacement('square').id, randomUUID(), target);
   assert.equal(square.handoff?.route, 'export_only');
-  assert.equal((await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals!.length, before + 1);
+  assert.equal((await h.store.getArticle(f.brand.id, f.articleId))!.localImageProposals!.length, before + 2, 'square adds nothing to the article');
   // A stranger cannot hand off this brand's artwork.
   await assert.rejects(studio.handoff(STRANGER.userId, f.brand.id, portrait.id, randomUUID(), target), /manage|not found|permission/i);
   const dist = await studio.distribution(OWNER.userId, f.brand.id, set.record.set.id);
+  assert.equal(dist.filter((d) => d.route === 'article_media').length, 3, 'portrait, its retry (recorded, reusing the image) and landscape');
   const media = dist.find((d) => d.route === 'article_media')!;
   assert.equal(media.posts[0]!.label, 'Not yet chosen for a post');
   assert.deepEqual(media.posts[0]!.ladder.map((s) => s.status), ['reached', 'waiting', 'waiting', 'waiting', 'not_applicable', 'unknown', 'unknown']);
@@ -149,7 +164,19 @@ test('post ladder: each state needs its own record; failures and unknowns are no
   assert.equal(st(postLadder(h, plan({ jobState: 'failed', events: [{ kind: 'failed', at: '2026-11-10T09:00:01.000Z', code: 'provider.rejected' }] }), true)), 'reached,reached,failed,failed,not_applicable,unknown,unknown');
   assert.equal(st(postLadder(h, plan({ jobState: 'reconciliation_pending', events: [{ kind: 'outcome_unknown', at: '2026-11-10T09:00:01.000Z', code: 'timeout' }] }), true)), 'reached,reached,unknown,unknown,not_applicable,unknown,unknown');
   assert.equal(st(postLadder(h, plan({ cancelled: true, materialized: false }), true)), 'reached,stopped,stopped,stopped,not_applicable,unknown,unknown');
-  assert.match(postLadder(h, null, false)[5]!.evidence, /without campaign parameters/);
+  // A plan replaced by a newer one, or whose calendar entry the existing worker retired, is stopped rather than "waiting".
+  assert.equal(st(postLadder(h, plan({ superseded: true, materialized: false }), true)), 'reached,stopped,stopped,stopped,not_applicable,unknown,unknown');
+  assert.equal(st(postLadder(h, plan({ jobState: 'cancelled' }), true)), 'reached,stopped,stopped,stopped,not_applicable,unknown,unknown');
+  assert.match(postLadder(h, plan({ jobState: 'cancelled' }), true)[1]!.evidence, /withdrawn by the existing posting controls/u);
+  assert.equal(st(postLadder(h, plan({ superseded: true, jobState: 'succeeded', events: [{ kind: 'published', at: '2026-11-10T09:05:00.000Z', code: 'p' }] }), true)), 'reached,reached,reached,reached,not_applicable,unknown,unknown', 'a plan that already published is not rewritten as stopped');
+  assert.match(postLadder(h, null, false)[5]!.evidence, /no campaign parameters are added/);
+  // One row per post: a superseded revision that carried the image is not repeated; a planned revision wins over the current one.
+  const asset = randomUUID(), q = randomUUID();
+  const rev = (id: string, withImage = true) => ({ id, media: withImage ? { assetId: asset } : null }) as unknown as ArticleCampaign['variants'][number]['revisions'][number];
+  const campaign = { variants: [{ id: 'v1', network: 'instagram', angle: 'launch', currentRevisionId: 'r2', revisions: [rev('r1'), rev('r2')] }, { id: 'v2', network: 'linkedin', angle: 'takeaway', currentRevisionId: 'r4', revisions: [rev('r3'), rev('r4', false)] }, { id: 'v3', currentRevisionId: 'r5', revisions: [rev('r5', false)] }],
+    queueInstructions: [{ instruction: { variantId: 'v1', variantRevisionId: 'r1', queueIntentId: q } }] } as unknown as ArticleCampaign;
+  assert.deepEqual(postUses(campaign, asset).map((u) => [u.variant.id, u.revision.id, u.plan?.instruction.queueIntentId ?? null]), [['v1', 'r1', q], ['v2', 'r3', null]]);
+  assert.deepEqual(postUses({ ...campaign, queueInstructions: [{ instruction: { variantId: 'v1', variantRevisionId: 'r1', queueIntentId: q }, cancelled: true }] } as unknown as ArticleCampaign, asset).map((u) => u.revision.id), ['r2', 'r3'], 'a cancelled plan falls back to the current revision');
   // Tracked-link ladder with no CRM read available stays unknown rather than zero.
   const t = { ...h, route: 'tracked_link', trackedLink: { url: 'https://x.example/?utm_content=concept-1-csabcdef12', utmCampaign: 'x-abcdef12', utmContent: 'concept-1-csabcdef12', channel: 'email', concept: 0 } } as CreativeHandoff;
   assert.deepEqual(trackedLinkLadder(t, null).slice(4).map((s) => s.status), ['unknown', 'unknown', 'unknown'], 'email delivery is not recorded here, and no CRM read is not zero');

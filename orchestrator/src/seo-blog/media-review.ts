@@ -130,9 +130,12 @@ export class ArticleMediaReviewService {
     const article = await this.article(actorId, brandId, articleId);
     const previous = article.localImageProposals?.find(p => p.commandId === commandId);
     if (previous) {
-      if (previous.candidateAssetId !== candidateAssetId || previous.candidateSha256 !== candidateSha256 || previous.articleVersionId !== versionId || previous.focal.x !== focal.x || previous.focal.y !== focal.y) throw new SeoBlogError(409, 'This crop command belongs to another exact image or focal point.');
+      if (previous.candidateAssetId !== candidateAssetId || previous.candidateSha256 !== candidateSha256 || previous.focal.x !== focal.x || previous.focal.y !== focal.y) throw new SeoBlogError(409, 'This crop command belongs to another exact image or focal point.');
+      if (previous.articleVersionId !== versionId) throw new SeoBlogError(409, 'This image was prepared for an earlier blog version. Refresh and prepare it again for the current version.');
       return previous;
     }
+    // Finished Creative Studio artwork is never re-cropped: the owner approved exact pixels, and a crop would cut its text.
+    if (!options.origin && article.localImageProposals?.some((p) => p.candidateAssetId === candidateAssetId && p.origin?.kind === 'creative_studio')) throw new SeoBlogError(409, 'This image is approved Creative Studio artwork and cannot be re-cropped. Create a different format in the Creative Studio instead.');
     if (article.currentVersionId !== versionId) throw new SeoBlogError(409, 'The blog changed. Refresh before preparing its crop.');
     if ((article.localImageProposals?.length ?? 0) >= 64) throw new SeoBlogError(409, 'The retained local crop limit was reached. Previous crops were not discarded.');
     const source = await this.media.loadPrivateAsset(brandId, candidateAssetId, candidateSha256);

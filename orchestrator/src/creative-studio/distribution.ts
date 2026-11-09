@@ -62,6 +62,8 @@ export interface DeliveryRecord {
   readonly materialized: boolean;
   readonly scheduledFor: string | null;
   readonly jobState: string | null;
+  /** A newer posting plan for the same post replaced this one (the existing SQL retires its calendar entry without a cancel command). */
+  readonly superseded?: boolean;
   readonly providerPostRecorded: boolean;
   readonly events: readonly Readonly<{ kind: 'accepted' | 'published' | 'failed' | 'outcome_unknown'; at: string; code: string }>[];
 }
@@ -78,10 +80,15 @@ const NO_MESSAGE_DELIVERY = 'Delivery receipts exist for messages (email, SMS, W
 /** Ladder for one social post planned with this artwork in an article campaign. */
 export function postLadder(handoff: CreativeHandoff, plan: DeliveryRecord | null, planSaved: boolean): StageEvidence[] {
   const out: StageEvidence[] = [{ stage: 'handed_off', status: 'reached', at: handoff.createdAt, evidence: 'Exact approved bytes entered the article’s private images.' }];
+  // Stopped means the owner cancelled it, a newer plan replaced it, or the existing calendar worker retired its entry.
+  const stopped = Boolean(plan && (plan.cancelled || plan.superseded || plan.jobState === 'cancelled'));
+  const stopReason = plan?.cancelled ? 'The posting plan was cancelled.' : plan?.superseded ? 'A newer posting plan for this post replaced it.' : 'The calendar entry was withdrawn by the existing posting controls.';
   if (!plan) {
     out.push({ stage: 'queued', status: 'waiting', at: null, evidence: planSaved ? 'A posting plan is saved but its receipt was not readable.' : 'No posting plan uses this image yet.' });
-  } else if (plan.cancelled && !plan.materialized) {
-    out.push({ stage: 'queued', status: 'stopped', at: null, evidence: 'The posting plan was cancelled before it entered the calendar.' });
+  } else if (stopped && !plan.materialized) {
+    out.push({ stage: 'queued', status: 'stopped', at: null, evidence: `${stopReason} It never entered the calendar.` });
+  } else if (stopped && plan.jobState === 'cancelled' && !plan.events.length) {
+    out.push({ stage: 'queued', status: 'stopped', at: plan.scheduledFor, evidence: `${stopReason} Its calendar entry was removed before any provider call.` });
   } else if (!plan.materialized) {
     out.push({ stage: 'queued', status: 'waiting', at: null, evidence: 'Posting plan saved. It waits until the blog version is confirmed live and current controls allow it.' });
   } else {
@@ -95,7 +102,7 @@ export function postLadder(handoff: CreativeHandoff, plan: DeliveryRecord | null
     if (hit) return { stage, status: 'reached' as const, at: hit.at, evidence: `${label} recorded by the provider receipt.` };
     if (failed) return { stage, status: 'failed' as const, at: failed.at ?? null, evidence: `The provider attempt failed (${failed.code}). Nothing is retried from here.` };
     if (unknown) return { stage, status: 'unknown' as const, at: unknown.at, evidence: 'The provider outcome is unknown and is held for reconciliation by the existing calendar worker.' };
-    if (plan?.cancelled) return { stage, status: 'stopped' as const, at: null, evidence: 'The posting plan was cancelled.' };
+    if (stopped) return { stage, status: 'stopped' as const, at: null, evidence: stopReason };
     return { stage, status: 'waiting' as const, at: null, evidence: 'No provider receipt yet.' };
   };
   out.push(after('provider_accepted', accepted, 'Acceptance'));
@@ -103,7 +110,7 @@ export function postLadder(handoff: CreativeHandoff, plan: DeliveryRecord | null
     ? { stage: 'published', status: 'reached', at: null, evidence: 'The calendar job settled as succeeded.' }
     : after('published', published, 'Publication'));
   out.push({ stage: 'delivered', status: 'not_applicable', at: null, evidence: NO_MESSAGE_DELIVERY });
-  const noUtm = 'Article posts link to the exact reviewed blog URL without campaign parameters, so leads cannot be attributed to this artwork. Use an acquisition campaign’s tracked link to measure leads.';
+  const noUtm = 'Article posts link to the exact reviewed blog URL and no campaign parameters are added, so leads cannot be attributed to this artwork. Use an acquisition campaign’s tracked link to measure leads.';
   out.push({ stage: 'lead', status: 'unknown', at: null, evidence: noUtm });
   out.push({ stage: 'customer', status: 'unknown', at: null, evidence: noUtm });
   return out;
@@ -149,8 +156,8 @@ export const ATTRIBUTION_LIMITS: readonly string[] = Object.freeze([
   'Only exact utm_campaign/utm_content values stored on CRM contacts are counted. Contacts without campaign tags are not counted here.',
   'Today no live lead form records campaign tags on new contacts; only imported contacts carry them. Until a capture path stores them, live leads will show as zero here even when they exist.',
   'Each contact is counted once, under its latest tagged touch. Earlier touches by other campaigns are not shared out.',
-  'Qualified means the contact reached the CRM pipeline stage “qualified” (or won). Booked means an appointment milestone. Sold means a recorded payment, sale milestone or won opportunity.',
-  'Subscription starts are not recorded in this database; only subscription cancellations are. No revenue, return on ad spend, cost per acquisition or “winner” is calculated.',
+  'Qualified means the contact reached the CRM pipeline stage whose slug is “qualified” (the seeded stage) or a won opportunity. Booked means an appointment milestone. Sold means a recorded payment, sale milestone or won opportunity.',
+  'Subscription starts are not recorded against CRM contacts in the outcome tables (only payments and cancellations are; MHP purchase records are separate and not contact-linked). No revenue, return on ad spend, cost per acquisition or “winner” is calculated.',
   'Counts are observations, not proof that the artwork caused them.',
 ]);
 

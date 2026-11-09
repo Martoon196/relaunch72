@@ -267,7 +267,10 @@ BEGIN
           AND cand.provenance->>'sourceName'='creative-studio-'||ver.id::text||'.jpg')) THEN
       RAISE EXCEPTION 'The article image does not match this approved artwork.' USING ERRCODE='55000'; END IF;
     IF a->>'route'='tracked_link' AND NOT (a#>>'{target,kind}'='creator_campaign'
-        AND a#>>'{trackedLink,utmContent}' ~ ('^concept-[0-9]{1,2}-cs'||left(replace(ver.id::text,'-',''),8)||'$')
+        AND a#>>'{target,concept}' ~ '^[0-9]{1,2}$' AND a#>>'{trackedLink,concept}' IS NOT DISTINCT FROM a#>>'{target,concept}'
+        AND a#>>'{trackedLink,utmContent}' = 'concept-'||((a#>>'{target,concept}')::int+1)||'-cs'||left(replace(ver.id::text,'-',''),8)
+        AND EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(prof->'conversionPages','[]'::jsonb)) cp
+          WHERE lower(regexp_replace(cp->>'url','^https?://(www[.])?([^/?#]+).*$','\2'))=lower(regexp_replace(a#>>'{trackedLink,url}','^https?://(www[.])?([^/?#]+).*$','\2')))
         AND a#>>'{trackedLink,utmCampaign}' ~ ('^[a-z0-9-]{1,40}-'||left(replace(a#>>'{target,campaignId}','-',''),8)||'$')
         AND position('utm_content='||(a#>>'{trackedLink,utmContent}') IN a#>>'{trackedLink,url}')>0
         AND position('utm_campaign='||(a#>>'{trackedLink,utmCampaign}') IN a#>>'{trackedLink,url}')>0) THEN
@@ -481,8 +484,9 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_studio_outcome_buckets(uuid,text) FROM PUBLIC;
 
+-- VOLATILE because the owner check locks the session row; the body itself only reads.
 CREATE FUNCTION app_private.creative_studio_distribution(p_workspace uuid,p_session bytea,p_action text,p_input jsonb)
-RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; campaign text; queues uuid[];
 BEGIN
   actor:=app_private.seo_media_owner(p_workspace,p_session);
@@ -490,10 +494,13 @@ BEGIN
   IF p_input IS NULL OR jsonb_typeof(p_input)<>'object' OR octet_length(p_input::text)>16384 THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
   IF p_action='delivery' THEN
     -- Only posting plans this brand's owner authorised; each state is what the calendar job and its receipts record.
-    IF jsonb_typeof(p_input->'queues') IS DISTINCT FROM 'array' OR jsonb_array_length(p_input->'queues')>64 THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
+    IF jsonb_typeof(p_input->'queues') IS DISTINCT FROM 'array' OR jsonb_array_length(p_input->'queues')>64
+      OR EXISTS(SELECT 1 FROM jsonb_array_elements(p_input->'queues') x WHERE jsonb_typeof(x)<>'string' OR (x#>>'{}') !~ '^[0-9a-f-]{36}$') THEN
+      RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
     queues:=ARRAY(SELECT x::uuid FROM jsonb_array_elements_text(p_input->'queues') x);
     RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('queueIntentId',q.id,
         'cancelled',EXISTS(SELECT 1 FROM app.seo_blog_media_commands c WHERE c.workspace_id=p_workspace AND c.action='cancel_campaign_queue' AND c.result->>'queueIntentId'=q.id::text),
+        'superseded',EXISTS(SELECT 1 FROM app.seo_blog_media_commands n WHERE n.workspace_id=p_workspace AND n.action='authorize_campaign_queue' AND n.actor_kind='user' AND n.result->>'supersedesQueueIntentId'=q.id::text),
         'materialized',m.result IS NOT NULL AND m.result->>'kind'='materialized',
         'scheduledFor',m.result->>'scheduledFor',
         'jobState',j.state,
@@ -599,6 +606,7 @@ BEGIN
 
   IF p_action='finding_record' THEN
     a:=p_input->'finding';
+    IF coalesce(a->>'campaignId','') !~ '^[0-9a-f-]{36}$' THEN RAISE EXCEPTION 'Record findings for one of this brand''s acquisition campaigns.' USING ERRCODE='22023'; END IF;
     IF a->>'recordedBy' IS DISTINCT FROM actor::text OR coalesce(a->>'id','') !~ '^[0-9a-f-]{36}$'
       OR NOT EXISTS(SELECT 1 FROM app.seo_blog_creator_campaigns c WHERE c.workspace_id=p_workspace AND c.id::text=a->>'campaignId' AND c.kind='acquisition')
       OR coalesce(a->>'utmCampaign','') !~ ('^[a-z0-9-]{1,40}-'||left(replace(a->>'campaignId','-',''),8)||'$')
@@ -611,6 +619,10 @@ BEGIN
     SELECT coalesce(jsonb_agg(jsonb_build_array(b->>'utmContent',(b->>'leads')::int,(b->>'qualified')::int,(b->>'booked')::int,(b->>'sold')::int,(b->>'customers')::int) ORDER BY b->>'utmContent'),'[]'::jsonb)
       INTO canon_claimed FROM jsonb_array_elements(coalesce(a#>'{read,buckets}','[]'::jsonb)) b;
     IF canon_claimed IS DISTINCT FROM canon_computed THEN RAISE EXCEPTION 'Outcomes changed since these findings were prepared. Refresh and review them again.' USING ERRCODE='55000'; END IF;
+    -- Every observation or comparison must cite at least one observed bucket; only gaps may stand without evidence.
+    IF EXISTS(SELECT 1 FROM jsonb_array_elements(a#>'{snapshot,findings}') f WHERE f->>'kind' NOT IN ('observation','comparison','gap')
+        OR (f->>'kind'<>'gap' AND (jsonb_typeof(f->'evidence') IS DISTINCT FROM 'array' OR jsonb_array_length(f->'evidence')=0))) THEN
+      RAISE EXCEPTION 'A finding cites outcomes that were not observed.' USING ERRCODE='55000'; END IF;
     FOR e IN SELECT x FROM jsonb_array_elements(a#>'{snapshot,findings}') f, jsonb_array_elements(coalesce(f->'evidence','[]'::jsonb)) x LOOP
       -- Exact ordered equality (jsonb array containment would ignore order and could accept swapped counts).
       IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(canon_computed) c

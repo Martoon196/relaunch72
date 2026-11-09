@@ -92,6 +92,9 @@ test('Milestone 5 on real PostgreSQL: evidence-checked findings journal and owne
       const good = base(), swapped = { ...good.snapshot, findings: good.snapshot.findings.map((f) => ({ ...f, evidence: f.evidence.map((x) => ({ ...x, leads: x.qualified, qualified: x.leads })) })) };
       await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), 'b'.repeat(64), { ...good, snapshot: swapped }), /not observed/u, 'swapped counts are not accepted by unordered containment');
       await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), 'c'.repeat(64), base({ campaignId: b.campaignId, utmCampaign: b.utm })), /acquisition campaigns/u, 'another brand\'s campaign');
+      await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), '1'.repeat(64), base({ campaignId: 'ab(cd' })), /acquisition campaigns/u, 'a malformed campaign id is a plain refusal, not a regex error');
+      const unanchored = { ...good.snapshot, findings: [{ ...good.snapshot.findings.find((f) => f.kind === 'observation')!, evidence: [] }] };
+      await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), '2'.repeat(64), { ...good, snapshot: unanchored }), /not observed/u, 'an observation without evidence is refused');
       await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), 'd'.repeat(64), base({ recordedBy: b.actor })), /acquisition campaigns|Invalid/u, 'cannot record as someone else');
       await lead(a.brand.id, a.utm, tag(1), '2026-11-06T09:00:00Z');
       await assert.rejects(a.store.recordFinding(a.brand.id, randomUUID(), 'e'.repeat(64), good), /Outcomes changed/u, 'a read older than the CRM is refused');
@@ -114,6 +117,15 @@ test('Milestone 5 on real PostgreSQL: evidence-checked findings journal and owne
       assert.deepEqual(mine.map((p) => [p.statement, p.state]), [[statement, 'shared']]);
       assert.deepEqual((await c.store.patterns(c.brand.id, 'other')).map((p) => p.statement), [statement], 'the same owner sees it in another brand');
       assert.deepEqual(await b.store.patterns(b.brand.id, 'other'), [], 'a different owner never sees it');
+      // A non-managing member of another brand that B owns does not make B's patterns visible to A's owner, and vice versa.
+      await admin.query("INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES($1,$2,'billing','active')", [b.org, a.actor]);
+      await admin.query("INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status,source_organization_id) VALUES($1,$2,$3,'viewer','active',$2)", [b.brand.id, b.org, a.actor]);
+      assert.deepEqual((await c.store.patterns(c.brand.id, 'other')).map((p) => p.statement), [statement], 'membership in B adds nothing: A still sees only own-managed brands');
+      const bShare = await b.store.decidePattern(b.brand.id, randomUUID(), createHash('sha256').update(randomUUID()).digest('hex'), { id: randomUUID(), patternId: randomUUID(), findingId: randomUUID(), statement: 'Short checklists invited more replies than long explanations.', state: 'shared', decidedBy: b.actor, decidedAt: new Date().toISOString() }).catch((e: Error) => e);
+      assert.ok(bShare instanceof Error, 'B has no recorded finding, so it cannot share');
+      await assert.rejects(a.store.decidePattern(a.brand.id, randomUUID(), createHash('sha256').update(randomUUID()).digest('hex'),
+        { id: randomUUID(), patternId: mine[0]!.patternId, findingId, statement, state: 'shared', decidedBy: a.actor, decidedAt: new Date().toISOString() }), /recorded findings/u, 're-sharing the same pattern id is refused');
+      await assert.rejects(admin.query('DELETE FROM app.creative_studio_patterns WHERE workspace_id=$1', [a.brand.id]), /append|immutable|not allowed/iu, 'patterns are append-only');
       const withdraw = () => a.store.decidePattern(a.brand.id, randomUUID(), createHash('sha256').update(randomUUID()).digest('hex'),
         { id: randomUUID(), patternId: mine[0]!.patternId, findingId, statement, state: 'withdrawn', decidedBy: a.actor, decidedAt: new Date().toISOString() });
       await withdraw();

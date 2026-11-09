@@ -58,6 +58,15 @@ export class PgCreativeDistributionReader implements DistributionReadPort {
   private async read<T>(brandId: string, action: 'delivery' | 'outcomes', input: Record<string, unknown>): Promise<T> {
     const p = this.principal;
     if (p.kind !== 'user') throw new SeoBlogError(403, 'Distribution views require a signed-in owner.');
+    try { return await this.transaction<T>(brandId, action, input); } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === '42501') throw new SeoBlogError(403, 'The current owner session or brand permission could not be confirmed.');
+      if (code === '22023' || code === '22P02') throw new SeoBlogError(400, 'Check the distribution request and try again.');
+      throw e;
+    }
+  }
+  private transaction<T>(brandId: string, action: string, input: Record<string, unknown>): Promise<T> {
+    const p = this.principal as Extract<PgSeoBlogPrincipal, { kind: 'user' }>;
     return withTransaction(this.pool, { actorKind: 'user', workspaceId: brandId, userId: p.userId, requestId: p.requestId }, async (t) => {
       const guard = await t.query<{ ok: boolean }>('SELECT app_private.lock_active_portal_session($1,$2,$3) AS ok', [this.sessionHash, p.userId, p.selectedWorkspaceId]);
       if (guard.rows[0]?.ok !== true) throw new SeoBlogError(401, 'Sign in again to continue.');
