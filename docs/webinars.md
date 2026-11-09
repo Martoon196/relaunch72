@@ -36,8 +36,8 @@ missing and what each enables. Nothing is faked and nothing 404s.
 | Q&A | Moderated by default. 3 questions per 5 minutes, 20 per person. Pending questions are visible only to the asker. |
 | CTA | Owner-defined. Manual mode is withheld from attendees entirely until the host reveals it; timed mode appears at a set minute. Clicks are recorded as clicks, never purchases. |
 | Signals | Room opened (a page visit, **not** attendance), player started, 30-second watch intervals (rate-limited, ≤120 s each), CTA clicked, question submitted. No fake chat, no fake audience numbers. |
-| Messages | Confirmation, reminders (default 24 h and 1 h), reschedule notice, cancellation, replay available, access link. Each is a durable job with a dedupe key; a reschedule cancels stale reminders and queues new ones; a send interrupted mid-call is marked *unknown* and never resent; reminders whose time passed are skipped, never sent late. |
-| CRM | Owner-triggered, idempotent handoff of registrants through the existing `CrmCommandService.createLead` (command key `webinar.<event>.<registration>`). Service consent is kept separate from marketing opt-in. No new lead database. LeadRelay receives leads through the CRM as before. |
+| Messages | Confirmation (also for anyone registering for the replay after the event), reminders (default 24 h and 1 h), reschedule notice, cancellation, replay available, access link. Each is a durable job with a dedupe key; a reschedule cancels stale reminders and queues new ones; a send interrupted mid-call is marked *unknown* and never resent; reminders whose time passed are skipped, never sent late. |
+| CRM | Owner-triggered, idempotent handoff of registrants through the existing `CrmCommandService.createLead` (command key `webinar.<event>.<registration>`). The form's explicit marketing opt-in is passed as `opted_in`; everything else stays `unknown`. No new lead database. LeadRelay receives leads through the CRM as before. |
 | Results | Registered, opened room, started player, observed minutes, CTA clicks, questions, CRM-linked, watched-at-least buckets, by source (UTM/referrer). |
 
 ## Live broadcasting: what Cloudflare can and cannot do
@@ -134,7 +134,7 @@ reachable from the build environment. Re-check against current docs during the l
 * **Migration `0144_native_webinars.sql`** — additive only: `app.webinar_events`, `webinar_registrations`,
   `webinar_signals`, `webinar_questions`, `webinar_jobs`, `webinar_provider_receipts`, FORCE RLS per
   workspace (pattern from 0131), definer functions for the public/attendee paths, grants to the existing
-  `r72_content_command` only. SHA-256 `291934db5265d9e6d74cd336598f8731130a2b4869819067aac87ae96de01159`
+  `r72_content_command` only. SHA-256 `dea9e16c2743b58b5901f95be06abcfc39d2237dc087b1c949478eb17357f3af`
   (pinned in `src/db/webinar-schema.ts`). Payment (0142) and inbox (0143) migrations are untouched.
 * **Number coordination:** the unmerged Creative Studio branch also uses 0144. Whichever merges second renames
   its file to 0145, updates its schema constant, re-pins the checksum and the runtime-readiness clauses.
@@ -239,9 +239,11 @@ applications, MHP marketing templates and `MHP_MARKETING_MODE`) is **not changed
   (ffmpeg 4.1 from 2018, install script forbidden by the supply-chain gate).
 * The studio relay lives in the web process that issued the ticket. This is correct for the current single
   instance; running more web instances would need sticky sessions for `/api/webinars/studio`.
-* A studio reconnect mid-session splits Cloudflare's recording; the replay keeps the longest part. Joining the
-  parts is not built.
+* A reconnect mid-session splits Cloudflare's recording. Whichever part is ready first becomes the replay and a
+  longer part replaces it as soon as Cloudflare reports it (webhook or worker); joining the parts is not built.
 * No live chat (deliberately: Q&A only, no fake chat).
-* Rate limits for public registration/link requests are per process; with several web instances the effective
-  limit multiplies (database-backed limits cover questions and signals).
+* Rate limits for public registration/link requests are per process and per client address; with several web
+  instances the effective limit multiplies. Room polling and signals are limited per registration (240 requests
+  per minute each), so an office or campus behind one address is never throttled as a group; questions and
+  signals are additionally bounded in the database.
 * Creative Studio migration-number collision must be resolved at merge time.

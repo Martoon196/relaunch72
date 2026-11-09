@@ -20,7 +20,7 @@ recovery, evidence, the smallest live test and the MHP cutover plan. This page i
 | `orchestrator/src/portal/webinar-router.ts`, `webinar-view.ts` | Portal pages under `/portal/webinars`. |
 | Wiring | `server/index.ts` also routes HTTP upgrades on `/api/webinars/studio` to the relay. `portal/router.ts`, `portal/ui.ts`, `portal/postgres-platform.ts`, `portal/provision.ts`, `portal/product-profile.ts`, `platform/modules.ts`, `server/app.ts`, `server/index.ts`, `mhp/mount.ts`. |
 | Tests | `test/webinars.test.ts`, `test/webinars-studio.test.ts`, `test/db/native-webinars.integration.test.ts`, `test/db/native-webinars-http.integration.test.ts`, shared fixtures `test/db/webinar-harness.ts`, visual preview `test/manual-webinars-preview.ts`. |
-| Dependency | `hls.js@1.6.19` (served from our origin; SBOM and lock regenerated). |
+| Dependency | `hls.js@1.7.4` (served from our origin; SBOM and lock regenerated). |
 
 ## Integration checklist
 
