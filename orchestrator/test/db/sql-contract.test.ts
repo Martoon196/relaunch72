@@ -1,6 +1,7 @@
 import { SEO_LIMITS_CHECKSUM } from '../../src/db/seo-limits-schema.js';
 import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
+import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -155,6 +156,7 @@ const migration144Url = new URL('../../src/db/migrations/0144_creative_studio_li
 const migration145Url = new URL('../../src/db/migrations/0145_seo_owner_limits.sql', import.meta.url);
 const migration146Url = new URL('../../src/db/migrations/0146_native_webinars.sql', import.meta.url);
 const migration147Url = new URL('../../src/db/migrations/0147_group_hq_delegated_session.sql', import.meta.url);
+const migration148Url = new URL('../../src/db/migrations/0148_operator_oauth_tokens.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -741,6 +743,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0145_seo_owner_limits.sql', version: 145 },
     { filename: WEBINARS_MIGRATION, version: 146 },
     { filename: GROUP_HQ_SSO_MIGRATION, version: 147 },
+    { filename: OPERATOR_OAUTH_MIGRATION, version: 148 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -884,6 +887,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration145Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration146Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration147Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration148Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -902,6 +906,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===145)?.checksum, SEO_LIMITS_CHECKSUM);
   assert.equal(tail.find(m=>m.version===146)?.checksum, WEBINARS_CHECKSUM);
   assert.equal(tail.find(m=>m.version===147)?.checksum, GROUP_HQ_SSO_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===148)?.checksum, OPERATOR_OAUTH_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

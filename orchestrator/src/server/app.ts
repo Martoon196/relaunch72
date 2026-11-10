@@ -86,6 +86,8 @@ export interface AppDeps {
   groupHqInboxCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Founder-only webinar listing for Group HQ's Webinars section (same bearer token as the CRM read bridge). */
   groupHqWebinars?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
+  /** Operator API for Claude (MCP + OAuth) on the canonical host; absent = its paths 404. */
+  operator?: { paths: readonly string[]; handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Per-process no-queue shield in front of the distributed portal guard. */
   portalMaxConcurrentRequests?: number;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
@@ -328,6 +330,14 @@ export function createApp(deps: AppDeps) {
       activePortalRequests += 1;
       try { await deps.groupHqInboxCrm.handle(req,res,url); }
       catch { if (!res.headersSent) send(res,503,{ error: 'temporarily_unavailable' }); }
+      finally { activePortalRequests -= 1; }
+      return;
+    }
+    if (deps.operator && deps.operator.paths.includes(url.pathname)) {
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try { await deps.operator.handle(req, res, url); }
+      catch { if (!res.headersSent) send(res, 503, { error: 'temporarily unavailable' }); }
       finally { activePortalRequests -= 1; }
       return;
     }
