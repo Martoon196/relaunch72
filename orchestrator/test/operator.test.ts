@@ -265,6 +265,9 @@ test('HTTP mount: metadata, registration, consent for the signed-in operator onl
   assert.equal(consent.status, 200);
   assert.match(consent.body, /Allow <em>Claude<\/em>/);
   assert.match(consent.body, /create or change leads/);
+  // Browsers apply form-action to the redirect after Allow/Deny: the client's origin must be allowed, and only there.
+  assert.match(String(consent.headers['content-security-policy']), /form-action 'self' https:\/\/claude\.ai;/);
+  assert.match(String(signedOut.headers['content-security-policy']), /form-action 'self';/);
   assert.match(consent.body, /sending stay with you in the portal/);
   assert.equal((await run('GET', `${OPERATOR_OAUTH_PATHS.authorize}?${query}&redirect_uri=https://evil.example/`, '', { cookie: `r72_portal=${session}` })).status, 400);
 
