@@ -10,6 +10,7 @@ import { discoverMigrations } from '../../src/db/migrate.js';
 import { assertRuntimeSchemaCurrent } from '../../src/db/runtime-readiness.js';
 import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
+import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -579,6 +580,10 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
     await assert.rejects(capable(changed),/checksum changed/);
   }
   await assert.rejects(capable([...all,{filename:'0148_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // Recovery: exactly the reviewed operator OAuth 148 applied is admitted; any other 148 is not.
+  await capable([...all,{filename:OPERATOR_OAUTH_MIGRATION,checksum:OPERATOR_OAUTH_CHECKSUM}]);
+  await assert.rejects(capable([...all,{filename:OPERATOR_OAUTH_MIGRATION,checksum:'0'.repeat(64)}]),/migration not present/);
+  await assert.rejects(capable([...through146,{filename:OPERATOR_OAUTH_MIGRATION,checksum:OPERATOR_OAUTH_CHECKSUM}]),/migration not present|not a contiguous prefix/);
 });
 
 test('owner limits 145 accepts only the exact applied Studio 144 ledger or its full successor', async()=>{

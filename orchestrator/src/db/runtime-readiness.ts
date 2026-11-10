@@ -5,6 +5,7 @@ import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.
 import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import { GROUP_HQ_SSO_MIGRATION, GROUP_HQ_SSO_CHECKSUM } from './group-hq-sso-schema.js';
+import { OPERATOR_OAUTH_MIGRATION, OPERATOR_OAUTH_CHECKSUM } from './operator-oauth-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -259,6 +260,11 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[145]?.checksum===WEBINARS_CHECKSUM
       && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM
       && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM) applied.delete(GROUP_HQ_SSO_MIGRATION);
+  // Recovery build only: the released Group HQ 147 stays ready after the exact additive operator OAuth 148.
+  if (migrations.length===147 && migrations[146]?.filename===GROUP_HQ_SSO_MIGRATION
+      && migrations[146]?.checksum===GROUP_HQ_SSO_CHECKSUM
+      && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM
+      && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM) applied.delete(OPERATOR_OAUTH_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
