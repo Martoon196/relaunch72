@@ -20,6 +20,8 @@ export const OPERATOR_OAUTH_PATHS = Object.freeze({
   register: '/api/operator/oauth/register',
   authorize: '/api/operator/oauth/authorize',
   token: '/api/operator/oauth/token',
+  revoke: '/api/operator/oauth/revoke',
+  connections: '/api/operator/connections',
   protectedResource: '/.well-known/oauth-protected-resource',
   authorizationServer: '/.well-known/oauth-authorization-server',
 });

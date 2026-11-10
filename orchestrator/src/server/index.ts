@@ -989,6 +989,7 @@ async function main(): Promise<void> {
     groupHqWebinars: postgresPortal?.groupHqWebinars,
     operator: postgresPortal?.operator && portal?.kind === 'postgres'
       ? createOperatorMount({ config: postgresPortal.operator.config, tools: postgresPortal.operator.tools, auth: postgresPortal.auth,
+          ...(postgresPortal.operator.store ? { store: postgresPortal.operator.store } : {}),
           origin: portalBaseUrl?.replace(/\/+$/, '') || `https://${canonicalHost ?? 'localhost'}`, sessionSecret: cfg.sessionSecret, log: (line) => console.warn(line) })
       : undefined,
     portalMaxConcurrentRequests: 32,

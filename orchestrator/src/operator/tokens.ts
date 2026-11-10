@@ -1,12 +1,11 @@
 /**
- * Stateless signed blobs for the operator OAuth server: `base64url(json).base64url(mac)`
- * with a per-kind HMAC domain so a code can never be presented as an access token.
- * Nothing is stored; expiry rides inside the blob and single-use codes are tracked
- * in a small bounded set for their two-minute life.
+ * Signed blobs for the operator OAuth server: `base64url(json).base64url(mac)` with a
+ * per-kind HMAC domain. Only registered client ids use this now; codes and tokens
+ * are opaque values stored as hashes in the database (migration 0148).
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export type BlobKind = 'oauth-client' | 'oauth-code' | 'oauth-access' | 'oauth-refresh';
+export type BlobKind = 'oauth-client';
 
 function mac(secret: string, kind: BlobKind, body: string): Buffer {
   return createHmac('sha256', secret).update(`r72-operator-${kind}\u0000`).update(body).digest();
@@ -31,18 +30,4 @@ export function verifyBlob(secret: string, kind: BlobKind, token: string | null 
   const claims = raw as Record<string, unknown>;
   if ('exp' in claims && (typeof claims.exp !== 'number' || !Number.isInteger(claims.exp) || claims.exp <= nowSec)) return null;
   return claims;
-}
-
-/** Bounded single-use registry keyed by nonce, swept by expiry. */
-export class ConsumedNonces {
-  private readonly seen = new Map<string, number>();
-  constructor(private readonly max = 5000) {}
-
-  /** True the first time a nonce is presented before its expiry; false on replay or when full. */
-  consume(nonce: string, expSec: number, nowSec: number): boolean {
-    for (const [n, exp] of this.seen) if (exp <= nowSec) this.seen.delete(n);
-    if (this.seen.has(nonce) || this.seen.size >= this.max) return false;
-    this.seen.set(nonce, expSec);
-    return true;
-  }
 }

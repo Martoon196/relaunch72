@@ -10,6 +10,7 @@ import { discoverMigrations } from '../../src/db/migrate.js';
 import { assertRuntimeSchemaCurrent } from '../../src/db/runtime-readiness.js';
 import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
+import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -564,12 +565,14 @@ test('webinars146 cutover and prepared limits145 recovery require the exact appl
 });
 
 test('Group HQ 147 cutover requires the exact applied native146 ledger and nothing beyond it', async()=>{
-  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  // The exact 147-file Group HQ release, reconstructed from today's source (148 is a separate release).
+  const all=(await discoverMigrations()).slice(0,147).map(({filename,checksum})=>({filename,checksum}));
   assert.equal(all.length,147);
   assert.deepEqual(all[145],{filename:WEBINARS_MIGRATION,checksum:WEBINARS_CHECKSUM});
   assert.deepEqual(all[146],{filename:GROUP_HQ_SSO_MIGRATION,checksum:GROUP_HQ_SSO_CHECKSUM});
   const through146=all.slice(0,146), ghq=all[146]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const releaseDir=await prefixDirectory(147,'ghq147-release');
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),releaseDir,{});
   await capable(through146); await capable(all);
   await assert.rejects(capable(all.slice(0,145)),/schema is behind by 2/);
   await assert.rejects(capable([...through146,{...ghq,checksum:'0'.repeat(64)}]),/checksum changed/);
@@ -579,6 +582,30 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
     await assert.rejects(capable(changed),/checksum changed/);
   }
   await assert.rejects(capable([...all,{filename:'0148_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // The released 147 binary stays ready once exactly the reviewed operator OAuth 148 is applied, and nothing else.
+  const oauth=(await discoverMigrations())[147]!;
+  assert.deepEqual({filename:oauth.filename,checksum:oauth.checksum},{filename:OPERATOR_OAUTH_MIGRATION,checksum:OPERATOR_OAUTH_CHECKSUM});
+  await capable([...all,{filename:oauth.filename,checksum:oauth.checksum}]);
+  await assert.rejects(capable([...all,{filename:oauth.filename,checksum:'0'.repeat(64)}]),/migration not present/);
+  await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
+});
+
+test('operator OAuth 148 cutover requires the exact applied Group HQ 147 ledger and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,148);
+  assert.deepEqual(all[146],{filename:GROUP_HQ_SSO_MIGRATION,checksum:GROUP_HQ_SSO_CHECKSUM});
+  assert.deepEqual(all[147],{filename:OPERATOR_OAUTH_MIGRATION,checksum:OPERATOR_OAUTH_CHECKSUM});
+  const through147=all.slice(0,147), oauth=all[147]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through147); await capable(all);
+  await assert.rejects(capable(all.slice(0,146)),/schema is behind by 2/);
+  await assert.rejects(capable([...through147,{...oauth,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,146),oauth]),/not a contiguous prefix|behind/);
+  for(const at of [0,120,144,145,146]) {
+    const changed=all.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r);
+    await assert.rejects(capable(changed),/checksum changed/);
+  }
+  await assert.rejects(capable([...all,{filename:'0149_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });
 
 test('owner limits 145 accepts only the exact applied Studio 144 ledger or its full successor', async()=>{

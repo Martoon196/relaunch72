@@ -33,6 +33,7 @@ import { loadOperatorConfig, type OperatorConfig } from '../operator/config.js';
 import { OperatorSessions } from '../operator/sessions.js';
 import { createOperatorTools } from '../operator/tools.js';
 import type { McpToolHost } from '../operator/mcp.js';
+import { PgOperatorOAuthStore, type OperatorOAuthStore } from '../operator/oauth-store.js';
 import {
   createPgInboxReadService,
   type InboxConversationQuery,
@@ -202,7 +203,7 @@ export interface PgPortalPlatform {
   /** Group HQ sign-in handoff verifier shared by the PP and MHP hosts; absent when not configured. */
   groupHqSso?: GroupHqHandoff;
   /** Operator API (MCP for Claude): tools acting as the configured user; absent when not configured. */
-  operator?: { config: OperatorConfig; tools: McpToolHost };
+  operator?: { config: OperatorConfig; tools: McpToolHost; store?: OperatorOAuthStore };
   mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
@@ -1389,9 +1390,16 @@ export async function buildPgPortalPlatform(
     let operator: PgPortalPlatform['operator'];
     try {
       const operatorConfig = loadOperatorConfig(env);
-      if (operatorConfig) {
+      // Delegated sessions need 0147; durable OAuth state needs 0148. Without 0148 only the static token works.
+      if (operatorConfig && groupHqHandoffReady) {
+        const oauthProbe = operatorConfig.oauthSecret ? await identityPool.query<{ ready: boolean }>(
+          `/* operator.oauth-schema-readiness */ SELECT to_regprocedure('app_private.operator_oauth_resolve(bytea,timestamptz)') IS NOT NULL AS ready`) : null;
+        const store = oauthProbe?.rows[0]?.ready === true ? new PgOperatorOAuthStore(identityPool) : undefined;
         const sessions = new OperatorSessions(operatorConfig, { pp: auth, mhp: mhp?.auth });
-        operator = { config: operatorConfig, tools: createOperatorTools({ sessions, crm, webinars, writes: operatorConfig.writes, log: (line) => console.warn(line) }) };
+        operator = { config: operatorConfig, ...(store ? { store } : {}),
+          tools: createOperatorTools({ sessions, crm, webinars, writes: operatorConfig.writes, log: (line) => console.warn(line) }) };
+      } else if (operatorConfig) {
+        console.warn('Operator API stays off until migration 0147 (delegated sessions) is applied.');
       }
     } catch (error) {
       console.warn(`Operator API is not configured correctly and stays off. ${error instanceof Error ? error.message : ''}`.trim());

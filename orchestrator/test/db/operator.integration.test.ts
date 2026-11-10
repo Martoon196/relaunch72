@@ -5,11 +5,15 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { openTestDatabase, testDatabaseSkipReason } from './database-helper.js';
 import { loginRole, seedBrand } from './webinar-harness.js';
 import { CrmCommandService, createPgCrmTransactionRunner } from '../../src/crm-pg/index.js';
 import { loadOperatorConfig } from '../../src/operator/config.js';
 import { OperatorSessions } from '../../src/operator/sessions.js';
+import { OperatorOAuth } from '../../src/operator/oauth.js';
+import { PgOperatorOAuthStore } from '../../src/operator/oauth-store.js';
 import { createOperatorTools } from '../../src/operator/tools.js';
 import { PgPortalAuthService } from '../../src/portal/auth-pg-service.js';
 import { createPgPortalCrmService } from '../../src/portal/crm-pg-service.js';
@@ -71,6 +75,93 @@ test('operator tools act as the configured owner through delegated sessions on a
     await assert.rejects(crossTools.callTool('webinars_list', { brand: 'pp' }), /not an owner/);
   } finally {
     await Promise.all([identityPool.end(), webPool.end(), crmPool.end(), content.end()]);
+    await admin.end();
+  }
+});
+
+test('0148 operator OAuth on actual roles: one redemption across instances, client-bound rotation, reuse and owner revocation', { skip, timeout: 300_000 }, async () => {
+  const admin = await openTestDatabase();
+  const instanceA = await loginRole(admin, 'r72_identity_command');
+  // A second, independent pool with the same login stands in for a second server instance.
+  const instanceB = new pg.Pool({ ...(instanceA as unknown as { options: pg.PoolConfig }).options, max: 6 });
+  try {
+    const a = await seedBrand(admin, 'Alpha');
+    const secret = 'operator-oauth-secret-integration-0123456789';
+    const oauthA = new OperatorOAuth(secret, new PgOperatorOAuthStore(instanceA));
+    const oauthB = new OperatorOAuth(secret, new PgOperatorOAuthStore(instanceB));
+    const client = oauthA.register({ redirect_uris: ['https://claude.ai/api/mcp/auth_callback'], client_name: 'Claude' })!;
+    assert.equal(oauthB.client(client.id)?.name, 'Claude', 'client ids verify on every instance');
+    const pkce = () => { const verifier = randomBytes(32).toString('base64url'); return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') }; };
+    const exchange = (oauth: OperatorOAuth, code: string, verifier: string) => oauth.exchange(new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: client.redirectUris[0]!, client_id: client.id, code_verifier: verifier }));
+
+    // Nothing but hashes is stored.
+    const p1 = pkce();
+    const code = (await oauthA.issueCode(client, client.redirectUris[0]!, p1.challenge, a.owner.userId))!;
+    const stored = await admin.query('SELECT code_hash FROM app_private.operator_oauth_codes');
+    assert.equal(stored.rowCount, 1);
+    assert.notEqual(stored.rows[0].code_hash.toString('base64url'), code);
+    assert.equal(await oauthA.issueCode(client, client.redirectUris[0]!, p1.challenge, randomUUID()), null, 'unknown users get no code');
+
+    // The same code presented to two instances at the same moment: exactly one wins.
+    const [r1, r2] = await Promise.all([exchange(oauthA, code, p1.verifier), exchange(oauthB, code, p1.verifier)]);
+    assert.deepEqual([r1.status, r2.status].sort(), [200, 400]);
+    const winner = (r1.status === 200 ? r1 : r2).body as Record<string, string>;
+    // The loser's replay revoked what the winner received.
+    assert.equal(await oauthA.subject(winner.access_token!), null, 'a replayed code ends its connection');
+    const reason = await admin.query("SELECT revoked_reason FROM app_private.operator_oauth_grants");
+    assert.deepEqual(reason.rows.map((r) => r.revoked_reason), ['code_replay']);
+
+    // A clean connection, refreshed on the other instance; the old refresh token is spent.
+    const p2 = pkce();
+    const code2 = (await oauthB.issueCode(client, client.redirectUris[0]!, p2.challenge, a.owner.userId))!;
+    assert.equal((await exchange(oauthA, code2, pkce().verifier)).body.error, 'invalid_grant', 'wrong verifier');
+    const t1 = (await exchange(oauthA, code2, p2.verifier)).body as Record<string, string>;
+    assert.equal(await oauthB.subject(t1.access_token!), a.owner.userId, 'access tokens resolve on every instance');
+    const refresh = (oauth: OperatorOAuth, token: string, clientId = client.id) => oauth.exchange(new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token, client_id: clientId }));
+    const t2 = (await refresh(oauthB, t1.refresh_token!)).body as Record<string, string>;
+    assert.ok(t2.access_token && t2.refresh_token && t2.refresh_token !== t1.refresh_token);
+    assert.equal(await oauthA.subject(t2.access_token!), a.owner.userId);
+    assert.equal(await oauthA.subject(t1.access_token!), a.owner.userId, 'the earlier access token lives out its hour');
+    assert.equal((await refresh(oauthA, t1.refresh_token!)).body.error, 'invalid_grant', 'a rotated refresh token is refused');
+    assert.equal(await oauthA.subject(t2.access_token!), null, 'and presenting it again ends the whole connection');
+    assert.equal((await refresh(oauthA, t2.refresh_token!)).body.error, 'invalid_grant');
+
+    // Refresh tokens are bound to their client.
+    const other = oauthA.register({ redirect_uris: ['https://claude.ai/api/mcp/auth_callback'], client_name: 'Other' })!;
+    const p3 = pkce();
+    const t3 = (await exchange(oauthA, (await oauthA.issueCode(client, client.redirectUris[0]!, p3.challenge, a.owner.userId))!, p3.verifier)).body as Record<string, string>;
+    assert.equal((await refresh(oauthB, t3.refresh_token!, other.id)).body.error, 'invalid_grant');
+    assert.equal(await oauthA.subject(t3.access_token!), null, 'a refresh token from another client ends the connection');
+
+    // The owner lists and revokes; a revoked connection stops at once.
+    const p4 = pkce();
+    const t4 = (await exchange(oauthB, (await oauthB.issueCode(client, client.redirectUris[0]!, p4.challenge, a.owner.userId))!, p4.verifier)).body as Record<string, string>;
+    const grants = await oauthA.listGrants(a.owner.userId);
+    assert.equal(grants.length, 4);
+    const live = grants.filter((g) => g.revokedAt === null);
+    assert.equal(live.length, 1);
+    assert.equal(await oauthA.revokeGrant(a.viewer.userId, live[0]!.grantId), false, 'only the subject can revoke it');
+    assert.equal(await oauthA.revokeGrant(a.owner.userId, live[0]!.grantId), true);
+    assert.equal(await oauthB.subject(t4.access_token!), null);
+    assert.equal((await refresh(oauthA, t4.refresh_token!)).body.error, 'invalid_grant');
+    const reasons = (await admin.query('SELECT revoked_reason FROM app_private.operator_oauth_grants ORDER BY created_at')).rows.map((r) => r.revoked_reason);
+    assert.deepEqual(reasons, ['code_replay', 'refresh_reuse', 'client_mismatch', 'owner']);
+
+    // RFC 7009 revocation by the client, and a deactivated user stops resolving.
+    const p5 = pkce();
+    const t5 = (await exchange(oauthA, (await oauthA.issueCode(client, client.redirectUris[0]!, p5.challenge, a.owner.userId))!, p5.verifier)).body as Record<string, string>;
+    await oauthA.revoke(new URLSearchParams({ token: t5.access_token!, client_id: client.id }));
+    assert.equal(await oauthA.subject(t5.access_token!), null);
+    const p6 = pkce();
+    const t6 = (await exchange(oauthA, (await oauthA.issueCode(client, client.redirectUris[0]!, p6.challenge, a.owner.userId))!, p6.verifier)).body as Record<string, string>;
+    await admin.query("UPDATE app.users SET status = 'suspended' WHERE id = $1", [a.owner.userId]);
+    assert.equal(await oauthA.subject(t6.access_token!), null, 'a suspended user cannot use a live token');
+    assert.equal((await refresh(oauthA, t6.refresh_token!)).body.error, 'invalid_grant');
+
+    // The identity role cannot read the tables directly.
+    await assert.rejects(instanceA.query('SELECT 1 FROM app_private.operator_oauth_tokens'), /permission denied/);
+  } finally {
+    await Promise.all([instanceA.end(), instanceB.end()]);
     await admin.end();
   }
 });
