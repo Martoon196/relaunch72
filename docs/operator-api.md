@@ -37,7 +37,7 @@ claude mcp add --transport http relaunch72 https://hq.propertypredator.com/api/o
 | `R72_OPERATOR_USER_ID` | The portal user every operator call acts as. Must be an active owner or admin of the PP workspace and, for MHP, the MHP marketing owner. Required. |
 | `R72_OPERATOR_OAUTH_SECRET` | Signs registered client ids (32–256 characters). Needed for claude.ai. |
 | `R72_OPERATOR_TOKEN` | Static bearer for Claude Code / Desktop (32–256 characters, different from the secret). Optional. |
-| `R72_OPERATOR_GROUP_HQ` | `enabled` lets Group HQ's own server relay operator tools (so webinars are run from the Group HQ connector). It presents a bearer derived from the existing `R72_GROUP_HQ_SSO_SECRET` with a fixed label; no new secret. Off by default. |
+| `R72_OPERATOR_GROUP_HQ` | `enabled` lets Group HQ's own server relay operator tools (so webinars are run from the Group HQ connector). It presents a bearer derived from the existing `R72_GROUP_HQ_SSO_SECRET` with a fixed label (no new secret) and names the signed-in Group HQ admin in `X-Group-HQ-Admin`. A call is accepted only for a login that `R72_GROUP_HQ_SSO_USERS` maps to `R72_OPERATOR_USER_ID`; any other Group HQ admin is refused. Off by default. |
 | `R72_OPERATOR_WRITES` | `enabled` offers the write and draft tools. Anything else (default) is read only. |
 | `R72_GROUP_HQ_CRM_PP_WORKSPACE_ID` | Existing: the PP workspace the `pp` brand maps to. The `mhp` brand is the fixed MHP marketing workspace. |
 

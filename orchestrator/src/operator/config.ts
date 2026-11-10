@@ -15,10 +15,13 @@ export const OPERATOR_ENV = Object.freeze({
   writes: 'R72_OPERATOR_WRITES',
   groupHq: 'R72_OPERATOR_GROUP_HQ',
   groupHqSecret: 'R72_GROUP_HQ_SSO_SECRET',
+  groupHqUsers: 'R72_GROUP_HQ_SSO_USERS',
   ppWorkspace: 'R72_GROUP_HQ_CRM_PP_WORKSPACE_ID',
 });
 
 export const OPERATOR_MCP_PATH = '/api/operator/mcp';
+/** Request header in which Group HQ's server names the signed-in admin a relayed call is for. */
+export const OPERATOR_GROUP_HQ_ADMIN_HEADER = 'x-group-hq-admin';
 export const OPERATOR_OAUTH_PATHS = Object.freeze({
   register: '/api/operator/oauth/register',
   authorize: '/api/operator/oauth/authorize',
@@ -43,6 +46,11 @@ export interface OperatorConfig {
    * the secret the two servers already share for the sign-in handoff; null unless R72_OPERATOR_GROUP_HQ=enabled.
    */
   readonly groupHqToken: string | null;
+  /**
+   * The Group HQ logins (lower-case emails) a relayed call may be for: exactly those the sign-in handoff map
+   * (R72_GROUP_HQ_SSO_USERS) ties to the operator user. Another Group HQ admin gains nothing from the relay.
+   */
+  readonly groupHqAdmins: ReadonlySet<string>;
   readonly writes: boolean;
   readonly workspaces: Readonly<Record<OperatorBrand, string | null>>;
 }
@@ -71,11 +79,21 @@ export function loadOperatorConfig(env: NodeJS.ProcessEnv): OperatorConfig | und
   const shared = env[OPERATOR_ENV.groupHqSecret]?.trim() ?? '';
   const groupHq = env[OPERATOR_ENV.groupHq]?.trim() === 'enabled';
   if (groupHq && (shared.length < 32 || shared.length > 256)) throw new Error(`${OPERATOR_ENV.groupHq} needs ${OPERATOR_ENV.groupHqSecret} (32–256 characters)`);
+  const groupHqAdmins = new Set<string>();
+  if (groupHq) {
+    let map: unknown;
+    try { map = JSON.parse(env[OPERATOR_ENV.groupHqUsers]?.trim() || '{}'); } catch { map = null; }
+    if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error(`${OPERATOR_ENV.groupHq} needs ${OPERATOR_ENV.groupHqUsers} (a JSON object of email → user id)`);
+    for (const [email, id] of Object.entries(map as Record<string, unknown>)) {
+      if (typeof id === 'string' && id.trim().toLowerCase() === userId) groupHqAdmins.add(email.trim().toLowerCase());
+    }
+  }
   return Object.freeze({
     token: token || null,
     oauthSecret: oauthSecret || null,
     userId,
     groupHqToken: groupHq ? deriveGroupHqOperatorToken(shared) : null,
+    groupHqAdmins,
     writes: env[OPERATOR_ENV.writes]?.trim() === 'enabled',
     workspaces: Object.freeze({ pp: UUID.test(pp) ? pp : null, mhp: MHP_MARKETING_WORKSPACE_ID }),
   });
