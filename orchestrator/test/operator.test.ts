@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { OPERATOR_MCP_PATH, OPERATOR_OAUTH_PATHS, deriveGroupHqOperatorToken, loadOperatorConfig } from '../src/operator/config.js';
+import { OPERATOR_GROUP_HQ_ADMIN_HEADER, OPERATOR_MCP_PATH, OPERATOR_OAUTH_PATHS, deriveGroupHqOperatorToken, loadOperatorConfig } from '../src/operator/config.js';
 import { signBlob, verifyBlob } from '../src/operator/tokens.js';
 import { OperatorOAuth, authorizationServerMetadata, validRedirectUri } from '../src/operator/oauth.js';
 import type { OperatorGrantRow, OperatorOAuthStore } from '../src/operator/oauth-store.js';
@@ -328,24 +328,35 @@ test('HTTP mount: metadata, registration, consent for the signed-in operator onl
   assert.equal(m.captured.status, 404, 'no OAuth metadata without a secret');
 });
 
-test('Group HQ relay bearer: derived from the shared handoff secret, off unless switched on, accepted by the mount', async () => {
+test('Group HQ relay bearer: derived from the shared handoff secret, off unless switched on, only for the admin the handoff map ties to the operator', async () => {
   const shared = 'group-hq-shared-secret-synthetic-0123456789abcdef';
-  const base = { R72_OPERATOR_OAUTH_SECRET: SECRET, R72_OPERATOR_USER_ID: USER, R72_GROUP_HQ_SSO_SECRET: shared };
+  const OTHER = '99999999-9999-4999-8999-999999999999';
+  const users = JSON.stringify({ 'Owner@Example.test': USER, 'colleague@example.test': OTHER });
+  const base = { R72_OPERATOR_OAUTH_SECRET: SECRET, R72_OPERATOR_USER_ID: USER, R72_GROUP_HQ_SSO_SECRET: shared, R72_GROUP_HQ_SSO_USERS: users };
   assert.equal(loadOperatorConfig(base)!.groupHqToken, null, 'sharing the handoff secret alone grants nothing');
+  assert.equal(loadOperatorConfig(base)!.groupHqAdmins.size, 0);
   assert.throws(() => loadOperatorConfig({ R72_OPERATOR_OAUTH_SECRET: SECRET, R72_OPERATOR_USER_ID: USER, R72_OPERATOR_GROUP_HQ: 'enabled' }), /R72_GROUP_HQ_SSO_SECRET/);
+  assert.throws(() => loadOperatorConfig({ ...base, R72_GROUP_HQ_SSO_USERS: 'not json', R72_OPERATOR_GROUP_HQ: 'enabled' }), /R72_GROUP_HQ_SSO_USERS/);
   const config = loadOperatorConfig({ ...base, R72_OPERATOR_GROUP_HQ: 'enabled' })!;
   // Pinned vector; app/services/relaunch72_operator.py in Group HQ must derive the same bytes.
   assert.equal(config.groupHqToken, deriveGroupHqOperatorToken(shared));
   assert.equal(deriveGroupHqOperatorToken(shared), 'vSvqRI-KLf62_AAErvHo3X0_isVsT-aXT9jMwmRUNxs');
   assert.notEqual(config.groupHqToken, shared);
+  assert.deepEqual([...config.groupHqAdmins], ['owner@example.test'], 'only the login mapped to the operator user');
   const rpc = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
-  const call = async (cfg: NonNullable<ReturnType<typeof loadOperatorConfig>>, bearer: string) => {
+  const call = async (cfg: NonNullable<ReturnType<typeof loadOperatorConfig>>, bearer: string, admin?: string) => {
     const mount = createOperatorMount({ config: cfg, origin: ORIGIN, tools: stubHost(false), sessionSecret: SESSION_SECRET, now: () => NOW, store: new MemoryStore(), auth: { resolve: async () => null } });
     const { res, captured } = response();
-    await mount.handle(request('POST', OPERATOR_MCP_PATH, rpc, { authorization: `Bearer ${bearer}` }), res, new URL(`${ORIGIN}${OPERATOR_MCP_PATH}`));
+    await mount.handle(request('POST', OPERATOR_MCP_PATH, rpc, { authorization: `Bearer ${bearer}`, ...(admin ? { [OPERATOR_GROUP_HQ_ADMIN_HEADER]: admin } : {}) }), res, new URL(`${ORIGIN}${OPERATOR_MCP_PATH}`));
     return captured.status;
   };
-  assert.equal(await call(config, config.groupHqToken!), 200);
-  assert.equal(await call(config, shared), 401, 'the shared secret itself is not a bearer');
-  assert.equal(await call(loadOperatorConfig(base)!, deriveGroupHqOperatorToken(shared)), 401, 'refused while the relay is off');
+  assert.equal(await call(config, config.groupHqToken!, 'owner@example.test'), 200);
+  assert.equal(await call(config, config.groupHqToken!, ' OWNER@example.test '), 200, 'the login is compared without case');
+  assert.equal(await call(config, config.groupHqToken!), 401, 'the relay bearer alone, naming nobody, is refused');
+  assert.equal(await call(config, config.groupHqToken!, 'colleague@example.test'), 401, 'a Group HQ admin mapped to another user gains nothing');
+  assert.equal(await call(config, config.groupHqToken!, 'stranger@example.test'), 401);
+  assert.equal(await call(config, shared, 'owner@example.test'), 401, 'the shared secret itself is not a bearer');
+  assert.equal(await call(loadOperatorConfig(base)!, deriveGroupHqOperatorToken(shared), 'owner@example.test'), 401, 'refused while the relay is off');
+  const noMap = loadOperatorConfig({ R72_OPERATOR_OAUTH_SECRET: SECRET, R72_OPERATOR_USER_ID: USER, R72_GROUP_HQ_SSO_SECRET: shared, R72_OPERATOR_GROUP_HQ: 'enabled' })!;
+  assert.equal(await call(noMap, noMap.groupHqToken!, 'owner@example.test'), 401, 'no handoff map, nobody to relay for');
 });

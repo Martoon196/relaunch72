@@ -15,7 +15,7 @@ import type { PortalAuthService } from '../portal/auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
 import { escapeHtml as e } from '../portal/ui.js';
 import { parseCookies } from '../server/admin/session.js';
-import { OPERATOR_MCP_PATH, OPERATOR_OAUTH_PATHS, type OperatorConfig } from './config.js';
+import { OPERATOR_GROUP_HQ_ADMIN_HEADER, OPERATOR_MCP_PATH, OPERATOR_OAUTH_PATHS, type OperatorConfig } from './config.js';
 import { McpServer, type McpToolHost } from './mcp.js';
 import { OperatorOAuth, authorizationServerMetadata, protectedResourceMetadata } from './oauth.js';
 import type { OperatorOAuthStore } from './oauth-store.js';
@@ -90,10 +90,16 @@ export function createOperatorMount(deps: OperatorMountDependencies) {
     const header = req.headers.authorization;
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
     const presented = header.slice(7).trim();
-    for (const expected of [deps.config.token, deps.config.groupHqToken]) {
-      if (!expected) continue;
+    const same = (expected: string | null): boolean => {
+      if (!expected) return false;
       const a = Buffer.from(presented, 'utf8'); const b = Buffer.from(expected, 'utf8');
-      if (a.length === b.length && timingSafeEqual(a, b)) return deps.config.userId;
+      return a.length === b.length && timingSafeEqual(a, b);
+    };
+    if (same(deps.config.token)) return deps.config.userId;
+    if (same(deps.config.groupHqToken)) {
+      // Group HQ's server relays for the admin signed in there; only one the handoff map ties to the operator account.
+      const admin = req.headers[OPERATOR_GROUP_HQ_ADMIN_HEADER];
+      return typeof admin === 'string' && deps.config.groupHqAdmins.has(admin.trim().toLowerCase()) ? deps.config.userId : null;
     }
     if (oauth) {
       const subject = await oauth.subject(presented);
