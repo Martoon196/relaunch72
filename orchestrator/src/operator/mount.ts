@@ -60,9 +60,15 @@ function json(res: ServerResponse, status: number, body: unknown, extra: Record<
   res.end(value);
 }
 
-function html(res: ServerResponse, status: number, body: string): void {
+/**
+ * `redirectOrigin` is the registered redirect URI's origin on the consent page only: browsers apply
+ * form-action to the redirect that follows a form post, so without it Allow and Deny could never
+ * return to the client. Every other page keeps form-action 'self'.
+ */
+function html(res: ServerResponse, status: number, body: string, redirectOrigin?: string): void {
+  const formAction = redirectOrigin && /^https?:\/\/[A-Za-z0-9.\-:[\]]+$/.test(redirectOrigin) ? `'self' ${redirectOrigin}` : "'self'";
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY',
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" });
+    'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'` });
   res.end(body);
 }
 
@@ -128,7 +134,7 @@ export function createOperatorMount(deps: OperatorMountDependencies) {
       html(res, 200, page('Allow Claude to operate Growth HQ?', `<h1>Allow <em>${e(request.client.name)}</em> to operate this portal?</h1>
 <dl><dt>Acting as</dt><dd>the operator account</dd><dt>Can</dt><dd>read CRM, webinars and follow-up sequences${deps.config.writes ? ', create or change leads, tasks and webinars, and save follow-up drafts. Publishing, starting sequences and sending stay with you in the portal.' : ' (changes are disabled on this deployment)'}</dd><dt>Returns to</dt><dd>${e(redirectHost)}</dd><dt>Access</dt><dd>one-hour tokens, renewed for up to 30 days; revoke any time at <a href="${OPERATOR_OAUTH_PATHS.connections}">Connected apps</a></dd></dl>
 <form method="post" action="${OPERATOR_OAUTH_PATHS.authorize}">${fields}<input type="hidden" name="csrf" value="${e(token)}"><input type="hidden" name="decision" value="allow"><button type="submit">Allow</button></form>
-<form method="post" action="${OPERATOR_OAUTH_PATHS.authorize}">${fields}<input type="hidden" name="csrf" value="${e(token)}"><input type="hidden" name="decision" value="deny"><button type="submit" class="secondary">Deny</button></form>`));
+<form method="post" action="${OPERATOR_OAUTH_PATHS.authorize}">${fields}<input type="hidden" name="csrf" value="${e(token)}"><input type="hidden" name="decision" value="deny"><button type="submit" class="secondary">Deny</button></form>`), new URL(request.redirectUri).origin);
       return;
     }
     if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, csrf)) { html(res, 403, page('Expired', '<h1>That form has expired</h1><p>Start the connection again from Claude.</p>')); return; }
