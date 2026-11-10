@@ -90,8 +90,9 @@ export function createOperatorMount(deps: OperatorMountDependencies) {
     const header = req.headers.authorization;
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
     const presented = header.slice(7).trim();
-    if (deps.config.token) {
-      const a = Buffer.from(presented, 'utf8'); const b = Buffer.from(deps.config.token, 'utf8');
+    for (const expected of [deps.config.token, deps.config.groupHqToken]) {
+      if (!expected) continue;
+      const a = Buffer.from(presented, 'utf8'); const b = Buffer.from(expected, 'utf8');
       if (a.length === b.length && timingSafeEqual(a, b)) return deps.config.userId;
     }
     if (oauth) {

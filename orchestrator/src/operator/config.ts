@@ -3,6 +3,7 @@
  * Claude Code) read and, when enabled, change workspace data through MCP, acting
  * as one configured portal user. Names only; never log a value.
  */
+import { createHmac } from 'node:crypto';
 import { MHP_MARKETING_WORKSPACE_ID } from '../mhp/marketing-workspace-service.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -12,6 +13,8 @@ export const OPERATOR_ENV = Object.freeze({
   oauthSecret: 'R72_OPERATOR_OAUTH_SECRET',
   userId: 'R72_OPERATOR_USER_ID',
   writes: 'R72_OPERATOR_WRITES',
+  groupHq: 'R72_OPERATOR_GROUP_HQ',
+  groupHqSecret: 'R72_GROUP_HQ_SSO_SECRET',
   ppWorkspace: 'R72_GROUP_HQ_CRM_PP_WORKSPACE_ID',
 });
 
@@ -35,8 +38,22 @@ export interface OperatorConfig {
   readonly oauthSecret: string | null;
   /** The portal user every operator call acts as (must own the brand workspaces). */
   readonly userId: string;
+  /**
+   * Bearer Group HQ's own server presents when it relays operator tools (its Webinars tools), derived from
+   * the secret the two servers already share for the sign-in handoff; null unless R72_OPERATOR_GROUP_HQ=enabled.
+   */
+  readonly groupHqToken: string | null;
   readonly writes: boolean;
   readonly workspaces: Readonly<Record<OperatorBrand, string | null>>;
+}
+
+/**
+ * The Group HQ relay bearer: HMAC of a fixed, domain-separated label under the shared handoff secret, so no
+ * new secret has to be created or copied. It can never be confused with a handoff token or its session token.
+ * Group HQ derives the same value (app/services/relaunch72_operator.py).
+ */
+export function deriveGroupHqOperatorToken(sharedSecret: string): string {
+  return createHmac('sha256', sharedSecret).update('group-hq-operator-bearer/v1\u0000').digest('base64url');
 }
 
 /** Undefined when nothing is configured; throws on a partial or malformed configuration. */
@@ -51,10 +68,14 @@ export function loadOperatorConfig(env: NodeJS.ProcessEnv): OperatorConfig | und
   if (token && oauthSecret && token === oauthSecret) throw new Error(`${OPERATOR_ENV.token} and ${OPERATOR_ENV.oauthSecret} must differ`);
   if (!UUID.test(userId)) throw new Error(`${OPERATOR_ENV.userId} must be the portal user id the operator acts as`);
   const pp = env[OPERATOR_ENV.ppWorkspace]?.trim().toLowerCase() ?? '';
+  const shared = env[OPERATOR_ENV.groupHqSecret]?.trim() ?? '';
+  const groupHq = env[OPERATOR_ENV.groupHq]?.trim() === 'enabled';
+  if (groupHq && (shared.length < 32 || shared.length > 256)) throw new Error(`${OPERATOR_ENV.groupHq} needs ${OPERATOR_ENV.groupHqSecret} (32–256 characters)`);
   return Object.freeze({
     token: token || null,
     oauthSecret: oauthSecret || null,
     userId,
+    groupHqToken: groupHq ? deriveGroupHqOperatorToken(shared) : null,
     writes: env[OPERATOR_ENV.writes]?.trim() === 'enabled',
     workspaces: Object.freeze({ pp: UUID.test(pp) ? pp : null, mhp: MHP_MARKETING_WORKSPACE_ID }),
   });
