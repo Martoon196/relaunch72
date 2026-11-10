@@ -8,6 +8,7 @@
  * so the HTTP response returns immediately while the 72-hour build runs.
  */
 
+import { createOperatorMount } from '../operator/mount.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -986,6 +987,10 @@ async function main(): Promise<void> {
     groupHqCrm: postgresPortal?.groupHqCrm,
     groupHqInboxCrm: postgresPortal?.groupHqInboxCrm,
     groupHqWebinars: postgresPortal?.groupHqWebinars,
+    operator: postgresPortal?.operator && portal?.kind === 'postgres'
+      ? createOperatorMount({ config: postgresPortal.operator.config, tools: postgresPortal.operator.tools, auth: postgresPortal.auth,
+          origin: portalBaseUrl?.replace(/\/+$/, '') || `https://${canonicalHost ?? 'localhost'}`, sessionSecret: cfg.sessionSecret, log: (line) => console.warn(line) })
+      : undefined,
     portalMaxConcurrentRequests: 32,
     portalBlockers: portal
       ? undefined
