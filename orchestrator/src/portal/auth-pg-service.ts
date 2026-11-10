@@ -9,6 +9,7 @@ import type {
   PortalAuthenticatedSession,
   PortalAuthRequestContext,
   PortalAuthService,
+  PortalDelegatedLogin,
   PortalExternalIdentityAssertion,
   PortalSessionIdentity,
 } from './auth-service.js';
@@ -399,6 +400,61 @@ export class PgPortalAuthService implements PortalAuthService {
         || !Number.isFinite(expiry) || expiry <= context.now
         || expiry > context.now + 24 * 60 * 60 * 1_000 + 60_000) {
       throw new Error('External portal login created an invalid session');
+    }
+    return Object.freeze({
+      sessionToken,
+      userId,
+      userEmail,
+      workspaceId,
+      expiresAt: new Date(expiry).toISOString(),
+    });
+  }
+
+  async loginDelegated(
+    input: PortalDelegatedLogin,
+    context: PortalAuthRequestContext,
+  ): Promise<PortalAuthenticatedSession | null> {
+    const userId = canonicalUuid(input.userId);
+    const workspaceId = canonicalUuid(input.workspaceId);
+    if (!userId || !workspaceId) return null;
+    if (input.handoffSessionToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(input.handoffSessionToken)) return null;
+    const sourceHash = sourceEvidenceHash(context.sourceHash);
+
+    const sessionToken = input.handoffSessionToken ?? rawOpaqueSession();
+    const csrfSecret = randomBytes(32);
+    let created;
+    try {
+      created = await this.dependencies.commandPool.query<SessionRow>(
+        `/* portal.auth.create-group-hq-delegated-session */
+         SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
+         FROM app_private.create_group_hq_delegated_session($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          userId,
+          workspaceId,
+          'property_predator_growth',
+          sha256(sessionToken),
+          sha256(csrfSecret),
+          sourceHash,
+          metadataHash(context.userAgent),
+        ],
+      );
+    } catch (error) {
+      if (isAuthorizationRace(error)) return null;
+      throw error;
+    }
+    if (created.rows.length === 0) return null;
+    if (created.rows.length !== 1) throw new Error('Delegated portal login did not create exactly one session');
+    const row = created.rows[0]!;
+    const returnedSessionId = canonicalUuid(row.session_id);
+    const returnedUserId = canonicalUuid(row.user_id);
+    const userEmail = canonicalEmail(row.user_email);
+    const returnedWorkspaceId = canonicalUuid(row.selected_workspace_id);
+    const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
+    const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
+    if (!returnedSessionId || returnedUserId !== userId || !userEmail || returnedWorkspaceId !== workspaceId
+        || !Number.isFinite(expiry) || expiry <= context.now
+        || expiry > context.now + 12 * 60 * 60 * 1_000 + 60_000) {
+      throw new Error('Delegated portal login created an invalid session');
     }
     return Object.freeze({
       sessionToken,

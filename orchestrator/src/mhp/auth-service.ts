@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
 import { hashPassword, verifyStoredPassword, type PortalScryptWorkLimiter } from '../portal/accounts.js';
-import type { PortalAuthService, PortalAuthRequestContext, PortalAuthenticatedSession, PortalSessionIdentity } from '../portal/auth-service.js';
+import type { PortalAuthService, PortalAuthRequestContext, PortalAuthenticatedSession, PortalDelegatedLogin, PortalSessionIdentity } from '../portal/auth-service.js';
 
 export const MHP_AUTH_ORIGIN = 'https://app.martinhowardproperty.co.uk';
 export const MHP_AUTH_HOST = 'app.martinhowardproperty.co.uk';
@@ -122,6 +122,24 @@ export class PgMhpAuthService implements MhpAuthService {
         [digest(token), purpose, passwordHash, digest(sessionToken), digest(randomBytes(32)), sourceHash, userAgent(context)],
       );
       return authenticated(result.rows, sessionToken, context.now);
+    } catch (error) { if (denied(error)) return null; throw error; }
+  }
+
+  /** Group HQ handoff: the caller verified the token and mapped the email; the database checks ownership of the MHP workspace. */
+  async loginDelegated(input: PortalDelegatedLogin, context: PortalAuthRequestContext): Promise<PortalAuthenticatedSession | null> {
+    if (!UUID.test(input.userId) || !UUID.test(input.workspaceId)) return null;
+    if (input.handoffSessionToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(input.handoffSessionToken)) return null;
+    const userId = input.userId.toLowerCase();
+    const workspaceId = input.workspaceId.toLowerCase();
+    const token = input.handoffSessionToken ?? randomBytes(32).toString('base64url');
+    try {
+      const result = await this.deps.commandPool.query<IdentityRow>(
+        'SELECT session_id,user_id,user_email,selected_workspace_id,expires_at FROM app_private.create_group_hq_delegated_session($1,$2,$3,$4,$5,$6,$7)',
+        [userId, workspaceId, 'martin_howard_property', digest(token), digest(randomBytes(32)), source(context), userAgent(context)],
+      );
+      const session = authenticated(result.rows, token, context.now);
+      if (session && (session.userId !== userId || session.workspaceId !== workspaceId)) throw new Error('MHP delegated identity changed');
+      return session;
     } catch (error) { if (denied(error)) return null; throw error; }
   }
 

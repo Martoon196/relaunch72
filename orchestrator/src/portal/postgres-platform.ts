@@ -27,6 +27,8 @@ import { assertExpectedDatabaseInstallation } from '../db/installation-identity.
 import { requestDatabaseContext } from '../db/rls.js';
 import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations/group-hq-crm/read.js';
 import { createGroupHqInboxCrmMount, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
+import { createGroupHqWebinarsReadMount } from '../integrations/group-hq-crm/webinars.js';
+import { GroupHqHandoff, loadGroupHqSsoConfig } from './group-hq-sso.js';
 import {
   createPgInboxReadService,
   type InboxConversationQuery,
@@ -192,6 +194,9 @@ import type { FinanceDraftsService } from './finance-drafts-service.js';
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
   groupHqInboxCrm?: ReturnType<typeof createGroupHqInboxCrmMount>;
+  groupHqWebinars?: ReturnType<typeof createGroupHqWebinarsReadMount>;
+  /** Group HQ sign-in handoff verifier shared by the PP and MHP hosts; absent when not configured. */
+  groupHqSso?: GroupHqHandoff;
   mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
@@ -1303,18 +1308,22 @@ export async function buildPgPortalPlatform(
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
     let webinarStudio: StudioRelay | undefined;
+    let groupHqHandoffReady = false;
     let webinarSetup: WebinarSetupInput = { database: false, config: webinarConfig, crmAvailable: true,
       databaseDetail: 'Set DATABASE_CONTENT_COMMAND_URL (the r72_content_command identity) to enable webinars.' };
     if (contentCommandPool) {
       try {
-        const probe = await contentCommandPool.query<{ ready: boolean }>(
-          `/* portal.webinars-schema-readiness */ SELECT to_regprocedure('app_private.webinar_public_event(text)') IS NOT NULL AS ready`);
+        const probe = await contentCommandPool.query<{ ready: boolean; handoff_ready: boolean }>(
+          `/* portal.webinars-schema-readiness */ SELECT to_regprocedure('app_private.webinar_public_event(text)') IS NOT NULL AS ready,
+            to_regprocedure('app_private.create_group_hq_delegated_session(uuid,uuid,text,bytea,bytea,bytea,bytea)') IS NOT NULL
+            AND to_regprocedure('app_private.webinar_crm_handoff_workspaces()') IS NOT NULL AS handoff_ready`);
+        groupHqHandoffReady = probe.rows[0]?.handoff_ready === true;
         if (probe.rows[0]?.ready === true) {
           const stream = webinarConfig.stream ? new CloudflareStreamClient(webinarConfig.stream) : null;
           webinars = new PgWebinarService({ pool: contentCommandPool, config: webinarConfig, stream,
             crm: { commands: new WebinarCrmCommands({ transactionRunner: webinarCrmRunner(commandPool) }), pool: commandPool } });
           webinarWorker = new WebinarWorker({ pool: contentCommandPool, config: webinarConfig, stream, mailer: createPostmarkMailer(),
-            log: (line) => console.warn(line) });
+            ...(groupHqHandoffReady ? { webinars } : {}), log: (line) => console.warn(line) });
           // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
           webinarStudio = new StudioRelay({ ...webinarConfig.studio });
           // Probed even before Cloudflare is configured, so the panel reports ffmpeg from day one.
@@ -1340,12 +1349,23 @@ export async function buildPgPortalPlatform(
       console.warn('MHP member application did not compose; its host remains unavailable.');
     }
     let groupHqCrm: ReturnType<typeof createGroupHqCrmReadMount> | undefined;
+    let groupHqWebinars: ReturnType<typeof createGroupHqWebinarsReadMount> | undefined;
     try {
       const groupHqConfig = loadGroupHqCrmConfig(env);
-      if (groupHqConfig) groupHqCrm = createGroupHqCrmReadMount(webPool, groupHqConfig);
+      if (groupHqConfig) {
+        groupHqCrm = createGroupHqCrmReadMount(webPool, groupHqConfig);
+        if (webinars && contentCommandPool) groupHqWebinars = createGroupHqWebinarsReadMount(contentCommandPool, groupHqConfig, webinarConfig);
+      }
     } catch {
       // An optional founder read bridge must never unmount the customer portal.
       console.warn('Group HQ CRM read bridge is unavailable; Property Predator portal remains mounted.');
+    }
+    let groupHqSso: GroupHqHandoff | undefined;
+    try {
+      const ssoConfig = loadGroupHqSsoConfig(env);
+      if (ssoConfig && groupHqHandoffReady) groupHqSso = new GroupHqHandoff(ssoConfig);
+    } catch (error) {
+      console.warn(`Group HQ sign-in handoff is not configured correctly; password sign-in remains available. ${error instanceof Error ? error.message : ''}`.trim());
     }
     let groupHqInboxCrm: ReturnType<typeof createGroupHqInboxCrmMount> | undefined;
     try {
@@ -1358,6 +1378,8 @@ export async function buildPgPortalPlatform(
     return {
       groupHqCrm,
       groupHqInboxCrm,
+      groupHqWebinars,
+      groupHqSso,
       mhp,
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       abuse,

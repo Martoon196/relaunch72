@@ -1,0 +1,739 @@
+From 434cbcb3a4b1d134b827b57b5a98ef17b9334d4f Mon Sep 17 00:00:00 2001
+From: "Codex handoff (Claude)" <noreply@anthropic.com>
+Date: Tue, 10 Nov 2026 00:39:22 +0000
+Subject: [PATCH] Webinars front door: list both brands' webinars and open them
+ signed in via Relaunch72
+
+Adds a Webinars section that lists Property Predator and Martin Howard Property
+webinars from the Relaunch72 bridge (GET /api/group-hq/webinars, same bearer
+token as the CRM read bridge) and opens any host, studio, people or edit page on
+the brand host through a signed two-minute single-use handoff token, so the
+founder signs in once here and never again on the brand hosts.
+
+- app/services/relaunch72_sso.py: token signer (byte-identical to
+  orchestrator/src/portal/group-hq-sso.ts, shared test vector)
+- app/services/relaunch72_webinars.py: validated read of the webinar listing
+- app/routers/webinars.py, app/templates/webinars.html, nav link
+- config/.env.example/render.yaml: R72_SSO_SECRET, R72_PP_HOST, R72_MHP_HOST (names only)
+- unit_checks: signer vector, listing parser, route smoke
+- docs/relaunch72-webinars.md: how it works, settings, release sequence
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LReXhJakn8pa2r1EHjVsaE
+---
+ .env.example                        |   5 +
+ app/config.py                       |   6 ++
+ app/main.py                         |   2 +
+ app/routers/webinars.py             |  58 +++++++++++
+ app/services/relaunch72_sso.py      |  96 ++++++++++++++++++
+ app/services/relaunch72_webinars.py | 151 ++++++++++++++++++++++++++++
+ app/templates/app_base.html         |   1 +
+ app/templates/webinars.html         |  33 ++++++
+ docs/relaunch72-webinars.md         |  48 +++++++++
+ render.yaml                         |   8 ++
+ unit_checks/relaunch72_sso.py       |  39 +++++++
+ unit_checks/relaunch72_webinars.py  |  68 +++++++++++++
+ unit_checks/webinars_route.py       |  72 +++++++++++++
+ 13 files changed, 587 insertions(+)
+ create mode 100644 app/routers/webinars.py
+ create mode 100644 app/services/relaunch72_sso.py
+ create mode 100644 app/services/relaunch72_webinars.py
+ create mode 100644 app/templates/webinars.html
+ create mode 100644 docs/relaunch72-webinars.md
+ create mode 100644 unit_checks/relaunch72_sso.py
+ create mode 100644 unit_checks/relaunch72_webinars.py
+ create mode 100644 unit_checks/webinars_route.py
+
+diff --git a/.env.example b/.env.example
+index 6aab8ff..61b3424 100644
+--- a/.env.example
++++ b/.env.example
+@@ -10,6 +10,11 @@ PP_BASE_URL=
+ PP_SERVICE_TOKEN=
+ # Separate read-only Relaunch72 founder CRM token; same value as R72_GROUP_HQ_CRM_TOKEN on the PP service.
+ R72_CRM_TOKEN=
++# Sign-in handoff into the Relaunch72 brand hosts (docs/relaunch72-webinars.md); same value as R72_GROUP_HQ_SSO_SECRET
++# on the Relaunch72 web service, 32-256 characters, used for nothing else. Hosts default to the live brand hosts.
++R72_SSO_SECRET=
++R72_PP_HOST=
++R72_MHP_HOST=
+ ORDRIS_BASE_URL=
+ ORDRIS_PARTNER_TOKEN=
+ KP_BASE_URL=
+diff --git a/app/config.py b/app/config.py
+index ccece6e..90cff2b 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -74,6 +74,12 @@ PP_BASE_URL = os.environ.get("PP_BASE_URL", "https://propertypredator.com").rstr
+ PP_SERVICE_TOKEN = os.environ.get("PP_SERVICE_TOKEN", "")
+ # Founder CRM read bridge into Relaunch72. Distinct from the PP partner token.
+ R72_CRM_TOKEN = os.environ.get("R72_CRM_TOKEN", "")
++# Group HQ -> Relaunch72 sign-in handoff (docs/relaunch72-webinars.md): the same value as R72_GROUP_HQ_SSO_SECRET on
++# the Relaunch72 web service, 32-256 characters, shared with nothing else. Never reuse R72_CRM_TOKEN or PP_SERVICE_TOKEN.
++R72_SSO_SECRET = os.environ.get("R72_SSO_SECRET", "")
++# The two Relaunch72 brand hosts the handoff may sign a token for; a token is bound to exactly one of them.
++R72_PP_HOST = (os.environ.get("R72_PP_HOST") or "hq.propertypredator.com").strip().lower()
++R72_MHP_HOST = (os.environ.get("R72_MHP_HOST") or "app.martinhowardproperty.co.uk").strip().lower()
+ ORDRIS_BASE_URL = os.environ.get("ORDRIS_BASE_URL", "").rstrip("/")
+ ORDRIS_PARTNER_TOKEN = os.environ.get("ORDRIS_PARTNER_TOKEN", "")
+ KP_BASE_URL = os.environ.get("KP_BASE_URL", "https://portal.keypropertiesuk.co.uk").rstrip("/")
+diff --git a/app/main.py b/app/main.py
+index 2898b59..a57a67b 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -51,6 +51,8 @@ app.include_router(laps.router)
+ from .routers import acquisitions  # noqa: E402
+ app.include_router(acquisitions.router)
+ app.include_router(crm.router)
++from .routers import webinars  # noqa: E402
++app.include_router(webinars.router)
+ app.include_router(whatsapp_keywords.router)
+ app.include_router(inbox.router)
+ from .routers import inbox_history
+diff --git a/app/routers/webinars.py b/app/routers/webinars.py
+new file mode 100644
+index 0000000..cffb230
+--- /dev/null
++++ b/app/routers/webinars.py
+@@ -0,0 +1,58 @@
++"""Webinars front door: both brands' webinars listed here; every page opens in Relaunch72 through the
++sign-in handoff, so the founder signs in once (here) and never again on the brand hosts."""
++from __future__ import annotations
++
++from fastapi import APIRouter, Depends, HTTPException, Request
++from fastapi.responses import HTMLResponse, RedirectResponse
++
++from ..auth import check_origin, require_admin
++from ..models import User
++from ..services import relaunch72_sso as sso
++from ..services.relaunch72_webinars import WebinarsUnavailable, fetch_webinars
++from ..templating import go, render
++
++router = APIRouter(dependencies=[Depends(check_origin)])
++
++OPEN_PATHS = {"list": "/portal/webinars", "new": "/portal/webinars/new", "setup": "/portal/webinars/setup"}
++
++
++def _brand(request: Request, allowed: set[str] = frozenset({"brand"})) -> str:
++    brand = request.query_params.get("brand", "mhp")
++    if brand not in sso.BRANDS or len(request.query_params.getlist("brand")) > 1 \
++            or any(key not in allowed for key in request.query_params):
++        raise HTTPException(status_code=400, detail="Choose Property Predator or Martin Howard Property")
++    return brand
++
++
++@router.get("/webinars", response_class=HTMLResponse)
++def webinars(request: Request, user: User = Depends(require_admin)):
++    brand = _brand(request)
++    try:
++        listing = fetch_webinars(brand)
++        unavailable = False
++    except WebinarsUnavailable:
++        listing = None
++        unavailable = True
++    response = render(request, "webinars.html", {
++        "user": user, "section": "webinars", "brand": brand, "brands": sso.BRANDS, "listing": listing,
++        "unavailable": unavailable, "handoff_ready": sso.configured(), "host": sso.host_for(brand),
++    })
++    response.headers["Cache-Control"] = "no-store"
++    return response
++
++
++@router.get("/webinars/open")
++def open_page(request: Request, user: User = Depends(require_admin)):
++    """303 to the brand host with a fresh two-minute token; the token exists only in this one redirect."""
++    brand = _brand(request, {"brand", "path"})
++    path = request.query_params.get("path", OPEN_PATHS["list"])
++    if len(request.query_params.getlist("path")) > 1 or not sso.valid_path(path):
++        raise HTTPException(status_code=400, detail="That is not a Relaunch72 portal page")
++    try:
++        target = sso.handoff(user.email, brand, path)
++    except sso.HandoffUnavailable:
++        return go(f"/webinars?brand={brand}", err="Sign-in handoff is not configured (R72_SSO_SECRET); open the brand host and sign in there.")
++    response = RedirectResponse(target.url, status_code=303)
++    response.headers["Cache-Control"] = "no-store"
++    response.headers["Referrer-Policy"] = "no-referrer"
++    return response
+diff --git a/app/services/relaunch72_sso.py b/app/services/relaunch72_sso.py
+new file mode 100644
+index 0000000..94193e3
+--- /dev/null
++++ b/app/services/relaunch72_sso.py
+@@ -0,0 +1,96 @@
++"""Group HQ -> Relaunch72 sign-in handoff tokens.
++
++The founder is already signed in here (password + authenticator). To open a Relaunch72 portal page
++without a second login, Group HQ signs a two-minute, single-use token bound to one brand host and one
++portal path with a secret only the two web services hold. Relaunch72 verifies it at
++/portal/auth/group-hq, maps the login email to a portal user from its own server-side allowlist and
++mints its ordinary session; a token is never authority on its own and never reaches a browser as
++anything but a redirect target. The byte format mirrors orchestrator/src/portal/group-hq-sso.ts.
++"""
++from __future__ import annotations
++
++import base64
++import hmac
++import json
++import re
++import secrets
++import time
++from dataclasses import dataclass
++from hashlib import sha256
++
++from .. import config
++
++VERSION = "ghq-handoff-1"
++ROUTE = "/portal/auth/group-hq"
++LIFETIME_SECONDS = 90          # Relaunch72 accepts at most 120
++BRANDS = {"pp": "Property Predator", "mhp": "Martin Howard Property"}
++EMAIL = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
++# Only portal pages on the brand host: never a scheme, another host or a protocol-relative path.
++PATH = re.compile(r"^/portal(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*/?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$")
++
++
++class HandoffUnavailable(Exception):
++    """The handoff is not configured, or the inputs could not be signed. Nothing was sent anywhere."""
++
++
++@dataclass(frozen=True)
++class Handoff:
++    brand: str
++    host: str
++    path: str
++    url: str
++
++
++def _b64url(raw: bytes) -> str:
++    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
++
++
++def host_for(brand: str) -> str:
++    if brand == "pp":
++        return config.R72_PP_HOST
++    if brand == "mhp":
++        return config.R72_MHP_HOST
++    raise HandoffUnavailable()
++
++
++def valid_path(path: str) -> bool:
++    return bool(path) and len(path) <= 400 and "//" not in path and PATH.fullmatch(path) is not None
++
++
++def sign(email: str, brand: str, path: str, *, secret: str | None = None, now: float | None = None,
++         nonce: str | None = None) -> str:
++    """The exact token Relaunch72 verifies: base64url(canonical JSON) . base64url(HMAC-SHA256)."""
++    key = config.R72_SSO_SECRET if secret is None else secret
++    if not key or len(key) < 32 or len(key) > 256:
++        raise HandoffUnavailable()
++    login = (email or "").strip().lower()
++    host = host_for(brand)
++    if not EMAIL.fullmatch(login) or len(login) > 320 or not host or not valid_path(path):
++        raise HandoffUnavailable()
++    issued = int(time.time() if now is None else now)
++    claims = {"v": VERSION, "email": login, "brand": brand, "host": host, "path": path,
++              "iat": issued, "exp": issued + LIFETIME_SECONDS, "nonce": nonce or secrets.token_urlsafe(24)}
++    # Fixed key order and compact separators so both sides sign identical bytes (JSON.stringify shape).
++    body = _b64url(json.dumps(claims, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
++    mac = hmac.new(key.encode("utf-8"), b"group-hq-handoff\x00" + body.encode("ascii"), sha256).digest()
++    return f"{body}.{_b64url(mac)}"
++
++
++def handoff(email: str, brand: str, path: str, **kw) -> Handoff:
++    """A redirect target for the browser; the token lives only in that one-time URL."""
++    token = sign(email, brand, path, **kw)
++    host = host_for(brand)
++    return Handoff(brand=brand, host=host, path=path, url=f"https://{host}{ROUTE}?t={token}")
++
++
++def configured() -> bool:
++    return 32 <= len(config.R72_SSO_SECRET) <= 256
++
++
++def verify_for_tests(token: str, secret: str) -> dict:
++    """Decode a token this module signed. Tests only: Relaunch72 is the verifier in production."""
++    body, _, mac = token.partition(".")
++    expected = hmac.new(secret.encode("utf-8"), b"group-hq-handoff\x00" + body.encode("ascii"), sha256).digest()
++    if not hmac.compare_digest(_b64url(expected), mac):
++        raise HandoffUnavailable()
++    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+diff --git a/app/services/relaunch72_webinars.py b/app/services/relaunch72_webinars.py
+new file mode 100644
+index 0000000..fb31165
+--- /dev/null
++++ b/app/services/relaunch72_webinars.py
+@@ -0,0 +1,151 @@
++"""Read-only webinar listing for both brands from the host-bound Relaunch72 bridge.
++
++Relaunch72 runs the webinars (video, registration, reminders, replays, CRM handoff). Group HQ only
++lists them and opens their pages through the sign-in handoff. No product writes happen here.
++"""
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++from typing import Any
++
++import httpx
++
++from .. import config
++from .relaunch72_crm import ORIGIN, UUID
++from .relaunch72_sso import BRANDS
++
++PATH = "/api/group-hq/webinars"
++KINDS = {"live": "Live", "on_demand": "On demand", "scheduled_recording": "Scheduled recording"}
++STATUSES = {"draft": "Draft", "published": "Published", "cancelled": "Cancelled", "archived": "Archived"}
++SESSIONS = {"idle", "live", "ended"}
++PUBLIC_URL = re.compile(r"^https://[a-z0-9.-]+/w/[a-z0-9][a-z0-9-]{2,70}[a-z0-9]$")
++TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z$")
++
++
++class WebinarsUnavailable(Exception):
++    pass
++
++
++@dataclass(frozen=True)
++class Webinar:
++    id: str
++    title: str
++    kind: str
++    status: str
++    starts_at: str | None
++    timezone: str
++    duration_minutes: int | None
++    session_state: str
++    registered: int
++    crm_linked: int
++    public_url: str | None
++    manage_path: str
++    host_path: str
++    studio_path: str
++    people_path: str
++
++    @property
++    def kind_label(self) -> str:
++        return KINDS[self.kind]
++
++    @property
++    def status_label(self) -> str:
++        return STATUSES[self.status]
++
++
++@dataclass(frozen=True)
++class WebinarListing:
++    brand: str
++    availability: str            # available | not_connected | not_available
++    workspace_name: str | None
++    webinars: tuple[Webinar, ...]
++
++
++def _text(value: Any, limit: int, *, required: bool = False) -> str | None:
++    if value is None:
++        if required:
++            raise WebinarsUnavailable()
++        return None
++    if not isinstance(value, str) or len(value) > limit or (required and not value.strip()):
++        raise WebinarsUnavailable()
++    return value
++
++
++def _count(value: Any) -> int:
++    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 1_000_000:
++        raise WebinarsUnavailable()
++    return value
++
++
++def _parse(payload: Any, brand: str) -> WebinarListing:
++    if not isinstance(payload, dict) or payload.get("brand") != brand:
++        raise WebinarsUnavailable()
++    availability = payload.get("availability")
++    if availability in ("not_connected", "not_available"):
++        return WebinarListing(brand, availability, None, ())
++    if availability != "available" or not isinstance(payload.get("webinars"), list) or len(payload["webinars"]) > 100:
++        raise WebinarsUnavailable()
++    workspace = payload.get("workspace")
++    if not isinstance(workspace, dict):
++        raise WebinarsUnavailable()
++    name = _text(workspace.get("name"), 200, required=True)
++    seen: set[str] = set()
++    webinars: list[Webinar] = []
++    for item in payload["webinars"]:
++        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not UUID.fullmatch(item["id"]):
++            raise WebinarsUnavailable()
++        webinar_id = item["id"].lower()
++        if webinar_id in seen:
++            raise WebinarsUnavailable()
++        seen.add(webinar_id)
++        kind, status = item.get("kind"), item.get("status")
++        if kind not in KINDS or status not in STATUSES:
++            raise WebinarsUnavailable()
++        starts_at = _text(item.get("startsAt"), 40)
++        if starts_at is not None and not TIMESTAMP.fullmatch(starts_at):
++            raise WebinarsUnavailable()
++        duration = item.get("durationMinutes")
++        if duration is not None and (not isinstance(duration, int) or isinstance(duration, bool) or duration < 0 or duration > 1440):
++            raise WebinarsUnavailable()
++        session = item.get("sessionState")
++        if session not in SESSIONS:
++            raise WebinarsUnavailable()
++        public_url = _text(item.get("publicUrl"), 400)
++        if public_url is not None and not PUBLIC_URL.fullmatch(public_url):
++            raise WebinarsUnavailable()
++        paths = item.get("paths")
++        base = f"/portal/webinars/{webinar_id}"
++        if not isinstance(paths, dict) or paths.get("manage") != base or paths.get("host") != f"{base}/host" \
++                or paths.get("studio") != f"{base}/studio" or paths.get("people") != f"{base}/people":
++            raise WebinarsUnavailable()
++        webinars.append(Webinar(
++            id=webinar_id, title=_text(item.get("title"), 200, required=True) or "", kind=kind, status=status,
++            starts_at=starts_at, timezone=_text(item.get("timezone"), 64, required=True) or "", duration_minutes=duration,
++            session_state=session, registered=_count(item.get("registered")), crm_linked=_count(item.get("crmLinked")),
++            public_url=public_url, manage_path=base, host_path=f"{base}/host", studio_path=f"{base}/studio",
++            people_path=f"{base}/people",
++        ))
++    return WebinarListing(brand, "available", name, tuple(webinars))
++
++
++def fetch_webinars(brand: str, *, client: httpx.Client | None = None, token: str | None = None) -> WebinarListing:
++    if brand not in BRANDS:
++        raise WebinarsUnavailable()
++    secret = config.R72_CRM_TOKEN if token is None else token
++    if not secret or len(secret) < 32:
++        raise WebinarsUnavailable()
++    own_client = client is None
++    http = client or httpx.Client(timeout=5.0, follow_redirects=False)
++    try:
++        response = http.get(f"{ORIGIN}{PATH}", params={"brand": brand},
++                            headers={"Authorization": f"Bearer {secret}", "Accept": "application/json",
++                                     "User-Agent": "GroupHQ/1.0"})
++        if response.status_code != 200 or len(response.content) > 200_000:
++            raise WebinarsUnavailable()
++        return _parse(response.json(), brand)
++    except (httpx.HTTPError, ValueError, TypeError) as exc:
++        raise WebinarsUnavailable() from exc
++    finally:
++        if own_client:
++            http.close()
+diff --git a/app/templates/app_base.html b/app/templates/app_base.html
+index 20de5f0..ce7a058 100644
+--- a/app/templates/app_base.html
++++ b/app/templates/app_base.html
+@@ -9,6 +9,7 @@
+       <a href="/acquisitions"{% if section == "acquisitions" %} class="is-active"{% endif %}>Property deals</a>
+       <a href="/crm"{% if section == "crm" %} class="is-active"{% endif %}>CRM &amp; follow-up</a>
+       <a href="/inbox"{% if section == "inbox" %} class="is-active"{% endif %}>Inbox</a>
++      <a href="/webinars"{% if section == "webinars" %} class="is-active"{% endif %}>Webinars</a>
+       <a href="/crm/channels/whatsapp" class="is-sub{% if section == 'whatsapp' %} is-active{% endif %}">WhatsApp</a>
+       <a href="/people"{% if section == "people" %} class="is-active"{% endif %}>People</a>
+       <a href="/mentees"{% if section == "mentees" %} class="is-active"{% endif %}>Mentees</a>
+diff --git a/app/templates/webinars.html b/app/templates/webinars.html
+new file mode 100644
+index 0000000..d73c7f5
+--- /dev/null
++++ b/app/templates/webinars.html
+@@ -0,0 +1,33 @@
++{% extends "app_base.html" %}
++{% set title = "Webinars | Group HQ" %}
++{% block content %}
++<div class="page-title"><span class="eyebrow">Webinars</span><h1>Every webinar, one sign-in.</h1></div>
++<p class="help">Webinars run on each brand's own host (video, registration, reminders, replays and the CRM handoff live there). Open any page from here and you arrive signed in; the brand host never asks for a second password.</p>
++<nav class="wa-brands" aria-label="Choose brand">
++  {% for key, name in brands.items() %}<a href="/webinars?brand={{ key }}" class="btn{% if key == brand %} btn-primary{% endif %}"{% if key == brand %} aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}
++</nav>
++{% if not handoff_ready %}<p class="flash err mt-2">Sign-in handoff is not configured on Group HQ (<code>R72_SSO_SECRET</code>). Links below open the brand host, which will ask you to sign in.</p>{% endif %}
++<p class="mt-2">
++  <a class="btn btn-primary" href="/webinars/open?brand={{ brand }}&amp;path=/portal/webinars/new">Create a webinar</a>
++  <a class="btn" href="/webinars/open?brand={{ brand }}&amp;path=/portal/webinars">All webinars on {{ host }}</a>
++  <a class="btn" href="/webinars/open?brand={{ brand }}&amp;path=/portal/webinars/setup">Email, video and CRM setup</a>
++</p>
++<section class="panel mt-2" aria-labelledby="webinars-heading">
++  <div class="panel-head"><h2 id="webinars-heading">{{ brands[brand] }}{% if listing and listing.workspace_name %} · {{ listing.workspace_name }}{% endif %}</h2><span class="help">Read from Relaunch72 · opens signed in</span></div>
++  {% if unavailable %}<p class="muted">The webinar connection is unavailable right now. Refresh to check again, or open the brand host directly.</p>
++  {% elif listing.availability == 'not_connected' %}<p class="muted">This brand's workspace is not mapped on Relaunch72 yet (<code>R72_GROUP_HQ_CRM_MHP_WORKSPACE_ID</code> and <code>_ORGANIZATION_ID</code>).</p>
++  {% elif listing.availability == 'not_available' %}<p class="muted">Relaunch72 refused the listing: the configured owner cannot manage this brand's workspace.</p>
++  {% elif not listing.webinars %}<p class="muted">No webinars yet. Create the first one above; registration pages, reminders and the CRM handoff are set up on the brand host.</p>
++  {% else %}<div class="table-scroll"><table class="data"><thead><tr><th>Webinar</th><th>When</th><th>Status</th><th>Registered</th><th>In CRM</th><th>Open</th></tr></thead><tbody>
++  {% for w in listing.webinars %}<tr>
++    <td><strong>{{ w.title }}</strong><br><small class="muted">{{ w.kind_label }}{% if w.public_url %} · <a href="{{ w.public_url }}" target="_blank" rel="noopener noreferrer">registration page ↗</a>{% endif %}</small></td>
++    <td>{% if w.starts_at %}{{ w.starts_at[:16].replace('T', ' ') }} UTC{% if w.duration_minutes %} · {{ w.duration_minutes }} min{% endif %}{% else %}On demand{% endif %}</td>
++    <td>{{ w.status_label }}{% if w.session_state == 'live' %} · <strong>live now</strong>{% elif w.session_state == 'ended' %} · ended{% endif %}</td>
++    <td>{{ w.registered }}</td>
++    <td>{{ w.crm_linked }}</td>
++    <td><a class="btn btn-primary" href="/webinars/open?brand={{ brand }}&amp;path={{ w.host_path }}">Host</a> <a class="btn" href="/webinars/open?brand={{ brand }}&amp;path={{ w.studio_path }}">Studio</a> <a class="btn" href="/webinars/open?brand={{ brand }}&amp;path={{ w.people_path }}">People</a> <a class="btn" href="/webinars/open?brand={{ brand }}&amp;path={{ w.manage_path }}">Edit</a></td>
++  </tr>{% endfor %}
++  </tbody></table></div>{% endif %}
++</section>
++<p class="help mt-2">Leads: every registrant becomes a CRM lead on the brand's workspace automatically (a per-webinar switch on the brand host turns this off). Property Predator leads appear on <a href="/crm">CRM &amp; follow-up</a>; MHP leads live in the MHP marketing workspace.</p>
++{% endblock %}
+diff --git a/docs/relaunch72-webinars.md b/docs/relaunch72-webinars.md
+new file mode 100644
+index 0000000..d35fdde
+--- /dev/null
++++ b/docs/relaunch72-webinars.md
+@@ -0,0 +1,48 @@
++# Webinars from Group HQ (sign in once)
++
++Webinars for Property Predator and Martin Howard Property run inside Relaunch72 on
++each brand's host (`hq.propertypredator.com`, `app.martinhowardproperty.co.uk`):
++video, registration pages, reminders, replays, the browser studio and the CRM
++handoff all live there. Group HQ is the front door: `/webinars` lists both brands'
++webinars and every button opens the right page on the brand host already signed in.
++
++## How the sign-in works
++
++1. The founder signs in to Group HQ (password + authenticator), as today.
++2. A click on `/webinars/open?brand=mhp&path=/portal/webinars/<id>/host` makes
++   Group HQ sign a token with `R72_SSO_SECRET`: the login email, the brand, the
++   exact brand host, the exact portal path, issued/expiry (90 seconds) and a
++   random nonce. The browser is redirected to
++   `https://<brand host>/portal/auth/group-hq?t=<token>`.
++3. Relaunch72 verifies the signature, host, path and lifetime, refuses a nonce it
++   has seen, maps the email to a portal user through its own server-side
++   allowlist (`R72_GROUP_HQ_SSO_USERS`) and asks its database for a session.
++   The database refuses unless that user is an active owner or admin of the
++   brand's workspace (for MHP, the MHP marketing owner). The result is the same
++   session cookie a password login sets, bounded to twelve hours.
++
++Nothing in the token is authority on its own, Relaunch72 never trusts a browser
++value for the workspace, and the token exists only in that one redirect.
++
++## Settings (names only)
++
++Group HQ web service: `R72_SSO_SECRET` (32-256 random characters, shared with
++nothing else), optionally `R72_PP_HOST` and `R72_MHP_HOST` (default to the live
++hosts). The webinar list reuses `R72_CRM_TOKEN`.
++
++Relaunch72 web service: `R72_GROUP_HQ_SSO_SECRET` (the same value),
++`R72_GROUP_HQ_SSO_USERS` (JSON object, Group HQ login email to portal user id),
++and for MHP the existing `R72_GROUP_HQ_CRM_MHP_WORKSPACE_ID` and
++`_ORGANIZATION_ID` so the listing bridge can answer `brand=mhp`.
++
++## Release sequence
++
++Deploy Relaunch72 first (migration 0147 adds the session function; its `/ready`
++stays green before and after). Set the two secrets, open `/webinars` here, press
++Host on one webinar and confirm you land signed in on the brand host. Check that
++a replayed link fails with a neutral sign-in page, and that removing the email
++from `R72_GROUP_HQ_SSO_USERS` fails the next click. To stop the handoff, remove
++`R72_SSO_SECRET` here: the Webinars page keeps listing and links fall back to
++the brand host's own login.
++
++Smoke checks without a database: `python -m unittest discover -s unit_checks -p '*.py' -v`.
+diff --git a/render.yaml b/render.yaml
+index ff55255..a200e6b 100644
+--- a/render.yaml
++++ b/render.yaml
+@@ -31,6 +31,14 @@ services:
+         value: https://propertypredator.com
+       - key: PP_SERVICE_TOKEN
+         sync: false
++      # Sign-in handoff into the Relaunch72 brand hosts (docs/relaunch72-webinars.md). Same value as
++      # R72_GROUP_HQ_SSO_SECRET on the Relaunch72 web service; web service only, never copied to a cron.
++      - key: R72_SSO_SECRET
++        sync: false
++      - key: R72_PP_HOST
++        value: hq.propertypredator.com
++      - key: R72_MHP_HOST
++        value: app.martinhowardproperty.co.uk
+       - key: ORDRIS_BASE_URL
+         value: https://ordris.io
+       - key: ORDRIS_PARTNER_TOKEN
+diff --git a/unit_checks/relaunch72_sso.py b/unit_checks/relaunch72_sso.py
+new file mode 100644
+index 0000000..059d825
+--- /dev/null
++++ b/unit_checks/relaunch72_sso.py
+@@ -0,0 +1,39 @@
++import unittest
++from unittest.mock import patch
++
++from app.services import relaunch72_sso as sso
++
++SECRET = "group-hq-shared-secret-synthetic-0123456789abcdef"
++# The same inputs signed by orchestrator/src/portal/group-hq-sso.ts (its test pins this token too).
++VECTOR = ("eyJ2IjoiZ2hxLWhhbmRvZmYtMSIsImVtYWlsIjoiZm91bmRlckBleGFtcGxlLnRlc3QiLCJicmFuZCI6Im1ocCIsImhvc3QiOiJhcHAubWFydGluaG93YXJkcHJvcGVydHkuY28udWsiLCJwYXRoIjoiL3BvcnRhbC93ZWJpbmFycyIsImlhdCI6MTc5NDMwMTIwMCwiZXhwIjoxNzk0MzAxMjkwLCJub25jZSI6Im5ubm5ubm5ubm5ubm5ubm5ubm5ubm5ubiJ9"
++          ".cSgbazHxniiCnWLaQEm5KLOo2QtFlP5ApIgCMmTHO-k")
++
++
++class HandoffTokenTests(unittest.TestCase):
++    def test_matches_the_relaunch72_test_vector_byte_for_byte(self):
++        with patch.object(sso, "LIFETIME_SECONDS", 90):
++            token = sso.sign("Founder@Example.test", "mhp", "/portal/webinars", secret=SECRET, now=1794301200,
++                             nonce="n" * 24)
++        self.assertEqual(token, VECTOR)
++
++    def test_unconfigured_or_bad_inputs_never_sign(self):
++        for kwargs in (dict(secret=""), dict(secret="short")):
++            with self.assertRaises(sso.HandoffUnavailable):
++                sso.sign("founder@example.test", "pp", "/portal/webinars", **kwargs)
++        for email, brand, path in (("not-an-email", "pp", "/portal"), ("founder@example.test", "kp", "/portal"),
++                                   ("founder@example.test", "pp", "https://evil.example/portal"),
++                                   ("founder@example.test", "pp", "//evil.example/portal"),
++                                   ("founder@example.test", "pp", "/portal//x"), ("founder@example.test", "pp", "/admin")):
++            with self.assertRaises(sso.HandoffUnavailable):
++                sso.sign(email, brand, path, secret=SECRET)
++
++    def test_redirect_target_is_the_brand_host_handoff_route(self):
++        target = sso.handoff("founder@example.test", "pp", "/portal/webinars/abc/host", secret=SECRET)
++        self.assertEqual(target.host, "hq.propertypredator.com")
++        self.assertTrue(target.url.startswith("https://hq.propertypredator.com/portal/auth/group-hq?t="))
++        self.assertNotIn(SECRET, target.url)
++        self.assertEqual(sso.host_for("mhp"), "app.martinhowardproperty.co.uk")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/unit_checks/relaunch72_webinars.py b/unit_checks/relaunch72_webinars.py
+new file mode 100644
+index 0000000..169c0b1
+--- /dev/null
++++ b/unit_checks/relaunch72_webinars.py
+@@ -0,0 +1,68 @@
++import unittest
++
++import httpx
++
++from app.services.relaunch72_webinars import WebinarsUnavailable, fetch_webinars
++
++WEBINAR_ID = "59e2f6cf-c35e-4a23-991f-012d29fbecba"
++
++
++def listing(**over):
++    base = f"/portal/webinars/{WEBINAR_ID}"
++    item = {"id": WEBINAR_ID, "title": "Unregistered land", "kind": "live", "status": "published",
++            "startsAt": "2026-11-25T19:00:00.000Z", "timezone": "Europe/London", "durationMinutes": 60,
++            "sessionState": "idle", "registered": 12, "crmLinked": 12, "updatedAt": "2026-11-10T09:00:00.000Z",
++            "publicUrl": "https://app.martinhowardproperty.co.uk/w/unregistered-land",
++            "paths": {"manage": base, "host": f"{base}/host", "studio": f"{base}/studio", "people": f"{base}/people"}}
++    item.update(over)
++    return {"brand": "mhp", "availability": "available", "workspace": {"id": WEBINAR_ID, "name": "MHP marketing", "timezone": "Europe/London"},
++            "webinars": [item]}
++
++
++class WebinarReadTests(unittest.TestCase):
++    def test_unconfigured_never_calls_product(self):
++        with self.assertRaises(WebinarsUnavailable):
++            fetch_webinars("mhp", token="")
++        with self.assertRaises(WebinarsUnavailable):
++            fetch_webinars("kp", token="x" * 32)
++
++    def test_fixed_host_token_and_validated_shape(self):
++        seen = []
++
++        def answer(request):
++            seen.append(request)
++            return httpx.Response(200, json=listing())
++
++        with httpx.Client(transport=httpx.MockTransport(answer)) as client:
++            result = fetch_webinars("mhp", client=client, token="x" * 32)
++        self.assertEqual(str(seen[0].url), "https://hq.propertypredator.com/api/group-hq/webinars?brand=mhp")
++        self.assertEqual(seen[0].headers["Authorization"], "Bearer " + "x" * 32)
++        self.assertEqual(result.availability, "available")
++        self.assertEqual(result.workspace_name, "MHP marketing")
++        webinar = result.webinars[0]
++        self.assertEqual((webinar.kind_label, webinar.status_label, webinar.registered), ("Live", "Published", 12))
++        self.assertEqual(webinar.host_path, f"/portal/webinars/{WEBINAR_ID}/host")
++
++    def test_not_connected_is_a_state_not_an_error(self):
++        with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"brand": "pp", "availability": "not_connected"}))) as client:
++            self.assertEqual(fetch_webinars("pp", client=client, token="x" * 32).availability, "not_connected")
++
++    def test_bad_payloads_fail_closed(self):
++        for payload in (
++            listing(id="javascript:alert(1)"),
++            listing(publicUrl="https://evil.example/w/x"),
++            listing(paths={"manage": "https://evil.example", "host": "/x", "studio": "/x", "people": "/x"}),
++            listing(kind="zoom"),
++            listing(registered="12"),
++            {"brand": "pp", "availability": "available", "workspace": {"name": "x"}, "webinars": []},
++        ):
++            with httpx.Client(transport=httpx.MockTransport(lambda request, p=payload: httpx.Response(200, json=p))) as client:
++                with self.assertRaises(WebinarsUnavailable):
++                    fetch_webinars("mhp", client=client, token="x" * 32)
++        with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(302, headers={"location": "https://evil.test"}))) as client:
++            with self.assertRaises(WebinarsUnavailable):
++                fetch_webinars("mhp", client=client, token="x" * 32)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/unit_checks/webinars_route.py b/unit_checks/webinars_route.py
+new file mode 100644
+index 0000000..2dc845e
+--- /dev/null
++++ b/unit_checks/webinars_route.py
+@@ -0,0 +1,72 @@
++"""Route smoke without a database or a product call."""
++import os
++import unittest
++from types import SimpleNamespace
++from unittest.mock import patch
++from urllib.parse import parse_qs, urlsplit
++
++os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://unused:unused@127.0.0.1/unused")
++os.environ.setdefault("SECRET_KEY", "unit-test-only")
++
++from fastapi import HTTPException  # noqa: E402
++from starlette.requests import Request  # noqa: E402
++from app import config  # noqa: E402
++from app.routers.webinars import open_page, webinars  # noqa: E402
++from app.services.relaunch72_sso import verify_for_tests  # noqa: E402
++from app.services.relaunch72_webinars import WebinarListing, WebinarsUnavailable  # noqa: E402
++
++SECRET = "group-hq-shared-secret-synthetic-0123456789abcdef"
++
++
++def request(path: str, query: str = ""):
++    return Request({"type": "http", "method": "GET", "path": path, "root_path": "", "scheme": "http",
++                    "server": ("testserver", 80), "headers": [], "query_string": query.encode()})
++
++
++class WebinarsRouteTests(unittest.TestCase):
++    founder = SimpleNamespace(email="founder@example.test")
++
++    def test_listing_page_and_unavailable_state(self):
++        empty = WebinarListing("mhp", "available", "MHP marketing", ())
++        with patch("app.routers.webinars.fetch_webinars", return_value=empty), patch.object(config, "R72_SSO_SECRET", SECRET):
++            response = webinars(request("/webinars", "brand=mhp"), self.founder)
++        body = response.body.decode()
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(response.headers["cache-control"], "no-store")
++        self.assertIn("No webinars yet", body)
++        self.assertIn("/webinars/open?brand=mhp&amp;path=/portal/webinars/new", body)
++        self.assertNotIn(SECRET, body)
++        with patch("app.routers.webinars.fetch_webinars", side_effect=WebinarsUnavailable()):
++            response = webinars(request("/webinars"), self.founder)
++        self.assertIn("connection is unavailable", response.body.decode())
++        with self.assertRaises(HTTPException):
++            webinars(request("/webinars", "brand=kp"), self.founder)
++
++    def test_open_redirects_to_the_brand_host_with_a_signed_single_use_token(self):
++        with patch.object(config, "R72_SSO_SECRET", SECRET):
++            response = open_page(request("/webinars/open", "brand=mhp&path=/portal/webinars/abc/host"), self.founder)
++        self.assertEqual(response.status_code, 303)
++        self.assertEqual(response.headers["cache-control"], "no-store")
++        location = response.headers["location"]
++        parts = urlsplit(location)
++        self.assertEqual((parts.scheme, parts.netloc, parts.path), ("https", "app.martinhowardproperty.co.uk", "/portal/auth/group-hq"))
++        token = parse_qs(parts.query)["t"][0]
++        claims = verify_for_tests(token, SECRET)
++        self.assertEqual((claims["email"], claims["brand"], claims["host"], claims["path"]),
++                         ("founder@example.test", "mhp", "app.martinhowardproperty.co.uk", "/portal/webinars/abc/host"))
++        self.assertLessEqual(claims["exp"] - claims["iat"], 120)
++
++    def test_open_refuses_foreign_paths_and_falls_back_when_unconfigured(self):
++        with patch.object(config, "R72_SSO_SECRET", SECRET):
++            for query in ("brand=pp&path=https://evil.example/portal", "brand=pp&path=//evil.example", "brand=pp&path=/admin",
++                          "brand=pp&path=/portal&next=x"):
++                with self.assertRaises(HTTPException):
++                    open_page(request("/webinars/open", query), self.founder)
++        with patch.object(config, "R72_SSO_SECRET", ""):
++            response = open_page(request("/webinars/open", "brand=pp&path=/portal/webinars"), self.founder)
++        self.assertEqual(response.status_code, 303)
++        self.assertTrue(response.headers["location"].startswith("/webinars?brand=pp&err="))
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

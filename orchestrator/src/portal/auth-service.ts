@@ -70,5 +70,24 @@ export interface PortalAuthService {
     context: PortalAuthRequestContext,
     bootstrapUserId?: string,
   ): Promise<PortalAuthenticatedSession | null>;
+  /**
+   * Mint the same opaque session for a user the server has already identified
+   * through the Group HQ sign-in handoff. The caller owns the handoff token
+   * verification and the email → user allowlist; the database still refuses
+   * unless the user is an active owner or admin of the workspace.
+   */
+  loginDelegated?(
+    input: PortalDelegatedLogin,
+    context: PortalAuthRequestContext,
+  ): Promise<PortalAuthenticatedSession | null>;
   revoke(sessionToken: string): Promise<void>;
+}
+
+export interface PortalDelegatedLogin {
+  /** Canonical user id from the server-owned Group HQ allowlist. */
+  userId: string;
+  /** Server-selected workspace for the brand; never a browser value. */
+  workspaceId: string;
+  /** Server-derived opaque token for one verified Group HQ grant; never supplied by an HTTP form. */
+  handoffSessionToken?: string;
 }

@@ -7,6 +7,7 @@
 
 import { escapeHtml as e } from './ui.js';
 import type { WebinarConfig } from '../webinars/config.js';
+import { MHP_MARKETING_WORKSPACE_ID } from '../mhp/marketing-workspace-service.js';
 import { WEBINAR_ENV } from '../webinars/config.js';
 import { formatInZone, utcToLocalInput, type RoomState } from '../webinars/schedule.js';
 import type { MessageStatusRow, QuestionRow, RegistrationRow, WebinarCounts, WebinarResults, WebinarSummary, WorkspaceProfile } from '../webinars/service.js';
@@ -64,6 +65,14 @@ function notice(notice: string | null, error: string | null): string {
   return `${notice ? `<p class="notice" role="status">${e(notice)}</p>` : ''}${error ? `<p class="notice" role="alert" style="border-color:#dc2626">${e(error)}</p>` : ''}`;
 }
 
+/** The exact sender entry to paste for this workspace. Names the token variable; never prints a token. */
+function emailSenderSnippet(workspaceId: string | null, blockers: readonly string[]): string {
+  if (!workspaceId) return '';
+  const tokenEnv = workspaceId.toLowerCase() === MHP_MARKETING_WORKSPACE_ID ? 'MHP_POSTMARK_SERVER_TOKEN' : 'POSTMARK_SERVER_TOKEN';
+  const snippet = JSON.stringify([{ workspaceId: workspaceId.toLowerCase(), from: 'Your Name <hello@your-brand.co.uk>', tokenEnv, messageStream: 'outbound' }]);
+  return `<details style="margin-top:6px"><summary>Exact settings for this workspace</summary><p class="wb-help" style="margin:6px 0">Add this entry to <code>${WEBINAR_ENV.senders}</code> (merge it into the array if other brands are already listed) and set <code>${WEBINAR_ENV.emailMode}</code> to <code>live</code>. The <code>from</code> address must be a verified Postmark sender on the server whose token is in <code>${e(tokenEnv)}</code>.</p><pre style="white-space:pre-wrap;word-break:break-all;margin:0">${e(snippet)}</pre>${blockers.length ? `<p class="wb-help" style="margin:6px 0 0">Current problems: ${blockers.map((b) => e(b)).join(' ')}</p>` : ''}</details>`;
+}
+
 export function setupChecklist(setup: SetupStatus): string {
   const c = setup.config;
   const item = (ok: boolean, title: string, detail: string) => `<li><span class="wb-status ${ok ? 'ok' : 'warn'}">${ok ? 'Ready' : 'Setup'}</span><div><strong>${e(title)}</strong><div class="wb-help">${detail}</div></div></li>`;
@@ -78,9 +87,9 @@ export function setupChecklist(setup: SetupStatus): string {
     item(Boolean(c?.defaultPublicOrigin || (setup.workspaceId && c?.workspaceOrigins.get(setup.workspaceId.toLowerCase()))), 'Public link origin',
       `Emailed links use <code>${WEBINAR_ENV.publicOrigin}</code> (or this brand's entry in <code>${WEBINAR_ENV.workspaceOrigins}</code>).`),
     item(Boolean(c && c.emailMode !== 'off' && sender), 'Confirmation and reminder emails',
-      !c || c.emailMode === 'off' ? `Email is off. Set <code>${WEBINAR_ENV.emailMode}</code> to <code>test</code> (only <code>${WEBINAR_ENV.emailTestRecipients}</code>) or <code>live</code>. Messages wait in the queue until then; reminders whose time passes are skipped, never sent late.`
+      !c || c.emailMode === 'off' ? `Email is off. Set <code>${WEBINAR_ENV.emailMode}</code> to <code>test</code> (only <code>${WEBINAR_ENV.emailTestRecipients}</code>) or <code>live</code>. Messages wait in the queue until then; reminders whose time passes are skipped, never sent late.${sender ? '' : emailSenderSnippet(setup.workspaceId, c?.senderBlockers ?? [])}`
         : sender ? `Mode <strong>${e(c.emailMode)}</strong>, sending as <code>${e(sender.from)}</code> on Postmark stream <code>${e(sender.messageStream)}</code>.`
-        : `No sender for this brand. Add this workspace to <code>${WEBINAR_ENV.senders}</code>; another brand's sender is never used.`),
+        : `No sender for this brand. Add this workspace to <code>${WEBINAR_ENV.senders}</code>; another brand's sender is never used.${emailSenderSnippet(setup.workspaceId, c.senderBlockers)}`),
     item(Boolean(setup.studio?.available), 'Browser studio (no encoder needed)', `${setup.studio?.available
       ? `Hosts can broadcast camera, microphone and screen share from the browser${setup.studio.safari ? '' : ' (Chrome and Edge; this ffmpeg cannot read Safari recordings)'}. Using ${e(setup.studio.detail)}.`
       : `Optional; encoders such as OBS work without it. ${e(setup.studio?.detail ?? 'Not checked on this deployment.')} The installed ffmpeg on PATH is used by default; <code>${WEBINAR_ENV.studioFfmpeg}</code> overrides it.`}
@@ -136,7 +145,8 @@ function settingsFields(s: WebinarSettings): string {
 <div class="wb-row"><div><label class="wb-check"><input type="checkbox" name="questionsEnabled" value="1"${s.questionsEnabled ? ' checked' : ''}> Attendees can ask questions</label></div>
 <div><label class="wb-check"><input type="checkbox" name="questionsModerated" value="1"${s.questionsModerated ? ' checked' : ''}> Hold questions for approval before others see them</label></div></div>
 <div class="wb-row"><div><label for="accentColor">Accent colour (optional)</label><input id="accentColor" name="accentColor" value="${e(s.accentColor ?? '')}" placeholder="#2563eb" maxlength="7"><p class="wb-help">Defaults to the brand colour.</p></div>
-<div><label for="crmPrefix">CRM opportunity prefix</label><input id="crmPrefix" name="crmPrefix" value="${e(s.crmOpportunityPrefix)}" maxlength="40"></div></div></fieldset>`;
+<div><label for="crmPrefix">CRM opportunity prefix</label><input id="crmPrefix" name="crmPrefix" value="${e(s.crmOpportunityPrefix)}" maxlength="40"></div></div>
+<div class="wb-row"><div><label class="wb-check"><input type="checkbox" name="crmAutoHandoff" value="1"${s.crmAutoHandoff ? ' checked' : ''}> Send every registrant to the CRM automatically</label><p class="wb-help">New registrants of a published webinar become CRM leads within a minute, owned by whoever created the webinar. Untick to send them in batches from the People tab instead.</p></div></div></fieldset>`;
 }
 
 export function editPage(input: { profile: WorkspaceProfile; csrf: string; event: (WebinarEvent & { rowVersion: number }) | null; settings: WebinarSettings; error: string | null; notice: string | null; values?: Record<string, string> }): string {

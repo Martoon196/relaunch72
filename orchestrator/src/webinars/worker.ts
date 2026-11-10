@@ -16,7 +16,7 @@ import { withTransaction } from '../db/transaction.js';
 import { issueAccessToken } from './access.js';
 import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js';
 import { composeMessage, deliveryDecision, type MessagePurpose, type WebinarMailer } from './messages.js';
-import { applyVideoState, readProfile, runProvisionJob, settleJob } from './service.js';
+import { applyVideoState, readProfile, runProvisionJob, settleJob, type PgWebinarService } from './service.js';
 import type { CloudflareStreamClient } from './stream.js';
 import { toEvent, type WebinarEvent } from './types.js';
 
@@ -25,6 +25,8 @@ export interface WebinarWorkerDependencies {
   readonly config: WebinarConfig;
   readonly stream: CloudflareStreamClient | null;
   readonly mailer: WebinarMailer;
+  /** Automatic CRM handoff for published webinars that opted in; absent means owners send registrants by hand. */
+  readonly webinars?: Pick<PgWebinarService, 'autoHandoff'>;
   readonly now?: () => number;
   readonly log?: (line: string) => void;
 }
@@ -47,6 +49,8 @@ export class WebinarWorker {
   private readonly now: () => number;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  /** Workspaces whose automatic CRM handoff failed outright wait ten minutes before the next attempt. */
+  private readonly handoffMutedUntil = new Map<string, number>();
 
   constructor(private readonly deps: WebinarWorkerDependencies) {
     this.now = deps.now ?? Date.now;
@@ -72,8 +76,13 @@ export class WebinarWorker {
     const stats: Record<string, number> = {};
     try {
       const ids = await this.deps.pool.query(`/* webinars.active-workspaces */ SELECT ws FROM app_private.webinar_active_workspaces($1) AS ws`, [new Date(this.now()).toISOString()]);
-      for (const row of ids.rows) {
-        const s = await this.workspace(String(row.ws));
+      const workspaces = new Set<string>(ids.rows.map((row) => String(row.ws)));
+      if (this.deps.webinars) {
+        const handoff = await this.deps.pool.query(`/* webinars.crm-handoff-workspaces */ SELECT ws FROM app_private.webinar_crm_handoff_workspaces() AS ws`);
+        for (const row of handoff.rows) workspaces.add(String(row.ws));
+      }
+      for (const ws of workspaces) {
+        const s = await this.workspace(ws);
         for (const [k, v] of Object.entries(s)) stats[k] = (stats[k] ?? 0) + v;
       }
     } finally {
@@ -126,6 +135,17 @@ export class WebinarWorker {
       }
     }
     if (this.deps.stream) Object.assign(stats, await this.refreshLive(workspaceId));
+    if (this.deps.webinars && (this.handoffMutedUntil.get(workspaceId) ?? 0) <= this.now()) {
+      try {
+        const h = await this.deps.webinars.autoHandoff(workspaceId, `webinar-worker-${randomUUID()}`);
+        if (h.events) { stats.crmHandoffEvents = h.events; stats.crmHandoffLinked = h.linked; stats.crmHandoffFailed = h.failed; }
+        if (h.failed && !h.linked) this.handoffMutedUntil.set(workspaceId, this.now() + 10 * 60_000);
+        else this.handoffMutedUntil.delete(workspaceId);
+      } catch (error) {
+        this.handoffMutedUntil.set(workspaceId, this.now() + 10 * 60_000);
+        this.deps.log?.(`webinar CRM handoff failed: ${error instanceof Error ? error.message : 'error'}`);
+      }
+    }
     return stats;
   }
 

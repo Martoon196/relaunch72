@@ -647,6 +647,7 @@ async function main(): Promise<void> {
           directClientAddress: (req) => req.socket.remoteAddress,
         }),
         propertyPredatorSso,
+        groupHqSso: postgresPortal.groupHqSso,
         crm: postgresPortal.crm,
         financeDrafts: postgresPortal.financeDrafts,
         investors: postgresPortal.investors,
@@ -921,6 +922,10 @@ async function main(): Promise<void> {
           abuseHashSecret: portalAbuseRuntime.hashSecret, requestContext: portal.requestContext!,
           crm: postgresPortal.crm, investors: runtime.investors, investorMail: runtime.investorMail,
           portalBaseUrl: MHP_AUTH_ORIGIN, productProfile: MARTIN_HOWARD_PROPERTY_PROFILE,
+          // MHP-brand webinars are managed on the MHP host by the MHP marketing owner; the
+          // same service enforces workspace RLS, so the PP host never sees them.
+          webinars: postgresPortal.webinars, webinarSetup: postgresPortal.webinarSetup, webinarStudio: postgresPortal.webinarStudio,
+          groupHqSso: postgresPortal.groupHqSso,
         });
         mhpPortal.sessionCookieName = MHP_SESSION_COOKIE;
         mhpPortal.authorizeMemberRequest = async ({ sessionToken, identity, path, method }) => {
@@ -980,6 +985,7 @@ async function main(): Promise<void> {
     portal,
     groupHqCrm: postgresPortal?.groupHqCrm,
     groupHqInboxCrm: postgresPortal?.groupHqInboxCrm,
+    groupHqWebinars: postgresPortal?.groupHqWebinars,
     portalMaxConcurrentRequests: 32,
     portalBlockers: portal
       ? undefined

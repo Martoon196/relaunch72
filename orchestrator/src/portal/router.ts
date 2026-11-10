@@ -266,6 +266,7 @@ import { CRM_PAGE_QUERY_KEY } from './crm-pagination.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity } from './auth-service.js';
+import { GROUP_HQ_HANDOFF_ROUTE, type GroupHqHandoff } from './group-hq-sso.js';
 import {
   PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
   PROPERTY_PREDATOR_SSO_COOKIE,
@@ -534,6 +535,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   auth: PortalAuthService;
   /** Exact Property Predator authorization-code bridge; absent means no SSO routes or UI. */
   propertyPredatorSso?: PropertyPredatorSsoClient;
+  /** Group HQ sign-in handoff verifier; absent means the handoff route answers 404. */
+  groupHqSso?: GroupHqHandoff;
   crm: PortalCrmService;
   financeDrafts?: PortalFinanceDraftsService;
   investors?: InvestorService;
@@ -1945,6 +1948,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const skipSessionResolution = p === '/portal/setup'
     || (p === '/portal/login' && method === 'POST')
     || p === PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE
+    || p === GROUP_HQ_HANDOFF_ROUTE
     || (p === '/portal/logout' && method === 'POST');
   if (sessionToken && !skipSessionResolution) {
     try {
@@ -2043,6 +2047,62 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
     } catch {
       return sendLoginPage(res, 503, deps, 'Property Predator sign-in is temporarily unavailable. Use your Growth HQ password.');
+    }
+  }
+  if (p === GROUP_HQ_HANDOFF_ROUTE) {
+    // Group HQ → portal sign-in handoff. The token proves Group HQ (shared secret)
+    // issued it for this host within the last two minutes; the allowlist maps the
+    // login email to a canonical user; the database still decides ownership.
+    const handoffFailure = 'We could not complete that sign-in from Group HQ. Open the page from Group HQ again or use your password.';
+    if (method !== 'GET') return sendLoginPage(res, 405, deps, handoffFailure, '', { allow: 'GET' });
+    if (deps.kind !== 'postgres' || !deps.groupHqSso || !deps.auth.loginDelegated) {
+      return sendLoginPage(res, 404, deps, 'Group HQ sign-in is not available on this deployment. Use your password.');
+    }
+    const tokens = url.searchParams.getAll('t');
+    if (tokens.length !== 1 || ![...url.searchParams.keys()].every((key) => key === 't')) {
+      return sendLoginPage(res, 400, deps, handoffFailure);
+    }
+    const rawHost = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+    const host = (rawHost ?? '').trim().toLowerCase().replace(/:443$/, '');
+    const claims = host ? deps.groupHqSso.consume(tokens[0], host) : null;
+    const expectedBrand = deps.sessionCookieName === '__Host-mhp_session' ? 'mhp' : 'pp';
+    const userId = claims && claims.brand === expectedBrand ? deps.groupHqSso.userFor(claims.email) : null;
+    const workspaceId = claims ? deps.groupHqSso.workspaceFor(claims.brand) : null;
+    let handoffAbuseLease: Buffer | null | false = null;
+    if (deps.abuse && resolvedRequestContext) {
+      if (!deps.abuseHashSecret) return sendAbuseStatus(res, 503, 30);
+      handoffAbuseLease = await reserveAbuse(
+        res,
+        deps.abuse,
+        authSubjectAbuseAdmission(resolvedRequestContext, 'auth.sso', deps.abuseHashSecret, claims?.nonce ?? 'group-hq-handoff', now),
+      );
+      if (handoffAbuseLease === false) return;
+      trackAbuseLease(handoffAbuseLease);
+    }
+    if (!claims || !userId || !workspaceId) {
+      await completeAbuseLease(handoffAbuseLease, 'auth_failure');
+      return sendLoginPage(res, 401, deps, handoffFailure);
+    }
+    try {
+      const authenticated = await deps.auth.loginDelegated(
+        { userId, workspaceId, handoffSessionToken: deps.groupHqSso.sessionTokenFor(claims) },
+        authRequestContext(req, now, resolvedRequestContext),
+      );
+      if (!authenticated) {
+        await completeAbuseLease(handoffAbuseLease, 'auth_failure');
+        return sendLoginPage(res, 401, deps, handoffFailure);
+      }
+      const expiry = authenticated.expiresAt ? Date.parse(authenticated.expiresAt) : Number.NaN;
+      const maxAge = Number.isFinite(expiry)
+        ? Math.max(1, Math.min(12 * 60 * 60, Math.floor((expiry - now) / 1_000)))
+        : 12 * 60 * 60;
+      await completeAbuseLease(handoffAbuseLease, 'success');
+      return redirect(res, claims.path, [
+        portalCookie(authenticated.sessionToken, deps.secure, maxAge, deps.sessionCookieName),
+      ], 303, { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+    } catch {
+      await completeAbuseLease(handoffAbuseLease, 'service_error');
+      return sendLoginPage(res, 503, deps, 'Group HQ sign-in is temporarily unavailable. Try again shortly or use your password.');
     }
   }
   if (p === PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE) {

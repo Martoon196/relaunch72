@@ -46,6 +46,8 @@ export interface WebinarSettings {
   readonly questionsModerated: boolean;
   readonly accentColor: string | null;
   readonly crmOpportunityPrefix: string;
+  /** When true the worker sends every new registrant to the CRM as the webinar's creator; off means owners press the button. */
+  readonly crmAutoHandoff: boolean;
 }
 
 export const DEFAULT_SETTINGS: WebinarSettings = Object.freeze({
@@ -62,6 +64,7 @@ export const DEFAULT_SETTINGS: WebinarSettings = Object.freeze({
   questionsModerated: true,
   accentColor: null,
   crmOpportunityPrefix: 'Webinar',
+  crmAutoHandoff: true,
 });
 
 const HTTPS_URL = /^https:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/;
@@ -114,6 +117,9 @@ export function readSettings(raw: unknown): WebinarSettings {
     questionsModerated: s.questionsModerated === undefined ? true : s.questionsModerated === true,
     accentColor: /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : null,
     crmOpportunityPrefix: text(s.crmOpportunityPrefix, 40) || DEFAULT_SETTINGS.crmOpportunityPrefix,
+    // New forms use DEFAULT_SETTINGS (on); legacy webinars without an explicit
+    // saved choice must not import old private-test registrants automatically.
+    crmAutoHandoff: s.crmAutoHandoff === true,
   });
 }
 

@@ -84,6 +84,8 @@ export interface AppDeps {
   /** PP-only, fixed-scope read bridge for the founder's Group HQ. */
   groupHqCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   groupHqInboxCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
+  /** Founder-only webinar listing for Group HQ's Webinars section (same bearer token as the CRM read bridge). */
+  groupHqWebinars?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Per-process no-queue shield in front of the distributed portal guard. */
   portalMaxConcurrentRequests?: number;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
@@ -326,6 +328,15 @@ export function createApp(deps: AppDeps) {
       activePortalRequests += 1;
       try { await deps.groupHqInboxCrm.handle(req,res,url); }
       catch { if (!res.headersSent) send(res,503,{ error: 'temporarily_unavailable' }); }
+      finally { activePortalRequests -= 1; }
+      return;
+    }
+    if (url.pathname === '/api/group-hq/webinars') {
+      if (!deps.groupHqWebinars) { send(res, 404, { error: 'not found' }); return; }
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try { await deps.groupHqWebinars.handle(req, res, url); }
+      catch { if (!res.headersSent) send(res, 503, { error: 'temporarily unavailable' }); }
       finally { activePortalRequests -= 1; }
       return;
     }
