@@ -29,6 +29,7 @@ import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations
 import { createGroupHqInboxCrmMount, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
 import { createGroupHqWebinarsReadMount } from '../integrations/group-hq-crm/webinars.js';
 import { GroupHqHandoff, loadGroupHqSsoConfig } from './group-hq-sso.js';
+import { MHP_AUTH_ORIGIN } from '../mhp/auth-service.js';
 import { loadOperatorConfig, type OperatorConfig } from '../operator/config.js';
 import { OperatorSessions } from '../operator/sessions.js';
 import { createOperatorTools } from '../operator/tools.js';
@@ -1397,7 +1398,10 @@ export async function buildPgPortalPlatform(
         const store = oauthProbe?.rows[0]?.ready === true ? new PgOperatorOAuthStore(identityPool) : undefined;
         const sessions = new OperatorSessions(operatorConfig, { pp: auth, mhp: mhp?.auth });
         operator = { config: operatorConfig, ...(store ? { store } : {}),
-          tools: createOperatorTools({ sessions, crm, webinars, writes: operatorConfig.writes, log: (line) => console.warn(line) }) };
+          tools: createOperatorTools({ sessions, crm, webinars, writes: operatorConfig.writes,
+            followups: { sequences: mhp?.sequences, ownerEmails: mhp?.ownerEmail, ppFlows: followupFlows,
+              links: { ppOrigin: env.PORTAL_BASE_URL?.trim().replace(/\/+$/, '') || null, mhpOrigin: MHP_AUTH_ORIGIN } },
+            log: (line: string) => console.warn(line) }) };
       } else if (operatorConfig) {
         console.warn('Operator API stays off until migration 0147 (delegated sessions) is applied.');
       }

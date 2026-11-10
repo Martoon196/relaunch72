@@ -12,49 +12,22 @@ import { WebinarError } from '../webinars/service.js';
 import type { OperatorBrand } from './config.js';
 import type { McpToolDefinition, McpToolHost } from './mcp.js';
 import type { OperatorSessions } from './sessions.js';
+import { createFollowupTools, type FollowupToolDependencies } from './followup-tools.js';
+import { BRAND_SCHEMA, ID_SCHEMA, brand, id, int, str, type OperatorTool, type ToolArgs } from './tool-kit.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const BRAND = { type: 'string', enum: ['pp', 'mhp'], description: 'pp = Property Predator (Growth HQ), mhp = Martin Howard Property marketing workspace' };
-const ID = { type: 'string', description: 'UUID' };
+const BRAND = BRAND_SCHEMA;
+const ID = ID_SCHEMA;
+type Args = ToolArgs;
+type Tool = OperatorTool;
 
 export interface OperatorToolDependencies {
   readonly sessions: OperatorSessions;
   readonly crm: Pick<PortalCrmService, 'snapshot' | 'lead360' | 'createLead' | 'moveOpportunity' | 'completeTask'>;
   readonly webinars?: Pick<PgWebinarService, 'list' | 'get' | 'create' | 'update' | 'setStatus' | 'registrants' | 'results' | 'messageStatus' | 'sendToCrm'>;
   readonly writes: boolean;
+  /** Follow-up sequences and owner emails; absent services answer that they are not composed. */
+  readonly followups?: Omit<FollowupToolDependencies, 'sessions'>;
   readonly log?: (line: string) => void;
-}
-
-type Args = Record<string, unknown>;
-
-interface Tool extends McpToolDefinition { readonly write: boolean; run(args: Args): Promise<unknown> }
-
-function str(args: Args, key: string, max = 2000, required = false): string {
-  const v = args[key];
-  if (v === undefined || v === null) { if (required) throw new Error(`${key} is required.`); return ''; }
-  if (typeof v !== 'string') throw new Error(`${key} must be text.`);
-  const out = v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
-  if (required && !out) throw new Error(`${key} is required.`);
-  return out.slice(0, max);
-}
-
-function id(args: Args, key: string): string {
-  const v = str(args, key, 64, true);
-  if (!UUID.test(v)) throw new Error(`${key} must be a UUID.`);
-  return v.toLowerCase();
-}
-
-function int(args: Args, key: string, min: number, max: number, fallback: number): number {
-  const v = args[key];
-  if (v === undefined || v === null) return fallback;
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) throw new Error(`${key} must be a whole number between ${min} and ${max}.`);
-  return v;
-}
-
-function brand(args: Args): OperatorBrand {
-  const v = args.brand;
-  if (v !== 'pp' && v !== 'mhp') throw new Error('brand must be "pp" or "mhp".');
-  return v;
 }
 
 function outcome(result: { ok: true; disposition: string } | { ok: false; kind: string; message: string; fieldErrors?: unknown }): unknown {
@@ -145,6 +118,7 @@ export function createOperatorTools(deps: OperatorToolDependencies): McpToolHost
       run: async (a) => needWebinars().sendToCrm(await sessions.identity(brand(a)), requestId(), id(a, 'id')) },
   ];
 
+  if (deps.followups) tools.push(...createFollowupTools({ ...deps.followups, sessions }));
   const visible = tools.filter((t) => deps.writes || !t.write);
   const definitions: McpToolDefinition[] = visible.map(({ name, description, inputSchema }) => Object.freeze({ name, description, inputSchema }));
   return {
