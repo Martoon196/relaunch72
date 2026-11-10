@@ -29,7 +29,7 @@ import { StudioRelay, type StudioProbe } from '../../src/webinars/studio.js';
 
 export const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
-export async function loginRole(admin: pg.Pool, role: 'r72_content_command' | 'r72_crm_command'): Promise<pg.Pool> {
+export async function loginRole(admin: pg.Pool, role: 'r72_content_command' | 'r72_crm_command' | 'r72_identity_command'): Promise<pg.Pool> {
   assertDisposableTestDatabase(process.env.TEST_DATABASE_URL ?? '');
   const password = randomUUID() + randomUUID();
   const statement = await admin.query<{ sql: string }>("SELECT format('ALTER ROLE %I PASSWORD %L', $1::text, $2::text) AS sql", [role, password]);

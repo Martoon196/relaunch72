@@ -95,6 +95,54 @@ Behaviour and limits:
   broadcast. That is part of the live test below.
 * Cloudflare's separate real-time products (Realtime SFU / RealtimeKit) would be a new paid product and were not used.
 
+## Running webinars from Group HQ (one sign-in)
+
+The owner runs both brands from **Group HQ** (`Martoon196/group-hq`, the separate founder app). Group HQ's
+**Webinars** page lists every PP and MHP webinar and opens the host screen, studio, people list or editor on
+the brand host **already signed in**. The video engine, registration pages, reminders, replays and CRM handoff
+stay in this orchestrator on the brand hosts; Group HQ is the front door, not a second webinar system.
+
+How the sign-in handoff works (`src/portal/group-hq-sso.ts`, route `/portal/auth/group-hq` on both hosts):
+
+1. The founder is signed in to Group HQ (password + authenticator). A click signs a token with a secret only the
+   two web services share: login email, brand, exact brand host, exact `/portal/...` path, issued/expiry (≤ 2
+   minutes) and a nonce. The browser is redirected to `https://<brand host>/portal/auth/group-hq?t=<token>`.
+2. This host verifies the HMAC, host, path and lifetime, refuses a nonce it has already consumed, and maps the
+   email to a canonical user id from its own server-owned allowlist (`R72_GROUP_HQ_SSO_USERS`). A valid token for
+   an email that is not listed is refused with the same neutral page as a bad token.
+3. `app_private.create_group_hq_delegated_session` (migration 0147, `r72_security_definer`) refuses unless that
+   user is an active owner or admin of the brand workspace (PP: `R72_GROUP_HQ_CRM_PP_WORKSPACE_ID`; MHP: the fixed
+   marketing workspace, and only for the MHP marketing owner). It inserts the same `app.user_sessions` row a
+   password login creates, with the host's own product audience, bounded to twelve hours. The ordinary cookie
+   (`r72_portal` or `__Host-mhp_session`) is set and the browser lands on the requested page.
+
+Nothing in the token is authority on its own; no browser value ever selects the workspace. A brand mismatch (an
+MHP token presented to the PP host) is refused before any database call. Abuse admission uses the existing
+`auth.sso` class.
+
+Other pieces that make Group HQ the front door:
+
+* **Webinar listing bridge** `GET /api/group-hq/webinars?brand=pp|mhp` (same bearer token as the CRM read bridge,
+  `src/integrations/group-hq-crm/webinars.ts`): titles, times, status, registered and CRM-linked counts, the public
+  registration link and the portal paths. Read-only, under the configured owner's own RLS context on the content
+  identity, and only when that owner can manage the workspace. No attendee data, no secrets.
+* **MHP host now serves `/portal/webinars`** (and the handoff route): `src/mhp/mount.ts` admitted only CRM,
+  investors and LeadRelay before, so MHP owners could not manage MHP webinars on the MHP host. The MHP portal now
+  composes `webinars`, `webinarSetup` and `webinarStudio`; RLS keeps each brand's webinars on its own workspace.
+* **Automatic CRM handoff.** Each webinar has *Send every registrant to the CRM automatically* (on by default,
+  stored as `settings.crmAutoHandoff`). The worker discovers workspaces with unlinked registrants through
+  `app_private.webinar_crm_handoff_workspaces()` and sends them through the existing lead command **as the
+  webinar's creator**, under that user's RLS context, so PP registrants become PP leads and MHP registrants become
+  MHP marketing-workspace leads. Consent travels exactly as before (`opted_in` only with the explicit opt-in). A
+  workspace whose handoff fails outright (for example no active default pipeline) is retried after ten minutes;
+  the People tab's manual button still works for webinars that switch the automation off.
+* **Email setup made copy-paste.** When a brand has no sender, the Webinars setup panel prints the exact
+  `WEBINAR_EMAIL_SENDERS` entry for that workspace id (naming `MHP_POSTMARK_SERVER_TOKEN` for the MHP marketing
+  workspace, `POSTMARK_SERVER_TOKEN` otherwise) and the current parse problems, instead of a generic hint.
+
+Group HQ side (`docs/codex-handoff/11-GROUP-HQ-WEBINARS.md` carries the patch): `R72_SSO_SECRET` (same value as
+`R72_GROUP_HQ_SSO_SECRET` here), `/webinars` page, `/webinars/open?brand=&path=` redirect, nav link, unit checks.
+
 ## Configuration (names only — never commit values)
 
 | Name | Purpose |
@@ -115,6 +163,9 @@ Behaviour and limits:
 | `WEBINAR_STUDIO_FFMPEG` | Path to ffmpeg for the browser studio (default `ffmpeg` on PATH). |
 | `WEBINAR_STUDIO_MAX_SESSIONS` (1), `WEBINAR_STUDIO_MAX_MINUTES` (240) | Browser-studio bounds per instance. |
 | `DATABASE_CONTENT_COMMAND_URL` | Existing `r72_content_command` login (reused; no new role). |
+| `R72_GROUP_HQ_SSO_SECRET` | Group HQ sign-in handoff secret, 32–256 characters; the same value as `R72_SSO_SECRET` on Group HQ and shared with nothing else. Absent = handoff route answers 404, password sign-in unchanged. |
+| `R72_GROUP_HQ_SSO_USERS` | JSON object, Group HQ login email → canonical portal user id (1–20 people). The server-owned allowlist; a token for any other email is refused. |
+| `R72_GROUP_HQ_CRM_TOKEN`, `R72_GROUP_HQ_CRM_PP_*`, `R72_GROUP_HQ_CRM_MHP_*` | Existing CRM read-bridge settings, reused by `/api/group-hq/webinars` and (PP workspace) by the handoff. |
 
 ### Cloudflare one-time setup (owner)
 
@@ -141,6 +192,16 @@ Payment 0142, inbox 0143, Creative Studio 0144 and the applied limits 0145 are p
 The 146 application is ready on the exact applied 145 ledger with only its reviewed
 146 pending, and after 146. It refuses a 144 ledger with both limits and webinars
 pending. Verify actual source/schema before starting a release.
+
+The Group HQ handoff is **0147_group_hq_delegated_session.sql** (SHA-256
+`7bd7caf7c10edfbb2fc0db2b2af09e9ba02550e7187f445f3c0f03b0a78f680e`, pinned in
+`src/db/group-hq-sso-schema.ts`): additive, no table changes, two definer functions
+(`create_group_hq_delegated_session`, `webinar_crm_handoff_workspaces`) and one execute grant
+on `mhp_marketing_workspace_allowed` to the session definer. The 147 application is ready
+on the exact applied 146 ledger with only 147 pending (handoff route 404, automatic CRM
+handoff off until the function exists) and after 147. The released 146 binary stays ready
+after exactly this 147 is applied (`test/db/runtime-readiness.test.ts`), so 146 remains the
+recovery release for 147. Apply 147 only after 146 is released and proven.
 
 **Already released binaries are not assumed to support rollback after 146.**
 Prepare and prove a separate recovery artifact from the exact released limits/Studio

@@ -20,6 +20,7 @@ test('route classification is a small value-only allowlist', () => {
   assert.equal(classifyPortalAbuseRoute('/portal/login', 'POST'), 'auth.login');
   assert.equal(classifyPortalAbuseRoute('/portal/setup', 'GET'), 'auth.setup');
   assert.equal(classifyPortalAbuseRoute('/portal/auth/property-predator/callback', 'GET'), 'auth.sso');
+  assert.equal(classifyPortalAbuseRoute('/portal/auth/group-hq', 'GET'), 'auth.sso');
   assert.equal(classifyPortalAbuseRoute('/portal', 'GET'), 'read.overview');
   assert.equal(classifyPortalAbuseRoute('/portal/crm/contacts/secret-id', 'GET'), 'read.page');
   assert.equal(classifyPortalAbuseRoute('/portal/crm/contacts/secret-id', 'POST'), 'command');

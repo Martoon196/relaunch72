@@ -178,7 +178,11 @@ export class PgWebinarService {
   }
 
   private async managed<T>(identity: PortalSessionIdentity, requestId: string, op: (tx: PoolClient, profile: WorkspaceProfile) => Promise<T>): Promise<T> {
-    return withTransaction(this.deps.pool, this.context(identity, requestId), async (tx) => {
+    return this.managedIn(this.context(identity, requestId), op);
+  }
+
+  private async managedIn<T>(context: DatabaseRequestContext, op: (tx: PoolClient, profile: WorkspaceProfile) => Promise<T>): Promise<T> {
+    return withTransaction(this.deps.pool, context, async (tx) => {
       const profile = await readProfile(tx);
       if (!profile) throw new WebinarError(403, 'This workspace is not available to you.');
       if (!profile.canManage) throw new WebinarError(403, 'Only a workspace owner or admin can manage webinars.');
@@ -636,13 +640,45 @@ export class PgWebinarService {
    * not grant marketing permission; only the form's explicit opt-in is passed as consent.
    */
   async sendToCrm(identity: PortalSessionIdentity, requestId: string, id: string, batch = 25): Promise<{ linked: number; replayed: number; failed: number; remaining: number }> {
+    return this.handoff(this.context(identity, requestId), identity.userId, id, batch);
+  }
+
+  /**
+   * Worker path for webinars with automatic handoff on: new registrants of each
+   * published webinar are sent to the CRM acting as the webinar's creator, under
+   * that user's own RLS context. A creator who is no longer an owner simply fails
+   * the authority check, and the registrants wait for a manual send.
+   */
+  async autoHandoff(workspaceId: string, requestId: string, batch = 25): Promise<{ events: number; linked: number; failed: number }> {
+    if (!this.deps.crm || !UUID.test(workspaceId)) return { events: 0, linked: 0, failed: 0 };
+    const due = await withTransaction(this.deps.pool, workerDatabaseContext({ workspaceId, requestId }), async (tx) => (await tx.query(
+      `/* webinars.auto-handoff-due */ SELECT e.id, e.created_by_user_id AS creator, e.settings FROM app.webinar_events e
+        WHERE e.workspace_id = app_private.current_workspace_id() AND e.status = 'published' AND e.created_by_user_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM app.webinar_registrations g WHERE g.workspace_id = e.workspace_id AND g.event_id = e.id
+            AND g.status = 'registered' AND g.crm_contact_id IS NULL)
+        ORDER BY e.starts_at LIMIT 10`)).rows as { id: string; creator: string; settings: unknown }[]);
+    let events = 0, linked = 0, failed = 0;
+    for (const row of due) {
+      if (!readSettings(row.settings).crmAutoHandoff || !UUID.test(row.creator)) continue;
+      events += 1;
+      try {
+        const r = await this.handoff(requestDatabaseContext({ workspaceId, userId: row.creator, requestId }), row.creator, row.id, batch);
+        linked += r.linked + r.replayed;
+        failed += r.failed;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { events, linked, failed };
+  }
+
+  private async handoff(context: DatabaseRequestContext, actorUserId: string, id: string, batch: number): Promise<{ linked: number; replayed: number; failed: number; remaining: number }> {
     const crm = this.deps.crm;
     if (!crm) throw new WebinarError(503, 'The CRM command identity is not configured on this deployment.');
-    const { event } = await this.get(identity, requestId, id);
-    const pending = await this.managed(identity, requestId, async (tx) => (await tx.query(`SELECT id, email, name, marketing_consent FROM app.webinar_registrations
+    const event = await this.managedIn(context, (tx) => this.loadEvent(tx, id));
+    const pending = await this.managedIn(context, async (tx) => (await tx.query(`SELECT id, email, name, marketing_consent FROM app.webinar_registrations
       WHERE workspace_id = app_private.current_workspace_id() AND event_id = $1 AND status = 'registered' AND crm_contact_id IS NULL
       ORDER BY created_at LIMIT $2`, [id, batch])).rows as { id: string; email: string; name: string; marketing_consent: boolean }[]);
-    const context = this.context(identity, requestId);
     const stage = await withTransaction(crm.pool, context, async (tx) => {
       const r = await tx.query(`/* webinars.crm-new-stage */ SELECT p.id AS "pipelineId", s.id AS "stageId"
         FROM app.pipelines p JOIN app.pipeline_stages s ON s.workspace_id = p.workspace_id AND s.pipeline_id = p.id
@@ -657,7 +693,7 @@ export class PgWebinarService {
         const result = await crm.commands.createLead(context, {
           commandKey: `webinar.${event.id}.${reg.id}`,
           displayName: reg.name.slice(0, 200) || reg.email,
-          ownerUserId: identity.userId,
+          ownerUserId: actorUserId,
           source: `webinar:${event.publicKey}:${reg.id}`,
           // The registration form's explicit opt-in is the only evidence that travels; without it, consent stays unknown.
           contactPoints: [{ kind: 'email', value: reg.email, isPrimary: true, consentStatus: reg.marketing_consent === true ? 'opted_in' : 'unknown' }],
@@ -665,14 +701,14 @@ export class PgWebinarService {
           opportunityName: `${event.settings.crmOpportunityPrefix}: ${event.title} · ${reg.name}`.slice(0, 200),
           valueMinor: 0, currency: 'GBP',
         });
-        await this.managed(identity, requestId, (tx) => tx.query(`UPDATE app.webinar_registrations SET crm_contact_id = $2, crm_opportunity_id = $3, crm_linked_at = clock_timestamp(), updated_at = clock_timestamp()
+        await this.managedIn(context, (tx) => tx.query(`UPDATE app.webinar_registrations SET crm_contact_id = $2, crm_opportunity_id = $3, crm_linked_at = clock_timestamp(), updated_at = clock_timestamp()
           WHERE workspace_id = app_private.current_workspace_id() AND id = $1`, [reg.id, result.contactId, result.opportunityId]));
         if (result.disposition === 'applied') linked += 1; else replayed += 1;
       } catch {
         failed += 1;
       }
     }
-    const remaining = await this.managed(identity, requestId, async (tx) => Number((await tx.query(`SELECT count(*) AS n FROM app.webinar_registrations
+    const remaining = await this.managedIn(context, async (tx) => Number((await tx.query(`SELECT count(*) AS n FROM app.webinar_registrations
       WHERE workspace_id = app_private.current_workspace_id() AND event_id = $1 AND status = 'registered' AND crm_contact_id IS NULL`, [id])).rows[0].n));
     return { linked, replayed, failed, remaining };
   }

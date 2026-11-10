@@ -54,7 +54,8 @@ export function classifyPortalAbuseRoute(pathname: string, method: string): Port
   if (pathname === '/portal/login') return 'auth.login';
   if (pathname === '/portal/setup') return 'auth.setup';
   if (pathname === '/portal/auth/property-predator'
-      || pathname === '/portal/auth/property-predator/callback') return 'auth.sso';
+      || pathname === '/portal/auth/property-predator/callback'
+      || pathname === '/portal/auth/group-hq') return 'auth.sso';
   if (method !== 'GET' && method !== 'HEAD') return 'command';
   if (pathname === '/portal' || pathname === '/portal/') return 'read.overview';
   return 'read.page';

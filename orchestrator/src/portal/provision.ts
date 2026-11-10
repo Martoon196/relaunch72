@@ -156,6 +156,8 @@ export interface PostgresPortalConfig {
   auth: PortalAuthService;
   /** Optional, env-gated main-site identity bridge. It never carries provider tokens. */
   propertyPredatorSso?: PropertyPredatorSsoClient;
+  /** Group HQ sign-in handoff verifier; absent means the handoff route is not available. */
+  groupHqSso?: PostgresPortalDeps['groupHqSso'];
   crm: PortalCrmService;
   journeys?: PortalJourneyManagerService;
   /** Authoritative operator queue; assignment/snooze only, with no provider effects. */
@@ -265,6 +267,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     abuseHashSecret: cfg.abuseHashSecret,
     auth: cfg.auth,
     propertyPredatorSso: cfg.propertyPredatorSso,
+    groupHqSso: cfg.groupHqSso,
     crm: cfg.crm,
     financeDrafts: cfg.financeDrafts,
     investors: cfg.investors,

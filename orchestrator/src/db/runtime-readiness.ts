@@ -4,6 +4,7 @@ import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
 import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-studio-schema.js';
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
+import { GROUP_HQ_SSO_MIGRATION, GROUP_HQ_SSO_CHECKSUM } from './group-hq-sso-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -253,6 +254,11 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[144]?.checksum===SEO_LIMITS_CHECKSUM
       && applied.get(SEO_LIMITS_MIGRATION)===SEO_LIMITS_CHECKSUM
       && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM) applied.delete(WEBINARS_MIGRATION);
+  // Released native146 stays ready after the exact additive Group HQ 147 is applied.
+  if (migrations.length===146 && migrations[145]?.filename===WEBINARS_MIGRATION
+      && migrations[145]?.checksum===WEBINARS_CHECKSUM
+      && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM
+      && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM) applied.delete(GROUP_HQ_SSO_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -266,6 +272,13 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_LIMITS_MIGRATION)===SEO_LIMITS_CHECKSUM
       && applied.get(CREATIVE_STUDIO_MIGRATION)===CREATIVE_STUDIO_CHECKSUM
       && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) return;
+  // Group HQ 147 is capable only after the exact native146 ledger is applied. While it is
+  // pending, the handoff route answers 404 and the worker's automatic CRM handoff stays off.
+  if (migrations.length===147 && migrations[146]?.filename===GROUP_HQ_SSO_MIGRATION
+      && migrations[145]?.filename===WEBINARS_MIGRATION && pending.length===1
+      && pending[0]?.filename===GROUP_HQ_SSO_MIGRATION && pending[0]?.checksum===GROUP_HQ_SSO_CHECKSUM
+      && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM
+      && applied.get(SEO_LIMITS_MIGRATION)===SEO_LIMITS_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

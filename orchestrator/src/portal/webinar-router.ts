@@ -146,6 +146,7 @@ function settingsFromForm(f: URLSearchParams): WebinarSettings {
     questionsModerated: f.get('questionsModerated') === '1',
     accentColor: f.get('accentColor') ?? '',
     crmOpportunityPrefix: f.get('crmPrefix') ?? '',
+    crmAutoHandoff: f.get('crmAutoHandoff') === '1',
   });
 }
 

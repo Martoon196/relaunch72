@@ -2,6 +2,7 @@ import { handleWebinarPublic } from '../webinars/public-router.js';
 import { webinarClientKey } from '../webinars/http.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePortal, type PostgresPortalDeps } from '../portal/router.js';
+import { GROUP_HQ_HANDOFF_ROUTE } from '../portal/group-hq-sso.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
 import { parseCookies } from '../server/admin/session.js';
 import { principalAbuseAdmission, sourceAbuseAdmission } from '../portal/abuse.js';
@@ -72,6 +73,8 @@ async function body(req: IncomingMessage, maximum: number): Promise<Buffer> {
 }
 function portalPath(path: string): boolean {
   return path === '/portal' || path === '/portal/appearance.js' || path === '/portal/mhp-crm.js'
+    || path === GROUP_HQ_HANDOFF_ROUTE
+    || path === '/portal/webinars' || path.startsWith('/portal/webinars/')
     || path === '/portal/crm' || path.startsWith('/portal/crm/')
     || path === '/portal/investors' || path.startsWith('/portal/investors/')
     || path === '/portal/leadrelay' || path.startsWith('/portal/leadrelay/')
