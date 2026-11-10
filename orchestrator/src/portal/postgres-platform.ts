@@ -29,6 +29,10 @@ import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations
 import { createGroupHqInboxCrmMount, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
 import { createGroupHqWebinarsReadMount } from '../integrations/group-hq-crm/webinars.js';
 import { GroupHqHandoff, loadGroupHqSsoConfig } from './group-hq-sso.js';
+import { loadOperatorConfig, type OperatorConfig } from '../operator/config.js';
+import { OperatorSessions } from '../operator/sessions.js';
+import { createOperatorTools } from '../operator/tools.js';
+import type { McpToolHost } from '../operator/mcp.js';
 import {
   createPgInboxReadService,
   type InboxConversationQuery,
@@ -197,6 +201,8 @@ export interface PgPortalPlatform {
   groupHqWebinars?: ReturnType<typeof createGroupHqWebinarsReadMount>;
   /** Group HQ sign-in handoff verifier shared by the PP and MHP hosts; absent when not configured. */
   groupHqSso?: GroupHqHandoff;
+  /** Operator API (MCP for Claude): tools acting as the configured user; absent when not configured. */
+  operator?: { config: OperatorConfig; tools: McpToolHost };
   mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
@@ -1370,20 +1376,33 @@ export async function buildPgPortalPlatform(
     } catch {
       console.warn('Group HQ inbox command bridge is unavailable; customer workspaces remain mounted.');
     }
+    const auth = new PgPortalAuthService({ readPool: webPool, commandPool: identityPool });
+    const crm = createPgPortalCrmService({
+      webPool,
+      commandPool,
+      cursorSecret: env.SESSION_SECRET?.trim() ?? '',
+    });
+    let operator: PgPortalPlatform['operator'];
+    try {
+      const operatorConfig = loadOperatorConfig(env);
+      if (operatorConfig) {
+        const sessions = new OperatorSessions(operatorConfig, { pp: auth, mhp: mhp?.auth });
+        operator = { config: operatorConfig, tools: createOperatorTools({ sessions, crm, webinars, writes: operatorConfig.writes, log: (line) => console.warn(line) }) };
+      }
+    } catch (error) {
+      console.warn(`Operator API is not configured correctly and stays off. ${error instanceof Error ? error.message : ''}`.trim());
+    }
     let closed = false;
     return {
       groupHqCrm,
       groupHqInboxCrm,
       groupHqWebinars,
       groupHqSso,
+      operator,
       mhp,
-      auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
+      auth,
       abuse,
-      crm: createPgPortalCrmService({
-        webPool,
-        commandPool,
-        cursorSecret: env.SESSION_SECRET?.trim() ?? '',
-      }),
+      crm,
       financeDrafts: createPgFinanceDraftsService({ webPool, commandPool, secret: env.SESSION_SECRET?.trim() ?? '' }),
       investors: new InvestorService(webPool, identityPool, commandPool),
       investorMail: new InvestorMailService(webPool,identityPool,investorMailVault(env),investorOAuthConfig(env),env.INVESTOR_MAIL_DELIVERY_ENABLED==='true'),
