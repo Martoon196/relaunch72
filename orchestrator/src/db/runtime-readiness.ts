@@ -6,7 +6,7 @@ import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import { GROUP_HQ_SSO_MIGRATION, GROUP_HQ_SSO_CHECKSUM } from './group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_MIGRATION, OPERATOR_OAUTH_CHECKSUM } from './operator-oauth-schema.js';
-import { MHP_KITS_MIGRATION, MHP_KITS_CHECKSUM } from './mhp-kits-schema.js';
+import { MHP_KITS_MIGRATION, MHP_KITS_CHECKSUM, MHP_KIT_CREDIT_MIGRATION, MHP_KIT_CREDIT_CHECKSUM } from './mhp-kits-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -271,6 +271,11 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[147]?.checksum===OPERATOR_OAUTH_CHECKSUM
       && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM
       && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM) applied.delete(MHP_KITS_MIGRATION);
+  // The released module kits 149 stays ready after the exact additive kit course credit 150 is applied.
+  if (migrations.length===149 && migrations[148]?.filename===MHP_KITS_MIGRATION
+      && migrations[148]?.checksum===MHP_KITS_CHECKSUM
+      && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM
+      && applied.get(MHP_KIT_CREDIT_MIGRATION)===MHP_KIT_CREDIT_CHECKSUM) applied.delete(MHP_KIT_CREDIT_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -305,6 +310,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===MHP_KITS_MIGRATION && pending[0]?.checksum===MHP_KITS_CHECKSUM
       && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM
       && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM) return;
+  // Kit course credit 150 is capable only after the exact module kits 149 ledger is applied. While it is
+  // pending, course receipts skip the credit (the claim function is absent) and nothing else changes.
+  if (migrations.length===150 && migrations[149]?.filename===MHP_KIT_CREDIT_MIGRATION
+      && migrations[148]?.filename===MHP_KITS_MIGRATION && pending.length===1
+      && pending[0]?.filename===MHP_KIT_CREDIT_MIGRATION && pending[0]?.checksum===MHP_KIT_CREDIT_CHECKSUM
+      && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM
+      && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

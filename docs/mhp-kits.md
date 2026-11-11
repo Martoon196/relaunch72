@@ -24,7 +24,14 @@ Martin Howard Property (MH196 Ltd) Stripe account. The catalogue and prices that
   stored in the database, never in a public repository. Members download at `/app/kits` and at the top of the
   module page ("Your kit downloads").
 
-Not built yet: the course credit (kit spend in the last 90 days counting towards Property Done Properly).
+Course credit (migration `0150_mhp_kit_course_credit.sql`): what a buyer paid for kits in the 90 days before
+buying Property Done Properly counts in full towards it. The course is bought at its normal price; when its signed
+receipt is recorded, the buyer's eligible kit orders (same email, same Stripe account, not refunded, not already
+credited) are claimed once for that course checkout and the total is refunded against the first course payment,
+always leaving at least £1 paid so the credit can never read as a full refund of the course. Replays are idempotent
+(the claim returns the same orders; the refund uses the key `mhp-kit-credit:<course session>`). A capped credit is
+logged as `mhp.kit.credit.capped` for the owner to settle by hand. `/app/kits` shows the credit a member's kits
+currently count for. Until 0150 is applied, course receipts are recorded without the credit.
 
 Release order: deploy this binary to every RL72 service first (it runs with 0149 pending: kit routes say "opening
 shortly"), then apply 0149, then restart the web service so the kit service composes.

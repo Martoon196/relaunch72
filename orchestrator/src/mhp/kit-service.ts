@@ -30,7 +30,15 @@ export interface MhpKitJob {
   id: string; lease: string; email: string; name: string; kind: 'single' | 'pair'; kits: string[];
   amountPence: number; paidAt: string; receiptState: string; attempt: number;
 }
-export interface MhpMyKits { isAdmin: boolean; kits: { kit: string; orderedAt: string }[]; files: { kit: string; name: string; size: number }[] }
+export interface MhpMyKits {
+  isAdmin: boolean; kits: { kit: string; orderedAt: string }[]; files: { kit: string; name: string; size: number }[];
+  /** What the member's kits currently count towards the course (0150); absent before that migration. */
+  credit?: { amountPence: number; nextExpiresAt: string | null };
+}
+/** A course purchase the kit credit applies to: its checkout, buyer and first payment. */
+export interface MhpCourseCreditInput { sessionId: string; email: string; paidAt: string; chargeId: string; chargeAmount: number; alreadyRefunded: number }
+/** The least a credit leaves paid on the course payment, so a credit can never read as a full refund of the course. */
+export const MHP_KIT_CREDIT_FLOOR_PENCE = 100;
 export interface MhpKitMailer {
   readonly configured: boolean;
   sendKitReceipt?(email: string, name: string, receipt: MhpKitReceipt): Promise<void>;
@@ -183,6 +191,31 @@ export class PgMhpKitService {
     } else complete = false;
     await pool.query('SELECT app_private.mhp_finish_kit_job($1,$2,$3)', [job.id, job.lease, complete]);
     return complete ? 'done' : 'retry';
+  }
+
+  /**
+   * Kit spend counts towards the course: once per course checkout, the buyer's kit orders from the 90 days before
+   * it are claimed and that amount is refunded against the course payment, leaving at least £1 paid on it.
+   * Idempotent: a replayed receipt claims the same orders and Stripe's idempotency key stops a second refund.
+   */
+  /** True once migration 0150 is applied; until then course receipts are recorded without a kit credit. */
+  creditEnabled = false;
+
+  async applyCourseCredit(input: MhpCourseCreditInput): Promise<{ creditedPence: number; capped: boolean }> {
+    if (!this.creditEnabled) return { creditedPence: 0, capped: false };
+    const { stripe, config, pool } = this.enabled();
+    const claim = await pool.query<{ claim: { amountPence: number; orders: number } }>('SELECT app_private.mhp_claim_kit_credit($1,$2,$3,$4,$5) AS claim',
+      [config.accountId, config.live, input.email, input.sessionId, input.paidAt]);
+    const owed = claim.rows[0]?.claim.amountPence ?? 0;
+    if (owed <= 0) return { creditedPence: 0, capped: false };
+    const room = Math.max(0, input.chargeAmount - input.alreadyRefunded - MHP_KIT_CREDIT_FLOOR_PENCE);
+    const amount = Math.min(owed, room);
+    if (amount < owed) console.warn(JSON.stringify({ event: 'mhp.kit.credit.capped', owedPence: owed, creditedPence: amount }));
+    if (amount <= 0) return { creditedPence: 0, capped: true };
+    await stripe.refunds.create({ charge: input.chargeId, amount, reason: 'requested_by_customer',
+      metadata: { brand: MHP_BRAND, mhp_kit_credit: input.sessionId } }, { idempotencyKey: `mhp-kit-credit:${input.sessionId}` });
+    console.info(JSON.stringify({ event: 'mhp.kit.credit.applied', creditedPence: amount }));
+    return { creditedPence: amount, capped: amount < owed };
   }
 
   async myKits(sessionToken: string): Promise<MhpMyKits> {

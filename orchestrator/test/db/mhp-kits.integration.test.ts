@@ -186,3 +186,55 @@ test('a paid kit opens its module and downloads for its buyer only, once, until 
     await admin.end();
   }
 });
+
+test('kit spend counts towards the course once: claimed by email within 90 days and refunded against the course payment', { skip, timeout: 300_000 }, async () => {
+  const admin = await openTestDatabase();
+  const web = await loginRole(admin, 'r72_web');
+  const identity = await loginRole(admin, 'r72_identity_command');
+  const webhook = await loginRole(admin, 'r72_webhook');
+  try {
+    const org = '15000000-0000-4000-8000-0000000000a1', ws = '15000000-0000-4000-8000-0000000000a2', buyer = '15000000-0000-4000-8000-000000000001';
+    await admin.query(`INSERT INTO app.organizations(id,name,slug,kind) VALUES($1,'Credit proof','credit-proof-org','direct_customer')`, [org]);
+    await admin.query(`INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES($1,$2,'Credit proof','credit-proof-ws')`, [ws, org]);
+    await admin.query(`INSERT INTO app.users(id,email,status,display_name,email_verified_at) VALUES($1,'credit-buyer@example.invalid','active','Credit Buyer',now())`, [buyer]);
+    await admin.query(`INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES($1,$2,'owner','active')`, [org, buyer]);
+    await admin.query(`INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status) VALUES($1,$2,$3,'owner','active')`, [ws, org, buyer]);
+    await admin.query(`INSERT INTO app.user_sessions(token_hash,csrf_secret_hash,user_id,selected_workspace_id,expires_at,product_audience)
+      VALUES($1,$2,$3,$4,now()+interval '1 hour','martin_howard_property')`, [createHash('sha256').update(tokenFor('credit')).digest(), createHash('sha256').update('credit-csrf').digest(), buyer, ws]);
+    const order = (session: string, kits: string[], amount: number, daysAgo: number, refunded = false, account = 'acct_creditproof') => admin.query(
+      `INSERT INTO app_private.mhp_kit_orders(stripe_account,live,session_id,payment_intent_id,email,kind,kits,modules,amount_pence,paid_at,refunded_at)
+       VALUES($1,false,$2,$3,'credit-buyer@example.invalid',$4,$5,$6,$7,now()-make_interval(days=>$8),$9)`,
+      [account, session, `pi_${session.slice(8)}`, kits.length === 1 ? 'single' : 'pair', kits, kits.map(() => '25'), amount, daysAgo, refunded ? new Date() : null]);
+    await order('cs_test_c1', ['land-gap'], 2700, 2);
+    await order('cs_test_c2', ['brrr', 'title-splitting'], 9700, 30);
+    await order('cs_test_c3', ['hmos-wales-first'], 9700, 120);             // older than 90 days: no credit
+    await order('cs_test_c4', ['auctions-and-legal-packs'], 9700, 5, true); // refunded: no credit
+
+    const refunds: { charge: string; amount: number; key: string }[] = [];
+    const stripe = { refunds: { create: async (p: { charge: string; amount: number }, o: { idempotencyKey: string }) => { refunds.push({ charge: p.charge, amount: p.amount, key: o.idempotencyKey }); return { id: 're_x' }; } } } as unknown as Stripe;
+    const kits = new PgMhpKitService(web, identity, webhook, stripe, { accountId: 'acct_creditproof', live: false } as MhpCommerceConfig);
+    const course = { sessionId: 'cs_test_course1', email: 'Credit-Buyer@example.invalid', paidAt: new Date().toISOString(), chargeId: 'ch_course1', chargeAmount: 149700, alreadyRefunded: 0 };
+
+    assert.deepEqual((await kits.myKits(tokenFor('credit'))).credit?.amountPence, 2700 + 9700);
+    assert.deepEqual(await kits.applyCourseCredit(course), { creditedPence: 0, capped: false }, 'off until 0150 is confirmed');
+    kits.creditEnabled = true;
+    assert.deepEqual(await kits.applyCourseCredit(course), { creditedPence: 12400, capped: false });
+    assert.deepEqual(refunds, [{ charge: 'ch_course1', amount: 12400, key: 'mhp-kit-credit:cs_test_course1' }]);
+    // A replayed receipt claims the same orders; Stripe's idempotency key makes the refund the same request.
+    assert.deepEqual(await kits.applyCourseCredit(course), { creditedPence: 12400, capped: false });
+    assert.equal(refunds[1]!.key, refunds[0]!.key);
+    // A second course purchase finds nothing left to credit, and the kits page shows no credit.
+    assert.equal((await kits.myKits(tokenFor('credit'))).credit?.amountPence, 0);
+    await order('cs_test_c5', ['doing-it-properly'], 9700, 5, false, 'acct_otheraccount'); // paid on another Stripe account
+    assert.deepEqual(await kits.applyCourseCredit({ ...course, sessionId: 'cs_test_course2' }), { creditedPence: 0, capped: false });
+    // Credit never empties the course payment: at least £1 stays paid, so it can't read as a full refund.
+    await order('cs_test_c6', ['brrr'], 9700, 1);
+    assert.deepEqual(await kits.applyCourseCredit({ ...course, sessionId: 'cs_test_course3', chargeAmount: 5000, alreadyRefunded: 0 }), { creditedPence: 4900, capped: true });
+    // Kits still open after being credited.
+    assert.deepEqual((await kits.myKits(tokenFor('credit'))).kits.map(k => k.kit).sort(), ['brrr', 'doing-it-properly', 'hmos-wales-first', 'land-gap', 'title-splitting']);
+    await assert.rejects(admin.query(`SELECT app_private.mhp_claim_kit_credit('acct_creditproof',false,'x@example.invalid','not-a-session',now())`), /Invalid course credit claim/);
+  } finally {
+    await Promise.allSettled([web.end(), identity.end(), webhook.end()]);
+    await admin.end();
+  }
+});
