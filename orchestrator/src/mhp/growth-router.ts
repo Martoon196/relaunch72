@@ -300,7 +300,7 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       if (method !== 'GET') throw new HttpError(405, 'This page does not accept that request.');
       const outline = await deps.learning.outline(token).catch(() => null);
       const owned = mine.kits.map(k => mhpKit(k.kit)).filter((k): k is MhpKit => Boolean(k));
-      send(res, 200, kitsPage({ csrf, owner: mine.isAdmin, bought: url.searchParams.get('bought') === '1', kits: owned.map(k => ({
+      send(res, 200, kitsPage({ csrf, owner: mine.isAdmin, bought: url.searchParams.get('bought') === '1', credit: mine.credit, kits: owned.map(k => ({
         kit: k.kit, name: k.name, module: mhpKitModule(k), moduleTitle: outline?.modules.find(m => m.number === mhpKitModule(k))?.title ?? null,
         files: mine.files.filter(f => f.kit === k.kit).map(f => ({ name: f.name, size: f.size })) })) }));
       return true;

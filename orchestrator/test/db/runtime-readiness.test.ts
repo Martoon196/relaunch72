@@ -11,7 +11,7 @@ import { assertRuntimeSchemaCurrent } from '../../src/db/runtime-readiness.js';
 import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
-import { MHP_KITS_CHECKSUM, MHP_KITS_MIGRATION } from '../../src/db/mhp-kits-schema.js';
+import { MHP_KITS_CHECKSUM, MHP_KITS_MIGRATION, MHP_KIT_CREDIT_CHECKSUM, MHP_KIT_CREDIT_MIGRATION } from '../../src/db/mhp-kits-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -591,18 +591,41 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
   await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
 });
 
-test('module kits 149 cutover requires the exact applied operator OAuth 148 ledger and nothing beyond it', async()=>{
+test('kit course credit 150 cutover requires the exact applied kits 149 ledger and nothing beyond it', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,150);
+  assert.deepEqual(all[149],{filename:MHP_KIT_CREDIT_MIGRATION,checksum:MHP_KIT_CREDIT_CHECKSUM});
+  const through149=all.slice(0,149), credit=all[149]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through149); await capable(all);
+  await assert.rejects(capable(all.slice(0,148)),/schema is behind by 2/);
+  await assert.rejects(capable([...through149,{...credit,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0151_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('module kits 149 binary stays ready after the exact additive kit credit 150 and nothing else', async()=>{
+  const directory=await prefixDirectory(149,'kits149-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,149);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[149]!]);
+  await assert.rejects(check([...rows,{filename:'0151_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('module kits 149 cutover requires the exact applied operator OAuth 148 ledger and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,149).map(({filename,checksum})=>({filename,checksum}));
+  const kitsDirectory=await prefixDirectory(149,'kits149-cutover');
   assert.equal(all.length,149);
   assert.deepEqual(all[147],{filename:OPERATOR_OAUTH_MIGRATION,checksum:OPERATOR_OAUTH_CHECKSUM});
   assert.deepEqual(all[148],{filename:MHP_KITS_MIGRATION,checksum:MHP_KITS_CHECKSUM});
   const through148=all.slice(0,148), kits=all[148]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),kitsDirectory,{});
   await capable(through148); await capable(all);
   await assert.rejects(capable(all.slice(0,147)),/schema is behind by 2/);
   await assert.rejects(capable([...through148,{...kits,checksum:'0'.repeat(64)}]),/checksum changed/);
   await assert.rejects(capable([...all.slice(0,147),kits]),/not a contiguous prefix|behind/);
-  await assert.rejects(capable([...all,{filename:'0150_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(capable([...all,{filename:'0151_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });
 
 test('operator OAuth 148 binary stays ready after the exact additive kits 149 and nothing else', async()=>{

@@ -68,7 +68,11 @@ interface RefundPlan {
 
 /** Receipts reconcile current provider state instead of trusting event arrival order. */
 /** Handles a verified Stripe event that belongs to a module kit; false for anything else (src/mhp/kit-service.ts). */
-export interface MhpKitEventHandler { handleEvent(event: Stripe.Event): Promise<boolean> }
+export interface MhpKitEventHandler {
+  handleEvent(event: Stripe.Event): Promise<boolean>;
+  /** Kit spend counts towards the course: credited once, after the course receipt is recorded. */
+  applyCourseCredit?(input: { sessionId: string; email: string; paidAt: string; chargeId: string; chargeAmount: number; alreadyRefunded: number }): Promise<unknown>;
+}
 
 export class PgMhpCommerceService {
   private accountCheck?: Promise<void>;
@@ -351,6 +355,13 @@ export class PgMhpCommerceService {
     if (event.type !== 'checkout.session.completed' || evidence.cancelled || evidence.payments.every(p => p.refunded === p.amount)) return null;
     const product = mhpProduct(evidence.sku);
     if (!product) return null;
+    // Kit spend counts in full towards the course. Recorded first, so a failure here retries the receipt
+    // (both the claim and the refund are idempotent) and never loses the course purchase itself.
+    if (product.type === 'course' && this.kits?.applyCourseCredit && evidence.payments.length) {
+      const first = [...evidence.payments].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt))[0]!;
+      await this.kits.applyCourseCredit({ sessionId: evidence.sessionId, email: evidence.email, paidAt: evidence.firstPaidAt,
+        chargeId: first.chargeId, chargeAmount: first.amount, alreadyRefunded: first.refunded });
+    }
     if (product.availability === 'window' && Date.parse(evidence.firstPaidAt) >= config.windowEndsAt) {
       // Only possible if the cut-over expiry could not reach Stripe. Recorded so the
       // money and access stay consistent; logged without identifiers for the owner.

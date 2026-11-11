@@ -97,11 +97,14 @@ export async function buildMhpRuntime(input: {
   const stripe = config ? new Stripe(config.secretKey, { maxNetworkRetries: 1, timeout: 8_000 }) : null;
   const commerce = new PgMhpCommerceService(webPool, identityPool, webhookPool, stripe, config);
   // Module kits need migration 0149; until it is applied the kit routes answer "opening shortly".
-  const kitsReady = (await webPool.query<{ ready: boolean }>(
-    `/* mhp.kits-schema-readiness */ SELECT to_regprocedure('app_private.mhp_my_kits(bytea)') IS NOT NULL AS ready`)).rows[0]?.ready === true;
+  const kitSchema = (await webPool.query<{ ready: boolean; credit: boolean }>(
+    `/* mhp.kits-schema-readiness */ SELECT to_regprocedure('app_private.mhp_my_kits(bytea)') IS NOT NULL AS ready,
+      to_regprocedure('app_private.mhp_claim_kit_credit(text,boolean,text,text,timestamptz)') IS NOT NULL AS credit`)).rows[0];
+  const kitsReady = kitSchema?.ready === true;
   const kits = kitsReady ? new PgMhpKitService(webPool, identityPool, webhookPool, stripe, config) : undefined;
+  if (kits) kits.creditEnabled = kitSchema?.credit === true;
   if (kits) commerce.setKitHandler(kits);
-  console.info(JSON.stringify({ event: 'mhp.kits.readiness', schema: kitsReady, billing: Boolean(kits?.billingEnabled) }));
+  console.info(JSON.stringify({ event: 'mhp.kits.readiness', schema: kitsReady, credit: Boolean(kits?.creditEnabled), billing: Boolean(kits?.billingEnabled) }));
   const mail = createMhpTransactionalMailer(env);
   const marketing = mhpMarketingConfig(env);
   const webinar = mhpWebinarConfig(env);

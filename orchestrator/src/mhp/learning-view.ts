@@ -91,12 +91,17 @@ function downloadsBlock(kit: MhpKitDownloads, heading = 'Your kit downloads'): s
     : '<p>Your files are being added. Check back shortly, or reply to your receipt email and Martin will send them.</p>';
   return `<section class="panel" style="margin:18px 0 26px"><h2 style="margin-top:0">${e(heading)}</h2><p style="margin:0 0 10px">${e(kit.name)}: yours for life.</p>${files}</section>`;
 }
-export function kitsPage(input: { csrf: string; owner: boolean; bought: boolean; kits: (MhpKitDownloads & { module: string; moduleTitle: string | null })[] }): string {
+export function kitsPage(input: { csrf: string; owner: boolean; bought: boolean; kits: (MhpKitDownloads & { module: string; moduleTitle: string | null })[];
+  credit?: { amountPence: number; nextExpiresAt: string | null } }): string {
   const thanks = input.bought ? '<div class="notice"><strong>Thank you. Your kits are open.</strong><p>Your receipt is on its way by email.</p></div>' : '';
+  const pounds = (pence: number) => `£${(pence / 100).toFixed(pence % 100 ? 2 : 0)}`;
+  const until = input.credit?.nextExpiresAt ? new Date(input.credit.nextExpiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' }) : '';
+  const credit = input.credit && input.credit.amountPence > 0
+    ? `<div class="notice"><strong>Your kits count ${e(pounds(input.credit.amountPence))} towards the full course.</strong><p>Buy <a href="https://martinhowardproperty.co.uk/join/">Property Done Properly</a> with this email address and ${e(pounds(input.credit.amountPence))} comes back to your card straight after the payment. Each kit counts for 90 days from its purchase${until ? `; the first runs out on ${e(until)}` : ''}.</p></div>` : '';
   const list = input.kits.length
     ? input.kits.map(k => `${downloadsBlock(k, k.name)}${k.moduleTitle ? `<p style="margin:-14px 0 28px"><a href="/app/learn/${e(k.module)}">Open the lessons: ${e(k.moduleTitle)} &rarr;</a></p>` : ''}`).join('')
     : `<div class="notice"><strong>No kits on this account yet.</strong><p>Kits you buy appear here, under the email address you paid with. <a href="https://martinhowardproperty.co.uk/kits/">See the kits</a>.</p></div>`;
-  return frame('Your kits', input.csrf, `<span class="eyebrow">Your kits</span><h1>Your kits.</h1><p class="intro">Field guides, calculators and letters for every kit you own. Download them as often as you like.</p>${thanks}${list}${input.owner ? '<p><a href="/hq/kits">Owner: upload kit files</a></p>' : ''}`, input.owner);
+  return frame('Your kits', input.csrf, `<span class="eyebrow">Your kits</span><h1>Your kits.</h1><p class="intro">Field guides, calculators and letters for every kit you own. Download them as often as you like.</p>${thanks}${credit}${list}${input.owner ? '<p><a href="/hq/kits">Owner: upload kit files</a></p>' : ''}`, input.owner);
 }
 export function hqKitsPage(input: { csrf: string; kits: { kit: string; name: string; files: number }[]; loaded?: { kits: number; files: number; skipped: number } }): string {
   const done = input.loaded ? `<div class="notice"><strong>Uploaded ${input.loaded.files} files for ${input.loaded.kits} kits.</strong>${input.loaded.skipped ? `<p>${input.loaded.skipped} entries were not kit files and were skipped.</p>` : ''}</div>` : '';
