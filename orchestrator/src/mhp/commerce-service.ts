@@ -67,8 +67,14 @@ interface RefundPlan {
 }
 
 /** Receipts reconcile current provider state instead of trusting event arrival order. */
+/** Handles a verified Stripe event that belongs to a module kit; false for anything else (src/mhp/kit-service.ts). */
+export interface MhpKitEventHandler { handleEvent(event: Stripe.Event): Promise<boolean> }
+
 export class PgMhpCommerceService {
   private accountCheck?: Promise<void>;
+  private kits?: MhpKitEventHandler;
+  /** Module kits share this Stripe account and webhook; their events never reach the course receipt path. */
+  setKitHandler(kits: MhpKitEventHandler): void { this.kits = kits; }
   constructor(private readonly readPool: QueryPool, private readonly commandPool: QueryPool,
     private readonly webhookPool: QueryPool | null, private readonly stripe: Stripe | null,
     private readonly config: MhpCommerceConfig | null, private readonly now: () => number = Date.now) {}
@@ -330,6 +336,7 @@ export class PgMhpCommerceService {
     requireEvidence(event.livemode === config.live && (!event.account || event.account === config.accountId));
     if (!(MHP_STRIPE_EVENTS as readonly string[]).includes(event.type)) return null;
     await this.verifyAccount();
+    if (this.kits && await this.kits.handleEvent(event)) return null;
     const observedAt = new Date(this.now()).toISOString();
     const sessionId = await this.sessionForEvent(event);
     const { evidence, buyerName } = await this.purchaseEvidence(sessionId, observedAt);

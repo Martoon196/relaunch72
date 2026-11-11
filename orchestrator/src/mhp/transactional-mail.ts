@@ -1,4 +1,6 @@
 import { MHP_AUTH_ORIGIN, normalizeMhpEmail, type MhpAuthPurpose } from './auth-service.js';
+import type { MhpKitReceipt } from './kit-service.js';
+import { MHP_SELLER_FOOTER } from './kits.js';
 
 export class MhpWelcomeDeliveryError extends Error {
   constructor(readonly outcome: 'rejected' | 'unknown') { super('MHP purchase welcome delivery needs attention'); }
@@ -10,6 +12,8 @@ export interface MhpTransactionalMailer {
   sendAccessInvite(email: string, name: string, product: string): Promise<void>;
   /** After a signed Stripe receipt is recorded. Stripe sends the payment receipt itself. */
   sendPurchaseWelcome?(email: string, name: string, product: string, kind: 'course' | 'mentoring'): Promise<void>;
+  /** MHP-KITS-001: the receipt for one or two module kits, sent once after the signed Stripe receipt is recorded. */
+  sendKitReceipt?(email: string, name: string, receipt: MhpKitReceipt): Promise<void>;
   /** MHP009B: requested event-reminder email proof. Separate from auth links; creates no account. */
   sendEventPhoneLink?(email: string, url: string, startsAt: string): Promise<void>;
 }
@@ -92,6 +96,36 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
       const plain = `Hi ${name},\n\nThank you. Your payment for ${product} has gone through and your access is open.\n\n${next}\n\nSign in here: ${link}\nEnter ${email} and choose “Email my secure link”. The sign-in email contains a one-time link.\n\n${help}\n\nMartin Howard Property\nMH196 Ltd, registered in England and Wales, company number 15060897.\nEducation only. Nothing here is financial, legal or tax advice.`;
       const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px"><p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">You’re in.</h1><p>Hi ${escape(name)}, your payment for ${escape(product)} has gone through and your access is open.</p><p>${escape(next)}</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;padding:14px 20px;background:#E8A33D;color:#142019;text-decoration:none;border-radius:8px;font-weight:bold">Sign in</a></p><p style="font-size:13px;color:#5b665f">Enter ${escape(email)} and choose “Email my secure link”. ${escape(help)}</p><hr style="border:0;border-top:1px solid #e7ebe6"><p style="font-size:12px">Martin Howard Property · MH196 Ltd, registered in England and Wales, company number 15060897 · martin@propinvestuk.co.uk<br>Education only. Nothing here is financial, legal or tax advice.</p></div></div>`;
       await deliver(email, subject, plain, html, 'mhp-purchase', true);
+    },
+    async sendKitReceipt(email: string, name: string, receipt: MhpKitReceipt): Promise<void> {
+      if (!normalizeMhpEmail(email) || !name || name.length > 200 || !receipt.kits.length || receipt.kits.length > 2
+        || !Number.isSafeInteger(receipt.amountPence) || receipt.amountPence < 1) throw new Error('Invalid MHP kit receipt');
+      const link = `${MHP_AUTH_ORIGIN}/app/kits`;
+      const pounds = `£${(receipt.amountPence / 100).toFixed(receipt.amountPence % 100 ? 2 : 0)}`;
+      const paid = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long', year: 'numeric' }).format(Date.parse(receipt.paidAt));
+      const items = receipt.kits.map(k => k.name);
+      const what = items.join(' and ');
+      const subject = `Your receipt: ${what}`;
+      const lines = [
+        `Hi ${name},`, '',
+        `Thank you. Your payment of ${pounds} for the ${what} went through on ${paid}. Your kit${items.length > 1 ? 's are' : ' is'} yours for life.`, '',
+        `Open ${items.length > 1 ? 'them' : 'it'} here: ${link}`,
+        `Sign in with ${email} and choose "Email my secure link". You'll find your downloads (field guide, calculator${receipt.replay ? ' and letters' : ''}) and the module's lessons.`,
+        ...(receipt.replay ? ['', 'The replay of "The Land Nobody Seems to Own" is included. You will get a separate email with your replay link.'] : []),
+        '', 'At checkout you asked for immediate access to this digital content, which ends the statutory 14-day right to cancel. Martin still offers a voluntary 14-day, no-questions refund: reply to this email within 14 days of purchase.',
+        '', 'Need help? Reply to this email or write to martin@propinvestuk.co.uk.', '', 'Martin Howard Property', '', MHP_SELLER_FOOTER,
+      ];
+      const plain = lines.join('\n');
+      const row = (label: string, value: string) => `<tr><td style="padding:6px 0;color:#5b6660">${escape(label)}</td><td style="padding:6px 0;text-align:right"><strong>${escape(value)}</strong></td></tr>`;
+      const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px">`
+        + `<p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">Your receipt</h1><p>Hi ${escape(name)}, thank you. Your kit${items.length > 1 ? 's are' : ' is'} yours for life.</p>`
+        + `<table style="width:100%;border-collapse:collapse;margin:18px 0">${items.map(item => row(item, items.length > 1 ? 'included' : pounds)).join('')}${items.length > 1 ? row('Total', pounds) : ''}${row('Paid', paid)}</table>`
+        + `<p><a href="${escape(link)}" style="display:inline-block;background:#142019;color:#fff;padding:14px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Open your kit</a></p>`
+        + `<p>Sign in with <strong>${escape(email)}</strong> and choose “Email my secure link”. Your downloads and the module's lessons are waiting.</p>`
+        + (receipt.replay ? '<p>The replay of <strong>The Land Nobody Seems to Own</strong> is included. Your replay link arrives in a separate email.</p>' : '')
+        + `<p style="font-size:14px;color:#5b6660">At checkout you asked for immediate access to this digital content, which ends the statutory 14-day right to cancel. Martin still offers a voluntary 14-day, no-questions refund: reply to this email within 14 days of purchase.</p>`
+        + `<p style="font-size:14px">Need help? Reply to this email or write to martin@propinvestuk.co.uk.</p><p style="font-size:12px;color:#5b6660;margin-top:24px">${escape(MHP_SELLER_FOOTER)}</p></div></div>`;
+      await deliver(email, subject, plain, html, 'mhp-kit-receipt', true);
     },
     async sendEventPhoneLink(email: string, url: string, startsAt: string): Promise<void> {
       const target = new URL(url), start = Date.parse(startsAt);

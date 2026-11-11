@@ -6,6 +6,7 @@ import { CREATIVE_STUDIO_MIGRATION, CREATIVE_STUDIO_CHECKSUM } from './creative-
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import { GROUP_HQ_SSO_MIGRATION, GROUP_HQ_SSO_CHECKSUM } from './group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_MIGRATION, OPERATOR_OAUTH_CHECKSUM } from './operator-oauth-schema.js';
+import { MHP_KITS_MIGRATION, MHP_KITS_CHECKSUM } from './mhp-kits-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -265,6 +266,11 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[146]?.checksum===GROUP_HQ_SSO_CHECKSUM
       && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM
       && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM) applied.delete(OPERATOR_OAUTH_MIGRATION);
+  // The released operator OAuth 148 stays ready after the exact additive module kits 149 is applied.
+  if (migrations.length===148 && migrations[147]?.filename===OPERATOR_OAUTH_MIGRATION
+      && migrations[147]?.checksum===OPERATOR_OAUTH_CHECKSUM
+      && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM
+      && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM) applied.delete(MHP_KITS_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -292,6 +298,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===OPERATOR_OAUTH_MIGRATION && pending[0]?.checksum===OPERATOR_OAUTH_CHECKSUM
       && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM
       && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM) return;
+  // Module kits 149 is capable only after the exact operator OAuth 148 ledger is applied. While it is
+  // pending, the kit routes answer "opening shortly" and the webhook leaves kit events to retry.
+  if (migrations.length===149 && migrations[148]?.filename===MHP_KITS_MIGRATION
+      && migrations[147]?.filename===OPERATOR_OAUTH_MIGRATION && pending.length===1
+      && pending[0]?.filename===MHP_KITS_MIGRATION && pending[0]?.checksum===MHP_KITS_CHECKSUM
+      && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM
+      && applied.get(GROUP_HQ_SSO_MIGRATION)===GROUP_HQ_SSO_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

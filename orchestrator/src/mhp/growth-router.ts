@@ -6,7 +6,9 @@ import { principalAbuseAdmission, sourceAbuseAdmission, type PortalAbuseRouteCla
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, parseMhpSignup, parseMhpStory, verifyMhpUnsubscribeToken, type PgMhpGrowthService } from './growth-service.js';
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
-import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
+import { hqKitsPage, kitsPage, learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
+import { MhpKitError, type PgMhpKitService } from './kit-service.js';
+import { MHP_KITS, mhpKit, mhpKitModule, type MhpKit } from './kits.js';
 import { hqApplicationsPage, hqCoursePage, hqGrowthPage, hqRegistrantsPage, registrantsCsv, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
 import { MhpCommerceError, type MhpPrivateOfferLink, type PgMhpCommerceService } from './commerce-service.js';
 import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabilityCookie, mhpEventPhoneHintCookie,
@@ -19,6 +21,8 @@ export interface MhpGrowthRouterDependencies {
   unsubscribeSecret: string;
   marketingMode: string;
   phoneSignup?: Pick<PgMhpEventPhonePublic, 'fromSignup'>;
+  /** Module kits (0149): the member's kits and downloads, and the owner's file upload. */
+  kits?: Pick<PgMhpKitService, 'myKits' | 'file' | 'importZip'>;
   /** Single-use applicant payment links (MHP Stripe account). */
   offers?: Pick<PgMhpCommerceService, 'billingEnabled' | 'privateOffers' | 'createPrivateOffer' | 'withdrawPrivateOffer'>;
 }
@@ -78,9 +82,10 @@ export function parseMultipart(body: Buffer, contentType: string): Map<string, B
 }
 
 const LEARN = /^\/app\/learn(?:\/([0-9]{2})(?:\/([0-9]{2}))?)?$/;
+const KIT_FILE = /^\/app\/kits\/([a-z0-9-]{1,80})\/([a-z0-9][a-z0-9.-]{0,150}\.(?:pdf|xlsx|docx))$/;
 const known = (path: string): boolean => path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/api/mhp/apply' || path === '/email/unsubscribe'
   || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || path === '/hq/applications/offer' || path === '/hq/applications/withdraw'
-  || path === '/hq/registrants' || LEARN.test(path);
+  || path === '/hq/registrants' || path === '/app/kits' || path === '/hq/kits' || KIT_FILE.test(path) || LEARN.test(path);
 
 /**
  * Cookieless page-event beacon from the site (navigator.sendBeacon). Always 204,
@@ -261,6 +266,46 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       redirect(res, `/hq/course?modules=${counts.modules}&lessons=${counts.lessons}`); return true;
     }
 
+    if (path === '/app/kits' || path === '/hq/kits' || KIT_FILE.test(path)) {
+      if (!deps.kits) throw new HttpError(503, 'Your kits are opening shortly. Please try again soon.');
+      const file = KIT_FILE.exec(path);
+      if (file) {
+        if (method !== 'GET') throw new HttpError(405, 'Use the download link.');
+        const found = await deps.kits.file(token, file[1]!, file[2]!);
+        if (!found) throw new HttpError(404, 'That file is not in this kit.');
+        res.writeHead(200, { 'content-type': found.contentType, 'content-length': String(found.bytes.length),
+          'content-disposition': `attachment; filename="${file[2]}"`, 'cache-control': 'private, no-store',
+          'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin' });
+        res.end(found.bytes); return true;
+      }
+      const mine = await deps.kits.myKits(token);
+      if (path === '/hq/kits') {
+        if (!mine.isAdmin) throw new HttpError(403, 'Owner access is required.');
+        if (method === 'POST') {
+          const contentType = String(req.headers['content-type'] ?? '');
+          if (!/^multipart\/form-data(?:;|$)/i.test(contentType)) throw new HttpError(415, 'Upload the kit zip file.');
+          const parts = parseMultipart(await readBody(req, 24 * 1024 * 1024), contentType);
+          if ([...parts.keys()].some(key => key !== 'csrf' && key !== 'zip')
+              || !verifyPortalCsrf(portal.sessionSecret, token, parts.get('csrf')?.toString('utf8') ?? '')) throw new HttpError(403, 'Refresh HQ before continuing.');
+          const zip = parts.get('zip');
+          if (!zip?.length) throw new HttpError(400, 'Choose the kit zip file.');
+          const loaded = await deps.kits.importZip(token, zip);
+          redirect(res, `/hq/kits?kits=${loaded.kits}&files=${loaded.files}&skipped=${loaded.skipped.length}`); return true;
+        }
+        const counted = new Map<string, number>();
+        for (const f of mine.files) counted.set(f.kit, (counted.get(f.kit) ?? 0) + 1);
+        const loaded = url.searchParams.get('files') ? { kits: Number(url.searchParams.get('kits')), files: Number(url.searchParams.get('files')), skipped: Number(url.searchParams.get('skipped') ?? 0) } : undefined;
+        send(res, 200, hqKitsPage({ csrf, kits: MHP_KITS.map(k => ({ kit: k.kit, name: k.name, files: counted.get(k.kit) ?? 0 })), loaded })); return true;
+      }
+      if (method !== 'GET') throw new HttpError(405, 'This page does not accept that request.');
+      const outline = await deps.learning.outline(token).catch(() => null);
+      const owned = mine.kits.map(k => mhpKit(k.kit)).filter((k): k is MhpKit => Boolean(k));
+      send(res, 200, kitsPage({ csrf, owner: mine.isAdmin, bought: url.searchParams.get('bought') === '1', kits: owned.map(k => ({
+        kit: k.kit, name: k.name, module: mhpKitModule(k), moduleTitle: outline?.modules.find(m => m.number === mhpKitModule(k))?.title ?? null,
+        files: mine.files.filter(f => f.kit === k.kit).map(f => ({ name: f.name, size: f.size })) })) }));
+      return true;
+    }
+
     const match = LEARN.exec(path)!;
     const [, moduleNumber, lessonNumber] = match;
     if (method === 'POST') {
@@ -274,7 +319,11 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     const module = outline.modules.find(m => m.number === moduleNumber);
     if (!module) throw new HttpError(404, 'That module is not in the training centre.');
     if (!lessonNumber) {
-      send(res, 200, learnModulePage(outline, module, module.open ? await deps.learning.content(token, moduleNumber) : null, csrf)); return true;
+      // A held kit for this module puts its downloads at the top of the page.
+      const mine = deps.kits ? await deps.kits.myKits(token).catch(() => null) : null;
+      const kit = MHP_KITS.find(k => mhpKitModule(k) === moduleNumber && mine?.kits.some(owned => owned.kit === k.kit));
+      const downloads = kit && mine ? { kit: kit.kit, name: kit.name, files: mine.files.filter(f => f.kit === kit.kit).map(f => ({ name: f.name, size: f.size })) } : undefined;
+      send(res, 200, learnModulePage(outline, module, module.open ? await deps.learning.content(token, moduleNumber) : null, csrf, downloads)); return true;
     }
     const lesson = module.lessons.find(l => l.key === `${moduleNumber}/${lessonNumber}`);
     if (!lesson) throw new HttpError(404, 'That lesson is not in the training centre.');
@@ -285,8 +334,9 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     return true;
   } catch (error) {
     outcome = 'service_error';
-    const status = error instanceof HttpError || error instanceof MhpGrowthError || error instanceof MhpLearningError ? error.status : 503;
-    const message = error instanceof HttpError || error instanceof MhpGrowthError || error instanceof MhpLearningError ? error.message : 'This page is temporarily unavailable. Please try again shortly.';
+    const known = error instanceof HttpError || error instanceof MhpGrowthError || error instanceof MhpLearningError || error instanceof MhpKitError;
+    const status = known ? (error as HttpError).status : 503;
+    const message = known ? (error as HttpError).message : 'This page is temporarily unavailable. Please try again shortly.';
     const title = status === 429 ? 'Slow down a moment' : status >= 500 ? 'Something went wrong' : status === 403 && !isPublic ? 'Not available' : 'Please check the form';
     send(res, status, publicMessagePage(title, message, isPublic ? `${MHP_SITE_ORIGIN}/` : '/app/learn'));
     return true;

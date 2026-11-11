@@ -196,6 +196,7 @@ import { WebinarWorker } from '../webinars/worker.js';
 import { StudioRelay } from '../webinars/studio.js';
 import type { WebinarSetupInput } from './router.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
+import type { MhpKitCrmRecorder, MhpKitReplayRegistrar } from '../mhp/kit-service.js';
 
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
@@ -206,6 +207,8 @@ export interface PgPortalPlatform {
   /** Operator API (MCP for Claude): tools acting as the configured user; absent when not configured. */
   operator?: { config: OperatorConfig; tools: McpToolHost; store?: OperatorOAuthStore };
   mhp?: MhpRuntime;
+  /** After-payment work for module kits: replay registration and CRM record (0149). */
+  mhpKitJobs?: { replay?: MhpKitReplayRegistrar; crm?: MhpKitCrmRecorder };
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
   abuse: PgPortalAbuseGuard;
@@ -1408,8 +1411,35 @@ export async function buildPgPortalPlatform(
     } catch (error) {
       console.warn(`Operator API is not configured correctly and stays off. ${error instanceof Error ? error.message : ''}`.trim());
     }
+    // Module kits: a land kit buyer is registered for its webinar replay (the webinar service sends the access
+    // email), and every kit is recorded in the MHP CRM through the operator's own idempotent create-lead tool.
+    let mhpKitJobs: PgPortalPlatform['mhpKitJobs'];
+    if (mhp?.kits) {
+      const service = webinars;
+      const tools = operator?.config.writes ? operator.tools : undefined;
+      let wonStage: string | null = null;
+      mhpKitJobs = {
+        ...(service ? { replay: async (publicKey: string, email: string, name: string) => {
+          const result = await service.register(publicKey, { email, name: name.slice(0, 120) || email.split('@')[0]!.slice(0, 120), answers: {}, marketing: false,
+            consent: { source: 'kit-purchase', serviceNotice: 'Included with the Land Gap Kit: the replay of this masterclass.' }, attribution: { source: 'kit-purchase' } });
+          if (result.outcome !== 'created' && result.outcome !== 'existing') throw new Error(`Replay registration ${result.outcome}`);
+        } } : {}),
+        ...(tools ? { crm: async (input: { key: string; email: string; name: string; title: string; note: string }) => {
+          if (!wonStage) {
+            const pipeline = await tools.callTool('crm_pipeline', { brand: 'mhp' }) as { stages?: { id: string; name?: string; stageType?: string; isClosed?: boolean }[] } | null;
+            const stages = pipeline?.stages ?? [];
+            wonStage = stages.find(st => st.stageType === 'won')?.id
+              ?? stages.find(st => /\b(won|completed|customer|paid|sale)\b/i.test(st.name ?? ''))?.id ?? null;
+            if (!wonStage) throw new Error('The MHP CRM has no won stage');
+          }
+          await tools.callTool('crm_create_lead', { brand: 'mhp', commandKey: input.key, displayName: input.name.slice(0, 200), email: input.email,
+            opportunityTitle: input.title, stageId: wonStage, taskTitle: input.note });
+        } } : {}),
+      };
+    }
     let closed = false;
     return {
+      mhpKitJobs,
       groupHqCrm,
       groupHqInboxCrm,
       groupHqWebinars,
