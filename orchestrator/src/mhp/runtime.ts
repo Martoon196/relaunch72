@@ -34,6 +34,7 @@ import { MhpEventWhatsAppOwner } from './event-whatsapp-owner.js';
 import { assertMetaWhatsAppLiveCommandBoundaryReady } from '../whatsapp-live-pg/index.js';
 import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
+import { PgMhpKitService } from './kit-service.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -42,6 +43,8 @@ export interface MhpRuntime {
   investors: MhpInvestorService;
   investorMail: InvestorMailService;
   commerce: PgMhpCommerceService;
+  /** Module kits (0149). Absent until the migration is applied. */
+  kits?: PgMhpKitService;
   hq: PgMhpHqService;
   desk: PgMhpDeskService;
   growth: PgMhpGrowthService;
@@ -93,6 +96,12 @@ export async function buildMhpRuntime(input: {
   }
   const stripe = config ? new Stripe(config.secretKey, { maxNetworkRetries: 1, timeout: 8_000 }) : null;
   const commerce = new PgMhpCommerceService(webPool, identityPool, webhookPool, stripe, config);
+  // Module kits need migration 0149; until it is applied the kit routes answer "opening shortly".
+  const kitsReady = (await webPool.query<{ ready: boolean }>(
+    `/* mhp.kits-schema-readiness */ SELECT to_regprocedure('app_private.mhp_my_kits(bytea)') IS NOT NULL AS ready`)).rows[0]?.ready === true;
+  const kits = kitsReady ? new PgMhpKitService(webPool, identityPool, webhookPool, stripe, config) : undefined;
+  if (kits) commerce.setKitHandler(kits);
+  console.info(JSON.stringify({ event: 'mhp.kits.readiness', schema: kitsReady, billing: Boolean(kits?.billingEnabled) }));
   const mail = createMhpTransactionalMailer(env);
   const marketing = mhpMarketingConfig(env);
   const webinar = mhpWebinarConfig(env);
@@ -198,6 +207,7 @@ export async function buildMhpRuntime(input: {
       google: oauthApp('MHP_INVESTOR_GOOGLE'), microsoft: oauthApp('MHP_INVESTOR_MICROSOFT'),
     }, env.MHP_INVESTOR_MAIL_DELIVERY_ENABLED === 'true'),
     commerce,
+    ...(kits ? { kits } : {}),
     hq: new PgMhpHqService(webPool, identityPool),
     desk: new PgMhpDeskService(webPool, identityPool),
     growth: new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env)),

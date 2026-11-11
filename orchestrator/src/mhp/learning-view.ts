@@ -81,12 +81,36 @@ function lessonList(module: MhpCourseModuleOutline, progress: Record<string, Mhp
   }).join('')}</ol>`;
 }
 
-export function learnModulePage(outline: MhpCourseOutline, module: MhpCourseModuleOutline, content: { overview?: string; sources?: string } | null, csrf: string): string {
+/** "Your kit downloads": the files of a kit the member holds, at the top of its module page and on /app/kits. */
+export interface MhpKitDownloads { kit: string; name: string; files: { name: string; size: number }[] }
+const size = (bytes: number): string => bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1_000))} KB`;
+const kind = (file: string): string => file.endsWith('.pdf') ? 'Field guide (PDF)' : file.endsWith('.xlsx') ? 'Calculator (Excel)' : file.endsWith('.docx') ? 'Letter (Word)' : 'File';
+function downloadsBlock(kit: MhpKitDownloads, heading = 'Your kit downloads'): string {
+  const files = kit.files.length
+    ? `<ul class="lessons">${kit.files.map(f => `<li><a href="/app/kits/${e(kit.kit)}/${e(f.name)}" download><div class="row"><span><strong>${e(kind(f.name))}</strong><br>${e(f.name)}</span><span>${e(size(f.size))}</span></div></a></li>`).join('')}</ul>`
+    : '<p>Your files are being added. Check back shortly, or reply to your receipt email and Martin will send them.</p>';
+  return `<section class="panel" style="margin:18px 0 26px"><h2 style="margin-top:0">${e(heading)}</h2><p style="margin:0 0 10px">${e(kit.name)}: yours for life.</p>${files}</section>`;
+}
+export function kitsPage(input: { csrf: string; owner: boolean; bought: boolean; kits: (MhpKitDownloads & { module: string; moduleTitle: string | null })[] }): string {
+  const thanks = input.bought ? '<div class="notice"><strong>Thank you. Your kits are open.</strong><p>Your receipt is on its way by email.</p></div>' : '';
+  const list = input.kits.length
+    ? input.kits.map(k => `${downloadsBlock(k, k.name)}${k.moduleTitle ? `<p style="margin:-14px 0 28px"><a href="/app/learn/${e(k.module)}">Open the lessons: ${e(k.moduleTitle)} &rarr;</a></p>` : ''}`).join('')
+    : `<div class="notice"><strong>No kits on this account yet.</strong><p>Kits you buy appear here, under the email address you paid with. <a href="https://martinhowardproperty.co.uk/kits/">See the kits</a>.</p></div>`;
+  return frame('Your kits', input.csrf, `<span class="eyebrow">Your kits</span><h1>Your kits.</h1><p class="intro">Field guides, calculators and letters for every kit you own. Download them as often as you like.</p>${thanks}${list}${input.owner ? '<p><a href="/hq/kits">Owner: upload kit files</a></p>' : ''}`, input.owner);
+}
+export function hqKitsPage(input: { csrf: string; kits: { kit: string; name: string; files: number }[]; loaded?: { kits: number; files: number; skipped: number } }): string {
+  const done = input.loaded ? `<div class="notice"><strong>Uploaded ${input.loaded.files} files for ${input.loaded.kits} kits.</strong>${input.loaded.skipped ? `<p>${input.loaded.skipped} entries were not kit files and were skipped.</p>` : ''}</div>` : '';
+  const rows = input.kits.map(k => `<li><div class="row"><span>${e(k.name)}<br><small>${e(k.kit)}</small></span><span>${k.files ? `${k.files} files` : '<strong>No files yet</strong>'}</span></div></li>`).join('');
+  return frame('Kit files', input.csrf, `<span class="eyebrow">Owner HQ · Kits</span><h1>Kit files.</h1><p class="intro">Upload kit-deliverables-v3.zip. Each folder is a kit; its files replace that kit's downloads. Paid files stay in the database, never in a public place.</p>${done}<form method="post" action="/hq/kits" enctype="multipart/form-data" class="panel"><input type="hidden" name="csrf" value="${e(input.csrf)}"><p><input type="file" name="zip" accept=".zip,application/zip" required></p><button>Upload kit files</button></form><ul class="lessons">${rows}</ul>`, true);
+}
+
+export function learnModulePage(outline: MhpCourseOutline, module: MhpCourseModuleOutline, content: { overview?: string; sources?: string } | null, csrf: string,
+  downloads?: MhpKitDownloads): string {
   const c = counts(module, outline.progress);
   const locked = module.open ? '' : `<div class="notice"><strong>This module is part of the full course.</strong><p>Here's everything it covers, lesson by lesson. <a href="${JOIN}">See how to join</a>.</p></div>`;
   const overview = content?.overview ? `<h2>About this module</h2><div class="prose">${renderMhpMarkdown(content.overview)}</div>` : '';
   const sources = content?.sources ? `<details class="panel" style="margin-top:22px"><summary><strong>Sources and further reading</strong></summary><div class="prose" style="border:0;padding:12px 0 0">${renderMhpMarkdown(content.sources)}</div></details>` : '';
-  return frame(moduleName(module), csrf, `<p class="crumbs"><a href="/app/learn">&larr; Training centre</a></p><span class="eyebrow">${e(LEVELS[module.level ?? ''] ?? 'Course')} · ${e(DOORS[module.door ?? ''] ?? '')}</span><h1>${e(moduleName(module))}</h1>${module.promise ? `<p class="intro">${e(module.promise)}</p>` : ''}${locked}${module.lessons.length ? `<div class="summary"><div><b>${c.done}</b> of ${c.total} complete</div><div class="meter"><span style="width:${c.pct}%"></span></div></div>` : ''}${lessonList(module, outline.progress)}${overview ? `<div style="margin-top:34px">${overview}</div>` : ''}${sources}`, outline.isAdmin);
+  return frame(moduleName(module), csrf, `<p class="crumbs"><a href="/app/learn">&larr; Training centre</a></p><span class="eyebrow">${e(LEVELS[module.level ?? ''] ?? 'Course')} · ${e(DOORS[module.door ?? ''] ?? '')}</span><h1>${e(moduleName(module))}</h1>${module.promise ? `<p class="intro">${e(module.promise)}</p>` : ''}${downloads ? downloadsBlock(downloads) : ''}${locked}${module.lessons.length ? `<div class="summary"><div><b>${c.done}</b> of ${c.total} complete</div><div class="meter"><span style="width:${c.pct}%"></span></div></div>` : ''}${lessonList(module, outline.progress)}${overview ? `<div style="margin-top:34px">${overview}</div>` : ''}${sources}`, outline.isAdmin);
 }
 
 export function learnLessonPage(input: { outline: MhpCourseOutline; module: MhpCourseModuleOutline; lesson: MhpCourseLessonOutline; body: string; csrf: string; saved?: boolean }): string {

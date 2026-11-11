@@ -18,6 +18,7 @@ import type { PgMhpDeskService } from './desk-service.js';
 import { handleMhpDesk } from './desk-router.js';
 import { handleMhpGrowth, type MhpGrowthRouterDependencies } from './growth-router.js';
 import { handleMhpMarketingWorkspace, type MhpMarketingWorkspaceDependencies } from './marketing-workspace-router.js';
+import { MhpKitError, type PgMhpKitService } from './kit-service.js';
 import { handleMhpOwnerEmail } from './owner-email-router.js';
 import { handleMhpOwnedSms } from './owned-sms-router.js';
 import type { MhpOwnedSmsService } from './owned-sms-service.js';
@@ -33,6 +34,8 @@ interface MhpMountDependencies {
   authMount: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> };
   commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout' | 'publicCourseCheckout' | 'sandbox'>>;
   desk?: Pick<PgMhpDeskService, 'snapshot' | 'save' | 'archive' | 'submitVerdict' | 'queue' | 'review'>;
+  /** Module kits (0149): public checkout for one kit, or two kits for the price of one. */
+  kits?: Pick<PgMhpKitService, 'checkout' | 'billingEnabled'>;
   hq: Pick<PgMhpHqService, 'snapshot' | 'grant' | 'isOwner'>;
   mail?: Pick<MhpTransactionalMailer, 'sendAccessInvite' | 'configured'> & Partial<Pick<MhpTransactionalMailer, 'sendPurchaseWelcome'>>;
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
@@ -86,6 +89,43 @@ const SITE_ORIGINS = new Set([MHP_SITE, 'https://www.martinhowardproperty.co.uk'
  * Public course checkout: a plain form post from the site's "Start the course"
  * buttons. The server picks the price by its own clock and sends the buyer to Stripe.
  */
+/** Public kit checkout from martinhowardproperty.co.uk/kits: the server picks the price at this moment. */
+async function kitCheckout(req: IncomingMessage, res: ServerResponse, deps: MhpMountDependencies, pair: boolean): Promise<void> {
+  const { portal, kits } = deps;
+  const back = pair ? `${MHP_SITE}/kits/thanks/` : `${MHP_SITE}/kits/`;
+  if (req.method !== 'POST') { redirect(res, back); return; }
+  const leases: Buffer[] = [];
+  let outcome: 'success' | 'service_error' = 'success';
+  try {
+    if (!SITE_ORIGINS.has(String(req.headers.origin ?? ''))) throw new MhpKitError(403, 'Please start checkout from martinhowardproperty.co.uk.');
+    if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))) throw new MhpKitError(415, 'Please start checkout from the kit page.');
+    const context = portal.requestContext?.(req);
+    if (!context || !portal.abuse) throw new MhpKitError(503, 'Checkout is temporarily unavailable.');
+    const admission = sourceAbuseAdmission(context, 'auth.setup', portal.now?.() ?? Date.now());
+    if (!admission) throw new MhpKitError(503, 'Checkout is temporarily unavailable.');
+    const decision = await portal.abuse.admit(admission);
+    if (decision.leaseHash) leases.push(decision.leaseHash);
+    if (!decision.allowed) throw new MhpKitError(429, 'Too many checkout attempts. Please wait a few minutes and try again.');
+    const fields = new URLSearchParams((await body(req, 1_024)).toString('utf8'));
+    const field = pair ? 'kits' : 'kit';
+    if ([...fields.keys()].some(key => key !== field)) throw new MhpKitError(400, 'Choose a kit on the kits page.');
+    const slugs = fields.getAll(field);
+    if (slugs.length !== (pair ? 2 : 1)) throw new MhpKitError(400, pair ? 'Choose two different kits.' : 'Choose a kit on the kits page.');
+    if (!kits?.billingEnabled) throw new MhpKitError(503, 'Kit checkout is opening shortly. Please try again soon, or email martin@propinvestuk.co.uk.');
+    const target = new URL(await kits.checkout(slugs));
+    if (target.protocol !== 'https:' || target.hostname !== 'checkout.stripe.com' || target.username || target.password) {
+      throw new MhpKitError(503, 'Checkout is temporarily unavailable.');
+    }
+    redirect(res, target.href);
+  } catch (error) {
+    outcome = 'service_error';
+    respond(res, error instanceof MhpKitError ? error.status : 503, error instanceof MhpKitError ? error.message
+      : 'Checkout is temporarily unavailable. Please try again shortly, or email martin@propinvestuk.co.uk.');
+  } finally {
+    await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome)));
+  }
+}
+
 async function courseCheckout(req: IncomingMessage, res: ServerResponse, deps: MhpMountDependencies): Promise<void> {
   const { portal, commerce } = deps;
   const sandbox = commerce.billingEnabled && commerce.sandbox === true;
@@ -180,6 +220,7 @@ export function createMhpMount(deps: MhpMountDependencies) {
         return;
       }
       if (path === '/api/mhp/checkout/course') { await courseCheckout(req, res, deps); return; }
+      if (path === '/api/mhp/checkout/kit' || path === '/api/mhp/checkout/kit-pair') { await kitCheckout(req, res, deps, path.endsWith('-pair')); return; }
       // Native webinar attendee pages for MHP-brand webinars, on the MHP app host.
       if (path.startsWith('/w/') && portal.kind === 'postgres' && portal.webinars) {
         if (await handleWebinarPublic(req, res, url, { service: portal.webinars, secureCookies: true, clientKey: webinarClientKey })) return;

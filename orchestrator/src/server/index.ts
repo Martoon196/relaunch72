@@ -33,6 +33,7 @@ import { authorizeMhpMemberRoute } from '../mhp/member-service.js';
 import { startMhpScheduleReconciler } from '../mhp/schedule-reconciler.js';
 import { startMhpWindowCloser } from '../mhp/window-closer.js';
 import { startMhpPurchaseWelcomes } from '../mhp/purchase-welcome.js';
+import { startMhpKitJobs } from '../mhp/kit-service.js';
 import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
@@ -948,7 +949,8 @@ async function main(): Promise<void> {
           ownedSms: runtime.ownedSms,
           eventPhone: runtime.eventPhone,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
-            marketingMode: runtime.marketing?.mode ?? 'off', offers: runtime.commerce },
+            marketingMode: runtime.marketing?.mode ?? 'off', offers: runtime.commerce, ...(runtime.kits ? { kits: runtime.kits } : {}) },
+          ...(runtime.kits ? { kits: runtime.kits } : {}),
           authMount: createMhpAuthMount({
             auth: runtime.auth, mail: runtime.mail, sessionSecret: cfg.sessionSecret,
             abuse: postgresPortal.abuse, abuseHashSecret: portalAbuseRuntime.hashSecret,
@@ -1031,6 +1033,9 @@ async function main(): Promise<void> {
   const stopMhpPurchaseWelcomes = postgresPortal?.mhp?.commerce.billingEnabled && process.env.MHP_ENABLED === 'true'
     ? startMhpPurchaseWelcomes(postgresPortal.mhp.commerce, postgresPortal.mhp.mail,
       () => console.warn(JSON.stringify({ event: 'mhp.purchase.welcome.attention' }))) : () => {};
+  const stopMhpKitJobs = postgresPortal?.mhp?.kits?.billingEnabled && process.env.MHP_ENABLED === 'true'
+    ? startMhpKitJobs(postgresPortal.mhp.kits, { mail: postgresPortal.mhp.mail, ...postgresPortal.mhpKitJobs },
+      () => console.warn(JSON.stringify({ event: 'mhp.kit.jobs.attention' }))) : () => {};
   const mhpMarketing = postgresPortal?.mhp?.marketing;
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret) : undefined;
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
@@ -1072,6 +1077,7 @@ async function main(): Promise<void> {
     stopMhpSchedules();
     stopMhpWindow();
     stopMhpPurchaseWelcomes();
+    stopMhpKitJobs();
     stopMhpMarketing();
     webinarWorker?.stop();
     postgresPortal?.webinarStudio?.stopAll();
