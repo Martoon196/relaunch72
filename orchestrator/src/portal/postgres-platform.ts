@@ -28,7 +28,8 @@ import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
 import { requestDatabaseContext } from '../db/rls.js';
 import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations/group-hq-crm/read.js';
-import { createGroupHqInboxCrmMount, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
+import { createGroupHqInboxCrmMount, createInboxCrmRunner, loadInboxCrmConfig, type InboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
+import { composeLeadRelayCrmFeed, type LeadRelayCrmFeed } from '../integrations/leadrelay/crm-feed.js';
 import { createGroupHqWebinarsReadMount } from '../integrations/group-hq-crm/webinars.js';
 import { GroupHqHandoff, loadGroupHqSsoConfig } from './group-hq-sso.js';
 import { MHP_AUTH_ORIGIN } from '../mhp/auth-service.js';
@@ -207,6 +208,8 @@ import { ppEmailBounceEffects, ppEmailBounceSourceDefault } from '../pp-followup
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
   groupHqInboxCrm?: ReturnType<typeof createGroupHqInboxCrmMount>;
+  /** LeadRelay enquiries and call results copied into the brand CRM (started by the server; inert unless enabled). */
+  leadrelayFeed?: LeadRelayCrmFeed;
   groupHqWebinars?: ReturnType<typeof createGroupHqWebinarsReadMount>;
   /** Group HQ sign-in handoff verifier shared by the PP and MHP hosts; absent when not configured. */
   groupHqSso?: GroupHqHandoff;
@@ -1413,9 +1416,15 @@ export async function buildPgPortalPlatform(
       console.warn(`Group HQ sign-in handoff is not configured correctly; password sign-in remains available. ${error instanceof Error ? error.message : ''}`.trim());
     }
     let groupHqInboxCrm: ReturnType<typeof createGroupHqInboxCrmMount> | undefined;
+    let inboxConfig: InboxCrmConfig | undefined, inboxConfigFailed = false;
+    try { inboxConfig = loadInboxCrmConfig(env); } catch { inboxConfigFailed = true; }
+    // LeadRelay → CRM feed: writes as the brand's Group HQ inbox owner on the CRM command identity, exactly like the
+    // inbox bridge. Inert unless LEADRELAY_CRM_FEED=enabled; a bad setting is logged once and never stops start-up.
+    const leadrelayFeed = composeLeadRelayCrmFeed({ env, inbox: inboxConfig, runner: createInboxCrmRunner(commandPool),
+      log: line => (line.includes('"level":"warn"') || line.startsWith('LeadRelay CRM feed is off') ? console.warn : console.info)(line) });
     try {
-      const inboxConfig = loadInboxCrmConfig(env);
-      if (inboxConfig) groupHqInboxCrm = createGroupHqInboxCrmMount(webPool, commandPool, inboxConfig);
+      if (inboxConfigFailed) throw new Error('Inbox command configuration is invalid');
+      if (inboxConfig) groupHqInboxCrm = createGroupHqInboxCrmMount(webPool, commandPool, inboxConfig, { leadrelayFeed });
     } catch {
       console.warn('Group HQ inbox command bridge is unavailable; customer workspaces remain mounted.');
     }
@@ -1476,6 +1485,7 @@ export async function buildPgPortalPlatform(
       mhpKitJobs,
       groupHqCrm,
       groupHqInboxCrm,
+      leadrelayFeed,
       groupHqWebinars,
       groupHqSso,
       operator,
