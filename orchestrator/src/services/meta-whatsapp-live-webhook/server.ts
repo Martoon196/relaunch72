@@ -365,7 +365,7 @@ export async function startMetaWhatsAppLiveWebhookService(
         // MHP009C: off unless explicitly enabled at cutover.
         mhpEventWhatsApp: env.MHP_EVENT_WHATSAPP_INBOUND?.trim() === 'enabled',
         // MHP-WA-121 (0151): Meta error codes on failed statuses for owner sends; off unless enabled after 0151.
-        mhpOwnerWhatsApp: env.MHP_WHATSAPP_OWNER_SENDS?.trim() === 'enabled',
+        mhpOwnerWhatsApp: env.MHP_WHATSAPP_OWNER_SENDS === 'enabled',
       })))(pool, config);
   }
   const readiness = readinessFor(config);

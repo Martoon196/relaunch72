@@ -78,3 +78,28 @@ test('0151 leaves every 0053/0141/0143 send, settle, status and enqueue function
   }
   assert.doesNotMatch(source, /SET is_verified|is_verified\s*=\s*true/u, 'an owner attestation never verifies a contact point');
 });
+
+// 0151 safeguards that are properties of the migration text itself (the behaviour is proved in the integration tests).
+test('0151 fails cleanly behind traffic, keeps the worker\'s cross-brand read to linked contacts and never takes a real template name', async () => {
+  const source = (await readFile(new URL('0151_mhp_whatsapp_owner_one_to_one.sql', DIR), 'utf8')).replace(/\r\n?/gu, '\n');
+  // The lock timeout is set before the first statement that takes a lock.
+  const statements = source.split('\n').filter(line => line.trim() && !line.startsWith('--'));
+  assert.equal(statements[0], "SET LOCAL lock_timeout='5s';");
+  assert.equal(statements[1], 'SET LOCAL ROLE r72_owner;');
+  // The worker (begin-call) may read another brand's contact points and suppressions only for a contact the owner linked.
+  for (const policy of ['mhp_wa_owner_origin_points_worker', 'mhp_wa_owner_origin_suppressions_worker']) {
+    const body = source.slice(source.indexOf(`CREATE POLICY ${policy} `)).split(';')[0]!;
+    assert.match(body, /FOR SELECT TO r72_whatsapp_live_definer/u, policy);
+    assert.match(body, /session_user='r72_whatsapp_live_worker_command'/u, policy);
+    assert.match(body, /current_setting\('app\.workspace_id',true\)='2789228d-55a6-4688-b1e8-2f70abca990b'/u, policy);
+    assert.match(body, /EXISTS\(SELECT 1 FROM app_private\.mhp_wa_owner_links l WHERE l\.origin_workspace_id=/u, policy);
+  }
+  // The 0053 template row of this rail is always the reserved name, so 0141's name/language pin is never taken.
+  assert.match(source, /SELECT 'mhp_owner_121__'\|\|p_meta_template_id/u);
+  const register = source.slice(source.indexOf('CREATE FUNCTION app_private.mhp_wa_owner_register_template('));
+  assert.match(register.slice(0, register.indexOf('END $f$;')), /approval_request_id,approval_decision_id,provider_template_name[\s\S]*app_private\.mhp_wa_owner_template_pin\(o\.meta_template_id\)/u);
+  assert.doesNotMatch(source, /provider_template_name=o\.template_name/u, 'never looked up or stored under the real Meta name');
+  // An unchanged template refreshes its row; nothing else on a catalogue row may change.
+  assert.match(source, /refresh constant text\[\]:=ARRAY\['observed_at','expires_at','observed_request_id'\]/u);
+  assert.match(source, /GRANT UPDATE\(observed_at,expires_at,observed_request_id\) ON app_private\.mhp_wa_owner_templates TO r72_whatsapp_live_definer;/u);
+});

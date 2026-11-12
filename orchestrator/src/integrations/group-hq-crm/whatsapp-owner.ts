@@ -31,7 +31,7 @@ export const OWNER_REASONS: Readonly<Record<string, string>> = Object.freeze({
   contact_not_found: 'This contact could not be found (it may have been archived).',
   number_not_found: 'That phone number is no longer on this contact.',
   number_not_international: 'Enter the number in international form, for example +44 7700 900123.',
-  mhp_contact_ambiguous: 'This number belongs to more than one Martin Howard Property contact. Merge them first.',
+  mhp_contact_ambiguous: 'This person matches more than one Martin Howard Property contact (by number or e-mail). Merge them first.',
   link_not_found: 'This WhatsApp number is not linked to this contact.',
   mhp_contact_unavailable: 'The Martin Howard Property copy of this contact is no longer available.',
   number_unverified: 'This number has not been confirmed as the person’s WhatsApp. Record permission and confirm the number first.',
@@ -136,7 +136,8 @@ function mapError(error: unknown): never {
 }
 
 export class OwnerWhatsAppCommands {
-  constructor(private readonly runner: CrmTransactionRunner, private readonly enabled: boolean) {}
+  /** `manualReplies` is the existing MHP_WHATSAPP_MANUAL_REPLIES switch: free text is refused without it, exactly as `whatsappReply` is. */
+  constructor(private readonly runner: CrmTransactionRunner, private readonly enabled: boolean, private readonly manualReplies = false) {}
 
   async execute(action: OwnerWhatsAppAction, input: Record<string, unknown>, origin: OwnerWhatsAppScope, mhpActor: OwnerWhatsAppActor | null,
     requestId: string): Promise<unknown> {
@@ -194,6 +195,7 @@ export class OwnerWhatsAppCommands {
         break;
       }
       case 'whatsappOwnerSendText': {
+        if (!this.manualReplies) throw new OwnerWhatsAppError(409, 'reply_unavailable');
         const body = text(input.body, 4096);
         if (!body.trim() || Buffer.byteLength(body) > 4096) throw new OwnerWhatsAppError(400, 'invalid_request');
         result = await one('/* ghq.wa-owner.send-text */ SELECT app_private.mhp_wa_owner_queue_text($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5) AS r',

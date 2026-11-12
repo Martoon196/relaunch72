@@ -23,6 +23,7 @@ import { GroupHqInboxCrmService, InboxCrmError, loadInboxCrmConfig, type InboxCr
 import type { CrmTransactionRunner } from '../src/crm-pg/types.js';
 import { MHP_MARKETING_WORKSPACE_ID } from '../src/mhp/marketing-workspace-service.js';
 import { loadMetaWhatsAppLiveWorkerConfig } from '../src/workers/meta-whatsapp-live/runner.js';
+import { PgMetaWhatsAppLiveWebhookCommandService } from '../src/whatsapp-live-pg/webhook-repository.js';
 
 // Synthetic identifiers only; numbers are in Ofcom's reserved drama range.
 const MHP = '2789228d-55a6-4688-b1e8-2f70abca990b';
@@ -169,12 +170,76 @@ test('owner worker cycle: fresh Meta read before begin, one send, never retried,
   assert.equal(await cycle(null, [], accepted, calls), 'idle');
 });
 
-test('owner worker mode needs the MHP worker mode and an explicit switch', () => {
-  const base = { DATABASE_WHATSAPP_LIVE_WORKER_URL: 'postgres://synthetic', PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '66666666-6666-4666-8666-666666666666' };
-  assert.throws(() => loadMetaWhatsAppLiveWorkerConfig({ ...base, MHP_WHATSAPP_OWNER_SENDS: 'yes' }), /MHP owner WhatsApp sends require/u);
-  // A disabled worker sends nothing at all, whatever the owner switch says.
-  assert.equal(loadMetaWhatsAppLiveWorkerConfig({ ...base, MHP_WHATSAPP_OWNER_SENDS: 'enabled' }).mode, 'disabled');
-  assert.equal(loadMetaWhatsAppLiveWorkerConfig(base).mode, 'disabled');
+test('the owner switch is on only for exactly "enabled" on the MHP worker; any other value is off and never stops the worker', () => {
+  const dark = { DATABASE_WHATSAPP_LIVE_WORKER_URL: 'postgres://synthetic', PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '66666666-6666-4666-8666-666666666666' };
+  const odd = ['yes', 'true', '1', '', 'ENABLED', ' enabled', 'enabled ', 'disabled'];
+  // A disabled worker sends nothing at all, whatever the owner switch says, and no value stops it starting.
+  for (const value of [...odd, 'enabled']) assert.equal(loadMetaWhatsAppLiveWorkerConfig({ ...dark, MHP_WHATSAPP_OWNER_SENDS: value }).mode, 'disabled');
+  assert.equal(loadMetaWhatsAppLiveWorkerConfig(dark).mode, 'disabled');
+  const live = { NODE_ENV: 'production', DATABASE_WHATSAPP_LIVE_WORKER_URL: 'postgresql://r72_whatsapp_live_worker_command:synthetic@db.example/test',
+    PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '66666666-6666-4666-8666-666666666666',
+    PROPERTY_PREDATOR_WHATSAPP_LIVE_MODE: 'owned_template_live', PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID: 'meta_whatsapp_cloud',
+    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true', PROPERTY_PREDATOR_WHATSAPP_EMERGENCY_PAUSED: 'false',
+    PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID: MHP, PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID: BINDING.connectionId,
+    PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 9).toString('base64'),
+    PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_VERSION: 'test-v1' };
+  const mhpMode = { ...live, PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE: 'enabled', PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID: '01410000-0000-4000-8000-000000000001' };
+  const load = (env: NodeJS.ProcessEnv) => loadMetaWhatsAppLiveWorkerConfig(env) as { mode: string; mhpOwnerSends?: true; mhpEventBindingId?: string };
+  const on = load({ ...mhpMode, MHP_WHATSAPP_OWNER_SENDS: 'enabled' });
+  assert.equal(on.mode, 'owned_template_live'); assert.equal(on.mhpOwnerSends, true);
+  for (const value of odd) {
+    const off = load({ ...mhpMode, MHP_WHATSAPP_OWNER_SENDS: value });
+    assert.equal(off.mode, 'owned_template_live', `"${value}" must not stop the worker`);
+    assert.equal(off.mhpOwnerSends, undefined, `"${value}" means off`);
+    assert.equal(off.mhpEventBindingId, '01410000-0000-4000-8000-000000000001', 'the webinar follow-up rail stays configured');
+  }
+  assert.equal(load(mhpMode).mhpOwnerSends, undefined);
+  // 'enabled' on a worker that does not run the MHP mode is simply off; it is not a startup failure.
+  const noMhp = load({ ...live, MHP_WHATSAPP_OWNER_SENDS: 'enabled' });
+  assert.equal(noMhp.mode, 'owned_template_live'); assert.equal(noMhp.mhpOwnerSends, undefined);
+  // The web boundary reads the same exact value.
+  const scopes = JSON.stringify({ kp: { label: 'KP', workspaceId: '11111111-1111-4111-8111-111111111111', organizationId: '22222222-2222-4222-8222-222222222222',
+    ownerUserId: '33333333-3333-4333-8333-333333333333', pipelineId: '44444444-4444-4444-8444-444444444444', stageId: '55555555-5555-4555-8555-555555555555',
+    actorEmails: ['owner@example.test'] } });
+  for (const value of odd) assert.equal(loadInboxCrmConfig({ R72_GROUP_HQ_INBOX_SECRET: 'x'.repeat(40), R72_GROUP_HQ_INBOX_SCOPES: scopes,
+    MHP_WHATSAPP_OWNER_SENDS: value })?.mhpWhatsappOwnerSends, undefined, `web: "${value}" means off`);
+});
+
+test('a replayed signed failed status still records Meta\'s error code and hold for an owner send (idempotent second step)', async () => {
+  const appSecret = 'synthetic-meta-app-secret-0123456789';
+  const body = Buffer.from(JSON.stringify({ object: 'whatsapp_business_account', entry: [{ id: BINDING.wabaId, changes: [{ field: 'messages', value: {
+    messaging_product: 'whatsapp', metadata: { phone_number_id: BINDING.phoneNumberId },
+    statuses: [{ id: 'wamid.failed1', recipient_id: '447700900123', status: 'failed', timestamp: '1794000000', errors: [{ code: 131050, title: 'x' }] },
+      { id: 'wamid.ok1', recipient_id: '447700900123', status: 'delivered', timestamp: '1794000000' },
+      { id: 'wamid.failed2', recipient_id: '447700900123', status: 'failed', timestamp: '1794000000' }] } }] }] }));
+  const verified = verifyMetaWhatsAppLiveWebhook({ binding: BINDING, appSecret, rawBody: body, contentType: 'application/json',
+    xHubSignature256: `sha256=${createHmac('sha256', appSecret).update(body).digest('hex')}` });
+  const [failed, delivered, failedNoCode] = verified.events as unknown as Extract<(typeof verified.events)[number], { kind: 'status' }>[];
+  const run = async (recorded: string, event: typeof failed, mhpOwnerWhatsApp = true, errorStepFails = false) => {
+    const sql: unknown[][] = [];
+    const pool = { connect: async () => ({ release() {}, async query(text: string, values?: unknown[]) {
+      if (/record_whatsapp_live_status/u.test(text)) { sql.push(['status']); return { rows: [{ outcome: recorded }] }; }
+      if (/mhp_wa_owner_status_error/u.test(text)) { sql.push(['error', ...(values ?? [])]); if (errorStepFails) throw new Error('synthetic database failure');
+        return { rows: [{ outcome: 'applied' }] }; }
+      return { rows: [] };
+    } }) } as unknown as Pick<Pool, 'connect'>;
+    const service = new PgMetaWhatsAppLiveWebhookCommandService({ commandPool: pool, workspaceId: MHP, connectionId: BINDING.connectionId,
+      bindingId: '01410000-0000-4000-8000-000000000001', mhpOwnerWhatsApp });
+    const outcome = await service.recordStatus({ event: event!, payloadSha256: verified.payloadSha256 }).catch((e: Error) => e.message);
+    return { outcome, steps: sql.map(q => q[0]), error: sql.find(q => q[0] === 'error') };
+  };
+  const first = await run('applied', failed);
+  assert.equal(first.outcome, 'applied'); assert.deepEqual(first.steps, ['status', 'error']);
+  assert.equal(first.error![3], 'wamid.failed1'); assert.equal(first.error![5], 131050);
+  // The second step failing surfaces as an error, so Meta delivers the signed status again...
+  assert.equal((await run('applied', failed, true, true)).outcome, 'synthetic database failure');
+  // ...and that retry arrives as 'replayed': the code and the hold are still recorded.
+  const replay = await run('replayed', failed);
+  assert.equal(replay.outcome, 'replayed'); assert.deepEqual(replay.steps, ['status', 'error']); assert.equal(replay.error![5], 131050);
+  assert.deepEqual((await run('conflict', failed)).steps, ['status'], 'a conflicting status records nothing more');
+  assert.deepEqual((await run('replayed', delivered)).steps, ['status'], 'only failed statuses carry a code');
+  assert.deepEqual((await run('replayed', failedNoCode)).steps, ['status'], 'a failed status without a code has nothing to record');
+  assert.deepEqual((await run('replayed', failed, false)).steps, ['status'], 'switched off: other jobs are untouched');
 });
 
 test('plain-English states: every refusal has a message, Meta codes are explained, nothing reads as sent unless Meta accepted it', () => {
@@ -212,6 +277,17 @@ test('owner commands validate input before any database call and stay off until 
     previewSha256: 'A'.repeat(64), variables: { first_name: 'Avery' } }, origin, actor, id) as Record<string, any>;
   assert.equal(sent.result.state, 'queued'); assert.equal(sent.sender, 'Martin Howard Property');
   assert.deepEqual(seen[0], [origin.workspaceId, id, id, id, '1234567890123', '{"first_name":"Avery"}', 'a'.repeat(64)]);
+  // Free text honours the existing MHP_WHATSAPP_MANUAL_REPLIES switch exactly as the inbox reply does: 409 reply_unavailable, no database call.
+  const text = { contactId: id, linkId: id, idempotencyKey: id, body: 'Thanks, speak at 3pm' };
+  await assert.rejects(commands.execute('whatsappOwnerSendText', text, origin, actor, id), (e: unknown) => e instanceof OwnerWhatsAppError && e.status === 409 && e.code === 'reply_unavailable');
+  await assert.rejects(new OwnerWhatsAppCommands(runner, true, false).execute('whatsappOwnerSendText', text, origin, actor, id),
+    (e: unknown) => e instanceof OwnerWhatsAppError && e.code === 'reply_unavailable');
+  assert.equal(seen.length, 1, 'a refused free-text reply never reaches the database');
+  const replied = await new OwnerWhatsAppCommands(runner, true, true).execute('whatsappOwnerSendText', text, origin, actor, id) as Record<string, any>;
+  assert.equal(replied.result.state, 'queued'); assert.deepEqual(seen[1], [origin.workspaceId, id, id, id, 'Thanks, speak at 3pm']);
+  // Template sends do not depend on the free-text switch.
+  assert.equal(((await new OwnerWhatsAppCommands(runner, true, false).execute('whatsappOwnerSendTemplate', { contactId: id, linkId: id, idempotencyKey: id,
+    metaTemplateId: '1234567890123', previewSha256: 'a'.repeat(64) }, origin, actor, id)) as Record<string, any>).result.state, 'queued');
 });
 
 test('the signed boundary routes owner actions only for an actor of both the brand and MHP, and only when switched on', async () => {
@@ -231,6 +307,10 @@ test('the signed boundary routes owner actions only for an actor of both the bra
   assert.equal(result.result.state, 'ok'); assert.deepEqual(contexts, [`${MHP_MARKETING_WORKSPACE_ID}:${ID('7')}`], 'runs as the mapped MHP owner in MHP');
   await assert.rejects(new GroupHqInboxCrmService(pool, runner, { ...both, mhpWhatsappOwnerSends: false }).execute(request('other@example.test')),
     (e: unknown) => e instanceof InboxCrmError && e.code === 'owner_send_unavailable');
+  // The signed boundary passes the manual-replies switch through: free text is 409 reply_unavailable without it.
+  const reply = { ...request('other@example.test'), action: 'whatsappOwnerSendText', linkId: ID('a'), idempotencyKey: ID('b'), body: 'Hello' };
+  await assert.rejects(new GroupHqInboxCrmService(pool, runner, both).execute(reply), (e: unknown) => e instanceof InboxCrmError && e.status === 409 && e.code === 'reply_unavailable');
+  assert.equal(((await new GroupHqInboxCrmService(pool, runner, { ...both, mhpWhatsappManualReplies: true }).execute(reply)) as Record<string, any>).result.state, 'ok');
   const secret = 'x'.repeat(40);
   assert.equal(loadInboxCrmConfig({ R72_GROUP_HQ_INBOX_SECRET: secret, R72_GROUP_HQ_INBOX_SCOPES: JSON.stringify({ kp }) })?.mhpWhatsappOwnerSends, undefined);
   assert.equal(loadInboxCrmConfig({ R72_GROUP_HQ_INBOX_SECRET: secret, R72_GROUP_HQ_INBOX_SCOPES: JSON.stringify({ kp }), MHP_WHATSAPP_OWNER_SENDS: 'enabled' })?.mhpWhatsappOwnerSends, true);

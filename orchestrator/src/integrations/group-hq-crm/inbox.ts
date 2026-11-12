@@ -120,7 +120,7 @@ export class GroupHqInboxCrmService {
   constructor(private readonly readPool: Pick<Pool, 'connect'>, private readonly runner: CrmTransactionRunner,
               private readonly config: InboxCrmConfig) {
     this.commands = new CrmCommandService({ transactionRunner: runner });
-    this.owner = new OwnerWhatsAppCommands(runner, config.mhpWhatsappOwnerSends === true);
+    this.owner = new OwnerWhatsAppCommands(runner, config.mhpWhatsappOwnerSends === true, config.mhpWhatsappManualReplies === true);
   }
   private async context(actorEmail: string, brand: string, requestId: string): Promise<{ context: DatabaseRequestContext; scope: InboxCrmScope }> {
     const scope = this.config.scopes[brand];

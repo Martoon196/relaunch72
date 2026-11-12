@@ -3,23 +3,31 @@
 --
 -- What this adds, and what it does not change:
 -- * The send is authorised and executed in the MHP workspace, where the 0053 binding lives. The
---   original brand contact is linked (never moved): the person is mirrored into MHP, or an existing
---   MHP contact with the same WhatsApp number is reused, and every outcome is written as an activity
---   on BOTH the original brand contact and the MHP contact.
+--   original brand contact is linked (never moved): the one existing MHP contact with the same number
+--   or e-mail is reused, a person MHP has never seen is mirrored, and a person who matches more than
+--   one MHP contact is refused (never duplicated). Every outcome is written as an activity on BOTH the
+--   original brand contact and the MHP contact.
 -- * A business-initiated message is an approved Meta template only, read server-side from Meta by the
 --   worker (no owner-typed approval), with body variables (named or positional) validated against the
 --   template's real placeholders. Free text is only the 0143 in-window reply (mhp_wa_direct_queue).
 -- * Template sends ride the 0053 rail with a third authority kind, 'mhp_owner_direct', exactly as
 --   0141 added 'mhp_event': one authority + one job per send, consent event, compliance subject,
 --   published owner review and PECR sender/instigator route records. The 0053 enqueue, the legacy
---   owner-action caps and the 0141 event rail are unchanged.
+--   owner-action caps and the 0141 event rail are unchanged. The rail's 0053 template row is its own,
+--   per Meta template id under a reserved name, so it never takes the name a webinar programme pins.
 -- * Permission is the existing 0063 founder rail (record_contact_permission_decision) for channel
 --   whatsapp and purpose 'mhp.owner-one-to-one'. A later withdrawal, denial, suppression, opt-out or
---   signed WhatsApp STOP blocks the send, at queue time and again at begin-call.
+--   signed WhatsApp STOP blocks the send, at queue time and again at begin-call; so does an opt-out or
+--   STOP on any point of the original brand contact that carries the number. Begin-call also re-proves
+--   that the template Meta holds still renders exactly the message the owner previewed.
 -- * UNRATIFIED (see docs/design/mhp-whatsapp-owner-121-20261112/MHP-WA-121-DECISION-PROPOSALS.md): owner-attested number
 --   state (proposal 1), evidence kinds and PECR route mapping (proposal 2), daily cap and recipient
 --   pacing (proposal 3), provider-restriction holds (proposal 4). An owner attestation never sets
 --   contact_points.is_verified and only satisfies this one purpose.
+-- This migration takes brief exclusive locks on shared tables (contacts, contact points, activities,
+-- the 0053 jobs and authorities). Fail cleanly after five seconds instead of queueing behind live
+-- traffic; a failed attempt changes nothing and can simply be run again.
+SET LOCAL lock_timeout='5s';
 SET LOCAL ROLE r72_owner;
 
 -- 1. Links between an original brand contact and the MHP contact/point that carries the send.
@@ -65,6 +73,8 @@ CREATE TABLE app_private.mhp_wa_owner_attestations (
 CREATE INDEX mhp_wa_owner_attestations_latest ON app_private.mhp_wa_owner_attestations(mhp_point_id,recorded_at DESC,id DESC);
 
 -- 3. Server-side Meta template catalogue for the MHP number (worker-only evidence, 15-minute life).
+-- One row per distinct content Meta returned: a later read of exactly the same template refreshes
+-- observed_at/expires_at on that row (first_observed_at keeps the first read); any change is a new row.
 CREATE TABLE app_private.mhp_wa_owner_templates (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  workspace_id uuid NOT NULL CHECK(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b'),
@@ -84,10 +94,12 @@ CREATE TABLE app_private.mhp_wa_owner_templates (
  unsupported_reason text CHECK(unsupported_reason IS NULL OR unsupported_reason~'^[a-z][a-z0-9_]{0,63}$'),
  observed_by_role text NOT NULL CHECK(observed_by_role='r72_whatsapp_live_worker_command'),
  observed_request_id text NOT NULL CHECK(observed_request_id=btrim(observed_request_id) AND length(observed_request_id) BETWEEN 1 AND 128),
+ first_observed_at timestamptz NOT NULL DEFAULT statement_timestamp(),
  observed_at timestamptz NOT NULL DEFAULT statement_timestamp(),
  expires_at timestamptz NOT NULL,
  FOREIGN KEY(workspace_id,binding_id) REFERENCES app.property_predator_whatsapp_live_bindings(workspace_id,id) ON DELETE RESTRICT,
  CHECK(expires_at>observed_at AND expires_at<=observed_at+interval '15 minutes'),
+ CHECK(first_observed_at<=observed_at),
  CHECK(sendable=(unsupported_reason IS NULL)),
  CHECK((parameter_format='NONE')=(cardinality(parameter_names)=0))
 );
@@ -177,8 +189,18 @@ CREATE TRIGGER mhp_wa_owner_links_immutable BEFORE UPDATE ON app_private.mhp_wa_
  FOR EACH ROW EXECUTE FUNCTION app_private.mhp_event_phone_receipt_guard();
 CREATE TRIGGER mhp_wa_owner_attestations_immutable BEFORE UPDATE ON app_private.mhp_wa_owner_attestations
  FOR EACH ROW EXECUTE FUNCTION app_private.mhp_event_phone_receipt_guard();
+CREATE FUNCTION app_private.mhp_wa_owner_template_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
+DECLARE refresh constant text[]:=ARRAY['observed_at','expires_at','observed_request_id'];
+BEGIN
+ -- Only "Meta still returns exactly this" may be recorded on an existing row; the content never changes.
+ IF TG_OP='DELETE' OR (to_jsonb(NEW)-refresh) IS DISTINCT FROM (to_jsonb(OLD)-refresh) OR NEW.observed_at<OLD.observed_at
+ THEN RAISE EXCEPTION 'MHP owner WhatsApp template evidence is immutable' USING ERRCODE='40001'; END IF;
+ RETURN NEW;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_template_guard() FROM PUBLIC;
 CREATE TRIGGER mhp_wa_owner_templates_immutable BEFORE UPDATE OR DELETE ON app_private.mhp_wa_owner_templates
- FOR EACH ROW EXECUTE FUNCTION app_private.mhp_event_phone_receipt_guard();
+ FOR EACH ROW EXECUTE FUNCTION app_private.mhp_wa_owner_template_guard();
 CREATE TRIGGER mhp_wa_owner_holds_immutable BEFORE UPDATE OR DELETE ON app_private.mhp_wa_owner_holds
  FOR EACH ROW EXECUTE FUNCTION app_private.mhp_event_phone_receipt_guard();
 
@@ -266,6 +288,7 @@ GRANT SELECT,INSERT ON app_private.mhp_wa_owner_links,app_private.mhp_wa_owner_a
  app_private.mhp_wa_owner_holds TO r72_whatsapp_live_definer;
 GRANT SELECT,INSERT ON app_private.mhp_wa_owner_sends TO r72_whatsapp_live_definer;
 GRANT UPDATE(state,state_reason,provider_message_id,error_code,updated_at) ON app_private.mhp_wa_owner_sends TO r72_whatsapp_live_definer;
+GRANT UPDATE(observed_at,expires_at,observed_request_id) ON app_private.mhp_wa_owner_templates TO r72_whatsapp_live_definer;
 
 -- The owner may see (never change) the original brand contact and its points, in a workspace the
 -- same owner can manage, only through these definer functions called on the Growth HQ command role.
@@ -283,6 +306,17 @@ CREATE POLICY mhp_wa_owner_origin_suppressions ON app.communication_suppression_
  USING(session_user='r72_crm_command' AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b'
   AND current_setting('app.actor_kind',true)='user'
   AND app_private.can_manage_workspace(nullif(current_setting('app.user_id',true),'')::uuid,workspace_id));
+-- Begin-call re-reads the original brand's own opt-out: the worker may see only the points and
+-- WhatsApp/SMS suppressions of an original contact the owner has linked, nothing else outside MHP.
+CREATE POLICY mhp_wa_owner_origin_points_worker ON app.contact_points FOR SELECT TO r72_whatsapp_live_definer
+ USING(session_user='r72_whatsapp_live_worker_command' AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b'
+  AND current_setting('app.actor_kind',true)='worker'
+  AND EXISTS(SELECT 1 FROM app_private.mhp_wa_owner_links l WHERE l.origin_workspace_id=contact_points.workspace_id AND l.origin_contact_id=contact_points.contact_id));
+CREATE POLICY mhp_wa_owner_origin_suppressions_worker ON app.communication_suppression_events FOR SELECT TO r72_whatsapp_live_definer
+ USING(session_user='r72_whatsapp_live_worker_command' AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b'
+  AND current_setting('app.actor_kind',true)='worker' AND channel IN('whatsapp','sms')
+  AND EXISTS(SELECT 1 FROM app_private.mhp_wa_owner_links l WHERE l.origin_workspace_id=communication_suppression_events.workspace_id
+   AND l.origin_contact_id=communication_suppression_events.contact_id));
 -- Worker/webhook reads of MHP contacts for the begin-call gate (MHP workspace only).
 CREATE POLICY mhp_wa_owner_mhp_contacts ON app.contacts FOR SELECT TO r72_whatsapp_live_definer
  USING(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b');
@@ -324,11 +358,15 @@ RESET ROLE;
 SET LOCAL ROLE r72_whatsapp_live_definer;
 
 -- International digits without '+'. A UK 07 mobile becomes 447...; anything ambiguous is NULL.
+-- The optional trunk zero people write after a country code ("+44 (0)7700 900126") is dropped, and a
+-- UK number that still carries it ("+4407700...") is refused rather than stored as a number nobody has.
 CREATE FUNCTION app_private.mhp_wa_owner_number(p_value text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $f$
- SELECT CASE WHEN n~'^\+[1-9][0-9]{6,14}$' THEN substr(n,2) WHEN n~'^00[1-9][0-9]{6,14}$' THEN substr(n,3)
-  WHEN n~'^07[0-9]{9}$' THEN '44'||substr(n,2) WHEN n~'^447[0-9]{9}$' THEN n END
- FROM (SELECT regexp_replace(coalesce(p_value,''),'[[:space:]().-]','','g') AS n) x
+ SELECT CASE WHEN d~'^440' THEN NULL ELSE d END
+ FROM (SELECT CASE WHEN n~'^\+[1-9][0-9]{6,14}$' THEN substr(n,2) WHEN n~'^00[1-9][0-9]{6,14}$' THEN substr(n,3)
+   WHEN n~'^07[0-9]{9}$' THEN '44'||substr(n,2) WHEN n~'^447[0-9]{9}$' THEN n END AS d
+  FROM (SELECT regexp_replace(regexp_replace(coalesce(p_value,''),
+    '^([[:space:]]*(\+|00)[[:space:]]*[1-9][0-9[:space:].-]*)\(0\)','\1'),'[[:space:]().-]','','g') AS n) x) y
 $f$;
 REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_number(text) FROM PUBLIC;
 
@@ -393,7 +431,8 @@ LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
  SELECT CASE
   WHEN app_private.mhp_unlinked_opt_latest('whatsapp',public.digest('+'||p_number,'sha256')) IS NOT DISTINCT FROM 'stop' THEN 'whatsapp_stop'
   WHEN EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND p.kind IN('whatsapp','phone')
-   AND p.deleted_at IS NULL AND ltrim(p.normalized_value,'+')=p_number AND p.consent_status='opted_out') THEN 'opted_out'
+   AND p.deleted_at IS NULL AND (ltrim(p.normalized_value,'+')=p_number OR app_private.mhp_wa_owner_number(p.normalized_value)=p_number)
+   AND p.consent_status='opted_out') THEN 'opted_out'
   WHEN EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND p.kind='whatsapp'
    AND p.deleted_at IS NULL AND ltrim(p.normalized_value,'+')=p_number
    AND EXISTS(SELECT 1 FROM (SELECT DISTINCT ON (coalesce(s.purpose,'')) s.state FROM app.communication_suppression_events s
@@ -402,6 +441,24 @@ LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
  END
 $f$;
 REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_number_blocked(text) FROM PUBLIC;
+
+-- The original brand's own record can still say no. Every phone/WhatsApp point of the original
+-- contact that carries this number counts, whether the owner picked the point or typed the number:
+-- an opt-out, or a current WhatsApp or SMS suppression (a STOP), on any of them blocks; so does a
+-- picked point that has since been removed. Read at link, at queue and again at begin-call.
+CREATE FUNCTION app_private.mhp_wa_owner_origin_blocked(p_origin_workspace uuid,p_origin_contact uuid,p_origin_point uuid,p_number text) RETURNS text
+LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
+ SELECT CASE
+  WHEN p_origin_point IS NOT NULL AND NOT EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=p_origin_workspace AND p.id=p_origin_point
+   AND p.contact_id=p_origin_contact AND p.deleted_at IS NULL) THEN 'number_not_found'
+  WHEN EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=p_origin_workspace AND p.contact_id=p_origin_contact AND p.kind IN('whatsapp','phone')
+   AND (p.id=p_origin_point OR app_private.mhp_wa_owner_number(p.normalized_value)=p_number OR app_private.mhp_wa_owner_number(p.value)=p_number)
+   AND (p.consent_status='opted_out' OR EXISTS(SELECT 1 FROM (SELECT DISTINCT ON (s.channel,coalesce(s.purpose,'')) s.state
+     FROM app.communication_suppression_events s WHERE s.workspace_id=p.workspace_id AND s.contact_point_id=p.id AND s.channel IN('whatsapp','sms')
+     ORDER BY s.channel,coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) latest WHERE latest.state='suppressed'))) THEN 'opted_out'
+ END
+$f$;
+REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_origin_blocked(uuid,uuid,uuid,text) FROM PUBLIC;
 
 -- Current verification and permission for one link. Pure read; every send gate calls it.
 CREATE FUNCTION app_private.mhp_wa_owner_point_state(p_link uuid) RETURNS jsonb
@@ -425,7 +482,8 @@ BEGIN
   WHEN consent.state='granted' AND consent.endpoint_identity_sha256 IS DISTINCT FROM endpoint THEN 'stale'
   WHEN consent.state='granted' AND consent.lawful_basis NOT IN('consent','legitimate_interests') THEN 'basis_not_allowed'
   ELSE consent.state END;
- blocked:=app_private.mhp_wa_owner_number_blocked(l.number);
+ blocked:=coalesce(app_private.mhp_wa_owner_number_blocked(l.number),
+  app_private.mhp_wa_owner_origin_blocked(l.origin_workspace_id,l.origin_contact_id,l.origin_point_id,l.number));
  RETURN jsonb_build_object('ok',true,'linkId',l.id,'pointId',p.id,'contactId',p.contact_id,'number',l.number,
   'recipientSha256',encode(public.digest(l.number,'sha256'),'hex'),'endpointSha256',encode(endpoint,'hex'),
   'verification',verification,'attestationId',CASE WHEN verification='owner_attested' THEN att.id END,
@@ -535,12 +593,28 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_note(uuid,text,text,text,jsonb,timestamptz) FROM PUBLIC;
 
--- 8a. Link an original brand contact's number to the MHP sender (mirror or reuse; never move).
+-- The reserved 0053 template name this rail uses for one Meta template id (never a real Meta name).
+CREATE FUNCTION app_private.mhp_wa_owner_template_pin(p_meta_template_id text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $f$ SELECT 'mhp_owner_121__'||p_meta_template_id $f$;
+REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_template_pin(text) FROM PUBLIC;
+
+-- What a send really is right now. A queued template whose ten-minute authority has lapsed can never be
+-- handed to Meta (claim and begin-call both require a current authority), so it reads as expired and
+-- stops counting even before a worker or the next queue attempt records that.
+CREATE FUNCTION app_private.mhp_wa_owner_effective_state(p_send uuid) RETURNS text
+LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
+ SELECT CASE WHEN s.kind='template' AND s.state='queued' AND NOT EXISTS(SELECT 1 FROM app.property_predator_whatsapp_live_authorities a
+   WHERE a.workspace_id=s.workspace_id AND a.id=s.authority_id AND a.owner_send_id=s.id AND a.valid_until>statement_timestamp()) THEN 'expired' ELSE s.state END
+ FROM app_private.mhp_wa_owner_sends s WHERE s.id=p_send
+$f$;
+REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_effective_state(uuid) FROM PUBLIC;
+
+-- 8a. Link an original brand contact's number to the MHP sender (reuse or mirror; never move, never duplicate).
 CREATE FUNCTION app_private.mhp_wa_owner_link(p_origin_workspace uuid,p_origin_brand text,p_origin_contact uuid,p_origin_point uuid,p_number text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; actor uuid; request text:=current_setting('app.request_id',true);
  v_origin app.contacts%ROWTYPE; v_point app.contact_points%ROWTYPE; v_number text; v_source text; existing app_private.mhp_wa_owner_links%ROWTYPE;
- candidate record; candidates integer; mhp_contact uuid; mhp_point uuid; link uuid:=gen_random_uuid(); created boolean:=false;
+ v_blocked text; matched uuid[]; mhp_contact uuid; mhp_point uuid; link uuid:=gen_random_uuid(); created boolean:=false; mirrored boolean:=false;
 BEGIN
  actor:=app_private.mhp_wa_owner_actor();
  IF p_origin_workspace IS NULL OR p_origin_contact IS NULL OR p_origin_brand IS NULL
@@ -553,44 +627,62 @@ BEGIN
   SELECT * INTO v_point FROM app.contact_points p WHERE p.workspace_id=p_origin_workspace AND p.id=p_origin_point AND p.contact_id=p_origin_contact
    AND p.kind IN('whatsapp','phone') AND p.deleted_at IS NULL;
   IF NOT FOUND THEN RETURN jsonb_build_object('state','refused','reason','number_not_found'); END IF;
-  IF v_point.consent_status='opted_out' OR EXISTS(SELECT 1 FROM (SELECT DISTINCT ON (coalesce(s.purpose,'')) s.state FROM app.communication_suppression_events s
-    WHERE s.workspace_id=v_point.workspace_id AND s.contact_point_id=v_point.id AND s.channel='whatsapp'
-    ORDER BY coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) latest WHERE latest.state='suppressed')
-  THEN RETURN jsonb_build_object('state','refused','reason','opted_out'); END IF;
-  v_number:=app_private.mhp_wa_owner_number(v_point.normalized_value); v_source:='crm_point';
+  v_number:=coalesce(app_private.mhp_wa_owner_number(v_point.normalized_value),app_private.mhp_wa_owner_number(v_point.value)); v_source:='crm_point';
  ELSE
   v_number:=app_private.mhp_wa_owner_number(p_number); v_source:='owner_entered';
  END IF;
+ -- The picked point's own opt-out refuses even when its number cannot be read; then every point with this number.
+ v_blocked:=app_private.mhp_wa_owner_origin_blocked(p_origin_workspace,p_origin_contact,p_origin_point,coalesce(v_number,''));
+ IF v_blocked IS NOT NULL THEN RETURN jsonb_build_object('state','refused','reason',v_blocked); END IF;
  IF v_number IS NULL THEN RETURN jsonb_build_object('state','refused','reason','number_not_international'); END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('mhp.wa.owner.number:'||v_number,151));
  SELECT * INTO existing FROM app_private.mhp_wa_owner_links x WHERE x.origin_workspace_id=p_origin_workspace AND x.origin_contact_id=p_origin_contact AND x.number=v_number;
  IF FOUND THEN
   RETURN jsonb_build_object('state','linked','linkId',existing.id,'mhpContactId',existing.mhp_contact_id,'number',app_private.mhp_wa_owner_mask(v_number),'created',false);
  END IF;
- -- Reuse an existing MHP WhatsApp point for this number (one contact only); never guess between two people.
- SELECT count(DISTINCT p.contact_id) INTO candidates FROM app.contact_points p JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id AND c.deleted_at IS NULL
- WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.deleted_at IS NULL AND p.dedupe_state='normal' AND ltrim(p.normalized_value,'+')=v_number;
- IF candidates>1 THEN RETURN jsonb_build_object('state','refused','reason','mhp_contact_ambiguous'); END IF;
- SELECT p.id,p.contact_id INTO candidate FROM app.contact_points p JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id AND c.deleted_at IS NULL
- WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.deleted_at IS NULL AND p.dedupe_state='normal' AND ltrim(p.normalized_value,'+')=v_number
- ORDER BY p.is_verified DESC,p.created_at,p.id LIMIT 1;
- IF FOUND THEN mhp_contact:=candidate.contact_id; mhp_point:=candidate.id;
+ -- Who is this person in MHP already? Every live MHP contact that carries this number (as a WhatsApp or
+ -- phone point) or one of the original contact's e-mail addresses, plus the original contact itself
+ -- when it is an MHP contact. Exactly one: reuse it. More than one: refuse, never guess and never add
+ -- a duplicate (a duplicate is what would later hold that person's webinar JOIN as ambiguous).
+ SELECT coalesce(array_agg(DISTINCT m.contact_id),'{}') INTO matched FROM (
+  SELECT p.contact_id FROM app.contact_points p JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id AND c.deleted_at IS NULL
+  WHERE p.workspace_id=ws AND p.deleted_at IS NULL AND p.dedupe_state='normal' AND (
+   (p.kind IN('whatsapp','phone') AND (ltrim(p.normalized_value,'+')=v_number OR app_private.mhp_wa_owner_number(p.normalized_value)=v_number
+     OR app_private.mhp_wa_owner_number(p.value)=v_number))
+   OR (p_origin_workspace<>ws AND p.kind='email' AND p.normalized_value IN (SELECT e.normalized_value FROM app.contact_points e
+     WHERE e.workspace_id=p_origin_workspace AND e.contact_id=p_origin_contact AND e.kind='email' AND e.deleted_at IS NULL AND e.dedupe_state='normal')))
+  UNION ALL SELECT p_origin_contact WHERE p_origin_workspace=ws) m;
+ -- A shared or quarantined WhatsApp point for this number is never guessed around either.
+ IF cardinality(matched)>1 OR EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.deleted_at IS NULL
+   AND p.dedupe_state<>'normal' AND ltrim(p.normalized_value,'+')=v_number)
+ THEN RETURN jsonb_build_object('state','refused','reason','mhp_contact_ambiguous'); END IF;
+ -- The number's live WhatsApp point belongs to an MHP contact that has been removed: say so, add nothing.
+ IF EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.deleted_at IS NULL AND p.dedupe_state='normal'
+   AND ltrim(p.normalized_value,'+')=v_number AND NOT (p.contact_id=ANY(matched)))
+ THEN RETURN jsonb_build_object('state','refused','reason','mhp_contact_unavailable'); END IF;
+ IF cardinality(matched)=1 THEN
+  mhp_contact:=matched[1];
+  SELECT p.id INTO mhp_point FROM app.contact_points p WHERE p.workspace_id=ws AND p.contact_id=mhp_contact AND p.kind='whatsapp' AND p.deleted_at IS NULL
+   AND p.dedupe_state='normal' AND ltrim(p.normalized_value,'+')=v_number;
  ELSE
-  mhp_contact:=CASE WHEN p_origin_workspace=ws THEN p_origin_contact ELSE gen_random_uuid() END; mhp_point:=gen_random_uuid();
-  IF p_origin_workspace<>ws THEN
-   INSERT INTO app.contacts(id,workspace_id,display_name,company_name,lifecycle_status,owner_user_id,source)
-   VALUES(mhp_contact,ws,v_origin.display_name,v_origin.company_name,'lead',NULL,'mhp:owner-one-to-one:'||p_origin_brand);
-  END IF;
+  -- MHP has never seen this person: mirror the original contact (name and company only).
+  mhp_contact:=gen_random_uuid(); mirrored:=true;
+  INSERT INTO app.contacts(id,workspace_id,display_name,company_name,lifecycle_status,owner_user_id,source)
+  VALUES(mhp_contact,ws,v_origin.display_name,v_origin.company_name,'lead',NULL,'mhp:owner-one-to-one:'||p_origin_brand);
+ END IF;
+ IF mhp_point IS NULL THEN
+  -- The number is carried as its own unverified, consent-unknown WhatsApp point on that one contact.
+  mhp_point:=gen_random_uuid(); created:=true;
   INSERT INTO app.contact_points(id,workspace_id,contact_id,kind,label,value,normalized_value,is_primary,is_verified,consent_status)
   VALUES(mhp_point,ws,mhp_contact,'whatsapp','WhatsApp','+'||v_number,v_number,false,false,'unknown');
-  created:=true;
  END IF;
  INSERT INTO app_private.mhp_wa_owner_links(id,workspace_id,origin_workspace_id,origin_brand,origin_contact_id,origin_point_id,number_source,
   mhp_contact_id,mhp_point_id,number,created_by_user_id,created_request_id)
  VALUES(link,ws,p_origin_workspace,p_origin_brand,p_origin_contact,p_origin_point,v_source,mhp_contact,mhp_point,v_number,actor,request);
  PERFORM app_private.mhp_wa_owner_note(link,'linked','WhatsApp number linked to the Martin Howard Property sender',NULL,
-  jsonb_build_object('numberSource',v_source,'mirrorCreated',created),NULL);
- RETURN jsonb_build_object('state','linked','linkId',link,'mhpContactId',mhp_contact,'number',app_private.mhp_wa_owner_mask(v_number),'created',true,'mirrorCreated',created);
+  jsonb_build_object('numberSource',v_source,'mirrorCreated',mirrored,'whatsappPointCreated',created),NULL);
+ RETURN jsonb_build_object('state','linked','linkId',link,'mhpContactId',mhp_contact,'number',app_private.mhp_wa_owner_mask(v_number),'created',true,
+  'mirrorCreated',mirrored,'whatsappPointCreated',created);
 END $f$;
 
 -- 8b. Record or withdraw permission through the 0063 founder rail, with the owner-attested number
@@ -711,7 +803,7 @@ DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; actor uuid; re
  subject uuid:=gen_random_uuid(); pack uuid:=gen_random_uuid(); legal uuid:=gen_random_uuid(); commercial uuid:=gen_random_uuid();
  publication uuid:=gen_random_uuid(); sender_route uuid:=gen_random_uuid(); instigator_route uuid:=gen_random_uuid();
  authority uuid:=gen_random_uuid(); job uuid:=gen_random_uuid(); scope bytea; facts jsonb; facts_sha bytea; now_at timestamptz; expiry timestamptz;
- route text; consent app.communication_consent_events%ROWTYPE;
+ route text; consent app.communication_consent_events%ROWTYPE; pin text;
 BEGIN
  actor:=app_private.mhp_wa_owner_actor();
  IF p_send IS NULL OR p_link IS NULL OR p_meta_template_id IS NULL OR p_meta_template_id!~'^[1-9][0-9]{4,29}$' OR octet_length(p_preview_sha) IS DISTINCT FROM 32
@@ -723,6 +815,9 @@ BEGIN
  IF binding.id IS NULL THEN RETURN jsonb_build_object('state','refused','reason','sender_not_connected'); END IF;
  -- One lock per binding serialises the cap, pacing and idempotency decisions (as 0053/0141 do).
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('pp-whatsapp-live:%s:%s',ws,binding.id),0));
+ -- Sends that can no longer go out (never picked up in time, or left mid-call) are settled first, whether
+ -- or not a worker is running, so they stop counting against today's limit and the person's pacing.
+ PERFORM app_private.mhp_wa_owner_sweep(ws,binding.provider_connection_id);
  SELECT * INTO prior FROM app_private.mhp_wa_owner_sends s WHERE s.id=p_send;
  o:=app_private.mhp_wa_owner_template_current(binding.id,p_meta_template_id);
  IF prior.id IS NOT NULL THEN
@@ -738,13 +833,8 @@ BEGIN
  IF rendered->>'sha256'<>encode(p_preview_sha,'hex') THEN RETURN jsonb_build_object('state','refused','reason','preview_changed'); END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('mhp.wa.owner.number:'||l.number,151));
  gate:=app_private.mhp_wa_owner_gate(p_link,binding.id);
+ -- The gate includes the original brand's own opt-out for every point that carries this number.
  IF (gate->>'ok')::boolean IS NOT TRUE THEN RETURN jsonb_build_object('state','refused','reason',gate->>'reason','hold',gate->'hold'); END IF;
- -- The original brand's own record can still say no (opt-out or suppression on that point).
- IF l.origin_point_id IS NOT NULL AND EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=l.origin_workspace_id AND p.id=l.origin_point_id
-   AND (p.deleted_at IS NOT NULL OR p.consent_status='opted_out' OR EXISTS(SELECT 1 FROM (SELECT DISTINCT ON (coalesce(s.purpose,'')) s.state
-    FROM app.communication_suppression_events s WHERE s.workspace_id=p.workspace_id AND s.contact_point_id=p.id AND s.channel='whatsapp'
-    ORDER BY coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) latest WHERE latest.state='suppressed')))
- THEN RETURN jsonb_build_object('state','refused','reason','opted_out'); END IF;
  recipient:=decode(gate->>'recipientSha256','hex');
  now_at:=date_trunc('milliseconds',statement_timestamp());
  SELECT count(*) INTO used FROM app_private.mhp_wa_owner_sends s WHERE s.binding_id=binding.id AND s.kind='template'
@@ -759,9 +849,12 @@ BEGIN
   WHEN consent.source='owner.one-to-one:existing_client' THEN 'individual_soft_opt_in'
   WHEN consent.source='owner.one-to-one:business_introduction' THEN 'corporate_subscriber_reg23' END;
  IF route IS NULL THEN RETURN jsonb_build_object('state','refused','reason','basis_not_allowed'); END IF;
- -- Pin the 0053 template row once per name/language, evidenced by the Meta read (as 0141 does).
+ -- The 0053 rail needs one template row per job. This rail keeps its own row per Meta template id under
+ -- a reserved name, so it never takes the real name/language that a webinar programme pins (0141).
+ pin:=app_private.mhp_wa_owner_template_pin(o.meta_template_id);
+ IF left(o.template_name,length('mhp_owner_121__'))='mhp_owner_121__' THEN RETURN jsonb_build_object('state','refused','reason','template_not_registered'); END IF;
  SELECT t.id INTO template FROM app.property_predator_whatsapp_live_templates t WHERE t.workspace_id=ws AND t.binding_id=binding.id
-  AND t.provider_template_name=o.template_name AND t.language_code=o.language_code;
+  AND t.provider_template_name=pin AND t.language_code=o.language_code;
  IF template IS NULL THEN template:=app_private.mhp_wa_owner_register_template(ws,binding.id,o.id); END IF;
  expiry:=now_at+interval '10 minutes';
  request_sha:=public.digest(concat_ws(chr(31),'mhp.owner-one-to-one.send/v1',p_send::text,l.id::text,l.origin_workspace_id::text,l.origin_contact_id::text,
@@ -841,7 +934,8 @@ BEGIN
  END IF;
  binding:=app_private.mhp_wa_owner_current_binding();
  IF binding.id IS NULL THEN RETURN jsonb_build_object('state','refused','reason','sender_not_connected'); END IF;
- blocked:=app_private.mhp_wa_owner_number_blocked(l.number);
+ blocked:=coalesce(app_private.mhp_wa_owner_number_blocked(l.number),
+  app_private.mhp_wa_owner_origin_blocked(l.origin_workspace_id,l.origin_contact_id,l.origin_point_id,l.number));
  IF blocked IS NOT NULL THEN RETURN jsonb_build_object('state','refused','reason',blocked); END IF;
  hold:=app_private.mhp_wa_owner_active_hold(binding.id,public.digest(l.number,'sha256'));
  IF hold IS NOT NULL THEN RETURN jsonb_build_object('state','refused','reason',CASE hold->>'scope' WHEN 'account' THEN 'account_restricted' ELSE 'recipient_paused' END,'hold',hold); END IF;
@@ -871,7 +965,7 @@ BEGIN
  binding:=app_private.mhp_wa_owner_current_binding();
  IF binding.id IS NOT NULL THEN
   SELECT count(*) INTO used FROM app_private.mhp_wa_owner_sends s WHERE s.binding_id=binding.id AND s.kind='template'
-   AND s.utc_day=(statement_timestamp() AT TIME ZONE 'UTC')::date AND s.state NOT IN('expired','blocked');
+   AND s.utc_day=(statement_timestamp() AT TIME ZONE 'UTC')::date AND app_private.mhp_wa_owner_effective_state(s.id) NOT IN('expired','blocked');
  END IF;
  SELECT coalesce(jsonb_agg(jsonb_build_object('linkId',l.id,'number',app_private.mhp_wa_owner_mask(l.number),'numberSource',l.number_source,
    'originPointId',l.origin_point_id,'mhpContactId',l.mhp_contact_id,'verification',st->>'verification','permission',st->>'permission',
@@ -884,7 +978,9 @@ BEGIN
  FROM app_private.mhp_wa_owner_links l CROSS JOIN LATERAL app_private.mhp_wa_owner_point_state(l.id) st
  WHERE l.origin_workspace_id=p_origin_workspace AND l.origin_contact_id=p_origin_contact;
  SELECT coalesce(jsonb_agg(x ORDER BY x->>'createdAt' DESC),'[]'::jsonb) INTO sends FROM (
-  SELECT jsonb_build_object('sendId',s.id,'kind',s.kind,'state',s.state,'stateReason',s.state_reason,'templateName',s.template_name,'language',s.language_code,
+  SELECT jsonb_build_object('sendId',s.id,'kind',s.kind,'state',app_private.mhp_wa_owner_effective_state(s.id),
+   'stateReason',CASE WHEN app_private.mhp_wa_owner_effective_state(s.id)<>s.state THEN 'authority_expired' ELSE s.state_reason END,
+   'templateName',s.template_name,'language',s.language_code,
    'text',s.rendered_text,'providerMessageId',s.provider_message_id,'errorCode',s.error_code,'createdAt',s.created_at,'updatedAt',s.updated_at,
    'number',app_private.mhp_wa_owner_mask(l.number),
    'receipts',coalesce((SELECT jsonb_agg(jsonb_build_object('event',r.event_kind,'at',r.provider_occurred_at,'code',r.safe_code) ORDER BY r.provider_occurred_at,r.recorded_at,r.id)
@@ -917,7 +1013,9 @@ BEGIN
  IF NOT FOUND THEN RETURN jsonb_build_object('state','not_found'); END IF;
  SELECT * INTO l FROM app_private.mhp_wa_owner_links x WHERE x.id=s.link_id;
  IF NOT app_private.can_manage_workspace(actor,l.origin_workspace_id) THEN RETURN jsonb_build_object('state','not_found'); END IF;
- RETURN jsonb_build_object('sendId',s.id,'kind',s.kind,'state',s.state,'stateReason',s.state_reason,'providerMessageId',s.provider_message_id,
+ RETURN jsonb_build_object('sendId',s.id,'kind',s.kind,'state',app_private.mhp_wa_owner_effective_state(s.id),
+  'stateReason',CASE WHEN app_private.mhp_wa_owner_effective_state(s.id)<>s.state THEN 'authority_expired' ELSE s.state_reason END,
+  'providerMessageId',s.provider_message_id,
   'errorCode',s.error_code,'templateName',s.template_name,'text',s.rendered_text,'createdAt',s.created_at,'updatedAt',s.updated_at,
   'originWorkspaceId',l.origin_workspace_id,'originContactId',l.origin_contact_id,
   'receipts',coalesce((SELECT jsonb_agg(jsonb_build_object('event',r.event_kind,'at',r.provider_occurred_at,'code',r.safe_code) ORDER BY r.provider_occurred_at,r.recorded_at,r.id)
@@ -954,7 +1052,7 @@ END $f$;
 CREATE FUNCTION app_private.record_mhp_wa_owner_template(p_workspace uuid,p_binding uuid,p_meta_template_id text,p_name text,p_language text,p_category text,
  p_status text,p_parameter_format text,p_parameter_names text[],p_body text,p_preview text,p_components_sha bytea,p_sendable boolean,p_unsupported_reason text)
 RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE created uuid; found_names text[]; numeric_names boolean;
+DECLARE created uuid; found_names text[]; numeric_names boolean; latest app_private.mhp_wa_owner_templates%ROWTYPE;
 BEGIN
  PERFORM app_private.mhp_event_whatsapp_worker_context(p_workspace);
  IF (app_private.mhp_event_whatsapp_binding(p_binding)).id IS NULL THEN RAISE EXCEPTION 'MHP owner template observation denied' USING ERRCODE='42501'; END IF;
@@ -969,6 +1067,19 @@ BEGIN
   OR p_parameter_format NOT IN('NONE','POSITIONAL','NAMED')
   OR position(p_body IN coalesce(p_preview,''))=0
  THEN RAISE EXCEPTION 'MHP owner template evidence is inconsistent' USING ERRCODE='22023'; END IF;
+ -- Meta still returning exactly the same template refreshes the latest row; only a change adds one.
+ PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('mhp.wa.owner.template:'||p_binding::text||':'||coalesce(p_meta_template_id,''),151));
+ SELECT * INTO latest FROM app_private.mhp_wa_owner_templates x WHERE x.binding_id=p_binding AND x.meta_template_id=p_meta_template_id
+  ORDER BY x.observed_at DESC,x.id DESC LIMIT 1;
+ IF latest.id IS NOT NULL AND latest.workspace_id=p_workspace AND latest.template_name=p_name AND latest.language_code=p_language AND latest.category=p_category
+  AND latest.provider_status=p_status AND latest.parameter_format=p_parameter_format AND latest.parameter_names=coalesce(p_parameter_names,'{}')
+  AND latest.body_text=p_body AND latest.preview_text=p_preview AND latest.components_sha256=p_components_sha AND latest.sendable=p_sendable
+  AND latest.unsupported_reason IS NOT DISTINCT FROM p_unsupported_reason THEN
+  UPDATE app_private.mhp_wa_owner_templates SET observed_at=greatest(statement_timestamp(),latest.observed_at),
+   expires_at=greatest(statement_timestamp(),latest.observed_at)+interval '15 minutes',observed_request_id=current_setting('app.request_id',true)
+  WHERE id=latest.id;
+  RETURN latest.id;
+ END IF;
  INSERT INTO app_private.mhp_wa_owner_templates(workspace_id,binding_id,meta_template_id,template_name,language_code,category,provider_status,parameter_format,
   parameter_names,body_text,preview_text,body_sha256,components_sha256,sendable,unsupported_reason,observed_by_role,observed_request_id,expires_at)
  VALUES(p_workspace,p_binding,p_meta_template_id,p_name,p_language,p_category,p_status,p_parameter_format,coalesce(p_parameter_names,'{}'),p_body,p_preview,
@@ -978,10 +1089,12 @@ BEGIN
 END $f$;
 
 -- The 0053 rail names one template row per name/language, pinned to an approved company-content
--- version. For owner one-to-one sends that content is the exact Meta-read template the owner chose
--- and confirmed (the version is stamped with the owner and request). The row keeps 0053's
--- parameter_count=0, so the legacy enqueue cannot use it with variables; only this rail reads the
--- variables, from mhp_wa_owner_sends, and re-proves the body against the latest Meta read.
+-- version, and a webinar programme (0141) refuses a name/language already pinned to other content.
+-- So this rail never takes the real name: its row is keyed by the Meta template id under the reserved
+-- name mhp_owner_121__<id>, and a webinar programme can still pin the real name afterwards. The exact
+-- template (real name, language, body, variables, rendered text) is carried by mhp_wa_owner_sends and
+-- re-proved against the latest Meta read at begin-call. No other rail can send through the reserved
+-- row: Meta has no template of that name.
 CREATE FUNCTION app_private.mhp_wa_owner_register_template(p_workspace uuid,p_binding uuid,p_observation uuid) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog AS $f$
 DECLARE o app_private.mhp_wa_owner_templates%ROWTYPE; b app.property_predator_whatsapp_live_bindings%ROWTYPE; item uuid:=gen_random_uuid();
@@ -991,7 +1104,7 @@ BEGIN
  SELECT * INTO STRICT o FROM app_private.mhp_wa_owner_templates x WHERE x.id=p_observation AND x.binding_id=p_binding;
  b:=app_private.mhp_event_whatsapp_binding(p_binding);
  IF b.id IS NULL OR session_user<>'r72_crm_command' OR actor IS NULL THEN RAISE EXCEPTION 'MHP owner template registration denied' USING ERRCODE='42501'; END IF;
- key:='meta-template:'||o.template_name||':'||o.language_code;
+ key:='meta-template:'||o.meta_template_id;
  body:=jsonb_build_object('schema','mhp.owner-121-meta-template/v1','metaTemplateId',o.meta_template_id,'templateName',o.template_name,
   'language',o.language_code,'category',o.category,'bodyText',o.body_text,'componentsSha256',encode(o.components_sha256,'hex'))::text;
  sha:=public.digest(body,'sha256');
@@ -1009,21 +1122,21 @@ BEGIN
  INSERT INTO app.property_predator_whatsapp_live_templates(id,workspace_id,binding_id,provider_connection_id,content_item_id,content_version_id,content_sha256,
   approval_request_id,approval_decision_id,provider_template_name,provider_template_ref_sha256,language_code,category,parameter_count,provider_status,
   provider_approval_evidence_sha256,provider_approved_at,created_by_user_id)
- VALUES(template,p_workspace,p_binding,b.provider_connection_id,item,version,sha,req,decision,o.template_name,public.digest('meta-template:'||o.meta_template_id,'sha256'),
+ VALUES(template,p_workspace,p_binding,b.provider_connection_id,item,version,sha,req,decision,app_private.mhp_wa_owner_template_pin(o.meta_template_id),
+  public.digest('meta-template:'||o.meta_template_id,'sha256'),
   o.language_code,lower(o.category),0,'approved',o.components_sha256,o.observed_at,actor);
  RETURN template;
 END $f$;
 REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_register_template(uuid,uuid,uuid) FROM PUBLIC;
 
-CREATE FUNCTION app_private.claim_owner_whatsapp_job(p_workspace_id uuid,p_provider_connection_id uuid,p_lease_token bytea,p_lease_seconds integer)
-RETURNS TABLE(job_id uuid,binding_id uuid,lease_version bigint)
-LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE selected app.property_predator_whatsapp_live_jobs%ROWTYPE; recovered app.property_predator_whatsapp_live_jobs%ROWTYPE; next_version bigint;
+-- Settle owner jobs that can no longer be sent. Called by the worker's claim and by the owner's next
+-- queue attempt, so it also runs while the worker's owner switch is off. 0053 recovery semantics for
+-- owner jobs only: a begun call is never retried (it becomes 'outcome unknown', which keeps counting);
+-- a queued job whose authority lapsed was never handed to Meta and is recorded as expired.
+CREATE FUNCTION app_private.mhp_wa_owner_sweep(p_workspace_id uuid,p_provider_connection_id uuid) RETURNS void
+LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog AS $f$
+DECLARE recovered app.property_predator_whatsapp_live_jobs%ROWTYPE; stale record; expired_link uuid;
 BEGIN
- PERFORM app_private.mhp_event_whatsapp_worker_context(p_workspace_id);
- IF octet_length(p_lease_token) IS DISTINCT FROM 32 OR p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 30 AND 300
- THEN RAISE EXCEPTION 'MHP owner WhatsApp claim denied' USING ERRCODE='42501'; END IF;
- -- 0053 recovery semantics for owner jobs only: a begun call is never retried.
  FOR recovered IN SELECT job.* FROM app.property_predator_whatsapp_live_jobs AS job
   WHERE job.workspace_id=p_workspace_id AND job.provider_connection_id=p_provider_connection_id AND job.authority_kind='mhp_owner_direct'
    AND ((job.state IN('leased','calling') AND job.lease_expires_at<=statement_timestamp()) OR (job.state='awaiting_status' AND job.status_deadline<=statement_timestamp()))
@@ -1042,15 +1155,30 @@ BEGIN
   WHERE j.workspace_id=recovered.workspace_id AND j.id=recovered.id;
   DELETE FROM app.property_predator_whatsapp_live_job_leases AS lease WHERE lease.workspace_id=recovered.workspace_id AND lease.job_id=recovered.id;
  END LOOP;
- -- Queued owner jobs whose authority lapsed were never handed to Meta: cancel, and say so on the send.
- WITH stale AS (
-  UPDATE app.property_predator_whatsapp_live_jobs AS j SET state='cancelled',settled_at=statement_timestamp(),updated_at=statement_timestamp()
+ FOR stale IN UPDATE app.property_predator_whatsapp_live_jobs AS j SET state='cancelled',settled_at=statement_timestamp(),updated_at=statement_timestamp()
   FROM app.property_predator_whatsapp_live_authorities AS a
   WHERE j.workspace_id=p_workspace_id AND j.provider_connection_id=p_provider_connection_id AND j.authority_kind='mhp_owner_direct' AND j.state='queued'
    AND a.workspace_id=j.workspace_id AND a.id=j.authority_id AND a.valid_until<=statement_timestamp()
-  RETURNING j.owner_send_id)
- UPDATE app_private.mhp_wa_owner_sends AS s SET state='expired',state_reason='authority_expired',updated_at=statement_timestamp()
- FROM stale WHERE s.id=stale.owner_send_id AND s.state='queued';
+  RETURNING j.owner_send_id LOOP
+  UPDATE app_private.mhp_wa_owner_sends AS s SET state='expired',state_reason='authority_expired',updated_at=greatest(statement_timestamp(),s.updated_at)
+  WHERE s.id=stale.owner_send_id AND s.state='queued' RETURNING s.link_id INTO expired_link;
+  IF FOUND THEN
+   PERFORM app_private.mhp_wa_owner_note(expired_link,'expired','WhatsApp not sent: it expired before the sender picked it up',NULL,
+    jsonb_build_object('sendId',stale.owner_send_id,'reason','authority_expired'),NULL);
+  END IF;
+ END LOOP;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_sweep(uuid,uuid) FROM PUBLIC;
+
+CREATE FUNCTION app_private.claim_owner_whatsapp_job(p_workspace_id uuid,p_provider_connection_id uuid,p_lease_token bytea,p_lease_seconds integer)
+RETURNS TABLE(job_id uuid,binding_id uuid,lease_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE selected app.property_predator_whatsapp_live_jobs%ROWTYPE; next_version bigint;
+BEGIN
+ PERFORM app_private.mhp_event_whatsapp_worker_context(p_workspace_id);
+ IF octet_length(p_lease_token) IS DISTINCT FROM 32 OR p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 30 AND 300
+ THEN RAISE EXCEPTION 'MHP owner WhatsApp claim denied' USING ERRCODE='42501'; END IF;
+ PERFORM app_private.mhp_wa_owner_sweep(p_workspace_id,p_provider_connection_id);
  SELECT job.* INTO selected FROM app.property_predator_whatsapp_live_jobs AS job
  JOIN app.property_predator_whatsapp_live_authorities AS a ON a.workspace_id=job.workspace_id AND a.id=job.authority_id AND a.authority_kind='mhp_owner_direct'
   AND a.owner_send_id=job.owner_send_id AND a.valid_until>statement_timestamp()
@@ -1074,7 +1202,7 @@ END $f$;
 CREATE FUNCTION app_private.mhp_wa_owner_eligible(p_job uuid) RETURNS jsonb
 LANGUAGE plpgsql STABLE SET search_path=pg_catalog AS $f$
 DECLARE job app.property_predator_whatsapp_live_jobs%ROWTYPE; s app_private.mhp_wa_owner_sends%ROWTYPE; a app.property_predator_whatsapp_live_authorities%ROWTYPE;
- gate jsonb; o app_private.mhp_wa_owner_templates%ROWTYPE;
+ gate jsonb; o app_private.mhp_wa_owner_templates%ROWTYPE; rendered jsonb;
 BEGIN
  SELECT * INTO job FROM app.property_predator_whatsapp_live_jobs j WHERE j.id=p_job AND j.authority_kind='mhp_owner_direct';
  IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'reason','not_eligible'); END IF;
@@ -1089,8 +1217,22 @@ BEGIN
   OR gate->>'verification' IS DISTINCT FROM s.verification OR (gate->>'attestationId')::uuid IS DISTINCT FROM s.attestation_id
  THEN RETURN jsonb_build_object('ok',false,'reason','permission_changed'); END IF;
  o:=app_private.mhp_wa_owner_template_current(s.binding_id,s.meta_template_id);
- IF o.id IS NULL OR o.body_sha256<>s.body_sha256 OR o.template_name<>s.template_name OR o.language_code<>s.language_code
-  OR o.parameter_format<>s.parameter_format THEN RETURN jsonb_build_object('ok',false,'reason','template_not_approved'); END IF;
+ IF o.id IS NULL OR o.template_name<>s.template_name OR o.language_code<>s.language_code
+ THEN RETURN jsonb_build_object('ok',false,'reason','template_not_approved'); END IF;
+ -- What Meta will send must still be exactly what the owner previewed: every component Meta returned
+ -- (header, body, footer, buttons) is unchanged, and the text rendered now from the stored variables
+ -- has the previewed SHA-256.
+ IF o.body_sha256<>s.body_sha256 OR o.parameter_format<>s.parameter_format OR o.components_sha256 IS DISTINCT FROM
+   (SELECT q.components_sha256 FROM app_private.mhp_wa_owner_templates q WHERE q.id=s.template_observation_id)
+ THEN RETURN jsonb_build_object('ok',false,'reason','preview_changed'); END IF;
+ BEGIN
+  rendered:=app_private.mhp_wa_owner_render(o.id,CASE s.parameter_format
+   WHEN 'NAMED' THEN (SELECT coalesce(jsonb_object_agg(e->>'name',e->'value'),'{}'::jsonb) FROM jsonb_array_elements(s.parameters) e)
+   WHEN 'POSITIONAL' THEN (SELECT coalesce(jsonb_agg(e->'value' ORDER BY n),'[]'::jsonb) FROM jsonb_array_elements(s.parameters) WITH ORDINALITY x(e,n))
+   ELSE '[]'::jsonb END);
+ EXCEPTION WHEN sqlstate '22023' THEN RETURN jsonb_build_object('ok',false,'reason','preview_changed'); END;
+ IF decode(rendered->>'sha256','hex') IS DISTINCT FROM s.rendered_sha256 OR rendered->'parameters' IS DISTINCT FROM s.parameters
+ THEN RETURN jsonb_build_object('ok',false,'reason','preview_changed'); END IF;
  RETURN jsonb_build_object('ok',true,'observationId',o.id);
 END $f$;
 REVOKE ALL ON FUNCTION app_private.mhp_wa_owner_eligible(uuid) FROM PUBLIC;

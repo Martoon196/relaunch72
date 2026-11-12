@@ -95,8 +95,11 @@ implements MetaWhatsAppLiveWebhookCommandService {
         event.providerMessageId, recipientSha256, event.status,
         payloadSha256, event.occurredAt],
     )), { isolation: 'serializable' });
-    if (recorded === 'applied' && this.mhpOwnerWhatsApp && event.status === 'failed' && event.errorCode !== undefined) {
+    if ((recorded === 'applied' || recorded === 'replayed') && this.mhpOwnerWhatsApp && event.status === 'failed' && event.errorCode !== undefined) {
       // Owner one-to-one sends keep Meta's own error code (and any restriction hold); other jobs are untouched.
+      // Also on a replay: if this second step failed the first time, Meta's retry of the same signed status
+      // arrives as 'replayed' and must still record the code and the hold. The database call is idempotent
+      // (same code on the same send; one hold per send and code).
       await withTransaction(this.#commandPool, { actorKind: 'webhook', workspaceId: this.workspaceId,
         requestId: this.#requestId(`${event.externalEventId}:error`) }, async (transaction) => transaction.query(
         `/* mhp-wa-owner.status-error */ SELECT app_private.mhp_wa_owner_status_error($1::uuid,$2::uuid,$3::text,$4::bytea,$5::integer) AS outcome`,

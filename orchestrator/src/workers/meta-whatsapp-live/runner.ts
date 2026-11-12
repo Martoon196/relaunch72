@@ -189,9 +189,6 @@ export function loadMetaWhatsAppLiveWorkerConfig(
     env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID,
     'PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID',
   );
-  if (!['enabled', 'disabled'].includes(env.MHP_WHATSAPP_OWNER_SENDS?.trim() ?? 'disabled')) {
-    throw new Error('MHP owner WhatsApp sends require MHP_WHATSAPP_OWNER_SENDS=enabled or disabled');
-  }
   const interval = pollInterval(env.PROPERTY_PREDATOR_WHATSAPP_LIVE_POLL_MS);
   const runtime = loadMetaWhatsAppLiveRuntimeConfig(env);
   if (runtime.mode === 'disabled') {
@@ -229,16 +226,16 @@ export function loadMetaWhatsAppLiveWorkerConfig(
 
 function mhpEventBinding(env: NodeJS.ProcessEnv): { mhpEventBindingId?: string; mhpOwnerSends?: true } {
   const mode = env.PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE?.trim() ?? 'disabled';
-  const owner = env.MHP_WHATSAPP_OWNER_SENDS?.trim() ?? 'disabled';
-  if (owner !== 'disabled' && (owner !== 'enabled' || mode !== 'enabled')) {
-    throw new Error('MHP owner WhatsApp sends require MHP_WHATSAPP_OWNER_SENDS=enabled on the MHP worker (PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE=enabled)');
-  }
+  // MHP-WA-121: exactly 'enabled' switches owner sends on, and only on the worker that runs the MHP mode.
+  // Any other value (unset, empty, 'true', a typo) or a worker without the MHP mode means OFF. This
+  // switch never stops the worker: webinar follow-ups and inbox replies share this process.
+  const owner = env.MHP_WHATSAPP_OWNER_SENDS === 'enabled';
   if (mode === 'disabled') return {};
   if (mode !== 'enabled' || env.PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID?.trim() !== MHP_EVENT_WHATSAPP_WORKSPACE_ID) {
     throw new Error('MHP event WhatsApp requires PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE=enabled on the MHP workspace');
   }
   return { mhpEventBindingId: requiredUuid(env.PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID, 'PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID'),
-    ...(owner === 'enabled' ? { mhpOwnerSends: true as const } : {}) };
+    ...(owner ? { mhpOwnerSends: true as const } : {}) };
 }
 
 function safeErrorClass(error: unknown): string {
