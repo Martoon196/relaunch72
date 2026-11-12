@@ -10,7 +10,8 @@ import { PgLeadRelayCrmWriter } from '../../src/integrations/leadrelay/crm-feed-
 import { LeadRelayCrmFeed, leadRelayEventKey, leadRelayLeadKey } from '../../src/integrations/leadrelay/crm-feed.js';
 import { createLeadRelayFeedClient } from '../../src/integrations/leadrelay/crm-feed-client.js';
 import { createPgCommunicationEligibilityService } from '../../src/consent-pg/eligibility.js';
-import { workerDatabaseContext } from '../../src/db/rls.js';
+import { requestDatabaseContext, workerDatabaseContext } from '../../src/db/rls.js';
+import { CrmCommandService } from '../../src/crm-pg/commands.js';
 
 /** A stand-in for LeadRelay's read/ack API, serving the exact shapes LeadRelay's api.py returns. */
 function fakeLeadRelay(rows: Record<string, unknown>[], leads: Record<string, Record<string, unknown>>) {
@@ -39,7 +40,7 @@ test('LeadRelay feed copies enquiries, call results and a calls-only stop under 
       const c = new Client({ connectionString: url }); await c.connect(); clients.push(c); await c.query(`SET ROLE ${role}`);
       return { query: c.query.bind(c), release() { void c.end(); } };
     } }) as unknown as Pick<Pool, 'connect'>;
-    const fake = fakeLeadRelay([], {});
+    let served: ReturnType<typeof fakeLeadRelay> | undefined;
     try {
       await seed.query('SET ROLE r72_owner');
       await seed.query('INSERT INTO app.organizations(id,name,slug,kind) VALUES($1,$2,$3,\'direct_customer\')', [org, 'LeadRelay feed proof', 'lr-' + suffix]);
@@ -88,10 +89,10 @@ test('LeadRelay feed copies enquiries, call results and a calls-only stop under 
         row(E.dCall, 'call.provider_outcome', L.d, { outcome: 'answered' }, 8),
         row(E.eNew, 'lead.created', L.e, { source: 'website_chat', is_demo: false }, 9),
       ];
-      const served = fakeLeadRelay(rows, leads);
+      served = fakeLeadRelay(rows, leads);
       const base = await served.listen();
       const lines: string[] = [];
-      const feed = () => new LeadRelayCrmFeed({ state: 'on', key: 'k'.repeat(48), baseUrl: base, brand: 'pp',
+      const feed = () => new LeadRelayCrmFeed({ state: 'on', key: 'k'.repeat(48), workspaceId: lrWs, baseUrl: base, brand: 'pp',
         scope: { workspaceId: workspace, ownerUserId: owner, pipelineId: pipeline, stageId: stage } },
         { writer, client: createLeadRelayFeedClient({ baseUrl: base, key: 'k'.repeat(48), request: http.request }), log: l => lines.push(l) });
       const first = feed();
@@ -99,9 +100,10 @@ test('LeadRelay feed copies enquiries, call results and a calls-only stop under 
       assert.equal(served.acked.size, rows.length, 'every row is acknowledged after its write or deliberate skip');
       assert.ok(served.requests.every(r => (r.method === 'GET' && /^\/api\/(outbox\?limit=200|leads\/[0-9a-f-]+)$/u.test(r.url)) || (r.method === 'POST' && /^\/api\/outbox\/[0-9a-f-]+\/ack$/u.test(r.url))));
       const status = first.status('pp');
-      assert.deepEqual(status.today, { enquiriesCopied: 3, callResultsCopied: 2, doNotCallRecorded: 1, skipped: 1, needsTheOwner: 2 });
+      assert.deepEqual(status.today, { enquiriesCopied: 3, callResultsCopied: 2, doNotCallRecorded: 1, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 3 });
       assert.match(status.summary, /1 LeadRelay enquiry matches two CRM contacts and was not copied\./u);
       assert.match(status.summary, /1 LeadRelay enquiry belongs to an archived CRM contact and was not copied\./u);
+      assert.match(status.summary, /1 LeadRelay update for enquiries that were not copied was not copied either\./u);
 
       const snapshot = async () => (await seed.query(`SELECT
           (SELECT count(*)::int FROM app.contacts WHERE workspace_id=$1) AS contacts,
@@ -148,7 +150,7 @@ test('LeadRelay feed copies enquiries, call results and a calls-only stop under 
       const second = feed();
       await second.runOnce();
       assert.deepEqual(await snapshot(), before);
-      assert.deepEqual(second.status('pp').today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 1, needsTheOwner: 0 });
+      assert.deepEqual(second.status('pp').today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 1 });
       assert.equal(served.acked.size, rows.length);
       // And directly: the same opt-out event recorded again is a replay with no new row.
       const again = await writer.recordTimeline({ eventKey: leadRelayEventKey(lrWs, E.aOut), leadKey: leadRelayLeadKey(lrWs, L.a), leadRelayEventId: E.aOut,
@@ -185,9 +187,76 @@ test('LeadRelay feed copies enquiries, call results and a calls-only stop under 
       await assert.rejects(writer.copyEnquiry({ leadKey: 'lr.lead.revoked', occurredAt: new Date().toISOString(),
         lead: { displayName: 'After revocation', companyName: null, email: `rev-${suffix}@example.test`, phone: null, source: 'leadrelay:x' } }));
       await seed.query('UPDATE app.workspace_memberships SET status=\'active\',updated_at=clock_timestamp() WHERE workspace_id=$1 AND user_id=$2', [workspace, owner]);
-      served.server.close();
     } finally {
-      fake.server.close();
+      served?.server.closeAllConnections(); served?.server.close();
+      try {
+        await seed.query('SET ROLE r72_owner');
+        for (const table of ['communication_suppression_events', 'activities', 'opportunity_stage_history', 'tasks', 'opportunities', 'contact_points', 'contacts',
+          'command_receipts', 'outbox_events', 'pipeline_stages', 'pipelines', 'workspace_memberships'])
+          await seed.query(`DELETE FROM app.${table} WHERE workspace_id=$1`, [workspace]);
+        await seed.query('DELETE FROM app.organization_memberships WHERE organization_id=$1', [org]);
+        await seed.query('DELETE FROM app.workspaces WHERE organization_id=$1', [org]);
+        await seed.query('DELETE FROM app.organizations WHERE id=$1', [org]);
+        await seed.query('DELETE FROM app.users WHERE id=$1', [owner]);
+      } finally { await seed.end(); }
+    }
+  });
+
+test('a restart between creating the lead and linking it, and two instances racing on one lead, each give exactly one lead and no false timeline entry',
+  { skip: testDatabaseSkipReason() }, async () => {
+    const url = process.env.TEST_DATABASE_URL!;
+    assertDisposableTestDatabase(url);
+    const seed = new Client({ connectionString: url }); await seed.connect();
+    const org = randomUUID(), workspace = randomUUID(), owner = randomUUID(), pipeline = randomUUID(), stage = randomUUID(), suffix = randomUUID();
+    const rolePool = () => ({ async connect() {
+      const c = new Client({ connectionString: url }); await c.connect(); await c.query('SET ROLE r72_crm_command');
+      return { query: c.query.bind(c), release() { void c.end(); } };
+    } }) as unknown as Pick<Pool, 'connect'>;
+    try {
+      await seed.query('SET ROLE r72_owner');
+      await seed.query('INSERT INTO app.organizations(id,name,slug,kind) VALUES($1,$2,$3,\'direct_customer\')', [org, 'LeadRelay restart proof', 'lrr-' + suffix]);
+      await seed.query('INSERT INTO app.users(id,email,status) VALUES($1,$2,\'active\')', [owner, `lrr-${suffix}@example.test`]);
+      await seed.query('INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES($1,$2,\'Restart proof\',\'lrr-proof\')', [workspace, org]);
+      await seed.query('INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES($1,$2,\'owner\',\'active\')', [org, owner]);
+      await seed.query('INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status) VALUES($1,$2,$3,\'owner\',\'active\')', [workspace, org, owner]);
+      await seed.query('INSERT INTO app.pipelines(id,workspace_id,name,slug,is_default) VALUES($1,$2,\'Enquiries\',\'enquiries\',true)', [pipeline, workspace]);
+      await seed.query('INSERT INTO app.pipeline_stages(id,workspace_id,pipeline_id,name,slug,position,stage_type) VALUES($1,$2,$3,\'New\',\'new\',1,\'open\')', [stage, workspace, pipeline]);
+      const scope = { workspaceId: workspace, ownerUserId: owner, pipelineId: pipeline, stageId: stage };
+      const lrWs = randomUUID();
+      const lead = (n: string) => ({ displayName: `Person ${n}`, companyName: null, email: `${n}-${suffix}@example.test`, phone: `+4477009${n === 'r' ? '10001' : '10002'}`, source: 'leadrelay:website_chat' });
+
+      // Restart: the lead was created (createLead committed) but the process stopped before the link was saved.
+      const restartKey = leadRelayLeadKey(lrWs, randomUUID());
+      const runner = createInboxCrmRunner(rolePool());
+      const first = await new CrmCommandService({ transactionRunner: runner }).createLead(
+        requestDatabaseContext({ workspaceId: workspace, userId: owner, requestId: 'restart-proof' }),
+        { commandKey: restartKey, displayName: 'Person r', source: 'leadrelay:website_chat', ownerUserId: owner, pipelineId: pipeline, stageId: stage,
+          contactPoints: [{ kind: 'email', value: lead('r').email, consentStatus: 'unknown' }, { kind: 'phone', value: lead('r').phone, consentStatus: 'unknown' }],
+          opportunityName: 'LeadRelay enquiry · Person r', valueMinor: 0, currency: 'GBP' });
+      const writer = new PgLeadRelayCrmWriter(runner, scope);
+      const linked = await writer.copyEnquiry({ leadKey: restartKey, lead: lead('r'), occurredAt: new Date().toISOString() });
+      assert.deepEqual(linked, { outcome: 'created', contactId: first.contactId, replayed: false });
+      const dnc = await writer.recordTimeline({ eventKey: leadRelayEventKey(lrWs, 'restart-dnc'), leadKey: restartKey, leadRelayEventId: 'restart-dnc',
+        activityType: 'leadrelay.do_not_call', subject: 'Asked not to be called', body: null, occurredAt: new Date().toISOString(), metadata: {}, doNotCall: true });
+      assert.equal(dnc.outcome === 'written' && dnc.doNotCall, 'recorded', 'the phone point was linked, so the stop lands on it');
+
+      // Race: two instances copy the same enquiry at the same moment.
+      const raceKey = leadRelayLeadKey(lrWs, randomUUID());
+      const [a, b] = await Promise.all([new PgLeadRelayCrmWriter(createInboxCrmRunner(rolePool()), scope), new PgLeadRelayCrmWriter(createInboxCrmRunner(rolePool()), scope)]
+        .map(w => w.copyEnquiry({ leadKey: raceKey, lead: lead('x'), occurredAt: new Date().toISOString() }).catch((e: unknown) => e)));
+      const outcomes = [a, b].filter(r => r && typeof r === 'object' && 'outcome' in (r as object)) as { outcome: string; contactId: string; replayed: boolean }[];
+      assert.ok(outcomes.length >= 1, 'at least one instance completes; a loser may only fail with "in progress" and retry next run');
+      for (const r of [a, b]) if (!outcomes.includes(r as never)) assert.match(String((r as Error).name), /CommandInProgressError/u);
+      assert.ok(outcomes.every(r => r.outcome === 'created' && r.contactId === outcomes[0]!.contactId));
+      // A retry by the loser settles on the same lead.
+      const retry = await writer.copyEnquiry({ leadKey: raceKey, lead: lead('x'), occurredAt: new Date().toISOString() });
+      assert.equal(retry.outcome === 'created' && retry.contactId, outcomes[0]!.contactId);
+
+      const counts = (await seed.query(`SELECT (SELECT count(*)::int FROM app.contacts WHERE workspace_id=$1) AS contacts,
+          (SELECT count(*)::int FROM app.opportunities WHERE workspace_id=$1) AS opportunities,
+          (SELECT count(*)::int FROM app.activities WHERE workspace_id=$1 AND activity_type='leadrelay.enquiry') AS false_entries`, [workspace])).rows[0];
+      assert.deepEqual(counts, { contacts: 2, opportunities: 2, false_entries: 0 });
+    } finally {
       try {
         await seed.query('SET ROLE r72_owner');
         for (const table of ['communication_suppression_events', 'activities', 'opportunity_stage_history', 'tasks', 'opportunities', 'contact_points', 'contacts',

@@ -1,16 +1,18 @@
 /**
  * LeadRelay → brand CRM feed (step one: Relaunch72 pulls, LeadRelay is unchanged).
  *
- * On a timer in the web process this reads LeadRelay's undelivered event list with a read-only workspace key,
+ * On a timer in the web process this reads LeadRelay's undelivered event list with a read-and-acknowledge key,
  * copies new enquiries and call results into the brand's CRM, and then marks each event as delivered. It sends
  * nothing to anyone, enrols nobody, never writes to LeadRelay except to mark an event delivered, and never
- * posts a lead back to LeadRelay.
+ * posts a lead back to LeadRelay. Marking an event delivered is the one thing it changes in LeadRelay, so it does
+ * that only after the CRM write has committed or for a deliberate skip, and never for an event it could not read.
  *
  * Switches (names only; values live in the hosting dashboard):
- *   LEADRELAY_CRM_FEED            exactly "enabled", or the whole feature is inert
- *   LEADRELAY_CRM_FEED_KEY        the LeadRelay workspace key (40+ characters; scopes events.read, events.ack, lead.read)
- *   LEADRELAY_CRM_FEED_BASE_URL   https only; defaults to https://leadrelay-live.onrender.com
- *   LEADRELAY_CRM_FEED_BRAND      must be "pp" for now; the workspace comes from the Group HQ inbox brand scopes
+ *   LEADRELAY_CRM_FEED               exactly "enabled", or the whole feature is inert
+ *   LEADRELAY_CRM_FEED_KEY           the LeadRelay read-and-acknowledge key (scopes events.read, events.ack, lead.read only)
+ *   LEADRELAY_CRM_FEED_WORKSPACE_ID  the LeadRelay workspace that key belongs to; anything from another workspace is refused
+ *   LEADRELAY_CRM_FEED_BASE_URL      https only; defaults to https://leadrelay-live.onrender.com
+ *   LEADRELAY_CRM_FEED_BRAND         must be "pp" for now; the CRM workspace comes from the Group HQ inbox brand scopes
  *
  * Bad settings are reported once and leave the feed off; they never stop the web service from starting.
  */
@@ -20,7 +22,7 @@ import type { InboxCrmConfig } from '../group-hq-crm/inbox.js';
 import type { CrmTransactionRunner } from '../../crm-pg/types.js';
 import {
   LEADRELAY_OUTBOX_PAGE, LeadRelayFeedError, createLeadRelayFeedClient, isLeadRelayId,
-  type LeadRelayFeedClient, type LeadRelayOutboxRow, type LeadRelayUnreadableRow,
+  type LeadRelayFeedClient, type LeadRelayOutboxRow,
 } from './crm-feed-client.js';
 import {
   PgLeadRelayCrmWriter, normalisedEmail, normalisedPhone,
@@ -29,31 +31,37 @@ import {
 
 export const LEADRELAY_CRM_FEED_ENV = 'LEADRELAY_CRM_FEED';
 export const LEADRELAY_CRM_FEED_KEY_ENV = 'LEADRELAY_CRM_FEED_KEY';
+export const LEADRELAY_CRM_FEED_WORKSPACE_ID_ENV = 'LEADRELAY_CRM_FEED_WORKSPACE_ID';
 export const LEADRELAY_CRM_FEED_BASE_URL_ENV = 'LEADRELAY_CRM_FEED_BASE_URL';
 export const LEADRELAY_CRM_FEED_BRAND_ENV = 'LEADRELAY_CRM_FEED_BRAND';
 export const LEADRELAY_DEFAULT_BASE_URL = 'https://leadrelay-live.onrender.com';
 const SUPPORTED_BRANDS = new Set(['pp']);
 const KEY = /^[\x21-\x7e]{40,512}$/u;
 const TIME_ZONE = 'Europe/London';
-/** Each event is tried once per run; after this many failures in a row it waits an hour so later events keep moving. */
+/** Each event is tried at most once per run; after this many failures in a row it waits an hour so later events keep moving. */
 export const MAX_ROW_FAILURES = 3;
 const HOLD_MS = 3_600_000;
 /** At most this many pages of 200 per run; the rest wait for the next run. */
 const MAX_PAGES_PER_RUN = 10;
-const NEEDS_OWNER_KEPT = 20;
+const NEEDS_OWNER_KEPT = 50;
+/** Call outcomes LeadRelay can report; anything else is stored as null. */
+const KNOWN_OUTCOMES = new Set(['answered', 'no_answer', 'booked', 'interested', 'not_interested', 'opt_out', 'failed']);
 
 // ---------------------------------------------------------------------------------------------------- settings
 
 export type LeadRelayCrmFeedConfig =
   | { readonly state: 'off' }
   | { readonly state: 'invalid'; readonly problem: string }
-  | { readonly state: 'on'; readonly key: string; readonly baseUrl: string; readonly brand: string; readonly scope: LeadRelayCrmScope };
+  | { readonly state: 'on'; readonly key: string; readonly workspaceId: string; readonly baseUrl: string; readonly brand: string;
+      readonly scope: LeadRelayCrmScope };
 
 export function loadLeadRelayCrmFeedConfig(env: NodeJS.ProcessEnv, inbox: InboxCrmConfig | undefined): LeadRelayCrmFeedConfig {
   if (env[LEADRELAY_CRM_FEED_ENV] !== 'enabled') return { state: 'off' };
   const invalid = (problem: string): LeadRelayCrmFeedConfig => ({ state: 'invalid', problem });
   const key = env[LEADRELAY_CRM_FEED_KEY_ENV]?.trim() ?? '';
-  if (!KEY.test(key)) return invalid(`${LEADRELAY_CRM_FEED_KEY_ENV} must be the LeadRelay key: at least 40 characters with no spaces.`);
+  if (!KEY.test(key)) return invalid(`${LEADRELAY_CRM_FEED_KEY_ENV} must be the LeadRelay read-and-acknowledge key: at least 40 characters with no spaces.`);
+  const workspaceId = env[LEADRELAY_CRM_FEED_WORKSPACE_ID_ENV]?.trim() ?? '';
+  if (!isLeadRelayId(workspaceId)) return invalid(`${LEADRELAY_CRM_FEED_WORKSPACE_ID_ENV} must be the id of the LeadRelay workspace the key belongs to.`);
   const rawBase = env[LEADRELAY_CRM_FEED_BASE_URL_ENV]?.trim() || LEADRELAY_DEFAULT_BASE_URL;
   let base: URL;
   try { base = new URL(rawBase); } catch { return invalid(`${LEADRELAY_CRM_FEED_BASE_URL_ENV} is not a web address.`); }
@@ -64,7 +72,7 @@ export function loadLeadRelayCrmFeedConfig(env: NodeJS.ProcessEnv, inbox: InboxC
   if (!SUPPORTED_BRANDS.has(brand)) return invalid(`${LEADRELAY_CRM_FEED_BRAND_ENV} must be pp.`);
   const scope = inbox?.scopes[brand];
   if (!scope) return invalid(`The ${brand} CRM is not set up in the Group HQ inbox settings (R72_GROUP_HQ_INBOX_SCOPES), so LeadRelay has nowhere to write.`);
-  return { state: 'on', key, baseUrl: base.origin, brand,
+  return { state: 'on', key, workspaceId, baseUrl: base.origin, brand,
     scope: { workspaceId: scope.workspaceId, ownerUserId: scope.ownerUserId, pipelineId: scope.pipelineId, stageId: scope.stageId } };
 }
 
@@ -82,6 +90,7 @@ function londonMidnight(at: number): number {
   return utcMidnight - Number(hourOnly.format(new Date(utcMidnight))) * 3_600_000;
 }
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+const wasWere = (count: number): string => count === 1 ? 'was' : 'were';
 
 /** "14:05 today", "14:05 yesterday" or "14:05 on 3 Nov 2026", in UK time. */
 export function whenLabel(at: number, now: number): string {
@@ -118,8 +127,17 @@ export function interpretLeadRelayEvent(row: LeadRelayOutboxRow): Action {
     case 'call.provider_outcome':
     case 'call.outcome': {
       if (!row.leadId) return { type: 'skip' };
-      const outcome = typeof p.outcome === 'string' ? p.outcome : null;
+      const outcome = typeof p.outcome === 'string' && KNOWN_OUTCOMES.has(p.outcome) ? p.outcome : null;
       if (outcome === 'opt_out') {
+        // LeadRelay's reconciliation path (payload.provenance) reports opt_out whenever the lead is unsubscribed or
+        // suppressed for any reason, including an email unsubscribe. Only an outcome from the call itself is a
+        // "do not call": the signed call-outcome event, or the provider's own call webhook (no provenance field).
+        const fromTheCall = row.kind === 'call.outcome' || !Object.prototype.hasOwnProperty.call(p, 'provenance');
+        if (!fromTheCall) {
+          return { type: 'timeline', leadId: row.leadId, counts: 'call', event: { leadRelayEventId: row.id, activityType: 'leadrelay.call_result',
+            subject: `LeadRelay stopped contacting this person (${date})`, body: null, occurredAt,
+            metadata: { leadRelayKind: row.kind, outcome: null, stoppedByLeadRelay: true }, doNotCall: false } };
+        }
         return { type: 'timeline', leadId: row.leadId, counts: 'dnc', event: { leadRelayEventId: row.id, activityType: 'leadrelay.do_not_call',
           subject: `Asked not to be called (AI call on ${date})`, body: null, occurredAt, metadata: { leadRelayKind: row.kind, outcome }, doNotCall: true } };
       }
@@ -129,7 +147,7 @@ export function interpretLeadRelayEvent(row: LeadRelayOutboxRow): Action {
     }
     case 'lead.status':
       // Booked and won arrive as their own meeting and purchase events; paused, active and new are LeadRelay's own housekeeping.
-      if (p.status === 'unsubscribed') return note(row.leadId, `Unsubscribed in LeadRelay (${date}). LeadRelay will not contact them; permissions in this CRM are unchanged.`, { status: 'unsubscribed' });
+      if (p.status === 'unsubscribed') return note(row.leadId, `Unsubscribed in LeadRelay (${date}). LeadRelay will not contact them.`, { status: 'unsubscribed' });
       if (p.status === 'lost') return note(row.leadId, `Marked as not interested in LeadRelay (${date})`, { status: 'lost' });
       return { type: 'ignore' };
     case 'meeting.booked': {
@@ -140,9 +158,9 @@ export function interpretLeadRelayEvent(row: LeadRelayOutboxRow): Action {
     case 'meeting.cancelled': return note(row.leadId, `Meeting cancelled in LeadRelay (${date})`);
     case 'purchase.confirmed': return note(row.leadId, `Purchase confirmed in LeadRelay (${date})`);
     case 'lead.replied': return note(row.leadId, `Replied to LeadRelay (${date})`);
-    case 'consent.updated': return note(row.leadId, `Contact permissions changed in LeadRelay (${date}). Permissions in this CRM are unchanged.`);
+    case 'consent.updated': return note(row.leadId, `Contact permissions changed in LeadRelay (${date})`);
     case 'privacy.erased': return note(isLeadRelayId(p.erased_lead_id) ? p.erased_lead_id : null,
-      `LeadRelay deleted this person's details at their request (${date}). Nothing in this CRM was changed.`);
+      `LeadRelay deleted this person's details (${date}). Nothing in this CRM was changed.`);
     default: return { type: 'ignore' };
   }
 }
@@ -155,9 +173,16 @@ const sourceLabel = (source: string): string => `leadrelay:${source.toLowerCase(
 // ---------------------------------------------------------------------------------------------------- status
 
 export interface LeadRelayFeedCounts {
-  enquiriesCopied: number; callResultsCopied: number; doNotCallRecorded: number; skipped: number; needsTheOwner: number;
+  enquiriesCopied: number; callResultsCopied: number; doNotCallRecorded: number;
+  /** Includes alreadyOptedOutInLeadRelay. */
+  skipped: number;
+  /** Enquiries not copied because the person had already opted out in LeadRelay. */
+  alreadyOptedOutInLeadRelay: number;
+  needsTheOwner: number;
 }
-export type LeadRelayFeedProblem = 'not_connected' | 'settings_incomplete' | 'starting' | 'no_answer' | 'key_refused' | 'unexpected_answer' | null;
+export type LeadRelayFeedProblem = 'not_connected' | 'settings_incomplete' | 'starting' | 'no_answer' | 'key_refused' | 'wrong_business'
+  | 'unexpected_answer' | 'blocked' | null;
+export type NeedsOwnerReason = 'two_contacts' | 'archived_contact' | 'number_not_on_contact' | 'do_not_call_enquiry_not_copied' | 'update_enquiry_not_copied';
 export interface LeadRelayFeedStatus {
   brand: string;
   switchedOn: boolean;
@@ -168,29 +193,34 @@ export interface LeadRelayFeedStatus {
   /** Counts are kept in memory: they start at midnight UK time or at the last restart, whichever is later. */
   countingSince: string;
   waitingAfterRepeatedFailures: number;
-  needsTheOwner: { leadRelayLeadId: string; reason: 'two_contacts' | 'archived_contact' | 'number_not_on_contact'; at: string }[];
+  needsTheOwner: { leadRelayLeadId: string; reason: NeedsOwnerReason; at: string }[];
   sentences: string[];
   summary: string;
 }
 
 type Logger = (line: string) => void;
 type RowResult = keyof LeadRelayFeedCounts | 'note' | 'ignored' | 'replayed';
+const zero = (): LeadRelayFeedCounts => ({ enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 0 });
+class WrongBusiness extends Error {}
 
 export class LeadRelayCrmFeed {
   private readonly startedAt: number;
   private readonly now: () => number;
   private readonly log: Logger;
-  private counts: LeadRelayFeedCounts = { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, needsTheOwner: 0 };
+  private counts: LeadRelayFeedCounts = zero();
   private countsDay: string;
   private lastSucceededAt: number | null = null;
   private lastAnsweredAt: number | null = null;
   private lastRun: number | null = null;
   private problem: Exclude<LeadRelayFeedProblem, 'not_connected' | 'settings_incomplete' | 'starting'> = null;
+  /** Rows left in LeadRelay on the last run because they could not be read. */
+  private unreadableLastRun = 0;
   private readonly failures = new Map<string, { count: number; retryAt: number }>();
   /** Events already counted whose acknowledgement did not reach LeadRelay; they are not counted twice. */
   private readonly countedNotAcked = new Set<string>();
   private readonly ownerItems: LeadRelayFeedStatus['needsTheOwner'] = [];
   private running: Promise<void> | null = null;
+  private stopped = false;
 
   constructor(readonly config: LeadRelayCrmFeedConfig, private readonly deps: { client?: LeadRelayFeedClient; writer?: LeadRelayCrmWriter;
     now?: () => number; log?: Logger } = {}) {
@@ -209,7 +239,7 @@ export class LeadRelayCrmFeed {
     const today = londonDay(this.now());
     if (today === this.countsDay) return;
     this.countsDay = today;
-    this.counts = { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, needsTheOwner: 0 };
+    this.counts = zero();
   }
 
   private bump(result: RowResult): void {
@@ -217,76 +247,118 @@ export class LeadRelayCrmFeed {
     if (result in this.counts) this.counts[result as keyof LeadRelayFeedCounts]++;
   }
 
-  private needsOwner(leadId: string, reason: LeadRelayFeedStatus['needsTheOwner'][number]['reason']): void {
+  private needsOwner(leadId: string, reason: NeedsOwnerReason, eventId: string): void {
     this.ownerItems.unshift({ leadRelayLeadId: leadId, reason, at: new Date(this.now()).toISOString() });
     this.ownerItems.length = Math.min(this.ownerItems.length, NEEDS_OWNER_KEPT);
+    this.emit('needs_owner', 'warn', { leadRelayLeadId: leadId, leadRelayEventId: eventId, reason });
   }
 
-  private async handle(client: LeadRelayFeedClient, writer: LeadRelayCrmWriter, row: LeadRelayOutboxRow): Promise<RowResult[]> {
+  private async handle(client: LeadRelayFeedClient, writer: LeadRelayCrmWriter, row: LeadRelayOutboxRow, workspaceId: string): Promise<RowResult[]> {
     const action = interpretLeadRelayEvent(row);
     if (action.type === 'ignore') return ['ignored'];
     if (action.type === 'skip') return ['skipped'];
-    const leadKey = leadRelayLeadKey(row.workspaceId, action.leadId);
+    const leadKey = leadRelayLeadKey(workspaceId, action.leadId);
     if (action.type === 'enquiry') {
       const lead = await client.lead(action.leadId);
+      if (lead && lead.workspaceId !== workspaceId) throw new WrongBusiness();
       // Demo leads, erased leads and leads with no way to reach them are not copied.
       if (!lead || lead.isDemo || (!normalisedEmail(lead.email) && !normalisedPhone(lead.phone))) return ['skipped'];
+      // Someone who had already opted out in LeadRelay is not added to this CRM at all.
+      if (lead.status === 'unsubscribed') return ['skipped', 'alreadyOptedOutInLeadRelay'];
       const result = await writer.copyEnquiry({ leadKey, occurredAt: new Date(row.createdAt * 1000).toISOString(), lead: {
         displayName: lead.name.trim() || 'LeadRelay enquiry', companyName: lead.company.trim() || null,
         email: lead.email, phone: lead.phone, source: sourceLabel(lead.source) } });
       if (result.replayed) return ['replayed'];
-      if (result.outcome === 'needs_owner') { this.needsOwner(action.leadId, result.reason); return ['needsTheOwner']; }
+      if (result.outcome === 'needs_owner') { this.needsOwner(action.leadId, result.reason, row.id); return ['needsTheOwner']; }
       return ['enquiriesCopied'];
     }
-    const result = await writer.recordTimeline({ ...action.event, leadKey, eventKey: leadRelayEventKey(row.workspaceId, row.id) });
+    const result = await writer.recordTimeline({ ...action.event, leadKey, eventKey: leadRelayEventKey(workspaceId, row.id) });
     if (result.replayed) return ['replayed'];
+    if (result.outcome === 'enquiry_needs_owner') {
+      this.needsOwner(action.leadId, action.counts === 'dnc' ? 'do_not_call_enquiry_not_copied' : 'update_enquiry_not_copied', row.id);
+      return ['needsTheOwner'];
+    }
     if (result.outcome === 'not_copied') return ['skipped'];
     if (action.counts === 'note') return ['note'];
     if (action.counts === 'call') return ['callResultsCopied'];
     if (result.doNotCall === 'recorded') return ['callResultsCopied', 'doNotCallRecorded'];
-    this.needsOwner(action.leadId, 'number_not_on_contact');
+    this.needsOwner(action.leadId, 'number_not_on_contact', row.id);
     return ['callResultsCopied', 'needsTheOwner'];
+  }
+
+  private fail(id: string, kind: string | null, error: unknown): number {
+    const count = (this.failures.get(id)?.count ?? 0) + 1;
+    this.failures.set(id, { count, retryAt: count >= MAX_ROW_FAILURES ? this.now() + HOLD_MS : 0 });
+    this.emit('row_failed', 'warn', { leadRelayEventId: id, kind, attempt: count,
+      cause: error instanceof Error ? error.name : 'unreadable',
+      code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : null,
+      message: count >= MAX_ROW_FAILURES ? 'This LeadRelay event failed several times; later events carry on and it is tried again in an hour.' : null });
+    return count;
   }
 
   /** One pass over LeadRelay's waiting events, oldest first. Never throws. */
   runOnce(): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.pass().finally(() => { this.running = null; });
+    this.running = this.pass().catch(() => {
+      this.emit('run_failed', 'warn', { message: 'The LeadRelay feed run stopped unexpectedly; nothing more was marked as delivered.' });
+    }).finally(() => { this.running = null; });
     return this.running;
   }
 
   private async pass(): Promise<void> {
     const config = this.config;
-    if (config.state !== 'on') return;
+    if (config.state !== 'on' || this.stopped) return;
     const client = this.deps.client ?? createLeadRelayFeedClient({ baseUrl: config.baseUrl, key: config.key });
     const writer = this.deps.writer;
     if (!writer) return;
     this.lastRun = this.now();
     const tally: Record<string, number> = {};
-    let failed = 0, transport: LeadRelayFeedError | null = null;
+    // A row that failed in this run is not tried again on a later page of the same run.
+    const triedAndFailed = new Set<string>();
+    let failed = 0, unreadable = 0, blocked = false, transport: LeadRelayFeedError | null = null, wrongBusiness = false;
     try {
-      for (let page = 0; page < MAX_PAGES_PER_RUN; page++) {
-        const rows = (await client.outbox()).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      for (let page = 0; page < MAX_PAGES_PER_RUN && !this.stopped; page++) {
+        const rows = await client.outbox();
         this.lastAnsweredAt = this.now();
+        // The key belongs to exactly one LeadRelay workspace; anything else means the wrong key. Nothing is copied or acknowledged.
+        if (rows.some(row => !('unreadable' in row) && row.workspaceId !== config.workspaceId)) throw new WrongBusiness();
+        rows.sort((a, b) => a.createdAt - b.createdAt || ((a.id ?? '') < (b.id ?? '') ? -1 : (a.id ?? '') > (b.id ?? '') ? 1 : 0));
+        if (rows.length < LEADRELAY_OUTBOX_PAGE) {
+          // This page is everything still waiting: forget rows that are no longer there.
+          const present = new Set(rows.map(row => row.id));
+          for (const id of [...this.failures.keys()]) if (!present.has(id)) this.failures.delete(id);
+          for (const id of [...this.countedNotAcked]) if (!present.has(id)) this.countedNotAcked.delete(id);
+        }
         let progressed = false;
         // A later event for a lead whose earlier event failed waits with it, so a call result never overtakes its enquiry.
         const waitingLeads = new Set<string>();
         for (const row of rows) {
-          const leadId = 'unreadable' in row ? null : row.leadId ?? (isLeadRelayId(row.payload.erased_lead_id) ? row.payload.erased_lead_id : null);
+          if (this.stopped) break;
+          if ('unreadable' in row) {
+            // Never interpreted and never acknowledged: it stays in LeadRelay and the owner is told.
+            unreadable++;
+            if (row.leadId) waitingLeads.add(row.leadId);
+            if (row.id && !triedAndFailed.has(row.id) && !((this.failures.get(row.id)?.retryAt ?? 0) > this.now())) {
+              triedAndFailed.add(row.id); this.fail(row.id, null, null);
+            }
+            continue;
+          }
+          const leadId = row.leadId ?? (isLeadRelayId(row.payload.erased_lead_id) ? row.payload.erased_lead_id : null);
           const held = this.failures.get(row.id);
-          if ((held && held.retryAt > this.now()) || (leadId && waitingLeads.has(leadId))) { if (leadId) waitingLeads.add(leadId); continue; }
+          if ((held && held.retryAt > this.now()) || triedAndFailed.has(row.id) || (leadId && waitingLeads.has(leadId))) {
+            if (leadId) waitingLeads.add(leadId);
+            continue;
+          }
           let results: RowResult[];
           try {
-            results = 'unreadable' in row ? ['skipped'] : await this.handle(client, writer, row);
+            results = await this.handle(client, writer, row, config.workspaceId);
           } catch (error) {
+            if (error instanceof WrongBusiness) throw error;
             if (error instanceof LeadRelayFeedError && error.kind !== 'not_found' && error.kind !== 'unexpected_answer') throw error;
-            const count = (held?.count ?? 0) + 1;
-            this.failures.set(row.id, { count, retryAt: count >= MAX_ROW_FAILURES ? this.now() + HOLD_MS : 0 });
+            this.fail(row.id, row.kind, error);
+            triedAndFailed.add(row.id);
             if (leadId) waitingLeads.add(leadId);
             failed++;
-            this.emit('row_failed', 'warn', { leadRelayEventId: row.id, kind: 'unreadable' in row ? null : row.kind, attempt: count,
-              cause: error instanceof Error ? error.name : 'unknown', code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : null,
-              message: count >= MAX_ROW_FAILURES ? 'This LeadRelay event failed several times; later events carry on and it is tried again in an hour.' : null });
             continue;
           }
           // Counted once, when the write commits (a replay counts nothing), then acknowledged: only now that the CRM
@@ -298,17 +370,23 @@ export class LeadRelayCrmFeed {
           this.countedNotAcked.delete(row.id);
           progressed = true;
         }
-        if (!progressed || rows.length < LEADRELAY_OUTBOX_PAGE) break;
+        if (!progressed) { if (rows.length >= LEADRELAY_OUTBOX_PAGE) blocked = true; break; }
+        if (rows.length < LEADRELAY_OUTBOX_PAGE) break;
       }
-      this.problem = null;
-      this.lastSucceededAt = this.now();
+      this.problem = unreadable ? 'unexpected_answer' : blocked ? 'blocked' : null;
+      if (!this.problem) this.lastSucceededAt = this.now();
     } catch (error) {
+      wrongBusiness = error instanceof WrongBusiness;
       transport = error instanceof LeadRelayFeedError ? error : null;
-      this.problem = transport?.kind === 'unauthorised' ? 'key_refused' : transport?.kind === 'unexpected_answer' ? 'unexpected_answer' : 'no_answer';
-      if (this.problem === 'key_refused' || this.problem === 'unexpected_answer') this.lastAnsweredAt = this.now();
+      this.problem = wrongBusiness ? 'wrong_business' : transport?.kind === 'unauthorised' ? 'key_refused'
+        : transport?.kind === 'unexpected_answer' ? 'unexpected_answer' : 'no_answer';
+      if (this.problem !== 'no_answer') this.lastAnsweredAt = this.now();
+      if (!wrongBusiness && !transport) throw error;
+    } finally {
+      this.unreadableLastRun = unreadable;
     }
-    if (transport || this.problem) {
-      this.emit('run_incomplete', 'warn', { problem: this.problem, status: transport?.status ?? null, failed, ...tally });
+    if (this.problem) {
+      this.emit('run_incomplete', 'warn', { problem: this.problem, status: transport?.status ?? null, failed, unreadable, ...tally });
     } else if (failed || Object.keys(tally).length) {
       this.emit('run', failed ? 'warn' : 'info', { failed, ...tally });
     }
@@ -317,20 +395,28 @@ export class LeadRelayCrmFeed {
   /** Runs now, then every intervalMs; after LeadRelay fails to answer it retries sooner, doubling up to maxRetryMs. */
   start(intervalMs = 120_000, retry: { retryMs?: number; maxRetryMs?: number } = {}): () => void {
     if (this.config.state !== 'on' || !this.deps.writer) return () => undefined;
-    let stopped = false, timer: NodeJS.Timeout | undefined, misses = 0;
+    let timer: NodeJS.Timeout | undefined, misses = 0;
     const firstRetry = retry.retryMs ?? 30_000, maxRetry = retry.maxRetryMs ?? 15 * 60_000;
-    const run = async (): Promise<void> => {
-      if (stopped) return;
-      await this.runOnce();
-      if (stopped) return;
-      misses = this.problem ? misses + 1 : 0;
-      const wait = misses ? Math.min(firstRetry * 2 ** (misses - 1), maxRetry) : intervalMs;
+    const schedule = (wait: number): void => {
+      if (this.stopped) return;
       timer = setTimeout(() => { void run(); }, wait);
       timer.unref?.();
     };
+    const run = async (): Promise<void> => {
+      // Last resort: nothing in here may become an unhandled rejection, and the timer always carries on.
+      try {
+        if (this.stopped) return;
+        await this.runOnce();
+        misses = this.problem ? misses + 1 : 0;
+        schedule(misses ? Math.min(firstRetry * 2 ** (misses - 1), maxRetry) : intervalMs);
+      } catch {
+        this.emit('timer_failed', 'warn', { message: 'The LeadRelay feed timer hit an unexpected error; it will try again.' });
+        schedule(maxRetry);
+      }
+    };
     this.emit('started', 'info', { brand: this.config.brand, everySeconds: Math.round(intervalMs / 1000) });
-    void run();
-    return () => { stopped = true; clearTimeout(timer); };
+    void run().catch(() => undefined);
+    return () => { this.stopped = true; clearTimeout(timer); };
   }
 
   status(brand: string): LeadRelayFeedStatus {
@@ -344,35 +430,44 @@ export class LeadRelayCrmFeed {
     const stuck = [...this.failures.values()].filter(item => item.count >= MAX_ROW_FAILURES).length;
     const problem: LeadRelayFeedProblem = config.state === 'off' || (config.state === 'on' && !mine) ? 'not_connected'
       : config.state === 'invalid' ? 'settings_incomplete' : this.lastRun === null ? 'starting' : this.problem;
+    const c = this.counts;
+    const since = restartedToday ? ` since the last restart at ${clock.format(new Date(this.startedAt))}` : ' today';
+    const copied = `${plural(c.enquiriesCopied, 'enquiry', 'enquiries')} and ${plural(c.callResultsCopied, 'call result', 'call results')} copied to the CRM${since}.`;
     const sentences: string[] = [];
-    const safe = 'Enquiries already copied are safe; new ones appear when it is back. Nothing was sent to anyone.';
+    const safe = 'Enquiries already copied are safe. Nothing was sent to anyone.';
     const lastHeard = this.lastAnsweredAt === null ? 'not heard from since the last restart' : `last heard ${whenLabel(this.lastAnsweredAt, now)}`;
     if (problem === 'not_connected') sentences.push('LeadRelay is not connected yet, so its enquiries are not reaching the CRM.');
     else if (problem === 'settings_incomplete') sentences.push('LeadRelay is switched on but its settings are incomplete, so its enquiries are not reaching the CRM.');
     else if (problem === 'starting') sentences.push('LeadRelay is connecting. New enquiries will appear in the CRM within a few minutes.');
-    else if (problem === 'no_answer') sentences.push(`LeadRelay did not answer (${lastHeard}). ${safe}`);
-    else if (problem === 'key_refused') sentences.push(`LeadRelay did not accept the connection key, so new enquiries are not reaching the CRM. ${safe}`);
-    else if (problem === 'unexpected_answer') sentences.push(`LeadRelay sent back something this CRM could not read, so new enquiries are waiting. ${safe}`);
-    else {
-      const c = this.counts;
-      const since = restartedToday ? ` since the last restart at ${clock.format(new Date(this.startedAt))}` : ' today';
-      sentences.push(`LeadRelay is connected. ${plural(c.enquiriesCopied, 'enquiry', 'enquiries')} and ${plural(c.callResultsCopied, 'call result', 'call results')} copied to the CRM${since}.`);
-    }
+    else if (problem === 'no_answer') sentences.push(`LeadRelay did not answer (${lastHeard}). Enquiries already copied are safe; new ones appear when it is back. Nothing was sent to anyone.`);
+    else if (problem === 'key_refused') sentences.push(`LeadRelay did not accept the read-and-acknowledge key, so new enquiries are not reaching the CRM. ${safe}`);
+    else if (problem === 'wrong_business') sentences.push('This LeadRelay key belongs to a different business, so nothing was copied.');
+    else if (problem === 'unexpected_answer') {
+      const n = this.unreadableLastRun;
+      sentences.push(n ? `${plural(n, 'LeadRelay update', 'LeadRelay updates')} could not be read, so ${n === 1 ? 'it was' : 'they were'} left waiting in LeadRelay and not copied. ${safe}`
+        : `LeadRelay's answers could not be read, so new enquiries are waiting in LeadRelay. ${safe}`);
+      sentences.push(`So far: ${copied}`);
+    } else if (problem === 'blocked') {
+      sentences.push(`New LeadRelay enquiries are waiting behind updates that could not be copied after several tries. ${safe}`);
+      sentences.push(`So far: ${copied}`);
+    } else sentences.push(`LeadRelay is connected. ${copied}`);
     if (mine) {
-      const c = this.counts;
-      if (c.doNotCallRecorded) sentences.push(`${plural(c.doNotCallRecorded, 'person', 'people')} asked not to be called; calls to them are now blocked. Texts, WhatsApp and email are not affected.`);
-      const twoContacts = this.ownerItems.filter(item => item.reason === 'two_contacts' && Date.parse(item.at) >= startOfCounting).length;
-      const archived = this.ownerItems.filter(item => item.reason === 'archived_contact' && Date.parse(item.at) >= startOfCounting).length;
-      const noNumber = this.ownerItems.filter(item => item.reason === 'number_not_on_contact' && Date.parse(item.at) >= startOfCounting).length;
-      if (twoContacts) sentences.push(`${plural(twoContacts, 'LeadRelay enquiry matches', 'LeadRelay enquiries match')} two CRM contacts and ${twoContacts === 1 ? 'was' : 'were'} not copied.`);
-      if (archived) sentences.push(`${plural(archived, 'LeadRelay enquiry belongs', 'LeadRelay enquiries belong')} to an archived CRM contact and ${archived === 1 ? 'was' : 'were'} not copied.`);
-      if (noNumber) sentences.push(`${plural(noNumber, 'person', 'people')} asked LeadRelay not to call them, but the number called is not on their CRM contact. Please check ${noNumber === 1 ? 'it' : 'them'}.`);
-      if (stuck) sentences.push(`${plural(stuck, 'LeadRelay update', 'LeadRelay updates')} could not be copied after several tries and will be tried again within the hour.`);
+      const today = (reason: NeedsOwnerReason): number => this.ownerItems.filter(item => item.reason === reason && Date.parse(item.at) >= startOfCounting).length;
+      const twoContacts = today('two_contacts'), archived = today('archived_contact'), noNumber = today('number_not_on_contact');
+      const dncNotCopied = today('do_not_call_enquiry_not_copied'), updatesNotCopied = today('update_enquiry_not_copied');
+      if (c.doNotCallRecorded) sentences.push(`${plural(c.doNotCallRecorded, 'do-not-call request', 'do-not-call requests')} from LeadRelay ${wasWere(c.doNotCallRecorded)} recorded as do not call in this CRM. Texts, WhatsApp and email are not affected.`);
+      if (c.alreadyOptedOutInLeadRelay) sentences.push(`${plural(c.alreadyOptedOutInLeadRelay, 'LeadRelay enquiry was', 'LeadRelay enquiries were')} not copied because the person had already opted out in LeadRelay.`);
+      if (twoContacts) sentences.push(`${plural(twoContacts, 'LeadRelay enquiry matches', 'LeadRelay enquiries match')} two CRM contacts and ${wasWere(twoContacts)} not copied.`);
+      if (archived) sentences.push(`${plural(archived, 'LeadRelay enquiry belongs', 'LeadRelay enquiries belong')} to an archived CRM contact and ${wasWere(archived)} not copied.`);
+      if (noNumber) sentences.push(`${plural(noNumber, 'do-not-call request', 'do-not-call requests')} could not be recorded because the number LeadRelay called is not on the CRM contact. Please check ${noNumber === 1 ? 'it' : 'them'}.`);
+      if (dncNotCopied) sentences.push(`${plural(dncNotCopied, 'do-not-call request', 'do-not-call requests')} could not be recorded because the enquiry was not copied. Please check ${dncNotCopied === 1 ? 'it' : 'them'} in LeadRelay.`);
+      if (updatesNotCopied) sentences.push(`${plural(updatesNotCopied, 'LeadRelay update', 'LeadRelay updates')} for enquiries that were not copied ${wasWere(updatesNotCopied)} not copied either.`);
+      if (stuck && problem !== 'blocked') sentences.push(`${plural(stuck, 'LeadRelay update', 'LeadRelay updates')} could not be copied after several tries and will be tried again within the hour.`);
     }
     return {
       brand, switchedOn: config.state === 'on' && mine, problem,
       lastSucceededAt: mine ? iso(this.lastSucceededAt) : null, lastAnsweredAt: mine ? iso(this.lastAnsweredAt) : null,
-      today: mine ? { ...this.counts } : { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, needsTheOwner: 0 },
+      today: mine ? { ...this.counts } : zero(),
       countingSince: new Date(startOfCounting).toISOString(),
       waitingAfterRepeatedFailures: mine ? stuck : 0,
       needsTheOwner: mine ? this.ownerItems.map(item => ({ ...item })) : [],

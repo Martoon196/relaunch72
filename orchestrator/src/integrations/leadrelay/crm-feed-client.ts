@@ -3,7 +3,7 @@
  * and mark one event as delivered. Nothing else is reachable through it.
  *
  * - Only GET /api/outbox, GET /api/leads/{id} and POST /api/outbox/{id}/ack are ever sent.
- * - The workspace key goes in the Authorization header only. No Origin header is sent (LeadRelay refuses
+ * - The read-and-acknowledge key goes in the Authorization header only. No Origin header is sent (LeadRelay refuses
  *   service keys that carry one), no cookies, no request body.
  * - Every request has a deadline and a response size limit.
  * - Errors carry only a category and an HTTP status: never a response body, a name, an address or the key.
@@ -36,8 +36,12 @@ export interface LeadRelayOutboxRow {
   /** Epoch seconds, as LeadRelay stores it. */
   readonly createdAt: number;
 }
-/** A row whose id is usable but whose other fields could not be read. It can be acknowledged, never interpreted. */
-export interface LeadRelayUnreadableRow { readonly id: string; readonly unreadable: true; readonly createdAt: number }
+/**
+ * A row that could not be read. It is never interpreted and never acknowledged: it stays in LeadRelay.
+ * id is null when even the id was unusable; leadId is kept when it alone could be read, so later events for
+ * the same lead wait with it.
+ */
+export interface LeadRelayUnreadableRow { readonly id: string | null; readonly unreadable: true; readonly leadId: string | null; readonly createdAt: number }
 
 export interface LeadRelayLead {
   readonly id: string;
@@ -47,6 +51,8 @@ export interface LeadRelayLead {
   readonly phone: string | null;
   readonly company: string;
   readonly source: string;
+  /** LeadRelay's own status for the lead (for example 'new', 'paused' or 'unsubscribed'). */
+  readonly status: string;
   readonly isDemo: boolean;
 }
 
@@ -64,15 +70,17 @@ const optionalText = (value: unknown, max: number): string | null => typeof valu
 
 export function isLeadRelayId(value: unknown): value is string { return typeof value === 'string' && ID.test(value); }
 
-function parseRow(value: unknown): LeadRelayOutboxRow | LeadRelayUnreadableRow | null {
-  if (!record(value) || !isLeadRelayId(value.id)) return null;
+function parseRow(value: unknown): LeadRelayOutboxRow | LeadRelayUnreadableRow {
+  if (!record(value)) return { id: null, unreadable: true, leadId: null, createdAt: 0 };
+  const readableLead = isLeadRelayId(value.lead_id) ? value.lead_id : null;
+  if (!isLeadRelayId(value.id)) return { id: null, unreadable: true, leadId: readableLead, createdAt: 0 };
   const createdAt = typeof value.created_at === 'number' && Number.isFinite(value.created_at) ? Math.trunc(value.created_at) : 0;
   const leadId = value.lead_id === null || value.lead_id === undefined ? null : isLeadRelayId(value.lead_id) ? value.lead_id : undefined;
   const workspaceId = value.workspace_id === undefined || value.workspace_id === null ? null
     : isLeadRelayId(value.workspace_id) ? value.workspace_id : undefined;
   if (typeof value.kind !== 'string' || !/^[a-z][a-z0-9_.]{0,79}$/u.test(value.kind) || !record(value.payload)
       || leadId === undefined || workspaceId === undefined || createdAt <= 0) {
-    return { id: value.id, unreadable: true, createdAt };
+    return { id: value.id, unreadable: true, leadId: readableLead, createdAt };
   }
   return { id: value.id, workspaceId, kind: value.kind, leadId, payload: value.payload, createdAt };
 }
@@ -87,6 +95,7 @@ function parseLead(value: unknown, id: string): LeadRelayLead {
     id, workspaceId, name: lead.name.slice(0, 200),
     email: optionalText(lead.email, 320), phone: optionalText(lead.phone, 32),
     company: optionalText(lead.company, 200) ?? '', source: optionalText(lead.source, 160) ?? '',
+    status: optionalText(lead.status, 40) ?? '',
     isDemo: lead.is_demo === true,
   };
 }
@@ -98,7 +107,10 @@ export function createLeadRelayFeedClient(input: { baseUrl: string; key: string;
 
   function call(method: 'GET' | 'POST', path: string): Promise<{ status: number; body: unknown }> {
     const url = new URL(path, base);
+    // Redirects are never followed: any 3xx is an unexpected answer.
     return new Promise((resolve, reject) => {
+      // Declared first: a request function that throws synchronously reaches finish() before the timer exists.
+      let timer: NodeJS.Timeout | undefined;
       let settled = false;
       const finish = (error: LeadRelayFeedError | null, value?: { status: number; body: unknown }) => {
         if (settled) return;
@@ -132,7 +144,7 @@ export function createLeadRelayFeedClient(input: { baseUrl: string; key: string;
           });
         });
       } catch { finish(new LeadRelayFeedError('unreachable')); return; }
-      const timer = setTimeout(() => { req.destroy(); finish(new LeadRelayFeedError('unreachable')); }, timeoutMs);
+      timer = setTimeout(() => { req.destroy(); finish(new LeadRelayFeedError('unreachable')); }, timeoutMs);
       timer.unref?.();
       req.on('error', () => finish(new LeadRelayFeedError('unreachable')));
       req.end();
@@ -143,8 +155,8 @@ export function createLeadRelayFeedClient(input: { baseUrl: string; key: string;
     async outbox() {
       const { body } = await call('GET', `/api/outbox?limit=${LEADRELAY_OUTBOX_PAGE}`);
       if (!Array.isArray(body) || body.length > LEADRELAY_OUTBOX_PAGE) throw new LeadRelayFeedError('unexpected_answer');
-      // A row without a usable id can be neither interpreted nor acknowledged; it is left where it is.
-      return body.map(parseRow).filter((row): row is LeadRelayOutboxRow | LeadRelayUnreadableRow => row !== null);
+      // Rows that cannot be read are returned as unreadable: the feed never interprets or acknowledges them.
+      return body.map(parseRow);
     },
     async lead(id) {
       if (!isLeadRelayId(id)) throw new LeadRelayFeedError('unexpected_answer');

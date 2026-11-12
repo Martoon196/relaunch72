@@ -26,12 +26,12 @@ interface Seen { method: string; url: string; headers: http.IncomingHttpHeaders;
 function fakeLeadRelay() {
   const state = {
     mode: 'ok' as Mode, rows: [] as Record<string, unknown>[], leads: {} as Record<string, Record<string, unknown>>,
-    acked: new Set<string>(), seen: [] as Seen[],
+    acked: new Set<string>(), seen: [] as Seen[], failAckOnce: new Set<string>(), delayMs: 0,
   };
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', c => { body += c; });
-    req.on('end', () => {
+    req.on('end', () => setTimeout(() => {
       state.seen.push({ method: req.method!, url: req.url!, headers: req.headers, body });
       const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(typeof value === 'string' ? value : JSON.stringify(value)); };
       if (state.mode === 'hang') return;
@@ -53,10 +53,11 @@ function fakeLeadRelay() {
       const ack = /^\/api\/outbox\/([^/]+)\/ack$/u.exec(req.url!);
       if (req.method === 'POST' && ack) {
         if (!state.rows.some(r => r.id === ack[1])) return send(404, { detail: 'Not found' });
+        if (state.failAckOnce.delete(ack[1]!)) return send(500, { detail: 'temporary' });
         state.acked.add(ack[1]!); return send(200, { ok: true });
       }
       send(404, { detail: 'Not found' });
-    });
+    }, state.delayMs));
   });
   return { state, server, async listen() { await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); return `http://127.0.0.1:${(server.address() as AddressInfo).port}`; },
     close() { server.closeAllConnections(); return new Promise<void>(r => server.close(() => r())); } };
@@ -91,7 +92,8 @@ function fakeWriter() {
     },
     async recordTimeline(input): Promise<TimelineOutcome> {
       const mapping = leads.get(input.leadKey);
-      if (!mapping || mapping.outcome === 'needs_owner') return { outcome: 'not_copied', replayed: false };
+      if (mapping?.outcome === 'needs_owner') return { outcome: 'enquiry_needs_owner', replayed: false };
+      if (!mapping) return { outcome: 'not_copied', replayed: false };
       if (events.has(input.eventKey)) return { outcome: 'written', contactId: mapping.contactId, doNotCall: null, replayed: true };
       events.add(input.eventKey); state.timeline.push(input);
       if (input.doNotCall && mapping.phone) state.suppressions.push(input.leadRelayEventId);
@@ -101,7 +103,7 @@ function fakeWriter() {
   return { writer, state };
 }
 
-const onConfig = (baseUrl: string): LeadRelayCrmFeedConfig => ({ state: 'on', key: KEY, baseUrl, brand: 'pp',
+const onConfig = (baseUrl: string): LeadRelayCrmFeedConfig => ({ state: 'on', key: KEY, workspaceId: LR_WS, baseUrl, brand: 'pp',
   scope: { workspaceId: SCOPE.workspaceId, ownerUserId: SCOPE.ownerUserId, pipelineId: SCOPE.pipelineId, stageId: SCOPE.stageId } });
 async function harness(options: { now?: () => number; timeoutMs?: number } = {}) {
   const lr = fakeLeadRelay(); const base = await lr.listen();
@@ -114,11 +116,11 @@ async function harness(options: { now?: () => number; timeoutMs?: number } = {})
 // ------------------------------------------------------------------------------------------- settings
 
 test('the feed is off unless LEADRELAY_CRM_FEED is exactly "enabled", and bad settings stay off without throwing', () => {
-  const good = { LEADRELAY_CRM_FEED: 'enabled', LEADRELAY_CRM_FEED_KEY: KEY, LEADRELAY_CRM_FEED_BRAND: 'pp' };
+  const good = { LEADRELAY_CRM_FEED: 'enabled', LEADRELAY_CRM_FEED_KEY: KEY, LEADRELAY_CRM_FEED_WORKSPACE_ID: LR_WS, LEADRELAY_CRM_FEED_BRAND: 'pp' };
   assert.deepEqual(loadLeadRelayCrmFeedConfig({}, INBOX), { state: 'off' });
   for (const value of ['true', 'Enabled', ' enabled', 'on', '1', '']) assert.deepEqual(loadLeadRelayCrmFeedConfig({ ...good, LEADRELAY_CRM_FEED: value }, INBOX), { state: 'off' });
   const on = loadLeadRelayCrmFeedConfig(good, INBOX);
-  assert.deepEqual(on, { state: 'on', key: KEY, baseUrl: 'https://leadrelay-live.onrender.com', brand: 'pp',
+  assert.deepEqual(on, { state: 'on', key: KEY, workspaceId: LR_WS, baseUrl: 'https://leadrelay-live.onrender.com', brand: 'pp',
     scope: { workspaceId: SCOPE.workspaceId, ownerUserId: SCOPE.ownerUserId, pipelineId: SCOPE.pipelineId, stageId: SCOPE.stageId } });
   assert.equal((loadLeadRelayCrmFeedConfig({ ...good, LEADRELAY_CRM_FEED_BASE_URL: 'https://lr.example.test/' }, INBOX) as { baseUrl: string }).baseUrl, 'https://lr.example.test');
   const invalid: Record<string, string | undefined>[] = [
@@ -126,6 +128,7 @@ test('the feed is off unless LEADRELAY_CRM_FEED is exactly "enabled", and bad se
     { LEADRELAY_CRM_FEED_BASE_URL: 'http://leadrelay-live.onrender.com' }, { LEADRELAY_CRM_FEED_BASE_URL: 'https://leadrelay-live.onrender.com/api' },
     { LEADRELAY_CRM_FEED_BASE_URL: 'https://user:pw@leadrelay-live.onrender.com' }, { LEADRELAY_CRM_FEED_BASE_URL: 'not a url' },
     { LEADRELAY_CRM_FEED_BRAND: undefined }, { LEADRELAY_CRM_FEED_BRAND: 'mhp' },
+    { LEADRELAY_CRM_FEED_WORKSPACE_ID: undefined }, { LEADRELAY_CRM_FEED_WORKSPACE_ID: '../other' }, { LEADRELAY_CRM_FEED_WORKSPACE_ID: 'x'.repeat(65) },
   ];
   for (const change of invalid) {
     const config = loadLeadRelayCrmFeedConfig({ ...good, ...change }, INBOX);
@@ -148,7 +151,7 @@ test('composing with bad settings logs one plain line, starts nothing and never 
   assert.equal(lines.length, 1, 'switched off is silent');
   assert.equal(off.status('pp').summary, 'LeadRelay is not connected yet, so its enquiries are not reaching the CRM.');
   assert.equal(off.status('pp').switchedOn, false);
-  const noDb = composeLeadRelayCrmFeed({ env: { LEADRELAY_CRM_FEED: 'enabled', LEADRELAY_CRM_FEED_KEY: KEY, LEADRELAY_CRM_FEED_BRAND: 'pp' }, inbox: INBOX, runner: undefined, log: l => lines.push(l) });
+  const noDb = composeLeadRelayCrmFeed({ env: { LEADRELAY_CRM_FEED: 'enabled', LEADRELAY_CRM_FEED_KEY: KEY, LEADRELAY_CRM_FEED_WORKSPACE_ID: LR_WS, LEADRELAY_CRM_FEED_BRAND: 'pp' }, inbox: INBOX, runner: undefined, log: l => lines.push(l) });
   assert.equal(noDb.config.state, 'invalid'); assert.equal(lines.length, 2);
   // A throwing environment read is contained too.
   const hostile = new Proxy({}, { get() { throw new Error('boom'); } }) as NodeJS.ProcessEnv;
@@ -187,8 +190,6 @@ test('one run copies enquiries and call results, records a calls-only stop, skip
       row(12, 'meeting.booked', 6, { booking_ref: 'b1', starts_at: Date.parse('2026-11-14T10:30:00Z') / 1000 }),
       row(13, 'job.completed', 1, { job_id: 'j', channel: 'call', step: 0 }),
       row(14, 'mystery.new_kind', null, { anything: 'Person Name1' }),
-      { id: eventId(15), workspace_id: LR_WS, lead_id: leadId(1), kind: 'lead.created', payload: 'not an object', created_at: T0 / 1000 + 15, delivered_at: null },
-      { id: '../../admin', kind: 'lead.created', payload: {}, created_at: T0 / 1000 + 16 },
       row(17, 'privacy.erased', null, { erased_lead_id: leadId(6) }),
       row(18, 'call.outcome', 6, { job_id: 'j', outcome: 'opt_out', summary: '' }),
     ];
@@ -211,23 +212,23 @@ test('one run copies enquiries and call results, records a calls-only stop, skip
     assert.deepEqual(h.crm.state.timeline.map(t => [t.activityType, t.subject, t.doNotCall]), [
       ['leadrelay.call_result', 'AI call: no answer (12 Nov 2026)', false],
       ['leadrelay.do_not_call', 'Asked not to be called (AI call on 12 Nov 2026)', true],
-      ['leadrelay.note', 'Unsubscribed in LeadRelay (12 Nov 2026). LeadRelay will not contact them; permissions in this CRM are unchanged.', false],
+      ['leadrelay.note', 'Unsubscribed in LeadRelay (12 Nov 2026). LeadRelay will not contact them.', false],
       ['leadrelay.note', 'Meeting booked through LeadRelay for 10:30 on 14 Nov 2026', false],
-      ['leadrelay.note', "LeadRelay deleted this person's details at their request (12 Nov 2026). Nothing in this CRM was changed.", false],
+      ['leadrelay.note', "LeadRelay deleted this person's details (12 Nov 2026). Nothing in this CRM was changed.", false],
       ['leadrelay.do_not_call', 'Asked not to be called (AI call on 12 Nov 2026)', true],
     ]);
     assert.ok(h.crm.state.timeline.every(t => t.body === null && !JSON.stringify(t).includes('transcript') && !JSON.stringify(t).includes('stop calling')));
     // The stop goes to the writer as a calls-only request; lead 6 has no phone, so it needs the owner instead.
     assert.deepEqual(h.crm.state.suppressions, [eventId(9)]);
-    // Everything that could be read was acknowledged; the row with an unusable id was left alone.
-    assert.equal(h.lr.state.acked.size, 17); assert.ok(!h.lr.state.seen.some(s => s.url.includes('admin')));
+    assert.equal(h.lr.state.acked.size, 16);
     const status = h.feed.status('pp');
-    assert.deepEqual(status.today, { enquiriesCopied: 2, callResultsCopied: 3, doNotCallRecorded: 1, skipped: 6, needsTheOwner: 1 });
+    assert.deepEqual(status.today, { enquiriesCopied: 2, callResultsCopied: 3, doNotCallRecorded: 1, skipped: 5, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 1 });
     assert.equal(status.problem, null); assert.equal(status.switchedOn, true);
     assert.ok(status.lastSucceededAt && status.lastAnsweredAt);
     assert.match(status.summary, /^LeadRelay is connected\. 2 enquiries and 3 call results copied to the CRM since the last restart at \d\d:\d\d\./u);
-    assert.match(status.summary, /1 person asked not to be called; calls to them are now blocked\. Texts, WhatsApp and email are not affected\./u);
-    assert.match(status.summary, /1 person asked LeadRelay not to call them, but the number called is not on their CRM contact\. Please check it\./u);
+    assert.match(status.summary, /1 do-not-call request from LeadRelay was recorded as do not call in this CRM\. Texts, WhatsApp and email are not affected\./u);
+    assert.match(status.summary, /1 do-not-call request could not be recorded because the number LeadRelay called is not on the CRM contact\. Please check it\./u);
+    assert.doesNotMatch(status.summary, /blocked|people|at their request|unchanged/u);
     assert.doesNotMatch(status.summary, /AI calls/u, 'the feed cannot know whether AI calls are switched off, so it never says so');
     assert.deepEqual(status.needsTheOwner.map(i => [i.leadRelayLeadId, i.reason]), [[leadId(6), 'number_not_on_contact']]);
     // Nothing personal, no free text and no key in any log line.
@@ -245,7 +246,7 @@ test('replaying the same rows writes nothing twice and counts nothing twice', as
     h.lr.state.acked.clear(); // as if the acknowledgements were lost
     await h.feed.runOnce();
     assert.equal(h.crm.state.enquiries.length, 1); assert.equal(h.crm.state.timeline.length, 1);
-    assert.deepEqual(h.feed.status('pp').today, { enquiriesCopied: 1, callResultsCopied: 1, doNotCallRecorded: 0, skipped: 0, needsTheOwner: 0 });
+    assert.deepEqual(h.feed.status('pp').today, { enquiriesCopied: 1, callResultsCopied: 1, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 0 });
     assert.equal(h.lr.state.acked.size, 2);
   } finally { await h.lr.close(); }
 });
@@ -260,9 +261,12 @@ test('an enquiry matching two CRM contacts writes nothing to them, is acknowledg
     assert.equal(h.crm.state.timeline.length, 0);
     assert.equal(h.lr.state.acked.size, 2, 'the queue is not blocked');
     const status = h.feed.status('pp');
-    assert.deepEqual(status.today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 1, needsTheOwner: 1 });
+    assert.deepEqual(status.today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 2 });
     assert.match(status.summary, /1 LeadRelay enquiry matches two CRM contacts and was not copied\./u);
-    assert.deepEqual(status.needsTheOwner.map(i => [i.leadRelayLeadId, i.reason]), [[leadId(1), 'two_contacts']]);
+    assert.match(status.summary, /1 LeadRelay update for enquiries that were not copied was not copied either\./u);
+    assert.deepEqual(status.needsTheOwner.map(i => [i.leadRelayLeadId, i.reason]), [[leadId(1), 'update_enquiry_not_copied'], [leadId(1), 'two_contacts']]);
+    const warned = h.lines.filter(l => l.includes('crm_feed.needs_owner"')).map(l => JSON.parse(l) as Record<string, unknown>);
+    assert.deepEqual(warned.map(w => [w.level, w.leadRelayLeadId, w.reason]), [['warn', leadId(1), 'two_contacts'], ['warn', leadId(1), 'update_enquiry_not_copied']]);
   } finally { await h.lr.close(); }
 });
 
@@ -348,8 +352,8 @@ test('a refused key and a malformed answer each stop the run with their own plai
   const h = await harness();
   try {
     h.lr.state.rows = [row(1, 'job.completed', null, {})];
-    for (const [mode, problem, sentence] of [['401', 'key_refused', /did not accept the connection key/u], ['403', 'key_refused', /did not accept the connection key/u],
-      ['malformed', 'unexpected_answer', /sent back something this CRM could not read/u]] as const) {
+    for (const [mode, problem, sentence] of [['401', 'key_refused', /did not accept the read-and-acknowledge key/u], ['403', 'key_refused', /did not accept the read-and-acknowledge key/u],
+      ['malformed', 'unexpected_answer', /LeadRelay's answers could not be read/u]] as const) {
       h.lr.state.mode = mode;
       await h.feed.runOnce();
       const status = h.feed.status('pp');
@@ -440,7 +444,7 @@ test('counts reset at UK midnight and say "today" once the process has run since
     assert.match(status.summary, /^LeadRelay is connected\. 1 enquiry and 0 call results copied to the CRM today\./u);
     assert.equal(status.countingSince, '2026-11-12T00:00:00.000Z');
     assert.equal(h.feed.status('mhp').problem, 'not_connected');
-    assert.deepEqual(h.feed.status('mhp').today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, needsTheOwner: 0 });
+    assert.deepEqual(h.feed.status('mhp').today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 0 });
   } finally { await h.lr.close(); }
 });
 
@@ -484,4 +488,202 @@ test('Group HQ leadrelayFeedStatus is read only, checked like every other action
       (e: unknown) => e instanceof InboxCrmError && e.status === 403);
     assert.equal(writes, 0);
   } finally { await h.lr.close(); }
+});
+
+// ------------------------------------------------------------------------------------------- review fixes
+
+test('a row that cannot be read is never acknowledged, holds back its own lead, and the owner is told LeadRelay could not be read', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1), [leadId(2)]: person(2) };
+    h.lr.state.rows = [
+      row(1, 'lead.created', 2, { is_demo: false }),
+      { id: eventId(2), workspace_id: LR_WS, lead_id: leadId(1), kind: 'lead.created', payload: 'not an object', created_at: T0 / 1000 + 2, delivered_at: null },
+      { id: '../../admin', lead_id: leadId(1), kind: 'lead.created', payload: {}, created_at: T0 / 1000 + 3 },
+      row(4, 'call.provider_outcome', 1, { outcome: 'answered' }),
+      row(5, 'job.completed', null, {}),
+    ];
+    await h.feed.runOnce();
+    assert.deepEqual([...h.lr.state.acked].sort(), [eventId(1), eventId(5)]);
+    assert.ok(!h.lr.state.seen.some(s => s.url.includes('admin') || s.url.includes(eventId(2)) || s.url.includes(eventId(4))));
+    const status = h.feed.status('pp');
+    assert.equal(status.problem, 'unexpected_answer');
+    assert.doesNotMatch(status.summary, /connected/u);
+    assert.match(status.summary, /^2 LeadRelay updates could not be read, so they were left waiting in LeadRelay and not copied\. Enquiries already copied are safe\. Nothing was sent to anyone\. So far: 1 enquiry/u);
+    assert.equal(status.lastSucceededAt, null);
+    assert.ok(h.lines.some(l => l.includes('crm_feed.row_failed') && l.includes(eventId(2)) && l.includes('"cause":"unreadable"')));
+  } finally { await h.lr.close(); }
+});
+
+test('a do-not-call comes only from the call: the reconciliation opt-out (any unsubscribe) is a neutral note with no suppression', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1) };
+    h.lr.state.rows = [row(1, 'lead.created', 1, { is_demo: false }),
+      row(2, 'call.provider_outcome', 1, { job_id: 'j', call_id: 'c', outcome: 'opt_out', provenance: 'retell_authenticated_get' }),
+      row(3, 'call.provider_outcome', 1, { job_id: 'j', call_id: 'c', outcome: 'opt_out', summary: 'x' }),
+      row(4, 'call.outcome', 1, { job_id: 'j', outcome: 'opt_out', summary: '' }),
+      row(5, 'call.outcome', 1, { job_id: 'j', outcome: 'sang_a_song' })];
+    await h.feed.runOnce();
+    assert.deepEqual(h.crm.state.timeline.map(t => [t.leadRelayEventId, t.activityType, t.subject, t.doNotCall, t.metadata.outcome ?? null]), [
+      [eventId(2), 'leadrelay.call_result', 'LeadRelay stopped contacting this person (12 Nov 2026)', false, null],
+      [eventId(3), 'leadrelay.do_not_call', 'Asked not to be called (AI call on 12 Nov 2026)', true, 'opt_out'],
+      [eventId(4), 'leadrelay.do_not_call', 'Asked not to be called (AI call on 12 Nov 2026)', true, 'opt_out'],
+      [eventId(5), 'leadrelay.call_result', 'AI call: finished (12 Nov 2026)', false, null],
+    ]);
+    assert.deepEqual(h.crm.state.suppressions, [eventId(3), eventId(4)]);
+    assert.equal(h.feed.status('pp').today.doNotCallRecorded, 2);
+  } finally { await h.lr.close(); }
+});
+
+test('a do-not-call for an enquiry held for the owner is reported as needing the owner, never as skipped', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1) };
+    h.crm.state.twoContacts.add(leadRelayLeadKey(LR_WS, leadId(1)));
+    h.lr.state.rows = [row(1, 'lead.created', 1, { is_demo: false }), row(2, 'call.outcome', 1, { outcome: 'opt_out' })];
+    await h.feed.runOnce();
+    const status = h.feed.status('pp');
+    assert.deepEqual(status.today, { enquiriesCopied: 0, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 0, alreadyOptedOutInLeadRelay: 0, needsTheOwner: 2 });
+    assert.match(status.summary, /1 do-not-call request could not be recorded because the enquiry was not copied\. Please check it in LeadRelay\./u);
+    assert.ok(h.lines.some(l => l.includes('crm_feed.needs_owner') && l.includes(leadId(1)) && l.includes('do_not_call_enquiry_not_copied')));
+    assert.equal(h.lr.state.acked.size, 2);
+  } finally { await h.lr.close(); }
+});
+
+test('someone who had already opted out in LeadRelay is not copied; other statuses are', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1, { status: 'unsubscribed' }), [leadId(2)]: person(2, { status: 'paused' }), [leadId(3)]: person(3, { status: 'unsubscribed', is_demo: true }) };
+    h.lr.state.rows = [row(1, 'lead.created', 1, { is_demo: false }), row(2, 'lead.created', 2, { is_demo: false }), row(3, 'lead.created', 3, { is_demo: false })];
+    await h.feed.runOnce();
+    assert.deepEqual(h.crm.state.enquiries.map(e => e.leadKey), [leadRelayLeadKey(LR_WS, leadId(2))]);
+    const status = h.feed.status('pp');
+    assert.deepEqual(status.today, { enquiriesCopied: 1, callResultsCopied: 0, doNotCallRecorded: 0, skipped: 2, alreadyOptedOutInLeadRelay: 1, needsTheOwner: 0 });
+    assert.match(status.summary, /1 LeadRelay enquiry was not copied because the person had already opted out in LeadRelay\./u);
+    assert.equal(h.lr.state.acked.size, 3);
+  } finally { await h.lr.close(); }
+});
+
+test('rows or leads from another LeadRelay workspace are refused, nothing is acknowledged, and the owner is told', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1) };
+    h.lr.state.rows = [row(1, 'job.completed', null, {}), { ...row(2, 'lead.created', 1, { is_demo: false }), workspace_id: 'dddddddd-0000-4000-8000-000000000009' }];
+    await h.feed.runOnce();
+    assert.equal(h.lr.state.acked.size, 0); assert.equal(h.crm.state.enquiries.length, 0);
+    assert.ok(!h.lr.state.seen.some(s => s.url.startsWith('/api/leads/')));
+    let status = h.feed.status('pp');
+    assert.equal(status.problem, 'wrong_business');
+    assert.equal(status.sentences[0], 'This LeadRelay key belongs to a different business, so nothing was copied.');
+    // The rows are this workspace's but LeadRelay returns a lead from another one: still refused, not acknowledged.
+    h.lr.state.rows = [row(3, 'lead.created', 1, { is_demo: false })];
+    h.lr.state.leads[leadId(1)] = person(1, { workspace_id: 'dddddddd-0000-4000-8000-000000000009' });
+    await h.feed.runOnce();
+    status = h.feed.status('pp');
+    assert.equal(status.problem, 'wrong_business'); assert.equal(h.lr.state.acked.size, 0); assert.equal(h.crm.state.enquiries.length, 0);
+  } finally { await h.lr.close(); }
+});
+
+test('a full page of held rows says new enquiries are blocked, not connected', async () => {
+  let now = T0;
+  const h = await harness({ now: () => now });
+  try {
+    h.lr.state.rows = Array.from({ length: 200 }, (_, i) => row(i + 1, 'lead.created', i + 1, { is_demo: false }));
+    h.lr.state.rows.push(row(500, 'job.completed', null, {}));
+    h.lr.state.leads = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [leadId(i + 1), person(i + 1)]));
+    for (let i = 1; i <= 200; i++) h.crm.state.failLeads.set(leadRelayLeadKey(LR_WS, leadId(i)), 99);
+    for (let run = 0; run < MAX_ROW_FAILURES; run++) { await h.feed.runOnce(); now += 60_000; }
+    const status = h.feed.status('pp');
+    assert.equal(status.problem, 'blocked');
+    assert.match(status.summary, /^New LeadRelay enquiries are waiting behind updates that could not be copied after several tries\./u);
+    assert.doesNotMatch(status.summary, /connected/u);
+    assert.equal(h.lr.state.acked.size, 0, 'the 201st row is never reached while 200 are held');
+  } finally { await h.lr.close(); }
+});
+
+test('a failing row is tried at most once per run even when the run reads several pages', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1) };
+    h.crm.state.failLeads.set(leadRelayLeadKey(LR_WS, leadId(1)), 99);
+    h.lr.state.rows = [row(1, 'lead.created', 1, { is_demo: false }), ...Array.from({ length: 249 }, (_, i) => row(i + 2, 'job.completed', null, {}))];
+    await h.feed.runOnce();
+    assert.equal(h.lr.state.seen.filter(s => s.url === `/api/leads/${leadId(1)}`).length, 1);
+    assert.equal(h.lr.state.seen.filter(s => s.url === '/api/outbox?limit=200').length, 2);
+    assert.equal(h.lr.state.acked.size, 249);
+    assert.equal(h.lines.filter(l => l.includes('crm_feed.row_failed')).length, 1);
+    // Once it is gone from LeadRelay its failure record is forgotten.
+    h.lr.state.rows = h.lr.state.rows.slice(1); await h.feed.runOnce();
+    assert.equal(h.feed.status('pp').waitingAfterRepeatedFailures, 0);
+  } finally { await h.lr.close(); }
+});
+
+test('an acknowledgement that fails after the write committed is retried, and nothing is written or counted twice', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.leads = { [leadId(1)]: person(1) };
+    h.lr.state.rows = [row(1, 'lead.created', 1, { is_demo: false }), row(2, 'job.completed', null, {})];
+    h.lr.state.failAckOnce.add(eventId(1));
+    await h.feed.runOnce();
+    assert.equal(h.lr.state.acked.size, 0); assert.equal(h.feed.status('pp').problem, 'no_answer');
+    await h.feed.runOnce();
+    assert.equal(h.lr.state.acked.size, 2); assert.equal(h.crm.state.enquiries.length, 1);
+    assert.equal(h.feed.status('pp').today.enquiriesCopied, 1);
+  } finally { await h.lr.close(); }
+});
+
+test('stopping during a run stops before the next row', async () => {
+  const h = await harness();
+  try {
+    h.lr.state.delayMs = 15;
+    h.lr.state.rows = Array.from({ length: 50 }, (_, i) => row(i + 1, 'job.completed', null, {}));
+    const stop = h.feed.start(60_000);
+    await new Promise(r => setTimeout(r, 120));
+    stop();
+    await new Promise(r => setTimeout(r, 60));
+    const acked = h.lr.state.acked.size;
+    assert.ok(acked > 0 && acked < 50, `stopped part-way (${acked})`);
+    await new Promise(r => setTimeout(r, 150));
+    assert.equal(h.lr.state.acked.size, acked);
+    await h.feed.runOnce();
+    assert.equal(h.lr.state.acked.size, acked, 'a stopped feed does not run again');
+  } finally { await h.lr.close(); }
+});
+
+test('an unexpected error inside a run is caught, logged safely and the timer carries on', async () => {
+  let calls = 0;
+  const client = { async outbox() { calls++; throw new TypeError('boom with person1@private.example'); }, async lead() { return null; }, async ack() {} };
+  const lines: string[] = [];
+  const feed = new LeadRelayCrmFeed(onConfig('https://lr.example.test'), { client, writer: fakeWriter().writer, log: l => lines.push(l) });
+  const unhandled: unknown[] = []; const onUnhandled = (e: unknown) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await feed.runOnce();
+    const stop = feed.start(10, { retryMs: 10, maxRetryMs: 10 });
+    await new Promise(r => setTimeout(r, 80));
+    stop();
+    assert.ok(calls >= 3, 'the timer kept running');
+    assert.equal(unhandled.length, 0);
+    assert.ok(lines.some(l => l.includes('crm_feed.run_failed')));
+    for (const line of lines) assert.doesNotMatch(line, /private\.example|boom/u);
+  } finally { process.off('unhandledRejection', onUnhandled); }
+});
+
+test('the client never follows a redirect, refuses an oversized answer and survives a request function that throws', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/outbox?limit=200') { res.writeHead(302, { location: 'https://evil.example.test/api/outbox' }); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('['.padEnd(2_100_000, ' ') + ']');
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    let requests = 0; server.on('request', () => { requests++; });
+    const client = createLeadRelayFeedClient({ baseUrl: base, key: KEY, request: http.request });
+    await assert.rejects(client.outbox(), (e: unknown) => e instanceof LeadRelayFeedError && e.kind === 'unexpected_answer' && e.status === 302);
+    assert.equal(requests, 1);
+    await assert.rejects(client.lead(leadId(1)), (e: unknown) => e instanceof LeadRelayFeedError && e.kind === 'unexpected_answer');
+    const throwing = createLeadRelayFeedClient({ baseUrl: base, key: KEY, request: () => { throw new Error('synchronous failure'); } });
+    await assert.rejects(throwing.outbox(), (e: unknown) => e instanceof LeadRelayFeedError && e.kind === 'unreachable');
+  } finally { server.closeAllConnections(); await new Promise(r => server.close(r)); }
 });

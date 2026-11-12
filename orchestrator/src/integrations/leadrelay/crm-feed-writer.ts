@@ -47,7 +47,10 @@ export interface TimelineEvent {
 }
 export type TimelineOutcome =
   | { outcome: 'written'; contactId: string; doNotCall: 'recorded' | 'no_number' | null; replayed: boolean }
-  | { outcome: 'not_copied'; replayed: boolean };
+  /** The enquiry was never copied (skipped, or LeadRelay never sent it). */
+  | { outcome: 'not_copied'; replayed: boolean }
+  /** The enquiry was held back for the owner (two contacts or an archived one), so this update was not copied either. */
+  | { outcome: 'enquiry_needs_owner'; replayed: boolean };
 
 export interface LeadRelayCrmWriter {
   copyEnquiry(input: { leadKey: string; lead: CopyableLead; occurredAt: string }): Promise<EnquiryOutcome>;
@@ -71,12 +74,33 @@ interface EventResult { outcome: 'written' | 'not_copied'; contactId?: string; d
 const keyHash = (key: string): Buffer => createHash('sha256').update(key).digest();
 class CreateInstead extends Error {}
 
+/**
+ * The CRM's createLead has one error code ('invalid_state') for several refusals, so the two that mean "the
+ * owner must decide" are told apart by their exact texts (pinned by a test against createLead itself).
+ * Anything else is not an owner decision and is retried.
+ */
+export const CREATE_LEAD_TWO_CONTACTS = 'Lead contact points belong to different existing contacts';
+export const CREATE_LEAD_ARCHIVED = 'A contact with this destination is archived and must be restored before it can receive a new opportunity';
+export const CREATE_LEAD_DELETED = 'A deleted contact still owns this destination and must be restored or permanently resolved first';
+export function ownerRefusal(error: unknown): 'two_contacts' | 'archived_contact' | null {
+  if (!(error instanceof InvalidCrmStateError) || error.code !== 'invalid_state') return null;
+  if (error.message === CREATE_LEAD_TWO_CONTACTS) return 'two_contacts';
+  if (error.message === CREATE_LEAD_ARCHIVED || error.message === CREATE_LEAD_DELETED) return 'archived_contact';
+  return null;
+}
+
 export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
-  private readonly commands: CrmCommandService;
+  private readonly commands: Pick<CrmCommandService, 'createLead'>;
   private readonly now: () => Date;
-  constructor(private readonly runner: CrmTransactionRunner, private readonly scope: LeadRelayCrmScope, options: { now?: () => Date } = {}) {
+  constructor(private readonly runner: CrmTransactionRunner, private readonly scope: LeadRelayCrmScope,
+              options: { now?: () => Date; commands?: Pick<CrmCommandService, 'createLead'> } = {}) {
     this.now = options.now ?? (() => new Date());
-    this.commands = new CrmCommandService({ transactionRunner: runner, now: this.now });
+    this.commands = options.commands ?? new CrmCommandService({ transactionRunner: runner, now: this.now });
+  }
+
+  private createdContactId(stored: { status: string; result: unknown } | null): string | null {
+    const id = stored?.status === 'succeeded' && stored.result && typeof stored.result === 'object' ? (stored.result as { contactId?: unknown }).contactId : null;
+    return typeof id === 'string' ? id : null;
   }
 
   private context(): DatabaseRequestContext {
@@ -144,6 +168,14 @@ export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
       return await this.runner.run(context, async tx => {
         const prior = await this.receipt(tx, LEAD_COMMAND, input.leadKey);
         if (prior?.status === 'succeeded') return this.enquiryOutcome(prior.result as MappingResult, true);
+        // A lead created on an earlier attempt (or by another instance) whose link was not saved yet: link it now,
+        // instead of mistaking the brand-new deal for an existing one.
+        const created = this.createdContactId(await this.receipt(tx, 'crm.createLead', input.leadKey));
+        if (created) {
+          const { result, replayed } = await this.once<MappingResult>(tx, context, LEAD_COMMAND, input.leadKey,
+            async () => ({ outcome: 'created', contactId: created, phonePointId: await this.phonePoint(tx, created, phone) }));
+          return this.enquiryOutcome(result, replayed);
+        }
         const repository = new CrmPgRepository(tx);
         const matches = (await Promise.all([email ? repository.findContactPoint('email', email) : null, phone ? repository.findContactPoint('phone', phone) : null]))
           .filter(match => match !== null);
@@ -187,8 +219,7 @@ export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
       });
       contactId = created.contactId;
     } catch (error) {
-      const reason = !(error instanceof InvalidCrmStateError) ? null : /different existing contacts/u.test(error.message) ? 'two_contacts'
-        : /archived|deleted contact/u.test(error.message) ? 'archived_contact' : null;
+      const reason = ownerRefusal(error);
       if (reason) {
         // The details came to belong to two contacts (or an archived one) after the check above.
         return this.runner.run(context, async tx => {
@@ -198,9 +229,8 @@ export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
       }
       if (!(error instanceof IdempotencyKeyReusedError)) throw error;
       // The lead was created on an earlier attempt and LeadRelay's copy has changed since: keep the first.
-      const stored = await this.runner.run(context, tx => this.receipt(tx, 'crm.createLead', input.leadKey));
-      const id = (stored?.status === 'succeeded' && stored.result && typeof stored.result === 'object') ? (stored.result as { contactId?: unknown }).contactId : null;
-      if (typeof id !== 'string') throw error;
+      const id = this.createdContactId(await this.runner.run(context, tx => this.receipt(tx, 'crm.createLead', input.leadKey)));
+      if (!id) throw error;
       contactId = id;
     }
     return this.runner.run(context, async tx => {
@@ -215,7 +245,8 @@ export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
     return this.runner.run(context, async tx => {
       const lead = await this.receipt(tx, LEAD_COMMAND, input.leadKey);
       const mapping = lead?.status === 'succeeded' ? lead.result as MappingResult : null;
-      if (!mapping || mapping.outcome === 'needs_owner' || typeof mapping.contactId !== 'string') return { outcome: 'not_copied', replayed: false };
+      if (mapping?.outcome === 'needs_owner') return { outcome: 'enquiry_needs_owner', replayed: false };
+      if (!mapping || typeof mapping.contactId !== 'string') return { outcome: 'not_copied', replayed: false };
       const contactId = mapping.contactId;
       const { result, replayed } = await this.once<EventResult>(tx, context, EVENT_COMMAND, input.eventKey, async () => {
         const contact = await tx.query(`/* leadrelay.feed.contact */ SELECT id FROM app.contacts
@@ -240,8 +271,8 @@ export class PgLeadRelayCrmWriter implements LeadRelayCrmWriter {
             doNotCall = 'recorded';
           }
         }
-        const body = doNotCall === 'recorded' ? 'Calls to this number are now blocked in this CRM. Texts, WhatsApp and email are not affected.'
-          : doNotCall === 'no_number' ? 'The number LeadRelay called is not on this contact, so no call block was added. Please check this contact.'
+        const body = doNotCall === 'recorded' ? 'This number is recorded as do not call in this CRM. Texts, WhatsApp and email are not affected.'
+          : doNotCall === 'no_number' ? 'The number LeadRelay called is not on this contact, so do not call could not be recorded. Please check this contact.'
           : input.body;
         await this.activity(tx, context, { contactId, activityType: input.activityType, subject: input.subject, body,
           metadata: { ...input.metadata, leadRelayEventId: input.leadRelayEventId }, occurredAt: input.occurredAt });
