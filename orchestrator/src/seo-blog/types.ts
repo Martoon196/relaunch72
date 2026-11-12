@@ -145,6 +145,14 @@ export interface KnowledgeDocument {
   readonly pagesTotal: number | null;
   readonly active: boolean;
   readonly createdAt: IsoInstant;
+  /** Set when this document is one of the brand's own website pages, read for the Brand DNA card. */
+  readonly origin?: KnowledgeOrigin;
+}
+
+export interface KnowledgeOrigin {
+  readonly kind: 'website';
+  readonly url: string;
+  readonly fetchedAt: IsoInstant;
 }
 
 export interface KnowledgeRef {
@@ -161,12 +169,38 @@ export interface ProfileOffer {
   readonly price: string | null;
   readonly url: string | null;
   readonly sourceDocumentId: string | null;
+  /**
+   * Set only when the owner settled this price on the Brand DNA card: the document they chose it from,
+   * or null when they typed it themselves. Absent means the price came from `sourceDocumentId`.
+   */
+  readonly priceSourceDocumentId?: string | null;
+}
+
+/** One of the differing answers found for the same fact, with the exact words and where they were read. */
+export interface ProfileConflictOption {
+  readonly value: string;
+  readonly documentId: string;
+  /** Verbatim words from that document; the owner sees them beside the choice. */
+  readonly quote: string;
 }
 
 export interface ProfileConflict {
   readonly field: string;
   readonly detail: string;
   readonly documentIds: readonly string[];
+  /** 'price' settles onto the named offer's price; anything else is recorded as an owner-settled fact. */
+  readonly kind?: 'price' | 'other';
+  /** Exact `offers[].name` this conflict is about, when it is about one offer. */
+  readonly offer?: string | null;
+  readonly options?: readonly ProfileConflictOption[];
+}
+
+/** Where one fact on the profile was read. `documentId` null means the owner typed or chose it themselves. */
+export interface ProfileFactSource {
+  readonly field: 'offer' | 'audience' | 'claim' | 'voice' | 'settled';
+  readonly value: string;
+  readonly documentId: string | null;
+  readonly quote: string | null;
 }
 
 export interface BrandProfile {
@@ -188,6 +222,8 @@ export interface BrandProfile {
   readonly exclusions: readonly string[];
   readonly conflicts: readonly ProfileConflict[];
   readonly missingFacts: readonly string[];
+  /** Where each audience, claim and settled fact was read. Absent on profiles made before Brand DNA. */
+  readonly sources?: readonly ProfileFactSource[];
   /** Hash over product facts and approved claims only — the factual invalidation key. */
   readonly factsSha: string;
   readonly source: 'extracted' | 'owner_edited';
@@ -211,6 +247,16 @@ export interface InventoryPage {
   readonly httpStatus: number | null;
   /** Heuristic: an article/guide-like page rather than an app, legal or checkout page. */
   readonly editorial: boolean;
+  /** Bounded page text. Present only on a Brand DNA website read, and never stored with the inventory. */
+  readonly text?: string;
+}
+
+/** What the home page itself declares about the brand's look. A proposal only: nothing is applied until the owner confirms it. */
+export interface WebsiteLook {
+  /** Same-site image addresses in order of preference (touch icon, icon, share image). */
+  readonly logoCandidates: readonly string[];
+  /** The home page's declared theme colour as #rrggbb, when it states one. */
+  readonly themeColour: string | null;
 }
 
 export interface WebsiteInventory {
@@ -221,6 +267,7 @@ export interface WebsiteInventory {
   readonly sitemapUrls: number;
   readonly pages: readonly InventoryPage[];
   readonly notes: readonly string[];
+  readonly look?: WebsiteLook;
 }
 
 // ─── Research ────────────────────────────────────────────────────────────────

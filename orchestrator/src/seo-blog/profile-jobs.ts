@@ -13,7 +13,9 @@ export interface ProfileJobPayload {
   readonly requestedBy: string;
   readonly requestIds: readonly string[];
   readonly inputSha: string;
-  readonly source: { readonly brandName: string; readonly website: string | null; readonly knowledge: readonly KnowledgeRef[]; readonly prompt: { readonly version: string; readonly sha256: string; readonly model: string } };
+  readonly source: { readonly brandName: string; readonly website: string | null; readonly knowledge: readonly KnowledgeRef[]; readonly prompt: { readonly version: string; readonly sha256: string; readonly model: string };
+    /** Brand DNA (site-fed) extraction: word-for-word prices and quoted sources are enforced. Part of the input identity. */
+    readonly strict?: true };
   readonly baseVersion: number;
   readonly baseProfileSha: string;
   readonly acknowledgedPriorUsage: readonly string[];
@@ -28,7 +30,8 @@ export function profilePayload(job: Job): ProfileJobPayload { return job.payload
 export function unacknowledgedProfileCalls(jobs: readonly Job[]): Job[] {
   const profiles = jobs.filter(isProfileJob);
   const acknowledged = new Set(profiles.flatMap((j) => profilePayload(j).acknowledgedPriorUsage));
-  return profiles.filter((j) => profilePayload(j).start && !profilePayload(j).receipt && !acknowledged.has(j.id));
+  // A rejected result is a known outcome with its usage recorded; only a call that never reported back is uncertain.
+  return profiles.filter((j) => profilePayload(j).start && !profilePayload(j).receipt && profilePayload(j).reason !== 'rejected' && !acknowledged.has(j.id));
 }
 export interface ProfileJobSnapshot {
   readonly brand: Brand;

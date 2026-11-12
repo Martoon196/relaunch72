@@ -18,6 +18,7 @@ import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ResearchSource,
 } from './types.js';
 import { SeoBlogError } from './types.js';
+import { cleanProvenance, holdConflictedPrices, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
 import {decodeArticleOutput} from './article-output.js';
@@ -222,24 +223,35 @@ export const PROFILE_SCHEMA: AnySchema = {
     voice: { type: 'object', required: ['tone', 'do', 'dont', 'examples'], properties: { tone: STR_ARR, do: STR_ARR, dont: STR_ARR, examples: { type: 'array', items: STR, maxItems: 5 } } },
     approvedClaims: STR_ARR,
     exclusions: STR_ARR,
-    conflicts: { type: 'array', maxItems: 30, items: { type: 'object', required: ['field', 'detail', 'documentIds'], properties: { field: STR, detail: STR, documentIds: STR_ARR } } },
+    conflicts: { type: 'array', maxItems: 30, items: { type: 'object', required: ['field', 'detail', 'documentIds'], properties: { field: STR, detail: STR, documentIds: STR_ARR,
+      kind: { type: 'string', enum: ['price', 'other'] }, offer: { type: ['string', 'null'] },
+      options: { type: 'array', maxItems: 8, items: { type: 'object', required: ['value', 'documentId', 'quote'], properties: { value: STR, documentId: STR, quote: STR } } },
+    } } },
     missingFacts: STR_ARR,
+    // Optional so a profile written before Brand DNA still validates; the site-fed path requires them (strictProfileProblems).
+    sources: { type: 'array', maxItems: 160, items: { type: 'object', required: ['field', 'value', 'documentId', 'quote'], properties: { field: { type: 'string', enum: ['audience', 'claim', 'voice', 'offer'] }, value: STR, documentId: STR, quote: STR } } },
   },
 };
 
-export type ExtractedProfile = Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts'>;
+export type ExtractedProfile = Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts' | 'sources'>;
 
 export async function extractProfile(llm: LlmClient, input: {
   readonly brandName: string;
   readonly website: string | null;
   readonly documents: readonly KnowledgeDocument[];
+  /**
+   * Brand DNA (site-fed) extraction. Rejects any price that is not word for word in its cited source and any
+   * audience or claim without a quoted source, then holds every offer whose sources disagree on price.
+   * The documents-only Setup path leaves this off and rejects nothing it did not reject before.
+   */
+  readonly strict?: boolean;
 }): Promise<JsonCallResult<ExtractedProfile>> {
   const readable = input.documents.filter((d) => d.active && d.text);
   if (readable.length === 0) throw new SeoBlogError(409, 'Upload at least one readable guidance document or paste brand text first.', 'no_knowledge');
-  const docs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, text: (d.text ?? '').slice(0, 60_000) }));
+  const docs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: (d.text ?? '').slice(0, 60_000) }));
   const prompt = loadPrompt('seo-blog-profile.md');
   const ids = new Set(readable.map((d) => d.id));
-  return callJson<ExtractedProfile>(llm, {
+  const result = await callJson<ExtractedProfile>(llm, {
     prompt,
     schema: PROFILE_SCHEMA,
     maxTokens: 8000,
@@ -247,8 +259,11 @@ export async function extractProfile(llm: LlmClient, input: {
     validate: (v) => [
       ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),
       ...v.conversionPages.filter((p) => !/^https:\/\//.test(p.url)).map((p) => `conversion page ${p.url} is not an absolute https URL`),
+      ...(input.strict ? strictProfileProblems(v, docs) : []),
     ],
   });
+  const cleaned = cleanProvenance(result.value, docs);
+  return { ...result, value: input.strict ? holdConflictedPrices(cleaned, docs) : cleaned };
 }
 
 // â”€â”€â”€ Planning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
