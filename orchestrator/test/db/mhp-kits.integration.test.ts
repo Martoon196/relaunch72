@@ -11,7 +11,7 @@ import type Stripe from 'stripe';
 import { openTestDatabase, testDatabaseSkipReason } from './database-helper.js';
 import { loginRole } from './webinar-harness.js';
 import { PgMhpKitService, readZip } from '../../src/mhp/kit-service.js';
-import { PgMhpLearningService } from '../../src/mhp/learning-service.js';
+import { PgMhpLearningService, parseMhpCourseBundle } from '../../src/mhp/learning-service.js';
 import type { MhpCommerceConfig } from '../../src/mhp/commerce-config.js';
 
 const skip = testDatabaseSkipReason();
@@ -235,6 +235,44 @@ test('kit spend counts towards the course once: claimed by email within 90 days 
     await assert.rejects(admin.query(`SELECT app_private.mhp_claim_kit_credit('acct_creditproof',false,'x@example.invalid','not-a-session',now())`), /Invalid course credit claim/);
   } finally {
     await Promise.allSettled([web.end(), identity.end(), webhook.end()]);
+    await admin.end();
+  }
+});
+
+test('a course upload can add or update modules and keep every other module as it is', { skip, timeout: 300_000 }, async () => {
+  const admin = await openTestDatabase();
+  const web = await loginRole(admin, 'r72_web');
+  const identity = await loginRole(admin, 'r72_identity_command');
+  try {
+    const founder = (await admin.query(`SELECT id FROM app.users WHERE lower(email::text)='office@propertypredator.com'`)).rows[0]?.id as string | undefined;
+    const owner = founder ?? '15100000-0000-4000-8000-000000000003';
+    if (!founder) await admin.query(`INSERT INTO app.users(id,email,status,display_name,email_verified_at) VALUES($1,'office@propertypredator.com','active','Owner',now())`, [owner]);
+    await admin.query(`UPDATE app.users SET status='active',email_verified_at=COALESCE(email_verified_at,now()) WHERE id=$1`, [owner]);
+    await admin.query('INSERT INTO app_private.investor_programme_admins(user_id) VALUES($1) ON CONFLICT DO NOTHING', [owner]);
+    const org = '15100000-0000-4000-8000-0000000000a1', ws = '15100000-0000-4000-8000-0000000000a2';
+    await admin.query(`INSERT INTO app.organizations(id,name,slug,kind) VALUES($1,'Merge proof','merge-proof-org','direct_customer')`, [org]);
+    await admin.query(`INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES($1,$2,'Merge proof','merge-proof-ws')`, [ws, org]);
+    await admin.query(`INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES($1,$2,'owner','active') ON CONFLICT DO NOTHING`, [org, owner]);
+    await admin.query(`INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status) VALUES($1,$2,$3,'owner','active') ON CONFLICT DO NOTHING`, [ws, org, owner]);
+    await admin.query(`INSERT INTO app.user_sessions(token_hash,csrf_secret_hash,user_id,selected_workspace_id,expires_at,product_audience)
+      VALUES($1,$2,$3,$4,now()+interval '1 hour','martin_howard_property')`, [createHash('sha256').update(tokenFor('merge-owner')).digest(), createHash('sha256').update('merge-csrf').digest(), owner, ws]);
+    const learning = new PgMhpLearningService(web, identity);
+    const token = tokenFor('merge-owner');
+    const mod = (number: number, title: string, lessons: number) => ({ number, slug: `m-${number}`, title, promise: `P${number}`, door: 'own', level: 'L1',
+      overview: `Overview ${number}`, sources: `Sources ${number}`,
+      lessons: Array.from({ length: lessons }, (_, i) => ({ number: i + 1, slug: `l-${i + 1}`, title: `${title} ${i + 1}`, minutes: 10, task: `Task ${i + 1}`, body: `Body ${number}/${i + 1}` })) });
+    await learning.importCourse(token, parseMhpCourseBundle(JSON.stringify({ modules: [mod(0, 'Start', 2), mod(1, 'Door', 1), mod(5, 'BRRR', 3)] })));
+    const merged = await learning.mergeWithLive(token, parseMhpCourseBundle(JSON.stringify({ modules: [mod(5, 'BRRR v2', 1), mod(25, 'Land', 6)] })));
+    assert.deepEqual(merged.modules.map(m => [m.number, m.title, m.lessons.length]), [[0, 'Start', 2], [1, 'Door', 1], [5, 'BRRR v2', 1], [25, 'Land', 6]]);
+    assert.equal(merged.modules[0]!.overview, 'Overview 0');
+    assert.equal(merged.modules[0]!.lessons[1]!.body, 'Body 0/2');
+    assert.deepEqual(await learning.importCourse(token, merged), { modules: 4, lessons: 10 });
+    const outline = await learning.outline(token);
+    assert.deepEqual(outline.modules.map(m => m.number), ['00', '01', '05', '25']);
+    assert.equal((await learning.content(token, '01/01'))?.body, 'Body 1/1');
+    assert.equal((await learning.content(token, '25/06'))?.body, 'Body 25/6');
+  } finally {
+    await Promise.allSettled([web.end(), identity.end()]);
     await admin.end();
   }
 });
