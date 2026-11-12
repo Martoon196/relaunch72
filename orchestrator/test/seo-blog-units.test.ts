@@ -149,7 +149,7 @@ test('a hidden source leaves no gap before punctuation and a shown one sits agai
 test('headings in a section body become sub-headings; elsewhere they stay bold text', () => {
   const none = () => null;
   assert.equal(renderMarkdown('## Costs to expect\nStamp duty first.', none, 'https://x.example', true), '<h3>Costs to expect</h3>\n<p>Stamp duty first.</p>');
-  assert.equal(renderMarkdown('#### Small print ##', none, 'https://x.example', true), '<h4>Small print</h4>');
+  assert.equal(renderMarkdown('#### Small print ##', none, 'https://x.example', true), '<h3>Small print</h3>', 'never deeper than h3');
   assert.equal(renderMarkdown('## Not a heading', none, 'https://x.example'), '<p><strong>Not a heading</strong></p>');
   const html = renderArticlePage({ ...body, sections: [{ id: '1', heading: 'Costs', body: '### Legal fees\nAbout £1,500.' }] }, { siteName: 'S', canonicalUrl: 'https://site.example/blog/d/', blogIndexUrl: 'https://site.example/blog/', locale: 'en-GB', publishedAt: '2026-11-03T09:00:00.000Z', articleId: 'a', versionId: 'v', contentSha: 'c'.repeat(64) });
   assert.match(html, /<h2>Costs<\/h2>\n<h3>Legal fees<\/h3>/);

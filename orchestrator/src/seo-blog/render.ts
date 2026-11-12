@@ -57,9 +57,10 @@ function inline(text: string, citeNumber: (id: string) => number | null, canonic
 }
 
 /**
- * Markdown body text to escaped HTML. Headings inside a body become sub-headings only where the
- * caller says the body sits under a section heading (`subHeadings`): `#`–`###` give <h3>, deeper
- * levels <h4>. Elsewhere (intro, conclusion, answers) they stay bold paragraphs, so the page keeps
+ * Markdown body text to escaped HTML. Headings inside a body become <h3> sub-headings only where
+ * the caller says the body sits under a section heading (`subHeadings`); one level only, because
+ * sites that sanitise the fragment (Property Predator keeps p, h2, h3, lists, links) strip anything
+ * deeper to plain text. Elsewhere (intro, conclusion, answers) they stay bold paragraphs, so the page keeps
  * one <h1> and a heading never appears above the first section.
  */
 export function renderMarkdown(markdown: string, citeNumber: (id: string) => number | null, canonical: string, subHeadings = false): string {
@@ -90,7 +91,7 @@ export function renderMarkdown(markdown: string, citeNumber: (id: string) => num
       flushPara(); closeList();
       const text = inline(heading[2]!.replace(/\s+#+\s*$/, ''), citeNumber, canonical);
       if (!subHeadings) html.push(`<p><strong>${text}</strong></p>`);
-      else { const tag = heading[1]!.length <= 3 ? 'h3' : 'h4'; html.push(`<${tag}>${text}</${tag}>`); }
+      else html.push(`<h3>${text}</h3>`);
       continue;
     }
     closeList();
@@ -140,7 +141,7 @@ const DEFAULT_TEMPLATE = `<!DOCTYPE html>
 <style>
 body{margin:0;font:18px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#1b1f24;background:#fff}
 main{max-width:720px;margin:0 auto;padding:32px 20px 64px}
-h1{font-size:2rem;line-height:1.2;margin:.2em 0 .4em}h2{font-size:1.4rem;margin:1.8em 0 .5em}h3{font-size:1.15rem;margin:1.4em 0 .4em}h4{font-size:1rem;margin:1.2em 0 .3em}
+h1{font-size:2rem;line-height:1.2;margin:.2em 0 .4em}h2{font-size:1.4rem;margin:1.8em 0 .5em}h3{font-size:1.15rem;margin:1.4em 0 .4em}
 a{color:#0b5cad}img{max-width:100%;height:auto;border-radius:8px}.meta{color:#5b6570;font-size:.9rem}
 .cta{display:inline-block;margin:1em 0;padding:.7em 1.1em;background:#0b5cad;color:#fff;border-radius:6px;text-decoration:none}
 .sources{font-size:.9rem;color:#3d4650}nav.crumbs{font-size:.9rem}
