@@ -2,6 +2,7 @@ import { SEO_LIMITS_CHECKSUM } from '../../src/db/seo-limits-schema.js';
 import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
+import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -160,6 +161,7 @@ const migration148Url = new URL('../../src/db/migrations/0148_operator_oauth_tok
 const migration149Url = new URL('../../src/db/migrations/0149_mhp_kits.sql', import.meta.url);
 const migration150Url = new URL('../../src/db/migrations/0150_mhp_kit_course_credit.sql', import.meta.url);
 const migration151Url = new URL('../../src/db/migrations/0151_mhp_whatsapp_owner_one_to_one.sql', import.meta.url);
+const migration152Url = new URL('../../src/db/migrations/0152_pp_followup_email_sequences.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -750,6 +752,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0149_mhp_kits.sql', version: 149 },
     { filename: '0150_mhp_kit_course_credit.sql', version: 150 },
     { filename: '0151_mhp_whatsapp_owner_one_to_one.sql', version: 151 },
+    { filename: PP_FOLLOWUP_MIGRATION, version: 152 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -897,6 +900,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration149Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration150Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration151Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration152Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -916,9 +920,54 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===146)?.checksum, WEBINARS_CHECKSUM);
   assert.equal(tail.find(m=>m.version===147)?.checksum, GROUP_HQ_SSO_CHECKSUM);
   assert.equal(tail.find(m=>m.version===148)?.checksum, OPERATOR_OAUTH_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===152)?.checksum, PP_FOLLOWUP_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
+});
+
+test('0152 keeps PP follow-up email runs pinned, additive and behind definer functions', async () => {
+  const sql = normalise(await readFile(migration152Url, 'utf8'));
+  const pinned = "d975ff66-336a-46c2-b36b-d7095a11af97";
+  for (const table of ['pp_followup_runs', 'pp_followup_sends', 'pp_followup_dispatch_proofs', 'pp_followup_commands']) {
+    assert.ok(sql.includes(`CREATE TABLE app_private.${table}(`), table);
+  }
+  assert.equal((sql.match(new RegExp(`workspace_id uuid NOT NULL CHECK\\(workspace_id='${pinned}'\\)`, 'g')) ?? []).length, 4);
+  // Additive only: no MHP object, no shared-table trigger, no ALTER of an existing table or function.
+  assert.doesNotMatch(sql, /mhp_/u);
+  assert.doesNotMatch(sql, /ALTER TABLE app\./u);
+  assert.doesNotMatch(sql, /ALTER FUNCTION|CREATE OR REPLACE|DROP /u);
+  assert.equal((sql.match(/CREATE TRIGGER/g) ?? []).length, 1);
+  assert.match(sql, /CREATE TRIGGER pp_followup_proof_immutable BEFORE UPDATE OR DELETE ON app_private\.pp_followup_dispatch_proofs/u);
+  const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  assert.ok(definers >= 15);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
+  assert.match(sql, /CREATE ROLE r72_pp_followup_definer NOLOGIN NOINHERIT/u);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_pp_followup_definer/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_snapshot\(bytea,uuid,text\) TO r72_web;/u);
+  assert.match(sql, /app_private\.pp_followup_hold_runs\(\) TO r72_identity_command;/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*pp_followup_(?:runs|sends|dispatch_proofs|commands)[^;]* TO r72_(?:web|identity_command)/u);
+  // The only write outside this feature: an unsubscribe suppression by the system actor, for the two Property
+  // Predator marketing purposes and nothing wider (never purpose-free, never another purpose).
+  assert.match(sql, /GRANT INSERT ON app\.communication_suppression_events TO r72_pp_followup_definer/u);
+  assert.match(sql, /purpose IN\('marketing','property_predator_marketing'\) AND state='suppressed' AND reason='recipient_unsubscribe' AND source='pp\.followup\.unsubscribe'/u);
+  assert.equal((sql.match(/GRANT INSERT ON app\./g) ?? []).length, 1);
+  assert.doesNotMatch(sql, /GRANT (?:UPDATE|DELETE|ALL)[^;]* ON app\.communication_/u);
+  // Permission reads the product purpose as well as the owner-recorded one, at every point, and never the mutable column.
+  const allowed = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_endpoint_allowed('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_next('));
+  assert.equal((allowed.match(/IN\('marketing','property_predator_marketing'\)/g) ?? []).length, 2, 'suppressions and consents both read both purposes');
+  assert.match(allowed, /bool_and\(latest\.state='granted'\)/u);
+  assert.doesNotMatch(sql, /purpose='marketing'/u, 'no path reads or writes the owner purpose alone');
+  assert.ok((sql.match(/pp_followup_endpoint_allowed\(/g) ?? []).length >= 9, 'enrolment, resume, claim (twice), prepare and the owner lists all go through the one rule');
+  assert.doesNotMatch(sql, /consent_status/u);
+  // Attempts are spent when the hand-off proof is written, never at claim; resume restarts an unclaimed step's clock.
+  const claim = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_claim('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_prepare('));
+  const prepare = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_prepare('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_settle('));
+  assert.doesNotMatch(claim, /attempts=attempts\+1/u); assert.match(prepare, /SET attempts=attempts\+1/u);
+  assert.match(sql, /due_at=CASE WHEN current_send_id IS NULL THEN greatest\(due_at,clock_timestamp\(\)\) ELSE due_at END/u);
+  assert.match(sql, /CREATE INDEX pp_followup_runs_contact_point ON app_private\.pp_followup_runs\(contact_point_id\);/u);
+  assert.match(sql, /app_private\.pp_followup_settle\(uuid,uuid,text,text\)/u);
+  assert.match(sql, /app_private\.pp_followup_command\(bytea,text,uuid,uuid,uuid,uuid,uuid,text,text\[\]\)/u);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {

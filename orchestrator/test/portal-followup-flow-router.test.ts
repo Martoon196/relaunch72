@@ -97,3 +97,42 @@ test('exact same-host message reads return safe JSON and reject forged selectors
   assert.equal((await f.request('GET', `/message?item=${sequenceIds.item}&version=${sequenceIds.version}&channel=email&workspaceId=${ids.prospect}`)).status, 400);
   assert.deepEqual(f.state.calls, ['message']);
 });
+test('connected PP email delivery: Start, Stop and unknown-retry post exact fields to the owner command only', async () => {
+  const f = flowRouterFixture(), commands: Record<string, string>[] = [];
+  const point = '2b5d8a3c-4f1e-4c7a-9d2b-1a2b3c4d5e6f', runId = '3c6e9b4d-5a2f-4d8b-8e3c-2b3c4d5e6f70', proofId = '4d7fa05e-6b3a-4e9c-9f4d-3c4d5e6f7081';
+  const views: unknown[] = [], baseSnapshot = f.deps.followupFlows!.snapshot;
+  let stale = false;
+  Object.assign(f.deps.followupFlows!, { snapshot: async (identity: never, request: string, view?: unknown) => { views.push(view); return baseSnapshot(identity, request); },
+    command: async (_identity: unknown, _request: string, input: Record<string, string>) => { if (stale) throw new FlowWorkspaceError(409, 'This page was out of date. Please try again.'); commands.push(input);
+      return { action: input.action, contentItemId: input.itemId, contentVersionId: input.versionId, changed: 1, remaining: 0, blocked: 0, inFlight: 0, heldForTest: 0, reason: null, replayed: false }; } });
+  Object.assign(f.snapshot, { executable: true, readiness: { ...readiness, email: true }, delivery: { mode: 'test', problems: [], search: '', database: { campaign: PP_FOLLOWUP_CAMPAIGN, permitted: 1, contactMatches: 1, runMatches: 1, runCount: 1,
+    contacts: [{ contactId: runId, contactPointId: point, displayName: 'Ann <Example>', email: 'ann@example.invalid', inOpenRun: true }],
+    runs: [{ id: runId, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, contactId: runId, contactPointId: point, email: 'ann@example.invalid', displayName: 'Ann <Example>',
+      state: 'held', position: 0, dueAt: new Date(now).toISOString(), reason: 'outcome_unknown', createdAt: new Date(now).toISOString(), lastAcceptedAt: null, inFlight: false, unknownProofId: proofId, steps: [] }] } } });
+  f.detail.blockers.splice(0); f.state.published = true;
+  const page = await f.request('GET', `?item=${sequenceIds.item}&version=${sequenceIds.version}`);
+  assert.equal(page.status, 200); assert.match(page.body, /Email sending is in test mode/u); assert.match(page.body, /Start this person/u);
+  assert.match(page.body, /Ann &lt;Example&gt; · ann@example\.invalid · already in a flow/u); assert.match(page.body, /Send it again/u);
+  assert.match(page.body, /<strong>Waiting for you<\/strong>/u); assert.doesNotMatch(page.body, /Cancel this run|<strong>held<\/strong>/u);
+  assert.deepEqual(views.at(-1), { itemId: sequenceIds.item }, 'the people lists follow the flow on screen');
+  // Search by name or email reaches the service; it is only accepted on a saved flow and is length-limited.
+  const searched = await f.request('GET', `?item=${sequenceIds.item}&version=${sequenceIds.version}&q=${encodeURIComponent(" O'Brien ")}`);
+  assert.equal(searched.status, 200); assert.deepEqual(views.at(-1), { itemId: sequenceIds.item, search: "O'Brien" });
+  assert.equal((await f.request('GET', '?q=ann')).status, 400); assert.equal((await f.request('GET', `?item=${sequenceIds.item}&version=${sequenceIds.version}&q=${'x'.repeat(101)}`)).status, 400);
+  const started = await f.request('POST', '/enrol', f.saved({ contactPointId: point }));
+  assert.equal(started.status, 200); assert.match(started.body, /Done: 1 person started\./u);
+  assert.equal((await f.request('POST', '/stop', f.saved({ runId, ackProofId: '' }))).status, 200);
+  assert.equal((await f.request('POST', '/resume', f.saved({ runId, ackProofId: proofId }))).status, 200);
+  assert.deepEqual(commands.map(input => [input.action, input.contactPointId, input.runId, input.ackProofId]), [['enrol', point, '', ''], ['stop', '', runId, ''], ['resume', '', runId, proofId]]);
+  for (const body of [f.saved(), f.saved({ contactPointId: point, recipient: 'forged@example.invalid' }), f.saved({ contactPointId: point, runId })]) assert.equal((await f.request('POST', '/enrol', body)).status, 400);
+  assert.equal((await f.request('POST', '/start', f.saved())).status, 409);
+  assert.equal(commands.length, 3, 'malformed forms never reach the command');
+  // A stale or back-button form: a plain sentence and a way back to a fresh copy of this flow, never raw error text.
+  stale = true;
+  const old = await f.request('POST', '/pause', f.saved({ runId, ackProofId: '' }));
+  assert.equal(old.status, 409); assert.match(old.headers['content-type']!, /text\/html/u);
+  assert.match(old.body, /<p>This page was out of date\. Please try again\.<\/p>/u);
+  assert.match(old.body, new RegExp(`href="/portal/follow-ups\\?item=${sequenceIds.item}&amp;version=${sequenceIds.version}">Back to your follow-ups</a>`, 'u'));
+  const forged = await f.request('POST', '/pause', f.saved({ runId, ackProofId: '', csrf: 'forged' }));
+  assert.equal(forged.status, 403); assert.match(forged.body, /This page was out of date\. Please try again\./u);
+});

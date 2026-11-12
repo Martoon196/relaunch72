@@ -41,9 +41,17 @@ export function createFollowupTools(deps: FollowupToolDependencies): OperatorToo
 
   return [
     { name: 'followups_overview', write: false,
-      description: 'Follow-up sequences for the brand: saved sequences and their approval state, message choices, channel readiness, email mode and (MHP) live runs and entry rules. Start here before drafting.',
+      description: 'Follow-up sequences for the brand: saved sequences and their approval state, message choices, channel readiness, email mode, live runs and (MHP) entry rules. Start here before drafting.',
       inputSchema: { type: 'object', properties: { brand: BRAND_SCHEMA }, required: ['brand'] },
-      run: async (a) => { const b = brand(a); const s = service(b); return { ...(await s.snapshot(await deps.sessions.identity(b), requestId())), portal: portal(b) }; } },
+      run: async (a) => {
+        const b = brand(a); const snapshot = await service(b).snapshot(await deps.sessions.identity(b), requestId()) as Record<string, unknown>;
+        // PP: people stay in the portal. Claude sees the counts, the email mode and each run's progress, never a
+        // recipient's name or address: the contact picker is dropped and every run is stripped of both.
+        const delivery = snapshot.delivery as { database?: { contacts?: unknown[]; runs?: unknown[] } | null } | undefined;
+        if (delivery?.database) snapshot.delivery = { ...delivery, database: { ...delivery.database, contacts: undefined,
+          runs: (delivery.database.runs ?? []).map(run => { const { email: _email, displayName: _displayName, ...rest } = run as Record<string, unknown>; return rest; }) } };
+        return { ...snapshot, portal: portal(b) };
+      } },
     { name: 'followup_sequence_get', write: false,
       description: 'One saved sequence version: plain steps (with each message\'s current text), approval state, timeline and what still blocks starting it. The steps can be edited and passed to followup_sequence_check / followup_sequence_save_draft.',
       inputSchema: { type: 'object', properties: { brand: BRAND_SCHEMA, contentItemId: ID_SCHEMA, contentVersionId: ID_SCHEMA }, required: ['brand', 'contentItemId', 'contentVersionId'] },
