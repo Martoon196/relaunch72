@@ -1,5 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from '../db/mhp-wa-direct-schema.js';
+import { MHP_WA_OWNER_MIGRATION, MHP_WA_OWNER_CHECKSUM } from '../db/mhp-wa-owner-schema.js';
 
 export const META_WHATSAPP_LIVE_COMMAND_DATABASE_ROLE =
   'r72_whatsapp_live_command' as const;
@@ -67,6 +68,17 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
   ],
 };
 
+const OWNER_ALLOWED: Record<'worker' | 'webhook', readonly string[]> = {
+  worker: [
+    'app_private.mhp_wa_owner_catalogue_target(uuid,uuid)',
+    'app_private.record_mhp_wa_owner_template(uuid,uuid,text,text,text,text,text,text,text[],text,text,bytea,boolean,text)',
+    'app_private.claim_owner_whatsapp_job(uuid,uuid,bytea,integer)',
+    'app_private.load_owner_whatsapp_job(uuid,uuid,bigint,bytea)',
+    'app_private.begin_owner_whatsapp_call(uuid,uuid,bigint,bytea,boolean,boolean)',
+  ],
+  webhook: ['app_private.mhp_wa_owner_status_error(uuid,uuid,text,bytea,integer)'],
+};
+
 async function assertBoundaryReady(
   pool: Pick<Pool, 'query'>,
   kind: BoundaryKind,
@@ -78,6 +90,11 @@ async function assertBoundaryReady(
       const {rows:ledger}=await pool.query<{checksum:string}>('SELECT checksum FROM app_private.runtime_schema_migrations() WHERE filename=$1',[DIRECT_WA_MIGRATION]);
       if (ledger.length && ledger[0]?.checksum===DIRECT_WA_CHECKSUM) allowed=[...allowed,
         'app_private.mhp_wa_direct_begin(uuid,uuid,uuid)','app_private.mhp_wa_direct_finish(uuid,uuid,uuid,text,text)'];
+    }
+    // MHP-WA-121 (0151): exact extra functions only once the exact 0151 ledger row is applied.
+    if (kind==='worker' || kind==='webhook') {
+      const {rows:ledger}=await pool.query<{checksum:string}>('SELECT checksum FROM app_private.runtime_schema_migrations() WHERE filename=$1',[MHP_WA_OWNER_MIGRATION]);
+      if (ledger.length && ledger[0]?.checksum===MHP_WA_OWNER_CHECKSUM) allowed=[...allowed,...OWNER_ALLOWED[kind]];
     }
     const placeholders = allowed.map((_, index) => `$${index + 2}::regprocedure`);
     const result = await pool.query<BoundaryRow>(

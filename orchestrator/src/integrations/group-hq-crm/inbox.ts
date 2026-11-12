@@ -8,6 +8,7 @@ import { CrmPgRepository } from '../../crm-pg/repository.js';
 import type { CrmTransactionRunner, SqlExecutor } from '../../crm-pg/types.js';
 import { MHP_MARKETING_WORKSPACE_ID } from '../../mhp/marketing-workspace-service.js';
 import { readOwnerWhatsapp } from './whatsapp-reader.js';
+import { OwnerWhatsAppCommands, OwnerWhatsAppError, isOwnerWhatsAppAction } from './whatsapp-owner.js';
 
 export const GROUP_HQ_INBOX_CRM_PATH = '/api/group-hq/inbox/crm';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -51,7 +52,9 @@ export interface InboxCrmScope {
   label: string; workspaceId: string; organizationId: string; ownerUserId: string;
   pipelineId: string; stageId: string; actorEmails: readonly string[]; whatsappOwnerIds?: Readonly<Record<string,string>>;
 }
-export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>>; mhpWhatsappInboxId?: string; mhpWhatsappManualReplies?: boolean }
+export interface InboxCrmConfig { secret: string; scopes: Readonly<Record<string, InboxCrmScope>>; mhpWhatsappInboxId?: string; mhpWhatsappManualReplies?: boolean;
+  /** MHP-WA-121 (0151): one-to-one WhatsApp from the MHP sender for any brand's contact (off unless enabled after 0151). */
+  mhpWhatsappOwnerSends?: boolean }
 export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | undefined {
   const raw = env.R72_GROUP_HQ_INBOX_SCOPES?.trim() ?? '';
   const secret = env.R72_GROUP_HQ_INBOX_SECRET?.trim() ?? '';
@@ -84,8 +87,9 @@ export function loadInboxCrmConfig(env: NodeJS.ProcessEnv): InboxCrmConfig | und
     }
   }
   const binding = env.GHQ_MHP_WHATSAPP_INBOX_ID?.trim();
+  const owner = env.MHP_WHATSAPP_OWNER_SENDS==='enabled' ? { mhpWhatsappOwnerSends: true } : {};
   return binding && UUID.test(binding) ? { secret, scopes, mhpWhatsappInboxId: binding.toLowerCase(),
-    ...(env.MHP_WHATSAPP_MANUAL_REPLIES==='enabled'?{mhpWhatsappManualReplies:true}:{}) } : {secret, scopes};
+    ...(env.MHP_WHATSAPP_MANUAL_REPLIES==='enabled'?{mhpWhatsappManualReplies:true}:{}), ...owner } : {secret, scopes, ...owner};
 }
 
 export function inboxSignature(secret: string, timestamp: string, method: string, path: string, body: Buffer): string {
@@ -112,9 +116,11 @@ export function inboxSocialPoint(input: InboxSource): string {
 
 export class GroupHqInboxCrmService {
   private readonly commands: CrmCommandService;
+  private readonly owner: OwnerWhatsAppCommands;
   constructor(private readonly readPool: Pick<Pool, 'connect'>, private readonly runner: CrmTransactionRunner,
               private readonly config: InboxCrmConfig) {
     this.commands = new CrmCommandService({ transactionRunner: runner });
+    this.owner = new OwnerWhatsAppCommands(runner, config.mhpWhatsappOwnerSends === true, config.mhpWhatsappManualReplies === true);
   }
   private async context(actorEmail: string, brand: string, requestId: string): Promise<{ context: DatabaseRequestContext; scope: InboxCrmScope }> {
     const scope = this.config.scopes[brand];
@@ -137,6 +143,14 @@ export class GroupHqInboxCrmService {
     const requestId = uuid(input.requestId);
     const brand = text(input.brand, 12);
     const { context, scope } = await this.context(actorEmail, brand, requestId);
+    if (isOwnerWhatsAppAction(input.action)) {
+      // The send runs as the MHP owner in the MHP workspace; the actor must be an MHP actor as well as this brand's.
+      const mhp = this.config.scopes.mhp;
+      const mhpActor = mhp && mhp.workspaceId === MHP_MARKETING_WORKSPACE_ID && mhp.actorEmails.includes(actorEmail)
+        ? { userId: mhp.whatsappOwnerIds?.[actorEmail] ?? mhp.ownerUserId } : null;
+      try { return await this.owner.execute(input.action, input, { brand, workspaceId: scope.workspaceId }, mhpActor, requestId); }
+      catch (error) { if (error instanceof OwnerWhatsAppError) throw new InboxCrmError(error.status, error.code); throw error; }
+    }
     if (input.action === 'whatsappThreads' || input.action === 'whatsappMessages' || input.action === 'whatsappReply') {
       const inboxId = this.config.mhpWhatsappInboxId;
       if (brand !== 'mhp' || scope.workspaceId !== MHP_MARKETING_WORKSPACE_ID || !inboxId || input.accountId !== inboxId) {

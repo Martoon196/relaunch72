@@ -138,7 +138,9 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     assert.equal(await deliver(p, { ...stop8, signature: randomBytes(32) }), 'conflict', 'signature change conflicts');
     assert.equal(await deliver(p, { ...stop8, occurred: new Date(stop8.occurred.getTime() + 1) }), 'conflict', 'occurrence change conflicts');
     assert.equal(await deliver(p, stop8), 'replayed', 'conflicts leave the original WhatsApp STOP unchanged');
-    await expectPostgresError(deliver(p, inbound(8, 'hello')), '23503'); // an ordinary message from an unknown number keeps the refusal
+    // Since 0143 an ordinary message from an unknown number is no longer refused: it is received into the private
+    // direct inbox, and still creates no CRM contact, no WhatsApp point and no consent identity (asserted just below).
+    assert.equal(await deliver(p, inbound(8, 'hello')), 'applied');
     const unlinked8 = await ownerQuery<{ wa: number; sms: number; held: number; points: number }>(owner, `SELECT
       (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='whatsapp' AND phone_identity_sha256=$1 AND opt_evidence='stop') wa,
       (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='sms' AND phone_identity_sha256=$1) sms,
@@ -365,4 +367,95 @@ test('MHP campaign batches reach more than three same-day recipients while repla
       (SELECT count(DISTINCT event_send_id) FROM app.property_predator_whatsapp_live_jobs)::text AS unique_sends`);
     assert.deepEqual(counts[0], { sends: '5', jobs: '5', unique_sends: '5' });
   } finally { await closeLoginPools(owner, pools); await owner.end(); }
+});
+
+// MHP-WA-121 (0151): the owner's one-to-one rail shares the MHP number and CRM with the webinar follow-up rail.
+// An owner send made FIRST must leave the webinar programme able to pin its template and able to take that
+// person's JOIN: the owner rail keeps its own reserved 0053 template row, and it reuses the one MHP contact
+// the person already is (by e-mail or number) instead of adding a duplicate that would hold the JOIN.
+test('MHP owner one-to-one first: the same template still activates for the webinar and the later JOIN is not held as ambiguous', { skip, timeout: 180_000 }, async () => {
+  const owner = await openTestDatabase();
+  let pools: Partial<Pools> = {};
+  let crm: Pool | undefined;
+  const PP_ORG = '0b151000-0000-4000-8000-0000000000a1', PP = '0b151000-0000-4000-8000-0000000000a2';
+  try {
+    await resetIdentityTables(owner);
+    await ownerQuery(owner, 'TRUNCATE app_private.mhp_prospects CASCADE');
+    await ownerQuery(owner, 'TRUNCATE app_private.mhp_unlinked_opt_events');
+    await ownerQuery(owner, await readFile(new URL('./mhp-event-whatsapp.fixture.sql', import.meta.url), 'utf8'));
+    pools = await openLoginPools(owner);
+    const p = pools as Pools;
+    const password = `mhp-121-${randomUUID()}`;
+    await owner.query((await owner.query<{ sql: string }>(`SELECT pg_catalog.format('ALTER ROLE r72_crm_command PASSWORD %L', $1::text) AS sql`, [password])).rows[0]!.sql);
+    const url = new URL(process.env.TEST_DATABASE_URL!.trim()); url.username = 'r72_crm_command'; url.password = password;
+    crm = new Pool({ connectionString: url.toString(), max: 2 });
+    const ownerCall = async <T>(sql: string, values: unknown[]): Promise<T> => (await as<{ r: T }>(crm!, 'owner', sql, values))[0]!.r;
+
+    // A second brand the same owner manages. Its contact is registrant 1 (already an MHP contact by e-mail) with a mobile.
+    await ownerQuery(owner, `DO $s$ BEGIN
+      PERFORM set_config('app.user_id','${OWNER}',true); PERFORM set_config('app.request_id','owner-121-event-fixture',true);
+      INSERT INTO app.organizations(id,name,slug,kind) VALUES('${PP_ORG}','Synthetic PP','synthetic-pp-121-event','direct_customer');
+      INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES('${PP}','${PP_ORG}','PP brand','pp-brand-121-event');
+      INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES('${PP_ORG}','${OWNER}','owner','active');
+      INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status) VALUES('${PP}','${PP_ORG}','${OWNER}','owner','active');
+    END $s$`);
+    const mhpByEmail = async (n: number): Promise<string> => (await ownerQuery<{ contact_id: string }>(owner,
+      `SELECT contact_id FROM app.contact_points WHERE workspace_id=$1 AND kind='email' AND normalized_value=$2 AND deleted_at IS NULL`, [WS, email(n)]))[0]!.contact_id;
+    const mhp1 = await mhpByEmail(1), mhp2 = await mhpByEmail(2), mhp3 = await mhpByEmail(3);
+    const contactsBefore = (await ownerQuery<{ n: number }>(owner, 'SELECT count(*)::int AS n FROM app.contacts WHERE workspace_id=$1', [WS]))[0]!.n;
+    const ppContact = randomUUID(), ppPhone = randomUUID(), clash = randomUUID(), clashPhone = randomUUID();
+    await ownerQuery(owner, `INSERT INTO app.contacts(id,workspace_id,display_name) VALUES($1,$3,'Avery Example'),($2,$3,'Blake Example')`, [ppContact, clash, PP]);
+    await ownerQuery(owner, `INSERT INTO app.contact_points(id,workspace_id,contact_id,kind,value,normalized_value) VALUES
+      ($1,$5,$2,'phone',$6,$6),(gen_random_uuid(),$5,$2,'email',$7,$7),($3,$5,$4,'phone',$8,$8),(gen_random_uuid(),$5,$4,'email',$9,$9)`,
+    [ppPhone, ppContact, clashPhone, clash, PP, phone(1), email(1), phone(7), email(2)]);
+    // Ambiguous on purpose: Blake's e-mail is MHP contact 2, but Blake's number is already a phone point of MHP contact 3.
+    await ownerQuery(owner, `INSERT INTO app.contact_points(workspace_id,contact_id,kind,value,normalized_value) VALUES($1,$2,'phone',$3,$3)`, [WS, mhp3, phone(7)]);
+
+    // --- Owner one-to-one FIRST, with the very template the webinar programme will use.
+    const linked = await ownerCall<Record<string, any>>('SELECT app_private.mhp_wa_owner_link($1,$2,$3,$4,$5) AS r', [PP, 'pp', ppContact, ppPhone, null]);
+    assert.equal(linked.state, 'linked');
+    assert.equal(linked.mhpContactId, mhp1, 'the one MHP contact with the same e-mail is reused');
+    assert.equal(linked.mirrorCreated, false); assert.equal(linked.whatsappPointCreated, true);
+    const refused = await ownerCall<Record<string, any>>('SELECT app_private.mhp_wa_owner_link($1,$2,$3,$4,$5) AS r', [PP, 'pp', clash, clashPhone, null]);
+    assert.deepEqual([refused.state, refused.reason], ['refused', 'mhp_contact_ambiguous'], 'two different MHP contacts match: held with a plain reason');
+    assert.equal((await ownerQuery<{ n: number }>(owner, 'SELECT count(*)::int AS n FROM app.contacts WHERE workspace_id=$1', [WS]))[0]!.n, contactsBefore, 'no duplicate MHP contact was made');
+    assert.equal((await ownerQuery<{ n: number }>(owner, `SELECT count(*)::int AS n FROM app.contact_points WHERE workspace_id=$1 AND kind='whatsapp'`, [WS]))[0]!.n, 1);
+    await as(p.r72_whatsapp_live_worker_command, 'worker',
+      'SELECT app_private.record_mhp_wa_owner_template($1,$2,$3,$4,$5,$6,$7,$8,$9::text[],$10,$11,$12,$13,$14)',
+      [WS, WA_BINDING, META_ID, 'mhp_webinar_20261104_reminder_v1', 'en_GB', 'MARKETING', 'APPROVED', 'NONE', [], BODY, BODY, sha('components:' + BODY), true, null]);
+    const granted = await ownerCall<Record<string, any>>('SELECT app_private.mhp_wa_owner_set_permission($1,$2,$3,$4,$5,$6,$7,$8,$9) AS r',
+      [PP, ppContact, linked.linkId, randomUUID(), 'granted', 'consent', 'asked_to_be_contacted', 'Asked for the replay by phone', true]);
+    assert.equal(granted.state, 'granted');
+    const shown = await ownerCall<Record<string, any>>('SELECT app_private.mhp_wa_owner_preview($1,$2::jsonb) AS r', [META_ID, '[]']);
+    assert.equal(shown.text, BODY);
+    const queued = await ownerCall<Record<string, any>>(`SELECT app_private.mhp_wa_owner_queue_template($1,$2,$3,$4,$5,$6::jsonb,decode($7,'hex')) AS r`,
+      [PP, ppContact, randomUUID(), linked.linkId, META_ID, '[]', shown.sha256]);
+    assert.equal(queued.state, 'queued');
+    const templates = () => ownerQuery<{ provider_template_name: string }>(owner,
+      'SELECT provider_template_name FROM app.property_predator_whatsapp_live_templates WHERE workspace_id=$1 ORDER BY 1', [WS]);
+    assert.deepEqual(await templates(), [{ provider_template_name: `mhp_owner_121__${META_ID}` }], 'the owner rail never takes the real template name');
+
+    // --- The same person now joins the webinar on WhatsApp from that number: joined, not held as ambiguous.
+    const r1 = await chooseWhatsApp(p, 1);
+    assert.equal(await deliver(p, inbound(1, `JOIN ${r1.nonce}`)), 'event_joined');
+    const intent = await ownerQuery<{ state: string; hold_reason: string | null; contact_id: string }>(owner,
+      `SELECT state,hold_reason,contact_id FROM app_private.mhp_event_whatsapp_intents WHERE phone_e164=$1`, [phone(1)]);
+    assert.deepEqual(intent, [{ state: 'verified', hold_reason: null, contact_id: mhp1 }]);
+    assert.equal((await ownerQuery<{ n: number }>(owner, `SELECT count(*)::int AS n FROM app_private.mhp_event_whatsapp_intents WHERE hold_reason='crm_ambiguous'`))[0]!.n, 0);
+    assert.equal((await ownerQuery<{ n: number }>(owner, 'SELECT count(*)::int AS n FROM app.contacts WHERE workspace_id=$1', [WS]))[0]!.n, contactsBefore);
+
+    // --- The webinar programme then pins and activates that same template name and language.
+    await observe(p, 'APPROVED');
+    const first = await review(p);
+    assert.equal(first.templateObservation.current, true); assert.equal(first.selectedReceiptIds.length, 1);
+    const done = await activate(p, randomUUID(), first);
+    assert.equal(done.count, 1, JSON.stringify(done));
+    assert.deepEqual(await templates(), [{ provider_template_name: `mhp_owner_121__${META_ID}` }, { provider_template_name: 'mhp_webinar_20261104_reminder_v1' }]);
+    assert.ok(mhp2 && mhp3);
+  } finally {
+    await crm?.end().catch(() => undefined);
+    await owner.query('ALTER ROLE r72_crm_command PASSWORD NULL').catch(() => undefined);
+    await closeLoginPools(owner, pools);
+    await owner.end();
+  }
 });

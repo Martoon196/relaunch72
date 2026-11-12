@@ -241,13 +241,29 @@ export type MetaWhatsAppDispatchResult = Readonly<{
   receiptSha256: string;
   safeCode: string;
   occurredAt: string;
+  /** Meta's numeric error code (error.code) when Meta refused the call; never set on acceptance. */
+  providerErrorCode?: number;
 }>;
+
+/** MHP owner one-to-one: one approved template with body parameters validated server-side (0151). */
+export interface MetaWhatsAppOwnerTemplateDispatch extends MetaWhatsAppTemplateDispatch {
+  readonly parameterFormat: 'NONE' | 'POSITIONAL' | 'NAMED';
+  readonly parameters: readonly Readonly<{ name: string; value: string }>[];
+}
+
+/** Meta's numeric error code from a Graph error body, if well formed. */
+export function metaErrorCode(parsed: Record<string, unknown> | null): number | undefined {
+  const error = parsed?.error;
+  const code = error && typeof error === 'object' && !Array.isArray(error) ? (error as Record<string, unknown>).code : undefined;
+  return typeof code === 'number' && Number.isSafeInteger(code) && code >= 0 && code <= 999_999_999 ? code : undefined;
+}
 
 export interface MetaWhatsAppLiveTransport {
   readonly contract: typeof META_WHATSAPP_LIVE_CONTRACT;
   readonly executionMode: 'owned_template_live';
   sendTemplate(input: MetaWhatsAppTemplateDispatch): Promise<MetaWhatsAppDispatchResult>;
   sendManualReply?(input: {recipient: string; body: string}): Promise<MetaWhatsAppDispatchResult>;
+  sendOwnerTemplate?(input: MetaWhatsAppOwnerTemplateDispatch): Promise<MetaWhatsAppDispatchResult>;
 }
 
 async function boundedResponse(response: Response): Promise<string> {
@@ -341,7 +357,9 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
       });
       const ambiguous = status === 408 || status === 409 || status === 425
         || status === 429 || status >= 500;
+      const providerErrorCode = status >= 200 && status < 300 ? undefined : metaErrorCode(parsed);
       return Object.freeze({
+        ...(providerErrorCode === undefined ? {} : { providerErrorCode }),
         state: ambiguous || (status >= 200 && status < 300) ? 'outcome_unknown' : 'failed',
         providerMessageId, receiptSha256,
         safeCode: status >= 200 && status < 300
@@ -364,6 +382,22 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
       if (bound.workspaceId !== '2789228d-55a6-4688-b1e8-2f70abca990b' || !E164.test(input.recipient)
           || typeof input.body!=='string' || !input.body.trim() || Buffer.byteLength(input.body)>4096) fail('invalid_request');
       return send(input,{type:'text',text:{preview_url:false,body:input.body}});
+    },
+    async sendOwnerTemplate(input: MetaWhatsAppOwnerTemplateDispatch): Promise<MetaWhatsAppDispatchResult> {
+      if (bound.workspaceId !== '2789228d-55a6-4688-b1e8-2f70abca990b'
+          || JSON.stringify(snapshotBinding(input.binding)) !== JSON.stringify(bound)
+          || !E164.test(input.recipient) || !TEMPLATE.test(input.templateName)
+          || !LANGUAGE.test(input.languageCode) || !UUID.test(input.operationId)
+          || !SHA256.test(input.requestSha256) || !['NONE', 'POSITIONAL', 'NAMED'].includes(input.parameterFormat)
+          || !Array.isArray(input.parameters) || input.parameters.length > 20
+          || (input.parameterFormat === 'NONE') !== (input.parameters.length === 0)
+          || input.parameters.some((p, i) => typeof p?.value !== 'string' || !p.value.trim() || p.value.length > 500
+            || /[\u0000-\u001f\u007f]| {5,}/u.test(p.value)
+            || (input.parameterFormat === 'NAMED' ? !/^[a-z_][a-z0-9_]*$/u.test(p.name) : p.name !== String(i + 1)))) fail('invalid_request');
+      const template: Record<string, unknown> = { name: input.templateName, language: { code: input.languageCode } };
+      if (input.parameters.length) template.components = [{ type: 'body', parameters: input.parameters.map(p => input.parameterFormat === 'NAMED'
+        ? { type: 'text', parameter_name: p.name, text: p.value } : { type: 'text', text: p.value }) }];
+      return send(input, { type: 'template', template });
     },
   });
 }
@@ -404,6 +438,8 @@ export type VerifiedMetaWhatsAppLiveEvent = Readonly<{
   recipientSha256: string;
   status: 'sent' | 'delivered' | 'read' | 'failed' | 'deleted';
   occurredAt: string;
+  /** Meta's errors[0].code on a signed 'failed' status, when present. */
+  errorCode?: number;
 }>;
 
 const VERIFIED_EVENTS = new WeakSet<object>();
@@ -502,12 +538,17 @@ export function verifyMetaWhatsAppLiveWebhook(input: Readonly<{
           fail('webhook_invalid');
         }
         const occurredAt = unixTimestamp(status.timestamp);
+        const errors = status.status === 'failed' && Array.isArray(status.errors) && status.errors.length >= 1
+          && typeof status.errors[0] === 'object' && status.errors[0] !== null ? status.errors[0] as Record<string, unknown> : null;
+        const errorCode = typeof errors?.code === 'number' && Number.isSafeInteger(errors.code) && errors.code >= 0
+          && errors.code <= 999_999_999 ? errors.code : undefined;
         const event = Object.freeze({
           kind: 'status' as const, workspaceId: binding.workspaceId,
           connectionId: binding.connectionId,
           externalEventId: `status:${status.id}:${String(status.status)}:${occurredAt}`,
           providerMessageId: status.id, recipientSha256: hash(status.recipient_id),
           status: status.status as 'sent' | 'delivered' | 'read' | 'failed' | 'deleted', occurredAt,
+          ...(errorCode === undefined ? {} : { errorCode }),
         });
         const fingerprint = hash(JSON.stringify(event));
         const prior = fingerprints.get(event.externalEventId);
