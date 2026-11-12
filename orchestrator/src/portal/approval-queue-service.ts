@@ -219,7 +219,7 @@ export class ApprovalQueueService {
         ref: this.sign(ctx, 'article', title, { articleId: article.id, versionId: version.id }, { rowVersion: String(article.rowVersion), contentSha: version.contentSha }),
         preview: clip(`${version.body.excerpt} ${version.body.intro}`), why: brief ? clip(`${brief.whyFit}${brief.targetQuery ? ` Search: “${brief.targetQuery}”.` : ''}`, 400) : 'Written from your accepted topic plan.',
         state: critical ? 'blocked' : 'ready', ...(critical ? { blockedReason: 'Checks found a serious problem. Fix it in the editor first; approval cannot override it.' } : {}),
-        refuseLabel: 'Not now — keep off the website', editHref: this.articleHref(seo, article.id), editLabel: `Open version ${version.number}`, batchable: !critical,
+        refuseLabel: 'Not now — keep off the website', editHref: this.articleHref(seo, article.id), editLabel: 'Read the full article', batchable: !critical,
       } satisfies ApprovalItem;
     });
   }
@@ -264,7 +264,7 @@ export class ApprovalQueueService {
           kind: 'promotion', label: `${networkLabel(post.network)} post`, title: post.title, since: version.createdAt,
           ref: this.sign(ctx, 'promotion', post.title, { articleId: article.id, versionId: version.id, network: post.network }, { packSha }),
           preview: clip(`${post.copy}${pack.canonicalUrl ? ` ${pack.canonicalUrl}` : ''}`), why: `Goes out with your article “${title}” once it is live.`,
-          state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}), editHref: this.articleHref(seo, article.id), editLabel: 'Open the article', batchable: !blocked,
+          state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}), editHref: this.articleHref(seo, article.id), editLabel: 'Read the full article', batchable: !blocked,
         });
       }
     }

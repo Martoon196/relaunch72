@@ -31,6 +31,8 @@ const STYLE = `<style data-approval-queue>
 .aq-table td.n{text-align:right;font-variant-numeric:tabular-nums}.aq-thumb{width:56px;height:auto;border-radius:6px}
 .aq-unknown{font-style:italic}
 @media(max-width:640px){.aq-batch{bottom:calc(86px + env(safe-area-inset-bottom))}}
+/* The batch bar only takes screen space once something is ticked (browsers without :has keep it always on). */
+@supports selector(:has(a)){.aq:not(:has(.aq-pick input:checked)) .aq-batch{display:none}}
 @media(max-width:560px){.aq-table thead{display:none}.aq-table tr{display:block;border-top:1px solid var(--line,#ddd);padding:6px 0}.aq-table td{display:inline-block;border:0;padding:2px 6px 2px 0}.aq-table td.n::before{content:attr(data-label) ": ";font-weight:700}}
 </style>`;
 
@@ -49,7 +51,7 @@ function card(item: ApprovalItem, csrf: string, now: number): string {
   const confirm = ready && item.confirmation ? `<label class="aq-confirm"><input type="checkbox" name="confirmed" value="1" required> ${e(item.confirmation)}</label>` : '';
   const refuse = item.refuseLabel ? `<button class="button secondary aq-quiet" type="submit" name="action" value="refuse" formnovalidate>${e(item.refuseLabel)}</button>` : '';
   const form = ready || refuse ? `<form method="post" action="${APPROVAL_QUEUE_DECIDE_ROUTE}"><input type="hidden" name="_csrf" value="${e(csrf)}"><input type="hidden" name="ref" value="${e(item.ref)}">${confirm}${ready ? '<button class="button aq-main" type="submit" name="action" value="approve">Approve</button>' : ''}${refuse}</form>` : '';
-  const pick = ready && item.batchable ? `<label class="aq-pick"><input type="checkbox" name="ref" value="${e(item.ref)}" form="aq-batch"> Select</label>` : '';
+  const pick = ready && item.batchable ? `<label class="aq-pick"><input type="checkbox" name="ref" value="${e(item.ref)}" form="aq-batch"> Tick to approve several at once</label>` : '';
   return `<article class="aq-card" data-kind="${e(item.kind)}"><div class="aq-meta"><span>${e(item.label)}</span><span>${e(waiting(item.since, now))}</span></div>
 <h3>${e(item.title)}</h3>${media}<p class="aq-preview">${e(item.preview)}</p><p class="aq-why"><strong>Why you are seeing this:</strong> ${e(item.why)}</p>
 ${ready ? '' : `<p class="aq-blocked">${e(item.blockedReason ?? 'Open this item on its own page first.')}</p>`}
