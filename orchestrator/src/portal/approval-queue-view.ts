@@ -9,7 +9,7 @@ const STYLE = `<style data-approval-queue>
 .aq h1{margin:0 0 6px;font-size:clamp(24px,6vw,32px)}.aq-lede{margin:0 0 14px;color:var(--muted,#555)}
 .aq-boundary{border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 12px;margin:0 0 16px;font-size:14px;background:var(--panel-subtle,#f7f7f7)}
 .aq-notice{border-radius:10px;padding:10px 12px;margin:0 0 16px;border:1px solid var(--line-strong,#999)}.aq-notice.bad{border-color:#b42318}
-.aq-links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}.aq-links a{min-height:44px;display:inline-flex;align-items:center}
+.aq-links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}.aq-links a{min-height:44px;display:inline-flex;align-items:center;padding:0 14px;border:1px solid var(--line,#ddd);border-radius:999px;background:var(--panel,#fff);color:var(--ink,#152033);font-weight:700;font-size:14px;text-decoration:none}.aq-links a:hover{border-color:var(--line-strong,#999)}
 .aq-section{margin:22px 0 0}.aq-section>h2{font-size:18px;margin:0 0 10px}
 .aq-card{border:1px solid var(--line,#ddd);border-radius:12px;padding:14px;margin:0 0 12px;background:var(--panel,#fff)}
 .aq-meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:700;color:var(--muted,#555);text-transform:uppercase;letter-spacing:.03em}
@@ -20,15 +20,17 @@ const STYLE = `<style data-approval-queue>
 .aq-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .aq-actions form{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0;flex:1 1 100%}
 .aq-main{min-height:48px;padding:0 22px;font-size:16px;font-weight:800;flex:1 1 auto}
-.aq-quiet{min-height:44px;background:transparent;border:1px solid var(--line-strong,#999);color:inherit}
+.aq-quiet{min-height:48px}
+.aq-actions>a{min-height:44px;display:inline-flex;align-items:center;font-weight:700}
 .aq-confirm{display:flex;gap:8px;align-items:flex-start;font-size:14px;flex:1 1 100%}
 .aq-pick{display:inline-flex;gap:6px;align-items:center;min-height:44px;font-size:14px}
-.aq-batch{position:sticky;bottom:0;margin:18px 0 0;padding:10px 12px;border:1px solid var(--line-strong,#999);border-radius:12px;background:var(--panel,#fff);display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.aq-batch{position:sticky;bottom:12px;z-index:20;box-shadow:0 8px 24px rgba(16,24,39,.12);margin:18px 0 0;padding:10px 12px;border:1px solid var(--line-strong,#999);border-radius:12px;background:var(--panel,#fff);display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .aq-batch p{margin:0;font-size:13px;flex:1 1 200px}
 .aq-results li{margin:0 0 8px}.aq-ok{font-weight:800}.aq-fail{font-weight:800;color:#b42318}
 .aq-table{width:100%;border-collapse:collapse;font-size:14px}.aq-table th,.aq-table td{text-align:left;padding:6px 4px;border-top:1px solid var(--line,#ddd);vertical-align:top}
 .aq-table td.n{text-align:right;font-variant-numeric:tabular-nums}.aq-thumb{width:56px;height:auto;border-radius:6px}
 .aq-unknown{font-style:italic}
+@media(max-width:640px){.aq-batch{bottom:calc(86px + env(safe-area-inset-bottom))}}
 @media(max-width:560px){.aq-table thead{display:none}.aq-table tr{display:block;border-top:1px solid var(--line,#ddd);padding:6px 0}.aq-table td{display:inline-block;border:0;padding:2px 6px 2px 0}.aq-table td.n::before{content:attr(data-label) ": ";font-weight:700}}
 </style>`;
 
@@ -45,8 +47,8 @@ function card(item: ApprovalItem, csrf: string, now: number): string {
     : item.videoHref ? `<video controls muted playsinline preload="metadata" src="${e(item.videoHref)}"></video>` : '';
   const ready = item.state === 'ready';
   const confirm = ready && item.confirmation ? `<label class="aq-confirm"><input type="checkbox" name="confirmed" value="1" required> ${e(item.confirmation)}</label>` : '';
-  const refuse = item.refuseLabel ? `<button class="aq-quiet secondary" type="submit" name="action" value="refuse" formnovalidate>${e(item.refuseLabel)}</button>` : '';
-  const form = ready || refuse ? `<form method="post" action="${APPROVAL_QUEUE_DECIDE_ROUTE}"><input type="hidden" name="_csrf" value="${e(csrf)}"><input type="hidden" name="ref" value="${e(item.ref)}">${confirm}${ready ? '<button class="aq-main" type="submit" name="action" value="approve">Approve</button>' : ''}${refuse}</form>` : '';
+  const refuse = item.refuseLabel ? `<button class="button secondary aq-quiet" type="submit" name="action" value="refuse" formnovalidate>${e(item.refuseLabel)}</button>` : '';
+  const form = ready || refuse ? `<form method="post" action="${APPROVAL_QUEUE_DECIDE_ROUTE}"><input type="hidden" name="_csrf" value="${e(csrf)}"><input type="hidden" name="ref" value="${e(item.ref)}">${confirm}${ready ? '<button class="button aq-main" type="submit" name="action" value="approve">Approve</button>' : ''}${refuse}</form>` : '';
   const pick = ready && item.batchable ? `<label class="aq-pick"><input type="checkbox" name="ref" value="${e(item.ref)}" form="aq-batch"> Select</label>` : '';
   return `<article class="aq-card" data-kind="${e(item.kind)}"><div class="aq-meta"><span>${e(item.label)}</span><span>${e(waiting(item.since, now))}</span></div>
 <h3>${e(item.title)}</h3>${media}<p class="aq-preview">${e(item.preview)}</p><p class="aq-why"><strong>Why you are seeing this:</strong> ${e(item.why)}</p>
@@ -58,7 +60,7 @@ export function renderApprovalQueueBody(snapshot: ApprovalQueueSnapshot, input: 
   const notice = input.notice ? `<p class="aq-notice${input.notice.ok ? '' : ' bad'}" role="status">${e(input.notice.text)}</p>` : '';
   const sections = snapshot.sections.map((s) => `<section class="aq-section" aria-labelledby="aq-${e(s.kind)}"><h2 id="aq-${e(s.kind)}">${e(s.label)} (${s.items.length})</h2>${s.error ? `<p class="aq-blocked">${e(s.error)}</p>` : ''}${s.items.map((i) => card(i, input.csrf, input.now)).join('')}</section>`).join('');
   const batchable = snapshot.sections.some((s) => s.items.some((i) => i.state === 'ready' && i.batchable));
-  const batch = batchable ? `<form id="aq-batch" class="aq-batch" method="post" action="${APPROVAL_QUEUE_BATCH_ROUTE}"><input type="hidden" name="_csrf" value="${e(input.csrf)}"><button class="aq-main" type="submit">Approve selected</button><p>Up to ${APPROVAL_QUEUE_BATCH_MAX} at a time. Each one is checked on its own; if one fails, the others still go through and you see which.</p></form>` : '';
+  const batch = batchable ? `<form id="aq-batch" class="aq-batch" method="post" action="${APPROVAL_QUEUE_BATCH_ROUTE}"><input type="hidden" name="_csrf" value="${e(input.csrf)}"><button class="button aq-main" type="submit">Approve selected</button><p>Up to ${APPROVAL_QUEUE_BATCH_MAX} at a time. Each one is checked on its own; if one fails, the others still go through and you see which.</p></form>` : '';
   const empty = snapshot.total === 0 ? '<p class="aq-boundary"><strong>Nothing is waiting for you.</strong> New drafts appear here as soon as they are ready.</p>' : '';
   return `${STYLE}<div class="aq"><h1>Waiting for your approval</h1><p class="aq-lede">${snapshot.total} item${snapshot.total === 1 ? '' : 's'} · ${snapshot.ready} ready to approve now</p>
 <p class="aq-boundary">Approving content only says the words and pictures are right. It does not give permission to contact anyone, it does not start anything, and it does not spend money. Those stay separate.</p>
