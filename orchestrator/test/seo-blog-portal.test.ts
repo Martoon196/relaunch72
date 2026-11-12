@@ -205,7 +205,8 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   assert.equal(feedback.status, 200); assert.match(feedback.headers['content-type']!, /javascript/); assert.equal(feedback.headers['x-content-type-options'], 'nosniff');
   const home = await call(service, owner, 'GET', '/portal/seo-blog');
   assert.equal(home.status, 200);
-  assert.match(home.body, /Add brand/);
+  assert.match(home.body, /<h1>Your businesses<\/h1>/); assert.match(home.body, /<a class="button" href="#add-business"[^>]*>Add a business<\/a>/);
+  assert.match(home.body, /<button type="submit">Add a business<\/button>/); assert.match(home.body, /<label for="name">Business name<\/label>/);
   assert.match(home.headers['content-security-policy']!, /script-src 'self'/);
 
   const commandId = randomUUID();
@@ -216,15 +217,19 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   const created = await call(service, owner, 'POST', '/portal/seo-blog/brands', { _csrf: csrf, commandId, name: 'Harbour <b>Lettings</b>', website: 'harbour.example' });
   assert.equal(created.status, 303);
   const location = created.headers.location!;
-  assert.match(location, /^\/portal\/seo-blog\/b\/[0-9a-f-]{36}\/setup\?n=/);
+  assert.match(location, /^\/portal\/seo-blog\/b\/[0-9a-f-]{36}\/dna\?n=/, 'a new business lands on the Brand DNA door');
   const brandId = /\/b\/([0-9a-f-]{36})\//.exec(location)![1]!;
   const retry = await call(service, owner, 'POST', '/portal/seo-blog/brands', { _csrf: csrf, commandId, name: 'Harbour <b>Lettings</b>', website: 'harbour.example' });
   assert.equal(/\/b\/([0-9a-f-]{36})\//.exec(retry.headers.location!)![1], brandId, 'retrying the same form does not duplicate');
   assert.equal((await h.engine.listBrands(OWNER)).length, 1);
 
-  const setup = await call(service, owner, 'GET', location);
+  const door = await call(service, owner, 'GET', location);
+  assert.equal(door.status, 200);
+  assert.match(door.body, /role="status">Harbour &lt;b&gt;Lettings&lt;\/b&gt; is added\. Start with its website\./);
+  assert.match(door.body, /<h1>Start with your website<\/h1>/);
+  assert.ok(!door.body.includes('<b>Lettings</b>'), 'brand names are escaped everywhere');
+  const setup = await call(service, owner, 'GET', `/portal/seo-blog/b/${brandId}/setup`);
   assert.equal(setup.status, 200);
-  assert.match(setup.body, /role="status">Harbour &lt;b&gt;Lettings&lt;\/b&gt; created/);
   assert.ok(!setup.body.includes('<b>Lettings</b>'), 'brand names are escaped everywhere');
   assert.match(setup.body, /enctype="multipart\/form-data"/);
   assert.match(setup.body, /Static website in a GitHub repository/);
@@ -290,4 +295,100 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
       writeFileSync(`${dir}/${name}.html`, (await call(service, owner, 'GET', path)).body);
     }
   }
+});
+
+test('add a business → Start with your website: the path is plain, lands on the Brand DNA door, and an empty allowance leads somewhere the owner can act', async () => {
+  const h = harness();
+  const base: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null };
+  const owner = identity(OWNER.userId), csrf = portalCsrfToken(SECRET, owner.sessionToken);
+
+  // No businesses yet: one heading, one main button, one plain form.
+  const empty = (await call(base, owner, 'GET', '/portal/seo-blog')).body;
+  assert.match(empty, /<h1>Your businesses<\/h1>/); assert.match(empty, /Add your first business to start\./);
+  assert.match(empty, /<section class="card" id="add-business"/); assert.match(empty, /Adding it publishes nothing, contacts no one and spends nothing\./);
+  assert.doesNotMatch(empty, /Add brand|workspace/i, 'no engine words');
+
+  // A name that will not do keeps the owner on the form with the reason; nothing is created.
+  const short = await call(base, owner, 'POST', '/portal/seo-blog/brands', { _csrf: csrf, commandId: randomUUID(), name: 'X', website: '' });
+  assert.equal(short.status, 303); assert.match(short.headers.location!, /^\/portal\/seo-blog\?e=[^#]+#add-business$/);
+  assert.match((await call(base, owner, 'GET', short.headers.location!.replace(/#.*$/u, ''))).body, /role="alert">Enter a business name between 2 and 120 characters\./);
+  assert.equal((await h.engine.listBrands(OWNER)).length, 0);
+
+  // Add two businesses. Each lands on its own Brand DNA door.
+  const add = async (name: string, website: string) => {
+    const made = await call(base, owner, 'POST', '/portal/seo-blog/brands', { _csrf: csrf, commandId: randomUUID(), name, website });
+    assert.equal(made.status, 303);
+    const id = /^\/portal\/seo-blog\/b\/([0-9a-f-]{36})\/dna\?n=/u.exec(made.headers.location!)?.[1];
+    assert.ok(id, made.headers.location); return { id: id!, location: made.headers.location! };
+  };
+  const key = await add('Key Properties UK', 'keyproperties.example'), prop = await add('Prop Invest <UK>', '');
+  const door = (await call(base, owner, 'GET', key.location)).body;
+  assert.match(door, /role="status">Key Properties UK is added\. Start with its website\./); assert.match(door, /<h1>Start with your website<\/h1>/);
+
+  // A new business has no allowance. An ordinary owner is sent to that business's own setting, with the number to type.
+  assert.match(door, /<h2>Set a monthly allowance first<\/h2>/); assert.match(door, /Nothing has been read and nothing has been spent\./);
+  assert.ok(door.includes(`<a class="button main" href="/portal/seo-blog/b/${key.id}/publishing#writing-budget">Set my monthly allowance</a>`));
+  const needed = (await h.engine.brandDna(OWNER, key.id)).allowance.estimate;
+  assert.ok(door.includes(`type ${needed} or more in “Writing allowance”, press “Save settings and authorise the draft programme” at the bottom`)); assert.doesNotMatch(door, /\/portal\/seo-blog\/limits/);
+  const settings = (await call(base, owner, 'GET', `/portal/seo-blog/b/${key.id}/publishing`)).body;
+  assert.match(settings, /<div id="writing-budget"><label for="bm">Writing allowance/); assert.match(settings, /<input id="bm" name="modelTokens" type="number" min="0" value="0">/);
+
+  // An account whose allowance is capped below what is needed cannot raise it there (saving would be refused), so the
+  // door says who can instead of sending the owner to a box that will not take the number.
+  const brands = (h.store as unknown as { brands: Map<string, Awaited<ReturnType<typeof h.engine.getBrand>>> }).brands;
+  const uncapped = brands.get(key.id)!;
+  brands.set(key.id, { ...uncapped, settings: { ...uncapped.settings, operatorLimits: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0, configuredBy: 'founder', configuredAt: '2026-11-02T10:00:00.000Z' } } });
+  const cappedDoor = (await call(base, owner, 'GET', `/portal/seo-blog/b/${key.id}/dna`)).body;
+  assert.match(cappedDoor, /<h2>Set a monthly allowance first<\/h2>/); assert.match(cappedDoor, /Ask whoever looks after your account to raise it, then come back here\./);
+  assert.doesNotMatch(cappedDoor, /Set my monthly allowance<\/a>|or more in “Writing allowance”/, 'no button and no instruction that would end in a refusal');
+  brands.set(key.id, uncapped);
+
+  // The founder is sent to the limits page, at that business, and only because the server says the page is open to him.
+  const saved: unknown[] = [];
+  const limits = { allowed: async () => true, save: async (...args: unknown[]) => { saved.push(args); }, policy: async () => {},
+    list: async () => ({ policy: { version: 1, enabled: false, maxConcurrency: 1, monthlyMicrousd: 0 }, brands: [
+      { id: key.id, name: 'Key Properties UK', owner: 'owner@example.test', rowVersion: 1, managed: false, limits: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0 }, usage: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0 } },
+      { id: randomUUID(), name: 'Somebody else’s', owner: 'other@example.test', rowVersion: 1, managed: false, limits: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0 }, usage: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0 } }] }) };
+  const founder: PortalSeoBlogService = { ...base, limitsFor: () => limits };
+  const founderDoor = (await call(founder, owner, 'GET', `/portal/seo-blog/b/${key.id}/dna`)).body;
+  assert.ok(founderDoor.includes(`<a class="button main" href="/portal/seo-blog/limits#limits-${key.id}">Set my monthly allowance</a>`));
+  assert.ok(founderDoor.includes(`Under “Writing tokens”, type ${needed} or more (or tick Unlimited), then press “Save limits for Key Properties UK” and come back here.`));
+  const limitsPage = await call(founder, owner, 'GET', '/portal/seo-blog/limits');
+  assert.equal(limitsPage.status, 200, 'the link opens for the founder');
+  assert.ok(limitsPage.body.includes(`<section class="card" id="limits-${key.id}"><h2>Key Properties UK</h2>`)); assert.match(limitsPage.body, /<legend>Writing tokens<\/legend>/);
+  assert.match(limitsPage.body, /<button type="submit">Save limits for Key Properties UK<\/button>/);
+  assert.ok(limitsPage.body.includes(`<a href="/portal/seo-blog/b/${key.id}/dna">Back to Key Properties UK: start with your website</a>`));
+  assert.equal((limitsPage.body.match(/start with your website<\/a>/gu) ?? []).length, 1, 'no way back is offered into a business he does not manage');
+  const set = await call(founder, owner, 'POST', '/portal/seo-blog/limits', { _csrf: csrf, target: key.id, rowVersion: '1', modelTokens: String(needed), searchCalls: '0', images: '0', studioImages: '0' });
+  assert.equal(set.status, 303); assert.deepEqual(saved, [[key.id, 1, { modelTokens: needed, searchCalls: 0, images: 0, studioImages: 0 }]]);
+  assert.equal((await call(base, owner, 'GET', '/portal/seo-blog/limits')).status, 403, 'anyone else is refused, so they are never shown that link');
+
+  // With an allowance, the door's one main button is "Read my website".
+  const brand = await h.engine.getBrand(OWNER, key.id);
+  await h.engine.updateSettings(OWNER, key.id, brand.rowVersion, { budgets: { modelTokensPerMonth: needed, searchCallsPerMonth: 0, imagesPerMonth: 0 } });
+  const ready = (await call(base, owner, 'GET', `/portal/seo-blog/b/${key.id}/dna`)).body;
+  assert.match(ready, /<button class="main" type="submit">Read my website<\/button>/); assert.doesNotMatch(ready, /Set a monthly allowance first/);
+  assert.match(ready, /value="https:\/\/keyproperties\.example"/, 'the address typed when adding is already filled in');
+
+  // Your businesses: each one shows its door, its approvals and its results; the picker is labelled "Business".
+  const home = (await call(base, owner, 'GET', '/portal/seo-blog')).body;
+  assert.ok(home.includes(`<a class="button" href="/portal/seo-blog/b/${key.id}/dna">Start with your website</a>`));
+  assert.ok(home.includes(`<a href="/portal/approvals?brand=${prop.id}">Approvals</a> · <a href="/portal/campaign-journey?brand=${prop.id}">Campaign results</a>`));
+  assert.match(home, /href="\/portal\/approvals\?brand=all"[^>]*>See what is waiting in every business<\/a>/);
+  assert.match(home, /Prop Invest &lt;UK&gt;/); assert.doesNotMatch(home, /Prop Invest <UK>/);
+  assert.match(ready, /<label for="brand-switch" class="muted" style="margin:0">Business<\/label><select id="brand-switch" name="brand">/);
+  assert.match(ready, /<input type="hidden" name="to" value="dna">/, 'choosing another business keeps the Brand DNA page open');
+  assert.ok(ready.includes(`<a href="/portal/approvals?brand=${key.id}">Approvals</a>`));
+  assert.match(home, /<option value="" selected disabled>Choose a business<\/option>/);
+
+  // The picker only ever redirects to a fixed page of a well-formed id; the page it lands on checks who may see it.
+  const switched = await call(base, owner, 'GET', `/portal/seo-blog/switch?brand=${prop.id.toUpperCase()}&to=dna`);
+  assert.equal(switched.status, 303); assert.equal(switched.headers.location, `/portal/seo-blog/b/${prop.id}/dna`);
+  assert.equal((await call(base, owner, 'GET', `/portal/seo-blog/switch?brand=${prop.id}`)).headers.location, `/portal/seo-blog/b/${prop.id}/overview`);
+  for (const to of ['//evil.example', '../../login', 'dna/read', 'https://evil.example', 'limits']) {
+    assert.equal((await call(base, owner, 'GET', `/portal/seo-blog/switch?brand=${prop.id}&to=${encodeURIComponent(to)}`)).headers.location, `/portal/seo-blog/b/${prop.id}/overview`, to);
+  }
+  assert.equal((await call(base, owner, 'GET', '/portal/seo-blog/switch?brand=nope&to=dna')).status, 400);
+  assert.equal((await call(base, identity(STRANGER.userId), 'GET', `/portal/seo-blog/b/${prop.id}/dna`)).status, 404, 'a business the user does not manage is never opened');
+  assert.equal(h.llm.calls.length, 0); assert.equal(h.web.requests.length, 0, 'nothing was read and nothing was spent on this path');
 });

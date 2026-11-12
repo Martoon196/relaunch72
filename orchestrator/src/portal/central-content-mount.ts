@@ -7,6 +7,8 @@ import type { PortalAuthenticatedSession, PortalSessionIdentity } from './auth-s
 import { createReleasedSeoMediaMount, RELEASED_SEO_MEDIA_PREFIX, serveReleasedSeoMedia, type PortalReleasedSeoMediaReader } from './seo-blog-media.js';
 import { handleWebinarPublic, WEBINAR_PUBLIC_PREFIX } from '../webinars/public-router.js';
 import { handleStreamWebhook, STREAM_WEBHOOK_ROUTE, webinarClientKey } from '../webinars/http.js';
+import { APPROVAL_QUEUE_BATCH_ROUTE, APPROVAL_QUEUE_DECIDE_ROUTE, APPROVAL_QUEUE_ROUTE } from './approval-queue-service.js';
+import { CAMPAIGN_JOURNEY_ROUTE } from './campaign-journey-service.js';
 
 export const CENTRAL_CONTENT_ORIGIN = 'https://app.relaunch72.com';
 export const CENTRAL_CONTENT_COOKIE = '__Host-r72_content' as const;
@@ -87,6 +89,10 @@ export function createCentralContentMount(input: {
       const method = req.method ?? 'GET';
       const seo = url.pathname === '/portal/seo-blog' || url.pathname.startsWith('/portal/seo-blog/');
       const webinars = url.pathname === '/portal/webinars' || url.pathname.startsWith('/portal/webinars/');
+      // One approval queue and campaign results for every business, behind the same sign-in, membership and Origin
+      // gates as the SEO pages. "Your content" and follow-up flows are not served here and are not listed here.
+      // Exact paths only: nothing else under these prefixes can fall through to another portal page.
+      const approvals = ([APPROVAL_QUEUE_ROUTE, APPROVAL_QUEUE_DECIDE_ROUTE, APPROVAL_QUEUE_BATCH_ROUTE, CAMPAIGN_JOURNEY_ROUTE] as readonly string[]).includes(url.pathname);
       const auth = ['/portal/login', '/portal/logout', '/portal/setup'].includes(url.pathname);
       const asset = url.pathname === '/portal/appearance.js' && method === 'GET';
       if (method === 'POST' && (req.headers.origin !== input.origin
@@ -96,9 +102,9 @@ export function createCentralContentMount(input: {
       if (['/', '/portal', '/portal/'].includes(url.pathname) && method === 'GET') {
         res.writeHead(303, { location: '/portal/seo-blog', 'cache-control': 'no-store' }); res.end(); return;
       }
-      if (!seo && !webinars && !auth && !asset) return status(res, 404, 'Page not found.');
+      if (!seo && !webinars && !approvals && !auth && !asset) return status(res, 404, 'Page not found.');
       if (!base.seoBlog) return status(res, 503, 'The content application is temporarily unavailable.');
-      if (seo || webinars) {
+      if (seo || webinars || approvals) {
         const token = parseCookies(req.headers.cookie)[CENTRAL_CONTENT_COOKIE];
         const identity = token ? await base.auth.resolve(token, Date.now()) : null;
         // This guard must run before handlePortal's early SEO route delegation.
