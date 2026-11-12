@@ -18,6 +18,7 @@ import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js'
 import { composeMessage, deliveryDecision, type MessagePurpose, type WebinarMailer } from './messages.js';
 import { applyVideoState, readProfile, runProvisionJob, settleJob, type PgWebinarService } from './service.js';
 import type { CloudflareStreamClient } from './stream.js';
+import type { EmailSendGuard } from '../email-bounces/policy.js';
 import { toEvent, type WebinarEvent } from './types.js';
 
 export interface WebinarWorkerDependencies {
@@ -25,6 +26,12 @@ export interface WebinarWorkerDependencies {
   readonly config: WebinarConfig;
   readonly stream: CloudflareStreamClient | null;
   readonly mailer: WebinarMailer;
+  /**
+   * Addresses that hard-bounced for this brand (on any of its email streams) are not emailed again:
+   * the address does not work, so even a requested confirmation or reminder would only bounce.
+   * Complaints and unsubscribes do not stop these requested event emails.
+   */
+  readonly recipients?: EmailSendGuard;
   /** Automatic CRM handoff for published webinars that opted in; absent means owners send registrants by hand. */
   readonly webinars?: Pick<PgWebinarService, 'autoHandoff'>;
   readonly now?: () => number;
@@ -176,6 +183,8 @@ export class WebinarWorker {
 
   private async message(workspaceId: string, job: JobRow): Promise<string> {
     const config = this.deps.config;
+    // Waited for outside the transaction; after the first read of the provider's lists this returns at once.
+    await this.deps.recipients?.whenReady();
     // Load everything and move to 'calling' in one transaction, so the send below is
     // the only thing that can be interrupted — and that interruption is 'unknown'.
     const prepared = await withTransaction(this.deps.pool, this.ctx(workspaceId), async (tx) => {
@@ -194,6 +203,10 @@ export class WebinarWorker {
       const decision = deliveryDecision(config, workspaceId, String(r.email));
       if (decision.kind === 'hold') { await settleJob(tx, job.id, 'queued', decision.reason, {}, new Date(this.now() + 5 * 60_000).toISOString()); return null; }
       if (decision.kind === 'block') { await settleJob(tx, job.id, 'blocked', decision.reason, {}); return null; }
+      if (this.deps.recipients?.decide(workspaceId, String(r.email).trim().toLowerCase(), 'service').blocked) {
+        await settleJob(tx, job.id, 'blocked', 'Not sent: an earlier email to this address bounced, so the address does not work.', {});
+        return null;
+      }
       const origin = publicOriginFor(config, workspaceId);
       if (!origin || !config.accessSecret) { await settleJob(tx, job.id, 'queued', 'WEBINAR_PUBLIC_ORIGIN or WEBINAR_ACCESS_SECRET is not set.', {}, new Date(this.now() + 5 * 60_000).toISOString()); return null; }
       const token = issueAccessToken(config.accessSecret, event.publicKey, { registrationId: String(r.id), version: Number(r.token_version) });

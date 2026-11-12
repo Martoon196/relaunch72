@@ -27,6 +27,7 @@ import { handlePpFollowupUnsubscribe } from '../pp-followup/unsubscribe-route.js
 import type { PpFollowupUnsubscriber } from '../pp-followup/repository.js';
 import { handleWebinarPublic, WEBINAR_PUBLIC_PREFIX } from '../webinars/public-router.js';
 import { handleStreamWebhook, STREAM_WEBHOOK_ROUTE, webinarClientKey } from '../webinars/http.js';
+import { POSTMARK_BOUNCE_WEBHOOK_PREFIX, type PostmarkBounceWebhook } from '../email-bounces/webhook.js';
 import { entitlementForOrder, type BuildEntitlement } from './entitlements.js';
 import { oneOffCheckoutBlockers, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
@@ -134,6 +135,8 @@ export interface AppDeps {
   buildMode?: 'mock' | 'live';
   /** Optional, disabled-by-default Property Predator receipt-only source bridge. */
   propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
+  /** Authenticated Postmark bounce, spam-complaint and unsubscribe webhook for every configured brand source. */
+  postmarkBounceWebhook?: PostmarkBounceWebhook;
   /** Optional, disabled-by-default signed Mailgun delivery-evidence ingress. */
   propertyPredatorMailgunWebhook?: PropertyPredatorMailgunWebhookMount;
   /** Optional, disabled-by-default owned-office Mailgun reply ingress. */
@@ -306,6 +309,13 @@ export function createApp(deps: AppDeps) {
       if (requestHost !== deps.canonicalHost && !mhpRequest && !centralContentRequest) {
         return send(res, 421, { error: 'misdirected request' });
       }
+    }
+
+    // Postmark's bounce webhook is answered on the canonical host and on a brand's own app host,
+    // before brand routing, so one handler serves every workspace. It authenticates each request itself.
+    if (deps.postmarkBounceWebhook && !centralContentRequest && url.pathname.startsWith(POSTMARK_BOUNCE_WEBHOOK_PREFIX)) {
+      try { if (await deps.postmarkBounceWebhook.handle(req, res, url)) return; }
+      catch { if (!res.headersSent) send(res, 503, { error: 'temporarily_unavailable' }); return; }
     }
 
     if (centralContentRequest && route !== 'GET /ready' && route !== 'GET /health') {

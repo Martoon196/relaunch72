@@ -199,6 +199,10 @@ import { StudioRelay } from '../webinars/studio.js';
 import type { WebinarSetupInput } from './router.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 import type { MhpKitCrmRecorder, MhpKitReplayRegistrar } from '../mhp/kit-service.js';
+import { emailBounceHandlingDisabled, loadEmailBounceConfig } from '../email-bounces/config.js';
+import { EmailBounceService } from '../email-bounces/service.js';
+import { mhpEmailBounceSourceDefault } from '../mhp/email-health.js';
+import { ppEmailBounceEffects, ppEmailBounceSourceDefault } from '../pp-followup/bounces.js';
 
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
@@ -209,6 +213,8 @@ export interface PgPortalPlatform {
   /** Operator API (MCP for Claude): tools acting as the configured user; absent when not configured. */
   operator?: { config: OperatorConfig; tools: McpToolHost; store?: OperatorOAuthStore };
   mhp?: MhpRuntime;
+  /** Bounce, complaint and unsubscribe handling for every configured email source (started by the server). */
+  emailBounces?: EmailBounceService;
   /** After-payment work for module kits: replay registration and CRM record (0149). */
   mhpKitJobs?: { replay?: MhpKitReplayRegistrar; crm?: MhpKitCrmRecorder };
   auth: PgPortalAuthService;
@@ -520,6 +526,8 @@ async function assertGeneratedDraftLifecycleRoleCapabilities(adapterPool: Pool):
     throw new Error('Generated draft lifecycle adapter capabilities are incomplete');
   }
 }
+
+const mhpEnabledForBounces = (env: NodeJS.ProcessEnv): boolean => env.MHP_ENABLED?.trim() === 'true';
 
 export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.PORTAL_POSTGRES_ENABLED?.trim().toLowerCase() ?? '';
@@ -1334,6 +1342,13 @@ export async function buildPgPortalPlatform(
     // identity for the owner-triggered CRM handoff. Cloudflare Stream is optional inside it:
     // without it the pages show the exact missing settings instead of fake controls.
     const webinarConfig = loadWebinarConfig(env);
+    // One bounce handler for every brand, chosen by configuration. EMAIL_BOUNCE_HANDLING=off leaves it with no sources.
+    const emailBounces = new EmailBounceService({ log: line => (line.includes('"level":"warn"') ? console.warn : console.info)(line), config: emailBounceHandlingDisabled(env)
+      ? { sources: [], blockers: [] }
+      : loadEmailBounceConfig(env, { webinarSenders: webinarConfig.senders.values(),
+        // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.
+        defaults: [...(mhpEnabledForBounces(env) ? [mhpEmailBounceSourceDefault(env)] : []), ...[ppEmailBounceSourceDefault(ppFollowup?.config)].filter(source => source !== null)] }) });
+    if (ppFollowup?.config) emailBounces.setEffects(PP_FOLLOWUP_WORKSPACE_ID, ppEmailBounceEffects(ppFollowup.unsubscriber));
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
     let webinarStudio: StudioRelay | undefined;
@@ -1352,6 +1367,7 @@ export async function buildPgPortalPlatform(
           webinars = new PgWebinarService({ pool: contentCommandPool, config: webinarConfig, stream,
             crm: { commands: new WebinarCrmCommands({ transactionRunner: webinarCrmRunner(commandPool) }), pool: commandPool } });
           webinarWorker = new WebinarWorker({ pool: contentCommandPool, config: webinarConfig, stream, mailer: createPostmarkMailer(),
+            recipients: emailBounces.registry,
             ...(groupHqHandoffReady ? { webinars } : {}), log: (line) => console.warn(line) });
           // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
           webinarStudio = new StudioRelay({ ...webinarConfig.studio });
@@ -1370,7 +1386,7 @@ export async function buildPgPortalPlatform(
     let mhp: MhpRuntime | undefined;
     try {
       mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,
-        contentAdapterPool: assetReadinessPool, contentCommandPool,
+        contentAdapterPool: assetReadinessPool, contentCommandPool, emailBounces,
         registerPool: pool => pools.push(pool) });
     } catch {
       // A separate brand's missing credentials must not replace the established
@@ -1464,6 +1480,7 @@ export async function buildPgPortalPlatform(
       groupHqSso,
       operator,
       mhp,
+      emailBounces,
       auth,
       abuse,
       crm,

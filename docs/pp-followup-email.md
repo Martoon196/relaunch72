@@ -56,7 +56,15 @@ For an unknown outcome the page says: "We're not sure this email went out. Check
 | Retry window (`expiryHours` in the flow) passes for a due step | The run fails as `delivery_expired`; later steps are never sent. Resume restarts the window for a step that was not claimed yet. |
 | Five spent attempts | The run fails as `delivery_failed`. |
 
-Bounces are not ingested automatically from Postmark yet. Postmark itself suppresses hard-bounced and spam-complaint addresses on the stream; the next send to one is refused with error 406 and the run fails.
+### Bounces, spam reports and Postmark unsubscribes
+
+PP uses the shared handler in `orchestrator/src/email-bounces/` (see `docs/mhp-growth-and-learning.md` for the rules), joined by configuration in `orchestrator/src/pp-followup/bounces.ts`. It exists only while `PP_MARKETING_MODE` is `test` or `live` and delivery is fully configured; with the mode off there is no PP webhook, no read of Postmark and nothing refused.
+
+- Postmark's suppression list and recent bounces for the PP stream are read at start-up and every hour (retried within minutes, with a warning in the log, if Postmark cannot be read). An address on that list, one that bounced hard, complained, unsubscribed at Postmark or soft-bounced 3 times in 30 days, is refused **before a dispatch proof is written**: the step settles as `undeliverable`, the run fails as `delivery_failed`, and it is never held as an unknown outcome.
+- Webhook: in Postmark, on the PP server's broadcast stream, **Webhooks → Add webhook**: URL `https://hq.propertypredator.com/api/provider-webhooks/postmark/pp`, Basic auth user `pp`, password the value of `PP_POSTMARK_WEBHOOK_SECRET`; tick **Bounce**, **Spam complaint** and **Subscription change** only.
+- Lasting stop, no migration: every follow-up email now carries its contact point in the message metadata. A hard bounce, spam report or Postmark unsubscribe reported for such an email calls the existing `pp_followup_unsubscribe` capability, which records the email suppression for both PP marketing purposes and stops the address's open runs. Email only. Three soft bounces never write a row: that block is temporary and held in the running process.
+- What that row says, exactly: `reason = recipient_unsubscribe`, `source = pp.followup.unsubscribe`, `actor_kind = system`, `evidence = {"route":"signed_unsubscribe_link"}`. For a bounce or a spam report that is not what happened: nobody followed an unsubscribe link. The suppression itself is right; its label is not, and the ledger is append-only. Recording the true reason needs a new function (0153).
+- Not durable yet (same migration): an address known only from Postmark's list or from an email sent before this release has no contact point to record against, so it is refused from the in-process list and its runs fail, but no suppression row is written.
 
 ## Configuration (PP web service)
 
@@ -68,6 +76,7 @@ Bounces are not ingested automatically from Postmark yet. Postmark itself suppre
 | `PP_MARKETING_FROM_NAME` | `Property Predator` | Display name; also fills `{{LABEL}}` and the email heading. |
 | `PP_MARKETING_REPLY_TO` | the sender | Reply-to address. |
 | `PP_POSTMARK_BROADCAST_STREAM` | `broadcast` | Postmark broadcast message stream id. |
+| `PP_POSTMARK_WEBHOOK_SECRET` | — | Password Postmark sends with the bounce webhook (secret, 24 to 200 characters, no spaces). Unset: the PP webhook stays closed. |
 | `PP_MARKETING_TEST_TO` | — | Comma-separated 1–20 addresses; required in `test` mode. |
 | `PP_MARKETING_LINK` | `https://propertypredator.com/` | Fills `{{LINK}}` (https only). |
 
