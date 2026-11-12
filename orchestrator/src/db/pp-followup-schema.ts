@@ -5,4 +5,4 @@
  * update the filename here, re-pin the checksum and re-run the migration contract and readiness tests.
  */
 export const PP_FOLLOWUP_MIGRATION = '0152_pp_followup_email_sequences.sql';
-export const PP_FOLLOWUP_CHECKSUM = '5769a2cb9b3b8a25df8605c9046ea6f15bc13431a47111a9ccf2428ccf354fd5';
+export const PP_FOLLOWUP_CHECKSUM = '81163cda55091c16fcfdf0caa9669f495411c27b3cfd5da7bb77fe40b97ff92b';

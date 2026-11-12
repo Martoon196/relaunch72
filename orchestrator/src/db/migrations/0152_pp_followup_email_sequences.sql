@@ -3,8 +3,9 @@
 -- added to any shared table. Every new table and function is pinned to the Property Predator workspace
 -- d975ff66-336a-46c2-b36b-d7095a11af97 and owned by the new NOLOGIN r72_pp_followup_definer.
 -- Copy stays in company_content_versions ('pp.followup-sequence' flows and 'pp.owner-email' messages, both exactly
--- approved). Recipients are existing CRM email contact points with a current granted 'email'/'marketing' consent
--- and no active suppression. The migration enrols nobody and has no provider effect.
+-- approved). Recipients are existing CRM email contact points whose email permission is current for Property
+-- Predator marketing: the product's own purpose 'property_predator_marketing' (0018) or the owner-recorded
+-- 'marketing', with no opt-out or active suppression on either. The migration enrols nobody and has no provider effect.
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='60s';
 
@@ -40,7 +41,7 @@ CREATE TABLE app_private.pp_followup_runs(
  state text NOT NULL CHECK(state IN('active','paused','held','completed','stopped','cancelled','failed')),
  position integer NOT NULL CHECK(position BETWEEN 0 AND 23),due_at timestamptz NOT NULL,
  current_send_id uuid,unknown_ack_proof_id uuid,
- reason text CHECK(reason IS NULL OR reason IN('newer_sequence','content_changed','outcome_unknown','unsubscribed','delivery_expired','delivery_failed','manual','recovery')),
+ reason text CHECK(reason IS NULL OR reason IN('newer_sequence','content_changed','outcome_unknown','unsubscribed','delivery_expired','delivery_failed','manual','recovery','test_mode')),
  last_accepted_at timestamptz,created_at timestamptz NOT NULL DEFAULT clock_timestamp(),updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  UNIQUE(workspace_id,id),UNIQUE(sequence_version_id,contact_point_id),
  FOREIGN KEY(workspace_id,sequence_item_id,sequence_version_id,sequence_sha256)
@@ -51,8 +52,10 @@ CREATE TABLE app_private.pp_followup_runs(
 );
 CREATE UNIQUE INDEX pp_followup_one_open_run ON app_private.pp_followup_runs(sequence_item_id,contact_point_id) WHERE state IN('active','paused','held');
 CREATE INDEX pp_followup_due ON app_private.pp_followup_runs(due_at,id) WHERE state='active';
+CREATE INDEX pp_followup_runs_contact_point ON app_private.pp_followup_runs(contact_point_id);
 
--- One email step of one run. Never marked sent without a provider message id.
+-- One email step of one run. Never marked sent without a provider message id. attempts counts dispatch proofs
+-- (real hand-offs to the provider), never claims: a lost lease spends nothing.
 CREATE TABLE app_private.pp_followup_sends(
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  workspace_id uuid NOT NULL CHECK(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'),
@@ -72,7 +75,7 @@ CREATE TABLE app_private.pp_followup_sends(
  CHECK((sent_at IS NULL)=(provider_reference IS NULL)),
  CHECK(provider_reference IS NULL OR length(provider_reference) BETWEEN 1 AND 200),
  CHECK((held_at IS NULL)=(hold_reason IS NULL)),CHECK(hold_reason IS NULL OR hold_reason='recovery'),
- CHECK(last_failure IS NULL OR last_failure='delivery_not_accepted')
+ CHECK(last_failure IS NULL OR last_failure IN('delivery_not_accepted','sender_not_ready','recipient_refused'))
 );
 ALTER TABLE app_private.pp_followup_runs ADD CONSTRAINT pp_followup_current_send_fk
  FOREIGN KEY(current_send_id) REFERENCES app_private.pp_followup_sends(id) ON DELETE RESTRICT;
@@ -138,7 +141,8 @@ CREATE TRIGGER pp_followup_proof_immutable BEFORE UPDATE OR DELETE ON app_privat
  FOR EACH ROW EXECUTE FUNCTION app_private.pp_followup_proof_immutable();
 
 -- Exact reads of the PP workspace only: its flow and owner-email content, approvals, CRM email endpoints and
--- permission ledger. The one write outside this feature's tables is an unsubscribe suppression event.
+-- permission ledger. The one write outside this feature's tables is an unsubscribe suppression event, for the two
+-- Property Predator marketing purposes only.
 GRANT USAGE ON SCHEMA app,app_private TO r72_pp_followup_definer;
 GRANT SELECT ON app.company_content_versions,app.company_content_source_attestations,app.company_content_approval_requests,
  app.company_content_approval_decisions,app.contacts,app.contact_points,app.communication_consent_events,app.communication_suppression_events
@@ -157,7 +161,7 @@ DO $policies$ DECLARE t text; BEGIN
  END LOOP;
 END $policies$;
 CREATE POLICY pp_followup_unsubscribe ON app.communication_suppression_events FOR INSERT TO r72_pp_followup_definer
- WITH CHECK(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND channel='email' AND purpose='marketing' AND state='suppressed'
+ WITH CHECK(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND channel='email' AND purpose IN('marketing','property_predator_marketing') AND state='suppressed'
   AND reason='recipient_unsubscribe' AND source='pp.followup.unsubscribe' AND actor_kind='system' AND actor_user_id IS NULL);
 GRANT EXECUTE ON FUNCTION app_private.resolve_portal_session(bytea),app_private.lock_active_portal_session(bytea,uuid,uuid),
  app_private.can_manage_workspace(uuid,uuid) TO r72_pp_followup_definer;
@@ -308,19 +312,27 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
   AND p.dedupe_state='normal' AND c.deleted_at IS NULL AND c.lifecycle_status<>'archived'
 $f$;
 
--- Permission for marketing email to exactly this endpoint identity: no active email suppression (any purpose-free or
--- marketing scope) and the latest email/marketing consent is granted. The mutable consent_status column is never used.
+-- Permission for Property Predator marketing email to exactly this endpoint identity. Two purposes count: the
+-- product's own 'property_predator_marketing' (registration, account preferences and unsubscribe events, 0018) and
+-- 'marketing' (recorded by the owner on the lead). The rule, checked at enrolment, claim and prepare:
+--  1. no active email suppression that is purpose-free or for either purpose;
+--  2. any opt-out wins: the latest consent of neither purpose is denied or withdrawn;
+--  3. the latest consent of at least one of the two purposes is granted.
+-- 'partner_marketing' is a different permission and is never read. The mutable consent_status column is never used.
 CREATE FUNCTION app_private.pp_followup_endpoint_allowed(p_point uuid,p_identity bytea) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
  SELECT EXISTS(SELECT 1 FROM app_private.pp_followup_endpoint(p_point) e WHERE e.identity_sha256=p_identity)
   AND NOT EXISTS(SELECT 1 FROM(SELECT DISTINCT ON(coalesce(s.purpose,'')) s.state FROM app.communication_suppression_events s
    WHERE s.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND s.contact_point_id=p_point AND s.channel='email'
-    AND(s.purpose IS NULL OR s.purpose='marketing') AND s.endpoint_identity_sha256=p_identity AND s.occurred_at<=statement_timestamp()+interval '5 minutes'
+    AND(s.purpose IS NULL OR s.purpose IN('marketing','property_predator_marketing')) AND s.endpoint_identity_sha256=p_identity
+    AND s.occurred_at<=statement_timestamp()+interval '5 minutes'
    ORDER BY coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) latest WHERE latest.state='suppressed')
-  AND coalesce((SELECT c.state='granted' FROM app.communication_consent_events c
-   WHERE c.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND c.contact_point_id=p_point AND c.channel='email' AND c.purpose='marketing'
-    AND c.endpoint_identity_sha256=p_identity AND c.occurred_at<=statement_timestamp()+interval '5 minutes'
-   ORDER BY c.occurred_at DESC,c.recorded_at DESC,c.id DESC LIMIT 1),false)
+  -- bool_and over the latest event of each recorded purpose: every one granted, and at least one exists.
+  AND coalesce((SELECT bool_and(latest.state='granted') FROM(SELECT DISTINCT ON(c.purpose) c.state FROM app.communication_consent_events c
+   WHERE c.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND c.contact_point_id=p_point AND c.channel='email'
+    AND c.purpose IN('marketing','property_predator_marketing') AND c.endpoint_identity_sha256=p_identity
+    AND c.occurred_at<=statement_timestamp()+interval '5 minutes'
+   ORDER BY c.purpose,c.occurred_at DESC,c.recorded_at DESC,c.id DESC) latest),false)
 $f$;
 
 CREATE FUNCTION app_private.pp_followup_next(p_definition jsonb,p_position integer,p_accepted timestamptz) RETURNS jsonb
@@ -344,11 +356,20 @@ BEGIN
   AND (lease_until IS NULL OR lease_until<=clock_timestamp());
 END $f$;
 
-CREATE FUNCTION app_private.pp_followup_snapshot(p_session bytea) RETURNS jsonb
+-- Owner read. p_item narrows the runs to one flow; p_search (name or email, case-insensitive) narrows both the runs
+-- and the people who can be started, so nobody is out of reach behind the 100/200 row caps.
+CREATE FUNCTION app_private.pp_followup_snapshot(p_session bytea,p_item uuid,p_search text) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE runs jsonb; contacts jsonb; permitted integer;
+DECLARE runs jsonb; contacts jsonb; permitted integer; contact_matches integer; run_matches integer; needle text;
 BEGIN
  PERFORM app_private.pp_followup_authorize(p_session,false);
+ IF p_search IS NOT NULL AND length(p_search)>100 THEN RAISE EXCEPTION 'Invalid PP follow-up search' USING ERRCODE='22023'; END IF;
+ IF p_search IS NOT NULL AND btrim(p_search)<>'' THEN
+  needle:='%'||replace(replace(replace(lower(btrim(p_search)),'\','\\'),'%','\%'),'_','\_')||'%';
+ END IF;
+ SELECT count(*) INTO run_matches FROM app_private.pp_followup_runs r JOIN app.contact_points p ON p.workspace_id=r.workspace_id AND p.id=r.contact_point_id
+  JOIN app.contacts c ON c.workspace_id=r.workspace_id AND c.id=r.contact_id
+  WHERE (p_item IS NULL OR r.sequence_item_id=p_item) AND (needle IS NULL OR lower(c.display_name) LIKE needle OR p.normalized_value LIKE needle);
  SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."createdAt" DESC,q.id DESC),'[]') INTO runs FROM(
   SELECT r.id,r.sequence_item_id AS "contentItemId",r.sequence_version_id AS "contentVersionId",r.contact_id AS "contactId",
    r.contact_point_id AS "contactPointId",p.normalized_value AS email,c.display_name AS "displayName",
@@ -363,33 +384,44 @@ BEGIN
   JOIN app.contacts c ON c.workspace_id=r.workspace_id AND c.id=r.contact_id
   LEFT JOIN app_private.pp_followup_sends s ON s.id=r.current_send_id
   LEFT JOIN LATERAL(SELECT x.id,x.accepted FROM app_private.pp_followup_dispatch_proofs x WHERE x.send_id=s.id ORDER BY x.checked_at DESC,x.id DESC LIMIT 1) proof ON true
+  WHERE (p_item IS NULL OR r.sequence_item_id=p_item) AND (needle IS NULL OR lower(c.display_name) LIKE needle OR p.normalized_value LIKE needle)
   ORDER BY r.created_at DESC,r.id DESC LIMIT 100)q;
- -- People who can be enrolled now: a granted email/marketing consent on the current endpoint and no suppression.
- SELECT count(*) INTO permitted FROM app.contact_points p WHERE p.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND p.kind='email' AND p.deleted_at IS NULL
-  AND EXISTS(SELECT 1 FROM app.communication_consent_events g WHERE g.workspace_id=p.workspace_id AND g.contact_point_id=p.id AND g.channel='email' AND g.purpose='marketing' AND g.state='granted')
-  AND EXISTS(SELECT 1 FROM app_private.pp_followup_endpoint(p.id) e WHERE app_private.pp_followup_endpoint_allowed(p.id,e.identity_sha256));
+ -- People who can be started now: current permission on the current endpoint (pp_followup_endpoint_allowed). The
+ -- EXISTS on a granted event of either purpose is only an index-friendly pre-filter.
+ SELECT count(*),count(*) FILTER(WHERE needle IS NULL OR lower(e.display_name) LIKE needle OR e.email LIKE needle) INTO permitted,contact_matches
+ FROM app.contact_points p CROSS JOIN LATERAL app_private.pp_followup_endpoint(p.id) e
+ WHERE p.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND p.kind='email' AND p.deleted_at IS NULL
+  AND EXISTS(SELECT 1 FROM app.communication_consent_events g WHERE g.workspace_id=p.workspace_id AND g.contact_point_id=p.id AND g.channel='email'
+   AND g.purpose IN('marketing','property_predator_marketing') AND g.state='granted')
+  AND app_private.pp_followup_endpoint_allowed(p.id,e.identity_sha256);
  SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."displayName",q."contactPointId"),'[]') INTO contacts FROM(
   SELECT e.contact_id AS "contactId",p.id AS "contactPointId",e.display_name AS "displayName",e.email,
    EXISTS(SELECT 1 FROM app_private.pp_followup_runs o WHERE o.contact_point_id=p.id AND o.state IN('active','paused','held')) AS "inOpenRun"
   FROM app.contact_points p CROSS JOIN LATERAL app_private.pp_followup_endpoint(p.id) e
   WHERE p.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND p.kind='email' AND p.deleted_at IS NULL
-   AND EXISTS(SELECT 1 FROM app.communication_consent_events g WHERE g.workspace_id=p.workspace_id AND g.contact_point_id=p.id AND g.channel='email' AND g.purpose='marketing' AND g.state='granted')
+   AND EXISTS(SELECT 1 FROM app.communication_consent_events g WHERE g.workspace_id=p.workspace_id AND g.contact_point_id=p.id AND g.channel='email'
+    AND g.purpose IN('marketing','property_predator_marketing') AND g.state='granted')
    AND app_private.pp_followup_endpoint_allowed(p.id,e.identity_sha256)
+   AND (needle IS NULL OR lower(e.display_name) LIKE needle OR e.email LIKE needle)
   ORDER BY e.display_name,p.id LIMIT 200)q;
- RETURN jsonb_build_object('campaign','pp-owner-followup','permitted',permitted,'contacts',contacts,'runs',runs,
-  'runCount',(SELECT count(*) FROM app_private.pp_followup_runs));
+ RETURN jsonb_build_object('campaign','pp-owner-followup','permitted',permitted,'contactMatches',contact_matches,'contacts',contacts,'runs',runs,
+  'runMatches',run_matches,'runCount',(SELECT count(*) FROM app_private.pp_followup_runs));
 END $f$;
 
-CREATE FUNCTION app_private.pp_followup_command(p_session bytea,p_action text,p_command uuid,p_version uuid,p_point uuid,p_run uuid,p_ack_proof uuid,p_request text) RETURNS jsonb
+-- Owner commands. p_test_emails is the test list while delivery is in test mode (NULL when live): a person outside
+-- it can be added but is held ('test_mode') and cannot be resumed until the owner resumes them in live mode, so a run
+-- started during testing never sends the moment the mode changes.
+CREATE FUNCTION app_private.pp_followup_command(p_session bytea,p_action text,p_command uuid,p_version uuid,p_point uuid,p_run uuid,p_ack_proof uuid,p_request text,p_test_emails text[]) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; item uuid; exact jsonb; next jsonb; payload jsonb; prior app_private.pp_followup_commands%ROWTYPE; r app_private.pp_followup_runs%ROWTYPE;
  q app_private.pp_followup_sends%ROWTYPE; proof app_private.pp_followup_dispatch_proofs%ROWTYPE; endpoint record;
- changed integer:=0; remaining integer:=0; blocked integer:=0; flying integer:=0; outcome jsonb; why text;
+ changed integer:=0; remaining integer:=0; blocked integer:=0; flying integer:=0; waiting integer:=0; outcome jsonb; why text; test_hold boolean;
 BEGIN
  actor:=app_private.pp_followup_authorize(p_session,true);
  IF p_action IS NULL OR p_action NOT IN('enrol','pause','resume','cancel','stop') OR p_command IS NULL OR p_version IS NULL
   OR p_request IS NULL OR p_request!~'^[!-~]{1,128}$' OR (p_action='enrol')<>(p_point IS NOT NULL) OR (p_action='enrol' AND p_run IS NOT NULL)
   OR (p_ack_proof IS NOT NULL AND (p_action<>'resume' OR p_run IS NULL))
+  OR (p_test_emails IS NOT NULL AND cardinality(p_test_emails) NOT BETWEEN 1 AND 20)
  THEN RAISE EXCEPTION 'Invalid PP flow action' USING ERRCODE='22023'; END IF;
  SELECT content_item_id INTO item FROM app.company_content_versions WHERE workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND id=p_version AND source_system='pp.followup-sequence';
  IF item IS NULL THEN RAISE EXCEPTION 'PP flow unavailable' USING ERRCODE='23514'; END IF;
@@ -408,13 +440,15 @@ BEGIN
   ELSIF EXISTS(SELECT 1 FROM app_private.pp_followup_runs o WHERE o.sequence_item_id=item AND o.contact_point_id=p_point AND o.state IN('active','paused','held')) THEN blocked:=1; why:='older_version_open';
   ELSE
    next:=app_private.pp_followup_next(exact->'definition',-1,clock_timestamp());
+   test_hold:=p_test_emails IS NOT NULL AND NOT coalesce(endpoint.email=ANY(p_test_emails),false);
    INSERT INTO app_private.pp_followup_runs(workspace_id,sequence_item_id,sequence_version_id,sequence_sha256,sequence_approval_id,owner_user_id,
-    contact_id,contact_point_id,endpoint_identity_sha256,enrolment_command_id,state,position,due_at)
+    contact_id,contact_point_id,endpoint_identity_sha256,enrolment_command_id,state,reason,position,due_at)
    VALUES('d975ff66-336a-46c2-b36b-d7095a11af97',item,p_version,decode(exact->>'contentSha256','hex'),(exact->>'approvalDecisionId')::uuid,actor,
-    endpoint.contact_id,p_point,endpoint.identity_sha256,p_command,'active',(next->>'position')::integer,(next->>'dueAt')::timestamptz)
+    endpoint.contact_id,p_point,endpoint.identity_sha256,p_command,CASE WHEN test_hold THEN 'held' ELSE 'active' END,CASE WHEN test_hold THEN 'test_mode' END,
+    (next->>'position')::integer,(next->>'dueAt')::timestamptz)
    ON CONFLICT DO NOTHING;
    GET DIAGNOSTICS changed=ROW_COUNT;
-   IF changed=0 THEN blocked:=1; why:='already_enrolled'; END IF;
+   IF changed=0 THEN blocked:=1; why:='already_enrolled'; ELSIF test_hold THEN waiting:=1; END IF;
   END IF;
  ELSE
   FOR r IN SELECT * FROM app_private.pp_followup_runs WHERE sequence_item_id=item AND (p_run IS NULL OR id=p_run)
@@ -428,14 +462,19 @@ BEGIN
     EXCEPTION WHEN check_violation OR insufficient_privilege THEN blocked:=blocked+1;CONTINUE; END;
     IF decode(exact->>'contentSha256','hex')<>r.sequence_sha256 OR NOT app_private.pp_followup_endpoint_allowed(r.contact_point_id,r.endpoint_identity_sha256)
      OR (q.expires_at IS NOT NULL AND q.expires_at<=clock_timestamp()) THEN blocked:=blocked+1;CONTINUE; END IF;
+    IF p_test_emails IS NOT NULL AND NOT EXISTS(SELECT 1 FROM app_private.pp_followup_endpoint(r.contact_point_id) e WHERE e.email=ANY(p_test_emails))
+    THEN blocked:=blocked+1;waiting:=waiting+1;CONTINUE; END IF;
     proof:=NULL;
     SELECT * INTO proof FROM app_private.pp_followup_dispatch_proofs WHERE send_id=r.current_send_id ORDER BY checked_at DESC,id DESC LIMIT 1;
     IF proof.id IS NOT NULL AND proof.accepted IS NULL AND proof.id IS DISTINCT FROM r.unknown_ack_proof_id THEN
      IF p_ack_proof IS DISTINCT FROM proof.id OR q.lease_until>clock_timestamp() THEN blocked:=blocked+1;CONTINUE; END IF;
     ELSIF p_ack_proof IS NOT NULL THEN RAISE EXCEPTION 'Unknown attempt changed; refresh before retrying' USING ERRCODE='23514'; END IF;
-    -- A resumed run follows the current exact approval decision of the same pinned bytes.
+    -- A resumed run follows the current exact approval decision of the same pinned bytes. Time spent paused or held
+    -- must not count against a step that has not been claimed yet: its retry window starts again from now, so a run
+    -- held longer than expiryHours is really resumed instead of failing as delivery_expired at the next sweep.
     UPDATE app_private.pp_followup_runs SET state='active',reason=NULL,sequence_approval_id=(exact->>'approvalDecisionId')::uuid,
-     unknown_ack_proof_id=coalesce(p_ack_proof,unknown_ack_proof_id),updated_at=clock_timestamp() WHERE id=r.id;
+     unknown_ack_proof_id=coalesce(p_ack_proof,unknown_ack_proof_id),
+     due_at=CASE WHEN current_send_id IS NULL THEN greatest(due_at,clock_timestamp()) ELSE due_at END,updated_at=clock_timestamp() WHERE id=r.id;
     UPDATE app_private.pp_followup_sends SET held_at=NULL,hold_reason=NULL WHERE run_id=r.id AND sent_at IS NULL AND cancelled_at IS NULL AND failed_at IS NULL
      AND hold_reason='recovery' AND (lease_until IS NULL OR lease_until<=clock_timestamp());
    ELSIF p_action='pause' THEN
@@ -449,7 +488,7 @@ BEGIN
    AND CASE p_action WHEN 'pause' THEN state='active' WHEN 'resume' THEN state IN('paused','held') ELSE state IN('active','paused','held') END;
  END IF;
  outcome:=jsonb_build_object('action',p_action,'contentItemId',item,'contentVersionId',p_version,'changed',changed,'remaining',remaining,
-  'blocked',blocked,'inFlight',flying,'reason',why,'replayed',false);
+  'blocked',blocked,'inFlight',flying,'heldForTest',waiting,'reason',why,'replayed',false);
  INSERT INTO app_private.pp_followup_commands(workspace_id,actor_user_id,action,command_id,payload_sha256,request_id,result,completed_at)
  VALUES('d975ff66-336a-46c2-b36b-d7095a11af97',actor,p_action,p_command,public.digest(payload::text,'sha256'),p_request,outcome,clock_timestamp());
  RETURN outcome;
@@ -458,7 +497,7 @@ END $f$;
 CREATE FUNCTION app_private.pp_followup_claim(p_limit integer,p_lease_seconds integer,p_only_emails text[]) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE candidate record; r app_private.pp_followup_runs%ROWTYPE; q app_private.pp_followup_sends%ROWTYPE; proof app_private.pp_followup_dispatch_proofs%ROWTYPE;
- exact jsonb; message jsonb; email jsonb; claimed jsonb:='[]'; lease uuid; until_at timestamptz; expiry timestamptz;
+ exact jsonb; message jsonb; email jsonb; claimed jsonb:='[]'; lease uuid; until_at timestamptz; expiry timestamptz; address text;
 BEGIN
  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 25 OR p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 30 AND 900
   OR (p_only_emails IS NOT NULL AND cardinality(p_only_emails) NOT BETWEEN 1 AND 20) THEN RAISE EXCEPTION 'Invalid PP follow-up claim' USING ERRCODE='22023'; END IF;
@@ -511,15 +550,19 @@ BEGIN
   IF proof.id IS NOT NULL AND proof.accepted IS NULL AND proof.id IS DISTINCT FROM r.unknown_ack_proof_id THEN
    UPDATE app_private.pp_followup_runs SET state='held',reason='outcome_unknown',updated_at=clock_timestamp() WHERE id=r.id;CONTINUE; END IF;
   IF q.due_at>clock_timestamp() THEN CONTINUE; END IF;
+  SELECT e.email INTO address FROM app_private.pp_followup_endpoint(r.contact_point_id) e WHERE e.identity_sha256=r.endpoint_identity_sha256;
+  IF address IS NULL THEN CONTINUE; END IF;
+  -- A claim spends nothing: attempts are counted in pp_followup_prepare, when the hand-off proof is written.
   lease:=gen_random_uuid();until_at:=clock_timestamp()+make_interval(secs=>p_lease_seconds);
-  UPDATE app_private.pp_followup_sends SET lease_id=lease,lease_until=until_at,attempts=attempts+1 WHERE id=q.id;
-  claimed:=claimed||jsonb_build_array(jsonb_build_object('id',q.id,'leaseId',lease,'leaseUntil',until_at));
+  UPDATE app_private.pp_followup_sends SET lease_id=lease,lease_until=until_at WHERE id=q.id;
+  claimed:=claimed||jsonb_build_array(jsonb_build_object('id',q.id,'leaseId',lease,'leaseUntil',until_at,'email',address));
   IF jsonb_array_length(claimed)>=p_limit THEN EXIT; END IF;
  END LOOP;
  RETURN claimed;
 END $f$;
 
 -- Re-verify everything under the lease and write the dispatch proof. Only a returned proof may reach Postmark.
+-- This is the moment an attempt is spent.
 CREATE FUNCTION app_private.pp_followup_prepare(p_send uuid,p_lease uuid) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE run_id uuid; r app_private.pp_followup_runs%ROWTYPE; q app_private.pp_followup_sends%ROWTYPE; exact jsonb; email jsonb; endpoint record; proof uuid; checked timestamptz;
@@ -532,6 +575,7 @@ BEGIN
  IF r.state<>'active' OR r.current_send_id IS DISTINCT FROM p_send OR r.position IS DISTINCT FROM q.step
   OR q.lease_id IS DISTINCT FROM p_lease OR q.lease_until IS NULL OR q.lease_until<=clock_timestamp() OR q.due_at>clock_timestamp()
   OR q.sent_at IS NOT NULL OR q.cancelled_at IS NOT NULL OR q.failed_at IS NOT NULL OR q.held_at IS NOT NULL OR q.expires_at<=clock_timestamp()
+  OR q.attempts>=5
   OR EXISTS(SELECT 1 FROM app_private.pp_followup_dispatch_proofs old WHERE old.send_id=p_send AND old.lease_id=p_lease)
   OR NOT app_private.pp_followup_endpoint_allowed(r.contact_point_id,r.endpoint_identity_sha256) THEN RETURN NULL; END IF;
  BEGIN
@@ -547,31 +591,56 @@ BEGIN
   endpoint_identity_sha256,observed_session_user,checked_at,expires_at)
  VALUES(q.workspace_id,q.id,p_lease,q.content_version_id,q.content_sha256,q.approval_decision_id,r.endpoint_identity_sha256,session_user,checked,
   least(q.lease_until,checked+interval '15 minutes')) RETURNING id INTO proof;
+ UPDATE app_private.pp_followup_sends SET attempts=attempts+1 WHERE id=q.id;
  RETURN jsonb_build_object('id',q.id,'leaseId',p_lease,'leaseUntil',q.lease_until,'proofId',proof,'runId',r.id,'step',q.step,
   'contactPointId',r.contact_point_id,'email',endpoint.email,'displayName',endpoint.display_name,
   'contentVersionId',q.content_version_id,'canonicalContent',email->>'canonicalContent','contentSha256',email->>'contentSha256');
 END $f$;
 
--- Only a provider acceptance with its message id marks a step sent and advances the run.
-CREATE FUNCTION app_private.pp_followup_settle(p_send uuid,p_lease uuid,p_accepted boolean,p_reference text) RETURNS void
+-- Records what happened to one lease. 'accepted' (with the provider message id and this lease's dispatch proof) is the
+-- only outcome that marks a step sent and advances the run. The others are definite non-sends, never "unknown":
+--  'rejected'      the provider refused this message: the attempt stays spent and the step waits 5 minutes per attempt;
+--  'deferred'      nothing is wrong with this message (sender not ready, rate limit, lease about to expire): the
+--                  attempt is handed back and the step is tried again in 5 minutes;
+--  'undeliverable' this address can never be sent to: the step and the run fail at once.
+-- A result may arrive after the lease ran out (a slow provider answer) as long as it is still this send's latest
+-- lease and, once the lease is over, its own dispatch proof is still unresolved; a replaced lease is refused.
+CREATE FUNCTION app_private.pp_followup_settle(p_send uuid,p_lease uuid,p_outcome text,p_reference text) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE run_id uuid; r app_private.pp_followup_runs%ROWTYPE; q app_private.pp_followup_sends%ROWTYPE; definition jsonb; next jsonb;
+DECLARE run_id uuid; r app_private.pp_followup_runs%ROWTYPE; q app_private.pp_followup_sends%ROWTYPE; proof app_private.pp_followup_dispatch_proofs%ROWTYPE;
+ definition jsonb; next jsonb;
 BEGIN
- IF p_send IS NULL OR p_lease IS NULL OR p_accepted IS NULL OR (p_accepted AND (p_reference IS NULL OR length(p_reference) NOT BETWEEN 1 AND 200))
+ IF p_send IS NULL OR p_lease IS NULL OR p_outcome IS NULL OR p_outcome NOT IN('accepted','rejected','deferred','undeliverable')
+  OR (p_outcome='accepted')<>(p_reference IS NOT NULL) OR (p_reference IS NOT NULL AND length(p_reference) NOT BETWEEN 1 AND 200)
  THEN RAISE EXCEPTION 'Invalid PP follow-up settlement' USING ERRCODE='22023'; END IF;
  SELECT s.run_id INTO run_id FROM app_private.pp_followup_sends s WHERE s.id=p_send;
  IF run_id IS NULL THEN RAISE EXCEPTION 'PP follow-up lease is no longer current' USING ERRCODE='23514'; END IF;
  SELECT * INTO r FROM app_private.pp_followup_runs WHERE id=run_id FOR UPDATE;
  SELECT * INTO q FROM app_private.pp_followup_sends WHERE id=p_send FOR UPDATE;
- IF q.lease_id IS DISTINCT FROM p_lease OR q.lease_until IS NULL OR q.lease_until<=clock_timestamp() OR q.sent_at IS NOT NULL
+ SELECT * INTO proof FROM app_private.pp_followup_dispatch_proofs p WHERE p.send_id=p_send AND p.lease_id=p_lease;
+ IF q.lease_id IS DISTINCT FROM p_lease OR q.lease_until IS NULL OR q.sent_at IS NOT NULL
+  OR (q.lease_until<=clock_timestamp() AND (proof.id IS NULL OR proof.accepted IS NOT NULL))
  THEN RAISE EXCEPTION 'PP follow-up lease is no longer current' USING ERRCODE='23514'; END IF;
- IF p_accepted AND NOT EXISTS(SELECT 1 FROM app_private.pp_followup_dispatch_proofs p WHERE p.send_id=p_send AND p.lease_id=p_lease
-  AND p.content_version_id=q.content_version_id AND p.content_sha256=q.content_sha256 AND p.accepted IS NULL AND p.expires_at>clock_timestamp())
+ IF p_outcome='accepted' AND (proof.id IS NULL OR proof.accepted IS NOT NULL OR proof.content_version_id<>q.content_version_id OR proof.content_sha256<>q.content_sha256)
  THEN RAISE EXCEPTION 'PP follow-up dispatch proof required' USING ERRCODE='23514'; END IF;
- UPDATE app_private.pp_followup_dispatch_proofs SET accepted=p_accepted,provider_reference=CASE WHEN p_accepted THEN p_reference END,completed_at=clock_timestamp()
+ UPDATE app_private.pp_followup_dispatch_proofs SET accepted=(p_outcome='accepted'),provider_reference=p_reference,completed_at=clock_timestamp()
  WHERE send_id=p_send AND lease_id=p_lease AND accepted IS NULL;
- IF NOT p_accepted THEN
-  UPDATE app_private.pp_followup_sends SET lease_id=NULL,lease_until=clock_timestamp()+make_interval(mins=>5*attempts),last_failure='delivery_not_accepted' WHERE id=p_send;
+ -- The outcome of this hand-off is now known, so a hold that only said "we are not sure" is lifted.
+ IF r.current_send_id=p_send AND r.state='held' AND r.reason='outcome_unknown' THEN
+  UPDATE app_private.pp_followup_runs SET state='active',reason=NULL,updated_at=clock_timestamp() WHERE id=r.id RETURNING * INTO r;
+ END IF;
+ IF p_outcome='rejected' THEN
+  UPDATE app_private.pp_followup_sends SET lease_id=NULL,lease_until=clock_timestamp()+make_interval(mins=>5*greatest(attempts,1)),last_failure='delivery_not_accepted' WHERE id=p_send;
+  RETURN;
+ ELSIF p_outcome='deferred' THEN
+  UPDATE app_private.pp_followup_sends SET lease_id=NULL,lease_until=clock_timestamp()+interval '5 minutes',
+   attempts=CASE WHEN proof.id IS NOT NULL THEN greatest(attempts-1,0) ELSE attempts END,last_failure='sender_not_ready' WHERE id=p_send;
+  RETURN;
+ ELSIF p_outcome='undeliverable' THEN
+  UPDATE app_private.pp_followup_sends SET lease_id=NULL,lease_until=NULL,failed_at=clock_timestamp(),last_failure='recipient_refused' WHERE id=p_send;
+  IF r.current_send_id=p_send AND r.state IN('active','paused','held') THEN
+   UPDATE app_private.pp_followup_runs SET state='failed',reason='delivery_failed',updated_at=clock_timestamp() WHERE id=r.id;
+  END IF;
   RETURN;
  END IF;
  -- A later unsubscribe cannot undo an acceptance that already happened; it stops the next step.
@@ -587,7 +656,8 @@ BEGIN
   last_accepted_at=q.sent_at,unknown_ack_proof_id=NULL,updated_at=clock_timestamp() WHERE id=r.id;
 END $f$;
 
--- Any failure after a proof is an unknown outcome: hold the run for an explicit owner decision, never retry silently.
+-- A hand-off whose result is genuinely uncertain (timeout, network error, provider 5xx, lost settlement) is an unknown
+-- outcome: hold the run for an explicit owner decision, never retry silently. Definite non-sends go to pp_followup_settle.
 CREATE FUNCTION app_private.pp_followup_unknown(p_send uuid,p_lease uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE run_id uuid; r app_private.pp_followup_runs%ROWTYPE; q app_private.pp_followup_sends%ROWTYPE;
@@ -601,28 +671,34 @@ BEGIN
  THEN UPDATE app_private.pp_followup_runs SET state='held',reason='outcome_unknown',updated_at=clock_timestamp() WHERE id=r.id; END IF;
 END $f$;
 
--- Signed one-click unsubscribe: append a marketing-email suppression for the current endpoint and stop its open runs.
+-- Signed one-click unsubscribe: append an email suppression for the current endpoint under BOTH Property Predator
+-- marketing purposes and stop its open runs. 'property_predator_marketing' is the purpose every other PP marketing
+-- send path (0022/0023 deliveries, the founder pilot, customer email) matches its suppressions on, so those stop too.
 CREATE FUNCTION app_private.pp_followup_unsubscribe(p_point uuid) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE endpoint record; latest text; stopped integer:=0; r record;
+DECLARE endpoint record; scope text; latest text; recorded boolean:=false; stopped integer:=0; r record;
 BEGIN
  IF p_point IS NULL THEN RAISE EXCEPTION 'Invalid unsubscribe' USING ERRCODE='22023'; END IF;
  SELECT p.contact_id,public.digest(p.kind||chr(31)||p.value||chr(31)||p.normalized_value,'sha256') AS identity INTO endpoint
  FROM app.contact_points p WHERE p.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97' AND p.id=p_point AND p.kind='email';
  IF endpoint.contact_id IS NULL THEN RETURN jsonb_build_object('known',false,'recorded',false,'stopped',0); END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('pp-followup-unsubscribe:'||p_point::text,7200152));
- SELECT s.state INTO latest FROM app.communication_suppression_events s WHERE s.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'
-  AND s.contact_point_id=p_point AND s.channel='email' AND s.purpose='marketing' AND s.endpoint_identity_sha256=endpoint.identity
- ORDER BY s.occurred_at DESC,s.recorded_at DESC,s.id DESC LIMIT 1;
- IF latest IS DISTINCT FROM 'suppressed' THEN
-  INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,actor_kind,evidence,occurred_at)
-  VALUES('d975ff66-336a-46c2-b36b-d7095a11af97',endpoint.contact_id,p_point,'email','marketing','suppressed','recipient_unsubscribe','pp.followup.unsubscribe','system',
-   jsonb_build_object('route','signed_unsubscribe_link'),statement_timestamp());
- END IF;
+ FOREACH scope IN ARRAY ARRAY['marketing','property_predator_marketing'] LOOP
+  latest:=NULL;
+  SELECT s.state INTO latest FROM app.communication_suppression_events s WHERE s.workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'
+   AND s.contact_point_id=p_point AND s.channel='email' AND s.purpose=scope AND s.endpoint_identity_sha256=endpoint.identity
+  ORDER BY s.occurred_at DESC,s.recorded_at DESC,s.id DESC LIMIT 1;
+  IF latest IS DISTINCT FROM 'suppressed' THEN
+   INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,actor_kind,evidence,occurred_at)
+   VALUES('d975ff66-336a-46c2-b36b-d7095a11af97',endpoint.contact_id,p_point,'email',scope,'suppressed','recipient_unsubscribe','pp.followup.unsubscribe','system',
+    jsonb_build_object('route','signed_unsubscribe_link'),statement_timestamp());
+   recorded:=true;
+  END IF;
+ END LOOP;
  FOR r IN SELECT id FROM app_private.pp_followup_runs WHERE contact_point_id=p_point AND state IN('active','paused','held') ORDER BY id FOR UPDATE LOOP
   PERFORM app_private.pp_followup_end_run(r.id,'stopped','unsubscribed'); stopped:=stopped+1;
  END LOOP;
- RETURN jsonb_build_object('known',true,'recorded',latest IS DISTINCT FROM 'suppressed','stopped',stopped);
+ RETURN jsonb_build_object('known',true,'recorded',recorded,'stopped',stopped);
 END $f$;
 
 -- Release recovery: hold every open run; each needs an explicit owner resume.
@@ -631,7 +707,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE r app_private.pp_followup_runs%ROWTYPE; held integer:=0; flying integer:=0;
 BEGIN
  FOR r IN SELECT * FROM app_private.pp_followup_runs WHERE state IN('active','paused','held') ORDER BY id FOR UPDATE LOOP
-  UPDATE app_private.pp_followup_runs SET state='held',reason=CASE WHEN reason IN('outcome_unknown','newer_sequence','content_changed') THEN reason ELSE 'recovery' END,updated_at=clock_timestamp() WHERE id=r.id;
+  UPDATE app_private.pp_followup_runs SET state='held',reason=CASE WHEN reason IN('outcome_unknown','newer_sequence','content_changed','test_mode') THEN reason ELSE 'recovery' END,updated_at=clock_timestamp() WHERE id=r.id;
   held:=held+1;
   SELECT flying+count(*) INTO flying FROM app_private.pp_followup_sends WHERE run_id=r.id AND sent_at IS NULL AND lease_id IS NOT NULL AND lease_until>clock_timestamp();
   UPDATE app_private.pp_followup_sends SET held_at=coalesce(held_at,clock_timestamp()),hold_reason='recovery'
@@ -643,13 +719,13 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.pp_followup_canonical(jsonb),app_private.pp_followup_authorize(bytea,boolean),
  app_private.pp_followup_local_exact(uuid,text,boolean,boolean),app_private.pp_followup_message_exact(uuid,boolean,boolean),
  app_private.pp_followup_sequence_exact(uuid,boolean,boolean),app_private.pp_followup_endpoint(uuid),app_private.pp_followup_endpoint_allowed(uuid,bytea),
- app_private.pp_followup_next(jsonb,integer,timestamptz),app_private.pp_followup_end_run(uuid,text,text),app_private.pp_followup_snapshot(bytea),
- app_private.pp_followup_command(bytea,text,uuid,uuid,uuid,uuid,uuid,text),app_private.pp_followup_claim(integer,integer,text[]),
- app_private.pp_followup_prepare(uuid,uuid),app_private.pp_followup_settle(uuid,uuid,boolean,text),app_private.pp_followup_unknown(uuid,uuid),
+ app_private.pp_followup_next(jsonb,integer,timestamptz),app_private.pp_followup_end_run(uuid,text,text),app_private.pp_followup_snapshot(bytea,uuid,text),
+ app_private.pp_followup_command(bytea,text,uuid,uuid,uuid,uuid,uuid,text,text[]),app_private.pp_followup_claim(integer,integer,text[]),
+ app_private.pp_followup_prepare(uuid,uuid),app_private.pp_followup_settle(uuid,uuid,text,text),app_private.pp_followup_unknown(uuid,uuid),
  app_private.pp_followup_unsubscribe(uuid),app_private.pp_followup_hold_runs() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_private.pp_followup_snapshot(bytea) TO r72_web;
-GRANT EXECUTE ON FUNCTION app_private.pp_followup_command(bytea,text,uuid,uuid,uuid,uuid,uuid,text),app_private.pp_followup_claim(integer,integer,text[]),
- app_private.pp_followup_prepare(uuid,uuid),app_private.pp_followup_settle(uuid,uuid,boolean,text),app_private.pp_followup_unknown(uuid,uuid),
+GRANT EXECUTE ON FUNCTION app_private.pp_followup_snapshot(bytea,uuid,text) TO r72_web;
+GRANT EXECUTE ON FUNCTION app_private.pp_followup_command(bytea,text,uuid,uuid,uuid,uuid,uuid,text,text[]),app_private.pp_followup_claim(integer,integer,text[]),
+ app_private.pp_followup_prepare(uuid,uuid),app_private.pp_followup_settle(uuid,uuid,text,text),app_private.pp_followup_unknown(uuid,uuid),
  app_private.pp_followup_unsubscribe(uuid),app_private.pp_followup_hold_runs() TO r72_identity_command;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;

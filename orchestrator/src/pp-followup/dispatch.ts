@@ -1,50 +1,83 @@
-import type { PpMarketingConfig } from './config.js';
+import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import { ppUnsubscribeUrl, renderPpFollowupEmail } from './content.js';
-import type { PpFollowupSender } from './mail.js';
-import type { PpFollowupQueue } from './repository.js';
+import { PpNotSentError, type PpFollowupSender } from './mail.js';
+import type { PpFollowupOutcome, PpFollowupQueue } from './repository.js';
 
 export interface PpFollowupDispatchInput {
   readonly queue: PpFollowupQueue; readonly sender: PpFollowupSender; readonly unsubscribeSecret: string;
   readonly config: Pick<PpMarketingConfig, 'testRecipients' | 'link' | 'unsubscribeOrigin' | 'fromName'>;
   readonly stopped?: () => boolean; readonly now?: () => number;
+  /** Called once per sweep when Postmark refused the sender itself (bad token, unconfirmed sender, rate limit). */
+  readonly onSenderRefused?: () => void;
 }
+export interface PpFollowupDispatchResult { readonly sent: number; readonly failed: number; readonly unknown: number }
+
+/** A lease this close to its end is not handed to the provider: there would be no time left to record the answer. */
+const LEASE_MARGIN_MS = 11_000;
 
 /**
- * Same phases as the MHP sequence dispatcher. Before a dispatch proof exists a failure is only a missed
- * attempt (the lease expires and the step is claimed again). After the proof, any failure is an unknown
- * outcome: the run is held for an explicit owner decision and never retried silently or marked sent.
+ * Same phases as the MHP sequence dispatcher, with definite non-sends told apart from uncertain ones:
+ *  - Before a dispatch proof exists nothing is spent. A lease that is about to expire is skipped and an address
+ *    that can never be sent to fails its run, both without a proof.
+ *  - After the proof, anything that certainly did not reach Postmark (rendering failed, Postmark answered 4xx, the
+ *    lease ran short) is settled as a plain failure and retried or failed by the database rules.
+ *  - Only a genuinely uncertain result (timeout, network error, 5xx, a lost settlement after acceptance) is an
+ *    unknown outcome: the run is held for an explicit owner decision and never retried silently or marked sent.
+ * `failed` counts definite non-sends; `unknown` counts held runs.
  */
-export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): Promise<{ sent: number; failed: number; unknown: number }> {
-  let sent = 0, failed = 0, unknown = 0;
-  for (let page = 0; page < 4 && !input.stopped?.(); page++) {
+export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): Promise<PpFollowupDispatchResult> {
+  let sent = 0, failed = 0, unknown = 0, senderRefused = false;
+  const now = () => input.now?.() ?? Date.now();
+  const expiring = (leaseUntil: string) => Date.parse(leaseUntil) <= now() + LEASE_MARGIN_MS;
+  for (let page = 0; page < 4 && !input.stopped?.() && !senderRefused; page++) {
     const batch = await input.queue.claim(25, 120, input.config.testRecipients);
     for (const lease of batch) {
-      if (input.stopped?.()) break;
-      let proofIssued = false;
+      if (input.stopped?.() || senderRefused) break;
+      // Checked before any proof: an unspent lease simply runs out and the step is claimed again.
+      if (expiring(lease.leaseUntil)) { failed++; continue; }
+      const to = normalizePpEmail(lease.email);
+      if (!to) { failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is looked at again */ } continue; }
+      if (input.config.testRecipients && !input.config.testRecipients.includes(to)) { failed++; continue; }
+      let proofIssued = false, handedOff = false, accepted = false;
       try {
         const prepared = await input.queue.prepare(lease);
         if (!prepared) continue;
         proofIssued = true;
-        if (Date.parse(prepared.leaseUntil) <= (input.now?.() ?? Date.now()) + 11_000) throw new Error('PP follow-up proof is expiring');
+        if (normalizePpEmail(prepared.email) !== to || expiring(prepared.leaseUntil)) throw new PpNotSentError('sender');
         const unsubscribe = ppUnsubscribeUrl(input.config.unsubscribeOrigin, input.unsubscribeSecret, prepared.contactPointId);
         const rendered = renderPpFollowupEmail({ canonicalContent: prepared.canonicalContent, contentSha256: prepared.contentSha256,
           displayName: prepared.displayName, label: input.config.fromName, link: input.config.link, unsubscribe,
           productName: input.config.fromName, unsubscribeOrigin: input.config.unsubscribeOrigin });
-        const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'pp_followup', rendered });
-        await input.queue.settle(lease, true, reference); sent++;
-      } catch {
-        if (proofIssued) { unknown++; try { await input.queue.unknown(lease); } catch { /* the unresolved proof still fences a retry */ } }
-        else failed++;
+        handedOff = true;
+        const reference = await input.sender.sendRendered({ id: prepared.id, email: to, tag: 'pp_followup', rendered });
+        accepted = true;
+        await input.queue.settle(lease, 'accepted', reference); sent++;
+      } catch (error) {
+        if (!proofIssued) { failed++; continue; }
+        // Certain that nothing went out: Postmark said no, or the failure happened before the provider call.
+        const definite: PpFollowupOutcome | null = accepted ? null
+          : error instanceof PpNotSentError ? ({ sender: 'deferred', message: 'rejected', recipient: 'undeliverable' } as const)[error.scope]
+          : !handedOff ? 'rejected' : null;
+        if (definite) {
+          try {
+            await input.queue.settle(lease, definite, null); failed++;
+            if (definite === 'deferred' && handedOff) senderRefused = true;
+            continue;
+          } catch { /* the result could not be recorded: fall through to the unknown hold */ }
+        }
+        unknown++;
+        try { await input.queue.unknown(lease); } catch { /* the unresolved proof still fences a retry */ }
       }
     }
     if (batch.length < 25) break;
   }
+  if (senderRefused) { try { input.onSenderRefused?.(); } catch { /* telemetry only */ } }
   return { sent, failed, unknown };
 }
 
 /** One-minute sweeps on the web process, like MHP. Counts only reach the logs. */
 export function startPpFollowupDispatcher(input: Omit<PpFollowupDispatchInput, 'stopped'>, options: { intervalMs?: number;
-  onResult?: (result: { sent: number; failed: number; unknown: number }) => void; onError?: () => void } = {}): () => void {
+  onResult?: (result: PpFollowupDispatchResult) => void; onError?: () => void } = {}): () => void {
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
     if (running || stopped) return;

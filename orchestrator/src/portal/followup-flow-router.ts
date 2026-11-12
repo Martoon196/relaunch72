@@ -10,8 +10,8 @@ import { FlowDraftValidationError } from '../followup-sequences/channel-drafts.j
 import { FollowupSequenceValidationError } from '../followup-sequences/definition.js';
 import { FLOW_SIMULATION_CASES } from '../followup-sequences/simulation.js';
 import { PP_FOLLOWUP_ROUTE as BASE, ppNewFlow, type PortalFollowupFlowService, type PortalFlowSaveInput } from './followup-flow-service.js';
-import { renderPortalFlowPage, type PortalFlowPageInput } from './followup-flow-view.js';
-import type { PpFollowupAction } from '../pp-followup/repository.js';
+import { ppFlowCommandMessage, renderPortalFlowPage, renderPortalFlowProblem, type PortalFlowPageInput } from './followup-flow-view.js';
+import { PP_FOLLOWUP_SEARCH_MAX, PP_FOLLOWUP_STALE_PAGE, type PpFollowupAction, type PpFollowupView } from '../pp-followup/repository.js';
 const RUN_ACTIONS = ['enrol', 'pause', 'resume', 'cancel', 'stop'] as const;
 const FLOW_FORM_ENROL = [...FLOW_FORM_SAVED, 'contactPointId'] as const;
 const FLOW_FORM_CONTROL = [...FLOW_FORM_SAVED, 'runId', 'ackProofId'] as const;
@@ -20,14 +20,20 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
   identity: PortalSessionIdentity | null; requestId: string;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (path !== BASE && !path.startsWith(`${BASE}/`)) return false;
+  // Where "Back to your follow-ups" leads after a refused action: the flow the owner was on, read fresh.
+  let back: string = BASE;
   try {
     const { portal, flows, identity, requestId } = input;
-    let origin: URL; try { origin = new URL(portal.portalBaseUrl ?? ''); } catch { throw new FlowWorkspaceError(503, 'The native PP workspace address is unavailable.'); }
-    if (portal.productProfile?.id !== 'property_predator_growth' || origin.protocol !== 'https:' || req.headers.host?.toLowerCase() !== origin.host.toLowerCase()) throw new FlowWorkspaceError(404, 'This flow workspace is not available on this host.');
+    let origin: URL; try { origin = new URL(portal.portalBaseUrl ?? ''); } catch { throw new FlowWorkspaceError(503, 'This page isn’t available right now. Please try again in a minute.'); }
+    if (portal.productProfile?.id !== 'property_predator_growth' || origin.protocol !== 'https:' || req.headers.host?.toLowerCase() !== origin.host.toLowerCase()) throw new FlowWorkspaceError(404, 'This page isn’t available here.');
     if (!identity) { res.writeHead(303, { location: '/portal/login', 'cache-control': 'no-store' }); res.end(); return true; }
     const reading = path === BASE || path === `${BASE}/editor.js` || path === `${BASE}/message`, method = req.method ?? 'GET';
-    if (method !== (reading ? 'GET' : 'POST')) throw new FlowWorkspaceError(405, 'Use the native flow controls.');
-    const page = async (extra: Partial<PortalFlowPageInput> = {}) => renderPortalFlowPage({ snapshot: await flows.snapshot(identity, requestId), csrf: portalCsrfToken(portal.sessionSecret, identity.sessionToken), commandId: randomUUID(), ...extra });
+    if (method !== (reading ? 'GET' : 'POST')) throw new FlowWorkspaceError(405, 'Please use the buttons on the follow-ups page.');
+    // The people lists follow the flow on screen and, on a search, the name or email the owner typed.
+    const page = async (extra: Partial<PortalFlowPageInput> = {}, search = '') => {
+      const itemId = extra.detail?.review.contentItemId, view: PpFollowupView = { ...(itemId ? { itemId } : {}), ...(search ? { search } : {}) };
+      return renderPortalFlowPage({ snapshot: await flows.snapshot(identity, requestId, view), csrf: portalCsrfToken(portal.sessionSecret, identity.sessionToken), commandId: randomUUID(), now: portal.now?.() ?? Date.now(), ...extra });
+    };
     if (path === `${BASE}/editor.js`) {
       if (url.search) throw new FlowWorkspaceError(400, 'Use the native editor script.');
       sendNativeFlow(res, 200, FOLLOWUP_EDITOR_SCRIPT, 'text/javascript; charset=utf-8'); return true;
@@ -39,34 +45,31 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
       sendNativeFlow(res, 200, JSON.stringify(message), 'application/json; charset=utf-8'); return true;
     }
     if (path === BASE) {
-      if ([...url.searchParams.keys()].some(key => !['new', 'item', 'version'].includes(key) || url.searchParams.getAll(key).length !== 1)) throw new FlowWorkspaceError(400, 'Use one saved flow link.');
-      const item = url.searchParams.get('item'), version = url.searchParams.get('version'), fresh = url.searchParams.get('new');
-      if (Boolean(item) !== Boolean(version) || fresh !== null && fresh !== '1' || fresh && item) throw new FlowWorkspaceError(400, 'Use one saved flow link.');
+      if ([...url.searchParams.keys()].some(key => !['new', 'item', 'version', 'q'].includes(key) || url.searchParams.getAll(key).length !== 1)) throw new FlowWorkspaceError(400, 'That link didn’t work. Open the flow from your saved flows.');
+      const item = url.searchParams.get('item'), version = url.searchParams.get('version'), fresh = url.searchParams.get('new'), search = (url.searchParams.get('q') ?? '').trim();
+      if (Boolean(item) !== Boolean(version) || fresh !== null && fresh !== '1' || fresh && item || url.searchParams.has('q') && !item) throw new FlowWorkspaceError(400, 'That link didn’t work. Open the flow from your saved flows.');
+      if (search.length > PP_FOLLOWUP_SEARCH_MAX) throw new FlowWorkspaceError(400, 'Search for a shorter name or email address.');
       sendNativeFlow(res, 200, await page({ detail: item && version ? await flows.review(identity, requestId, item, version) : undefined,
-        draft: fresh ? ppNewFlow(randomUUID()) : undefined }), 'text/html; charset=utf-8'); return true;
+        draft: fresh ? ppNewFlow(randomUUID()) : undefined }, search), 'text/html; charset=utf-8'); return true;
     }
-    if (url.search || req.headers.origin !== origin.origin || req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin') throw new FlowWorkspaceError(403, 'Refresh the native PP flow form.');
+    if (url.search || req.headers.origin !== origin.origin || req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin') throw new FlowWorkspaceError(403, PP_FOLLOWUP_STALE_PAGE);
     const action = path.slice(BASE.length + 1), editing = ['save', 'preview', 'simulate'].includes(action);
     const control = (RUN_ACTIONS as readonly string[]).includes(action), connected = control && Boolean(flows.command);
-    if (!editing && !control && !['publish', 'start', 'entry-activate'].includes(action)) throw new FlowWorkspaceError(404, 'This flow action is unavailable.');
+    if (!editing && !control && !['publish', 'start', 'entry-activate'].includes(action)) throw new FlowWorkspaceError(404, 'That button isn’t available here.');
     const fields = await readNativeFlowForm(req, editing ? FLOW_FORM_DRAFT : !connected ? FLOW_FORM_SAVED : action === 'enrol' ? FLOW_FORM_ENROL : FLOW_FORM_CONTROL, editing), field = (name: string) => fields.get(name) ?? '';
-    if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, field('csrf'))) throw new FlowWorkspaceError(403, 'Refresh the PP flow form before continuing.');
-    if (action === 'start' || action === 'entry-activate' || (control && !connected)) { await flows.snapshot(identity, requestId); throw new FlowWorkspaceError(409, 'Your PP flow is saved. Connect and test delivery before starting it.'); }
+    if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, field('csrf'))) throw new FlowWorkspaceError(403, PP_FOLLOWUP_STALE_PAGE);
+    if (/^[0-9a-f-]{36}$/u.test(field('itemId')) && /^[0-9a-f-]{36}$/u.test(field('versionId'))) back = `${BASE}?item=${field('itemId')}&version=${field('versionId')}`;
+    if (action === 'start' || action === 'entry-activate' || (control && !connected)) { await flows.snapshot(identity, requestId); throw new FlowWorkspaceError(409, 'Email sending isn’t set up yet. Your flow is saved and nothing was sent.'); }
     if (connected) {
       const result = await flows.command!(identity, requestId, { action: action as PpFollowupAction, commandId: field('commandId'), itemId: field('itemId'), versionId: field('versionId'),
         contactPointId: field('contactPointId'), runId: field('runId'), ackProofId: field('ackProofId') });
-      const reason = result.reason === 'not_permitted' ? ' This contact has no current email marketing permission, or the address is suppressed or changed.'
-        : result.reason === 'already_enrolled' ? ' This contact has already been enrolled in this exact version.'
-        : result.reason === 'older_version_open' ? ' This contact is still in an older version of this flow; cancel that run first.' : '';
-      const verb = { enrol: 'started', pause: 'paused', resume: 'resumed', cancel: 'cancelled', stop: 'stopped' }[result.action];
-      const message = `${result.changed} run${result.changed === 1 ? '' : 's'} ${verb}.${reason} ${action === 'enrol' ? '' : `${result.remaining} remain for another explicit batch; ${result.blocked} need review. ${result.inFlight} already being processed may still finish.`}${result.replayed ? ' This is the saved result of your earlier request.' : ''}`.trim();
-      sendNativeFlow(res, 200, await page({ detail: await flows.review(identity, requestId, field('itemId'), field('versionId')), message }), 'text/html; charset=utf-8'); return true;
+      sendNativeFlow(res, 200, await page({ detail: await flows.review(identity, requestId, field('itemId'), field('versionId')), message: ppFlowCommandMessage(result) }), 'text/html; charset=utf-8'); return true;
     }
     if (editing) {
       let definition: unknown, inlineMessages: unknown;
       try { definition = JSON.parse(field('definition')); if (fields.has('inlineMessages')) inlineMessages = JSON.parse(field('inlineMessages')); }
-      catch { throw new FlowWorkspaceError(400, 'Check the flow and inline message drafts.'); }
-      if (fields.has('simulationCase') && !(FLOW_SIMULATION_CASES as readonly string[]).includes(field('simulationCase'))) throw new FlowWorkspaceError(400, 'Choose a synthetic simulation scenario.');
+      catch { throw new FlowWorkspaceError(400, 'We couldn’t read this flow. Please go back and try again.'); }
+      if (fields.has('simulationCase') && !(FLOW_SIMULATION_CASES as readonly string[]).includes(field('simulationCase'))) throw new FlowWorkspaceError(400, 'Choose one of the practice runs from the list.');
       const draft: PortalFlowSaveInput = { commandId: field('commandId'), contentItemId: field('contentItemId'), previousVersionId: field('previousVersionId'), definition,
         ...(inlineMessages === undefined ? {} : { inlineMessages }) };
       if (action === 'save') { const saved = await flows.save(identity, requestId, draft, portal.now?.() ?? Date.now());
@@ -77,9 +80,14 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
     }
     await flows.publish(identity, requestId, field('itemId'), field('versionId'), field('commandId'), portal.now?.() ?? Date.now());
     sendNativeFlow(res, 200, await page({ detail: await flows.review(identity, requestId, field('itemId'), field('versionId')),
-      message: 'Your messages and flow are published. No one was added and nothing was sent. Choose who to start below when you are ready.' }), 'text/html; charset=utf-8'); return true;
+      message: 'Published. No one was started and nothing was sent. Choose who to start below when you’re ready.' }), 'text/html; charset=utf-8'); return true;
   } catch (error) {
     const known = error instanceof FlowWorkspaceError, validation = error instanceof FlowDraftValidationError || error instanceof FollowupSequenceValidationError;
-    sendNativeFlow(res, known ? error.status : validation ? 400 : 503, known || validation ? error.message : 'PP flow controls are temporarily unavailable.'); return true;
+    const status = known ? error.status : validation ? 400 : 503;
+    const message = known || validation ? error.message : 'Something went wrong on our side. Nothing was changed. Please try again in a minute.';
+    // The editor script reads these two as text; everything else is a page the owner is looking at.
+    if (path === `${BASE}/message` || path === `${BASE}/editor.js`) sendNativeFlow(res, status, message);
+    else sendNativeFlow(res, status, renderPortalFlowProblem(message, back), 'text/html; charset=utf-8');
+    return true;
   }
 }

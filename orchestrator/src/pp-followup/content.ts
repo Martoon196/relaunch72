@@ -5,7 +5,7 @@ export const PP_FOLLOWUP_UNSUBSCRIBE_ROUTE = '/email/follow-up/unsubscribe';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const escape = (value: string): string => value.replace(/[&<>"']/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 
-/** One link per CRM email contact point, signed with the portal session secret; it can only ever suppress marketing email. */
+/** One link per CRM email contact point, signed with the portal session secret; it can only ever suppress Property Predator marketing email. */
 export function ppUnsubscribeToken(secret: string, contactPointId: string): string {
   if (!secret || !UUID.test(contactPointId)) throw new Error('Invalid PP unsubscribe subject');
   return createHmac('sha256', secret).update('relaunch72/pp-followup-unsubscribe/v1\u0000').update(contactPointId).digest('base64url');

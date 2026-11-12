@@ -2,7 +2,8 @@
  * Property Predator follow-up email delivery settings (PP-FOLLOWUP-001).
  *
  * PP_MARKETING_MODE: off (default; nothing is claimed or sent and runs wait), test (only the
- * addresses in PP_MARKETING_TEST_TO can receive anything, checked at claim and again at send),
+ * addresses in PP_MARKETING_TEST_TO can receive anything, checked at claim and again at send;
+ * anyone else started while testing is held until the owner resumes them in live mode),
  * live (every enrolled person with current permission). A mode other than off that is missing
  * any required setting is reported as not ready and sends nothing; it never takes the portal down.
  */
@@ -14,9 +15,14 @@ export interface PpMarketingConfig {
 export interface PpMarketingStatus { readonly mode: PpMarketingMode; readonly ready: boolean; readonly problems: readonly string[] }
 export const PP_MARKETING_DEFAULT_LINK = 'https://propertypredator.com/';
 
+/**
+ * One plain mailbox address, lower-cased. Apostrophes are valid in the local part (o'brien@example.com) and are
+ * accepted; whitespace, control characters and the characters that could start a second address or a display name
+ * (angle brackets, quotes, commas, semicolons, colons, brackets, backslashes) are not.
+ */
 export function normalizePpEmail(value: string): string | null {
   const email = value.trim().toLowerCase();
-  return email.length <= 254 && /^[^\s@<>"',;:()[\]\\]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(email) ? email : null;
+  return email.length <= 254 && /^[^\s@<>",;:()[\]\\\p{Cc}]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(email) ? email : null;
 }
 
 export function ppMarketingConfig(env: NodeJS.ProcessEnv): { status: PpMarketingStatus; config: PpMarketingConfig | null } {
