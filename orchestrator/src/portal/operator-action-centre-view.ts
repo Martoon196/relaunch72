@@ -9,6 +9,8 @@ import type {
 } from './operator-action-centre-presenter.js';
 
 export interface OperatorActionCentreRenderOptions {
+  /** Link to the shared content approval queue, when it is composed. */
+  readonly approvalsHref?: string;
   readonly notice?: Readonly<{
     kind: 'success' | 'info' | 'error';
     title: string;
@@ -176,7 +178,7 @@ export function renderOperatorActionCentreBody(
     : '';
   return `<style data-property-predator-operator-action-centre>${OPERATOR_ACTION_CENTRE_STYLE}</style><article class="oac" aria-labelledby="oac-title" data-property-predator-operator-actions data-environment="${escapeHtml(view.environment)}" data-dataset-kind="${escapeHtml(view.datasetKind)}" data-command-boundary="${controlsReady ? 'ready' : 'absent'}" data-mutating-controls="${controlsReady ? 'enabled' : 'disabled'}" data-provider-effects="none">
     <header class="oac-hero"><div class="oac-hero-copy"><div class="oac-kicker">Growth HQ · Operator action centre</div><h1 id="oac-title">One queue. <em>Nothing gets dropped.</em></h1><p>Journey stalls, conversion replies, content decisions, provider readiness and CRM tasks—ranked by measured evidence, urgency and ownership in one decisive operational view.</p></div><aside class="oac-shift" aria-label="Operator shift snapshot"><span>Current operational snapshot</span><strong>${escapeHtml(view.workspaceName)}</strong><p>${escapeHtml(view.asOfLabel)} UTC · ${escapeHtml(view.datasetBoundary)}.</p><div class="oac-shift-meta"><span class="oac-chip env">${environmentLabel}</span><span class="oac-chip env">${datasetLabel}</span><span class="oac-chip${integrityTone}">${escapeHtml(view.integrity.label)}</span><span class="oac-chip">EVIDENCE + SOURCE LINK</span></div></aside></header>
-    ${boundary}${notice}
+    ${boundary}${notice}${options.approvalsHref ? `<p class="oac-approvals-link"><a class="button secondary" href="${escapeHtml(options.approvalsHref)}">Content waiting for your approval</a></p>` : ''}
     <section class="oac-headlines" aria-label="Action queue headline metrics"><div class="oac-headline good"><span>Total active</span><strong>${safeCount(view.headline.total)}</strong><small>Bounded ${authoritative ? 'measured source' : 'fictional TEST'} facts</small></div><div class="oac-headline hot"><span>Need you now</span><strong>${safeCount(view.headline.needsNow)}</strong><small>Breached, due in 2h or blocked P0</small></div><div class="oac-headline hot"><span>SLA breached</span><strong>${safeCount(view.headline.breached)}</strong><small>Sorted to the top automatically</small></div><div class="oac-headline warn"><span>Blocked</span><strong>${safeCount(view.headline.blocked)}</strong><small>Explicit dependency recorded</small></div><div class="oac-headline warn"><span>Unassigned</span><strong>${safeCount(view.headline.unassigned)}</strong><small>Ownership gap stays visible</small></div><div class="oac-headline"><span>Evidence unavailable</span><strong>${safeCount(view.headline.evidenceUnavailable)}</strong><small>Never promoted to fact</small></div></section>
     <section class="oac-pulse" aria-labelledby="oac-pulse-title"><header class="oac-section-head"><div><span>01 · Source pulse</span><h2 id="oac-pulse-title">Seven systems. One operator rhythm.</h2></div><p>Counts expose where the work originates. They do not flatten provenance: every card retains its originating ledger and direct evidence route.</p></header><div class="oac-source-grid">${sources}</div></section>
     <div class="oac-layout"><section class="oac-main" aria-label="Action queue">

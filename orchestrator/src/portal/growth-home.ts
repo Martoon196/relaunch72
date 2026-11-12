@@ -146,6 +146,7 @@ export function renderGrowthHomeBody(
     actionCentreAvailable?: boolean;
     dailyOutreachAvailable?: boolean;
     followupFlowsAvailable?: boolean;
+    approvalsAvailable?: boolean;
   }> = {},
 ): string {
   const growth = suppliedGrowth ?? emptyGrowthIntelligence(snapshot.workspace.snapshotAt);
@@ -175,6 +176,7 @@ export function renderGrowthHomeBody(
   const dailyOutreachAvailable = options.dailyOutreachAvailable === true
     && profile.id === 'property_predator_growth';
   const heroActions = [
+    ...(options.approvalsAvailable ? ['<a class="button" href="/portal/approvals">Approvals</a>'] : []),
     ...(options.followupFlowsAvailable && profile.id === 'property_predator_growth' ? ['<a class="button" href="/portal/follow-ups">Build follow-up flows</a>'] : []),
     actionCentreAvailable
       ? '<a class="button" href="/portal/actions">Open Action Centre</a>'
