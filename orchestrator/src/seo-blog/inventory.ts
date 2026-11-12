@@ -7,13 +7,21 @@
 
 import { parseHtmlPage, parseSitemap } from './html.js';
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
-import type { InventoryPage, WebsiteInventory } from './types.js';
+import type { InventoryPage, WebsiteInventory, WebsiteLook } from './types.js';
+import { BRAND_PAGE_LIMIT, BRAND_PAGE_TEXT_LIMIT, brandPageRank } from './brand-dna.js';
 
 export interface InventoryOptions {
   readonly maxPages?: number;
   readonly maxSitemaps?: number;
   readonly now: string;
+  /**
+   * Brand DNA website read: also keep bounded text for the home page and the few pages that describe the
+   * business (about, pricing, services…), and read those pages first. Same crawl, same guarded transport.
+   */
+  readonly captureText?: boolean;
 }
+
+const UNUSABLE_LOGO = /\.(svg|ico|gif|webp|avif|bmp)(\?|$)/i;
 
 const NON_EDITORIAL = /\/(login|logout|sign-?in|sign-?up|register|account|app|dashboard|portal|checkout|cart|basket|pay|payment|billing|pricing|terms|privacy|cookies?|dpa|legal|thanks|thank-you|404|admin|api|search|members?|desk|sso)(\/|$|\.html?$)/i;
 
@@ -86,6 +94,9 @@ export async function buildInventory(brandId: string, website: string, transport
   // The home page's links find standalone editorial pages a sitemap omits.
   const pages: InventoryPage[] = [];
   const seen = new Set<string>();
+  const home = normaliseUrl(origin + '/');
+  let look: WebsiteLook | undefined;
+  let withText = 0;
   const fetchPage = async (url: string): Promise<string[]> => {
     if (seen.has(url) || pages.length >= maxPages) return [];
     seen.add(url);
@@ -99,7 +110,19 @@ export async function buildInventory(brandId: string, website: string, transport
       const parsed = parseHtmlPage(res.body.toString('utf8'), res.finalUrl);
       const words = parsed.text.split(/\s+/).filter(Boolean).length;
       if (parsed.robotsNoindex) notes.push(`${url} is marked noindex.`);
+      if (url === home) {
+        // What the site itself declares. A suggestion for the owner; nothing is applied from here.
+        const logoCandidates = [...parsed.icons, ...(parsed.ogImage ? [parsed.ogImage] : [])]
+          .filter((u, i, all) => /^https:\/\//i.test(u) && !UNUSABLE_LOGO.test(u) && all.indexOf(u) === i).slice(0, 6);
+        if (logoCandidates.length || parsed.themeColour) look = { logoCandidates, themeColour: parsed.themeColour };
+      }
+      // Words are kept only from a page that is still on the brand's own site after any redirect: a "join" page that
+      // forwards to a checkout or sign-in elsewhere is somebody else's words, not the brand's.
+      const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated && sameSite(res.finalUrl, origin);
+      const text = keepText ? parsed.text.replace(/\s+/g, ' ').trim().slice(0, BRAND_PAGE_TEXT_LIMIT) : '';
+      if (text) withText++;
       pages.push({
+        ...(text ? { text } : {}),
         url,
         canonical: parsed.canonical,
         title: parsed.title,
@@ -119,16 +142,20 @@ export async function buildInventory(brandId: string, website: string, transport
     }
   };
 
-  const homeLinks = await fetchPage(normaliseUrl(origin + '/'));
+  const homeLinks = await fetchPage(home);
   for (const link of homeLinks) candidates.add(link);
-  for (const url of candidates) {
+  // A Brand DNA read reaches the pages that describe the business before the page limit can cut them off.
+  const ordered = options.captureText
+    ? [...candidates].map((url, index) => ({ url, index, rank: brandPageRank(url) ?? 99 })).sort((a, b) => a.rank - b.rank || a.index - b.index).map((c) => c.url)
+    : [...candidates];
+  for (const url of ordered) {
     if (pages.length >= maxPages) {
       notes.push(`Inventory stopped at ${maxPages} pages; ${candidates.size - pages.length} further URLs were not read.`);
       break;
     }
     await fetchPage(url);
   }
-  return { brandId, website: origin, fetchedAt: options.now, sitemapUrls, pages, notes };
+  return { brandId, website: origin, fetchedAt: options.now, sitemapUrls, pages, notes, ...(look ? { look } : {}) };
 }
 
 function emptyPage(url: string, fetchStatus: InventoryPage['fetchStatus'], httpStatus: number | null): InventoryPage {

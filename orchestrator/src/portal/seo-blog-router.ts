@@ -37,6 +37,8 @@ import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.j
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
+import { brandDnaPage } from './brand-dna-view.js';
+import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 
@@ -239,7 +241,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
     }
     if (path === SEO_BLOG_BASE) {
-      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID()));
+      // Which door each brand shows ("Start with your website" until it has a card). A brand that cannot be read keeps the default door.
+      const dna = new Map((await Promise.all(brands.map(async (b) => [b.id, await engine.brandDnaStatus(actor, b.id).catch(() => undefined)] as const)))
+        .flatMap(([id, status]) => status ? [[id, status] as const] : []));
+      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID(), dna));
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
@@ -337,7 +342,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       if (rest === 'creative/kit') {
         const { context, kit } = await studio.context(actor.userId, brandId);
-        return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID() }));
+        // Only while no logo is on record, and only when the owner asks to see it: the page itself never calls out to
+        // their website. Read through the guarded fetch; shown, never saved, until "Yes, use these".
+        const declared = kit?.logo ? null : (await engine.getInventory(actor, brandId).catch(() => null))?.look ?? null;
+        const asked = url.searchParams.get('website') === '1';
+        const found = declared && asked ? await engine.proposedWebsiteLook(actor, brandId).catch(() => null) : null;
+        return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID(), proposal: websiteLookProposal(found, kit), websiteHint: Boolean(declared) && !asked }));
       }
       if (parts[1] === 's' && parts[2] && parts.length === 3) {
         const [found, articles, saved, distribution, acquisitions] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview(),
@@ -372,6 +382,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const data = await loadAuthorityProgrammePage(engine, actor, brandId);
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
+    if (rest === 'dna') return send(res, 200, brandDnaPage(shell('setup'), await engine.brandDna(actor, brandId), randomUUID()));
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -518,6 +529,19 @@ async function handlePost(
         await engine.retryJob(actor, brandId, task.job.id);
         return ok(`${home}/task/${task.job.id}`, 'Task queued again. It replays the same request; nothing is duplicated.');
       }
+      if (parts[1] === 'kit' && parts[2] === 'use-website') {
+        // "Yes, use these": the same saveKit path as a typed kit. The logo is fetched again through the guarded
+        // transport and must be the very file the owner was shown; the colour is the one stored from their site.
+        const { kit } = await studio.context(actor.userId, brandId);
+        const proposal = websiteLookProposal(await engine.proposedWebsiteLook(actor, brandId), kit);
+        if (!proposal?.usable) throw new SeoBlogError(409, 'There is nothing from your website we can use. Choose your logo and colours below.');
+        if ((f('logoSha') ?? '') !== (proposal.logo?.sha256 ?? '') || (f('colour') ?? '').toLowerCase() !== (proposal.colour ?? '')) {
+          throw new SeoBlogError(409, 'The logo or colour on your website changed since you looked. Check what we found now, then choose again.');
+        }
+        await studio.saveKit(actor.userId, brandId, commandId, { palette: proposal.palette, typography: kit?.typography, disclosure: kit?.disclosure ?? '', restricted: (kit?.restrictedPhrases ?? []).join('\n'),
+          logo: proposal.logo ? { kind: 'upload', bytes: proposal.logo.bytes, label: 'Logo from your website' } : { kind: 'keep' }, expectedVersion: int(f('expectedVersion'), 'the kit version') });
+        return ok(`${home}/kit`, proposal.logo && proposal.colour ? 'Saved. Your logo and main colour from your website are now in use.' : proposal.logo ? 'Saved. Your logo from your website is now in use.' : 'Saved. Your main colour from your website is now in use.');
+      }
       if (parts[1] === 'kit') {
         const action = f('logo_action') ?? 'keep';
         const logo = action === 'remove' ? { kind: 'remove' as const } : action === 'upload' && form.file?.data.length ? { kind: 'upload' as const, bytes: form.file.data, label: f('logo_label') ?? '' } : { kind: 'keep' as const };
@@ -625,6 +649,35 @@ async function handlePost(
         return ok(back('campaigns/'+id),'This campaign draft is approved for export. Nothing was sent.');
       }
       throw new SeoBlogError(404,'That campaign action was not found.');
+    }
+    case 'dna': {
+      // Brand DNA front door. Hidden fields carry positions and the card number only; every value shown to the owner
+      // (an answer, a price) is read back from the stored card inside the engine.
+      const here = back('dna');
+      const whole = (name: string): number => {
+        const raw = (f(name) ?? '').trim();
+        if (!/^\d{1,9}$/.test(raw)) throw new SeoBlogError(400, 'Reload the page and try again.');
+        return Number(raw);
+      };
+      if (parts[1] === 'read' && parts.length === 2) {
+        await engine.requestBrandDna(actor, brandId, { commandId: f('commandId') ?? '', website: f('website'), readAgain: f('again') === '1', acknowledgePriorUsage: f('acknowledgePriorUsage') === '1' });
+        return ok(here, 'Reading your website. It carries on in the background.');
+      }
+      if (parts[1] === 'settle' && parts.length === 2) {
+        const picked = (f('choice') ?? '').trim();
+        if (picked !== 'typed' && !/^\d{1,3}$/.test(picked)) throw new SeoBlogError(400, 'Choose one of the answers first.');
+        await engine.settleBrandDnaConflict(actor, brandId, whole('version'), whole('conflict'), picked === 'typed' ? { kind: 'typed', text: f('typed') ?? '' } : { kind: 'option', index: Number(picked) });
+        return ok(here, 'Answer saved.');
+      }
+      if (parts[1] === 'edit' && parts.length === 2) {
+        await engine.correctBrandDna(actor, brandId, whole('version'), { summary: f('summary') ?? '', audiences: lines(f('audiences')), approvedClaims: lines(f('approvedClaims')), exclusions: lines(f('exclusions')), voiceDont: lines(f('voiceDont')) });
+        return ok(here, 'Your changes are saved. Confirm the card to use it.');
+      }
+      if (parts[1] === 'confirm' && parts.length === 2) {
+        await engine.confirmBrandDna(actor, brandId, whole('version'));
+        return ok(here, 'Your Brand DNA is confirmed.');
+      }
+      break;
     }
     case 'basics': {
       await engine.updateBrandBasics(actor, brandId, { rowVersion: rowVersion(), website: f('website'), locale: (f('locale') ?? 'en-GB').trim(), timezone: (f('timezone') ?? 'Europe/London').trim() });

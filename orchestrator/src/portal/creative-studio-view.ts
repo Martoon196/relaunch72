@@ -5,6 +5,7 @@ import { videoEstimate, type SavedGeneratedImage, type ApprovalState, type setVi
 import { ARTICLE_MEDIA_PROFILE, PAID_CHANNELS, STAGE_LABEL, type StageEvidence } from '../creative-studio/distribution.js';
 import type { CreativeSetSummary, CreativeSetRecord } from '../creative-studio/store.js';
 import { CREATIVE_PURPOSES, PURPOSE_LABELS, type BrandKit, type CreativeVersion } from '../creative-studio/types.js';
+import type { WebsiteLookProposal } from '../creative-studio/website-look.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 
 const e = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, (c) => `&#${c.charCodeAt(0)};`);
@@ -91,11 +92,27 @@ ${data.generatedImages?.length ? `<p class="small muted">Generated from your ima
   return layout(shell, 'Creative studio', `${STYLE}<div class="cs-hero"><div><h1>Creative studio</h1><p class="muted">Brand-aware images and ad creative for ${e(c.brandName)}. Drafts only — nothing is published, scheduled or spent.</p><ol class="cs-steps"><li>Create images</li><li>Compare</li><li>Edit</li><li>Approve</li><li>Download / add to campaign</li></ol></div></div>${kitSummary(shell, c, data.kit)}${form}${library}${data.otherPatterns === null ? '<p class="notice bad small">Patterns from your other brands could not be read right now.</p>' : ''}${data.otherPatterns?.length ? `<section class="card" aria-labelledby="pat-h"><h2 id="pat-h">Patterns from your other brands</h2><p class="small muted">Shared by you from another brand you manage. They carry no figures, names, offers or colours, and they are <strong>not evidence for ${e(c.brandName)}</strong>: test them here before relying on them. They are never added to proposals automatically.</p><ul>${data.otherPatterns.map((p) => `<li>${e(p.statement)} <span class="small muted">· shared ${e(p.decidedAt.slice(0, 10))}</span></li>`).join('')}</ul></section>` : ''}`);
 }
 
-export function creativeKitPage(shell: Shell, data: { readonly context: CreativeBrandContext; readonly kit: BrandKit | null; readonly commandId: string }): string {
+/** Shown above the kit form while the brand has no logo on record. Nothing here is saved until the button is pressed. */
+function websiteLookSection(shell: Shell, proposal: WebsiteLookProposal, kitVersion: number, commandId: string): string {
+  if (!proposal.usable) return `<p class="notice">We found a logo on your website but could not use it: ${e(proposal.refused ?? 'it could not be opened')}. Add your logo below (PNG or JPEG).</p>`;
+  const both = Boolean(proposal.logo && proposal.colour);
+  const heading = both ? 'Is this your logo and colours?' : proposal.logo ? 'Is this your logo?' : 'Is this your main colour?';
+  return `<section class="card" id="from-website"><h2>${heading}</h2><p class="muted">Found on your website. Nothing is used until you say so.</p>
+${proposal.logo ? `<p><img class="kit-logo" style="background:${e(proposal.palette.dark)}" alt="Logo found on your website" src="data:${proposal.logo.mime};base64,${proposal.logo.bytes.toString('base64')}"></p>` : ''}
+${proposal.colour ? `<p><span class="swatch" style="display:inline-flex"><i style="background:${e(proposal.colour)}"></i>Main colour ${e(proposal.colour)}</span></p>` : ''}
+${proposal.refused ? `<p class="small muted">We also found a logo but could not use it: ${e(proposal.refused)}.</p>` : ''}
+<form method="post" action="${base(shell)}/kit/use-website">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}"><input type="hidden" name="expectedVersion" value="${kitVersion}">
+<input type="hidden" name="logoSha" value="${e(proposal.logo?.sha256 ?? '')}"><input type="hidden" name="colour" value="${e(proposal.colour ?? '')}">
+<button type="submit">${both ? 'Yes, use these' : 'Yes, use this'}</button></form><p class="small muted">Not right? Choose your own below. The other colours stay as they are until you change them.</p></section>`;
+}
+
+export function creativeKitPage(shell: Shell, data: { readonly context: CreativeBrandContext; readonly kit: BrandKit | null; readonly commandId: string; readonly proposal?: WebsiteLookProposal | null; readonly websiteHint?: boolean }): string {
   const p = data.kit?.palette ?? data.context.palette;
+  const offered = data.proposal?.usable === true;
   const field = (k: keyof typeof p, label: string) => `<div><label for="kit-${k}">${label}</label><input id="kit-${k}" type="text" name="${k}" value="${e(p[k])}" pattern="#?[0-9a-fA-F]{6}" required><input type="color" value="${e(p[k])}" aria-label="${label} preview" disabled></div>`;
   return layout(shell, 'Creative kit', `${STYLE}<h1>Creative kit</h1><p class="muted">Owner-confirmed decorative and compliance rules applied deterministically to every artwork. Saving a new kit version makes earlier image approvals for this brand no longer current.</p>
 ${data.context.suggestedColours.length ? `<p class="notice small">Colours mentioned in your visual guidance (not applied until you confirm them): ${data.context.suggestedColours.map((c) => `<span class="swatch" style="display:inline-flex"><i style="background:${e(c)}"></i>${e(c)}</span>`).join(' ')}</p>` : ''}
+${data.websiteHint ? `<p class="notice">Your website shows a logo or a colour we can suggest. Nothing is used until you say so. <a href="${base(shell)}/kit?website=1">Show me what you found</a></p>` : ''}${data.proposal ? websiteLookSection(shell, data.proposal, data.kit?.version ?? 0, data.commandId) : ''}${offered ? '<details class="card"><summary><strong>Choose my own logo and colours</strong></summary>' : ''}
 <form class="card cs-form" method="post" action="${base(shell)}/kit" enctype="multipart/form-data">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.commandId)}"><input type="hidden" name="expectedVersion" value="${data.kit?.version ?? 0}">
 <fieldset><legend>Colours</legend><div class="row">${field('primary', 'Primary')}${field('accent', 'Accent (buttons)')}${field('dark', 'Dark (text panels)')}${field('light', 'Light (text)')}</div><p class="small muted">Text contrast is measured on every rendered image; a failing combination is flagged and blocks approval.</p></fieldset>
 <fieldset><legend>Typography</legend><label for="kit-font">Artwork font</label><select id="kit-font" name="typography"><option value="inter"${(data.kit?.typography ?? 'inter') === 'inter' ? ' selected' : ''}>Inter</option><option value="website_sans"${data.kit?.typography === 'website_sans' ? ' selected' : ''}>Website sans (Arial-compatible)</option></select><p class="small muted">Website sans uses the embedded Arimo font, a metric-compatible alternative to Arial. Headlines, body text and video scenes use the chosen style. Logo artwork stays unchanged.</p></fieldset>
@@ -104,7 +121,7 @@ ${data.context.suggestedColours.length ? `<p class="notice small">Colours mentio
 <p class="small muted">The exact file is placed on artwork unchanged. Logos are never redrawn by an image model. SVG is not accepted.</p></fieldset>
 <fieldset><legend>Compliance</legend><label for="kit-disc">Required disclosure (shown on every artwork)</label><input id="kit-disc" type="text" name="disclosure" maxlength="220" value="${e(data.kit?.disclosure ?? '')}">
 <label for="kit-restricted">Restricted wording (one phrase per line; added to the profile's exclusions)</label><textarea id="kit-restricted" name="restricted" style="min-height:80px">${e((data.kit?.restrictedPhrases ?? []).join('\n'))}</textarea></fieldset>
-<button type="submit">Save kit version ${(data.kit?.version ?? 0) + 1}</button> <a href="${base(shell)}">Cancel</a></form>`);
+<button${offered ? ' class="secondary"' : ''} type="submit">Save kit version ${(data.kit?.version ?? 0) + 1}</button> <a href="${base(shell)}">Cancel</a></form>${offered ? '</details>' : ''}`);
 }
 
 type SetViewData = ReturnType<typeof setView>;
