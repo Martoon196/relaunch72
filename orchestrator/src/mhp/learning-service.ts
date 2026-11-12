@@ -99,6 +99,34 @@ export class PgMhpLearningService {
     } catch (error) { failure(error, 'Your progress could not be saved. Please try again.'); }
   }
 
+  /**
+   * The uploaded modules on top of the course as it stands: every live module the file doesn't carry is read back
+   * (outline and content, as the owner sees them) and kept; a module the file carries replaces the live one with
+   * the same number. The result goes through the same full import, so a bad file still changes nothing.
+   */
+  async mergeWithLive(token: string, bundle: MhpCourseBundle): Promise<MhpCourseBundle> {
+    const outline = await this.outline(token);
+    if (!outline.isAdmin) throw new MhpLearningError(403, 'Owner access is required to load the course.');
+    const incoming = new Set(bundle.modules.map(m => m.number));
+    const kept: MhpCourseBundle['modules'] = [];
+    for (const module of outline.modules) {
+      const number = Number(module.number);
+      if (incoming.has(number)) continue;
+      const about = await this.content(token, module.number);
+      const lessons: MhpCourseBundle['modules'][number]['lessons'] = [];
+      for (const lesson of module.lessons) {
+        const body = (await this.content(token, lesson.key))?.body;
+        if (!body) throw new MhpLearningError(503, `Lesson ${lesson.key} could not be read back, so nothing was changed.`);
+        lessons.push({ number: lesson.position, slug: lesson.slug, title: lesson.title, minutes: lesson.minutes, task: lesson.task, body });
+      }
+      kept.push({ number, slug: module.slug, title: module.title, promise: module.promise, door: module.door, level: module.level,
+        overview: about?.overview ?? '', sources: about?.sources ?? '', lessons });
+    }
+    const modules = [...kept, ...bundle.modules].sort((a, b) => a.number - b.number);
+    // The combined course goes through the same checks as an uploaded file.
+    return parseMhpCourseBundle(JSON.stringify({ modules }));
+  }
+
   async importCourse(token: string, bundle: MhpCourseBundle): Promise<{ modules: number; lessons: number }> {
     try {
       const result = await this.commandPool.query<{ counts: { modules: number; lessons: number } }>(

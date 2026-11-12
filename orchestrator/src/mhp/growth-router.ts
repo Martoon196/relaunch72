@@ -7,7 +7,7 @@ import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, parseMhpSignup, parseMhpStory, verifyMhpUnsubscribeToken, type PgMhpGrowthService } from './growth-service.js';
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { hqKitsPage, kitsPage, learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
-import { MhpKitError, type PgMhpKitService } from './kit-service.js';
+import { MhpKitError, readZip, type PgMhpKitService } from './kit-service.js';
 import { MHP_KITS, mhpKit, mhpKitModule, type MhpKit } from './kits.js';
 import { hqApplicationsPage, hqCoursePage, hqGrowthPage, hqRegistrantsPage, registrantsCsv, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
 import { MhpCommerceError, type MhpPrivateOfferLink, type PgMhpCommerceService } from './commerce-service.js';
@@ -17,7 +17,7 @@ import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabi
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
   growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'> & Partial<Pick<PgMhpGrowthService, 'apply' | 'event' | 'listApplications' | 'listRegistrants'>>;
-  learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse'>;
+  learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse' | 'mergeWithLive'>;
   unsubscribeSecret: string;
   marketingMode: string;
   phoneSignup?: Pick<PgMhpEventPhonePublic, 'fromSignup'>;
@@ -79,6 +79,25 @@ export function parseMultipart(body: Buffer, contentType: string): Map<string, B
     start = next;
   }
   return parts;
+}
+
+/**
+ * The uploaded course file: a bundle .json, or a .zip holding one or more .json files, each a bundle
+ * ({"modules": [...]}) or a single module ({"number": .., "lessons": [...]}). The modules are combined into one bundle.
+ */
+function courseBundleText(file: Buffer): string {
+  if (file.length < 4 || file.readUInt32LE(0) !== 0x04034b50) return file.toString('utf8');
+  const modules: unknown[] = [];
+  for (const entry of readZip(file)) {
+    if (entry.directory || !/\.json$/i.test(entry.name) || entry.name.split('/').some(part => part.startsWith('.') || part === '__MACOSX')) continue;
+    let data: unknown;
+    try { data = JSON.parse(entry.data().toString('utf8')); } catch { throw new HttpError(400, `${entry.name.slice(0, 80)} in the zip is not valid JSON.`); }
+    if (data && typeof data === 'object' && Array.isArray((data as { modules?: unknown }).modules)) modules.push(...(data as { modules: unknown[] }).modules);
+    else if (data && typeof data === 'object' && 'number' in data && 'lessons' in data) modules.push(data);
+    else throw new HttpError(400, `${entry.name.slice(0, 80)} in the zip is not a course bundle or module.`);
+  }
+  if (!modules.length) throw new HttpError(400, 'That zip has no course modules in it.');
+  return JSON.stringify({ modules });
 }
 
 const LEARN = /^\/app\/learn(?:\/([0-9]{2})(?:\/([0-9]{2}))?)?$/;
@@ -257,12 +276,15 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       }
       const contentType = String(req.headers['content-type'] ?? '');
       if (!/^multipart\/form-data(?:;|$)/i.test(contentType)) throw new HttpError(415, 'Upload the course bundle file.');
-      const parts = parseMultipart(await readBody(req, 8 * 1024 * 1024), contentType);
-      if ([...parts.keys()].some(key => key !== 'csrf' && key !== 'bundle')
+      const parts = parseMultipart(await readBody(req, 16 * 1024 * 1024), contentType);
+      if ([...parts.keys()].some(key => key !== 'csrf' && key !== 'bundle' && key !== 'mode')
           || !verifyPortalCsrf(portal.sessionSecret, token, parts.get('csrf')?.toString('utf8') ?? '')) throw new HttpError(403, 'Refresh HQ before continuing.');
       const bundle = parts.get('bundle');
       if (!bundle?.length) throw new HttpError(400, 'Choose the course bundle file.');
-      const counts = await deps.learning.importCourse(token, parseMhpCourseBundle(bundle.toString('utf8')));
+      const mode = parts.get('mode')?.toString('utf8') ?? 'replace';
+      if (mode !== 'merge' && mode !== 'replace') throw new HttpError(400, 'Choose how to load the file.');
+      const parsed = parseMhpCourseBundle(courseBundleText(bundle));
+      const counts = await deps.learning.importCourse(token, mode === 'merge' ? await deps.learning.mergeWithLive(token, parsed) : parsed);
       redirect(res, `/hq/course?modules=${counts.modules}&lessons=${counts.lessons}`); return true;
     }
 
