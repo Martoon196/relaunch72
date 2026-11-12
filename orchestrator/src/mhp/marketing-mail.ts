@@ -4,6 +4,7 @@ import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
+import { EmailRecipientBlockedError, type EmailSendGuard } from '../email-bounces/policy.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -112,16 +113,28 @@ export interface MhpRenderedMarketingSend {
   id: string; email: string; tag: string;
   rendered: { subject: string; text: string; html: string; unsubscribe: string; stream?: 'broadcast' | 'outbound' };
   ownerTest?: boolean;
+  /** The prospect this email is addressed to. Travels with the message so a later bounce or complaint can stop that person. */
+  prospectId?: string;
 }
 export interface MhpRenderedMarketingSender { sendRendered(item: MhpRenderedMarketingSend): Promise<string> }
+/** Refuses bounced, complained and unsubscribed addresses for one workspace before any provider call. */
+export interface MhpRecipientGuard { guard: EmailSendGuard; workspaceId: string }
+const PROSPECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
-export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribeSecret: string, fetcher: typeof fetch = fetch): MhpMarketingSender & MhpRenderedMarketingSender {
+export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribeSecret: string, fetcher: typeof fetch = fetch,
+  recipients?: MhpRecipientGuard): MhpMarketingSender & MhpRenderedMarketingSender {
     const sendRendered = async (item: MhpRenderedMarketingSend): Promise<string> => {
       const to = normalizeMhpEmail(item.email);
       if (!to) throw new Error('Invalid recipient');
       if (config.testRecipients && !config.testRecipients.includes(to)) throw new Error('Recipient is outside the test list');
       const email = item.rendered;
       const transactional = email.stream === 'outbound';
+      // The single choke point for built-in emails, owner emails and sequences. The owner's own test send is exempt.
+      if (recipients && !item.ownerTest) {
+        await recipients.guard.whenReady();
+        const decision = recipients.guard.decide(recipients.workspaceId, to, transactional ? 'service' : 'marketing');
+        if (decision.blocked) throw new EmailRecipientBlockedError(decision.reason);
+      }
       const response = await fetcher('https://api.postmarkapp.com/email', {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
         headers: { 'content-type': 'application/json', accept: 'application/json', 'X-Postmark-Server-Token': config.token },
@@ -133,7 +146,7 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
             { Name: 'List-Unsubscribe', Value: `<${email.unsubscribe}>` },
             { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
           ] }),
-          Metadata: { send: item.id },
+          Metadata: { send: item.id, ...(item.prospectId && PROSPECT_ID.test(item.prospectId) ? { prospect: item.prospectId } : {}) },
         }),
       });
       // Provider bodies can echo recipients. Only the message id is read on success.
@@ -148,7 +161,9 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
     sendRendered,
     send: (item: MhpClaimedSend) => {
       if (item.template === 'application_notify' && normalizeMhpEmail(item.email) !== config.notifyTo) throw new Error('Application notification recipient changed');
+      // An application notice goes to the owner, not the applicant, so it never carries the applicant's prospect id.
       return sendRendered({ id: item.id, email: item.email, tag: item.template,
+        ...(item.template === 'application_notify' ? {} : { prospectId: item.prospectId }),
         rendered: renderMhpMarketingEmail(item, unsubscribeSecret, { bookingUrl: config.bookingUrl }) });
     },
   };
@@ -159,7 +174,9 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
   config: Pick<MhpMarketingConfig, 'testRecipients'>, options: { intervalMs?: number; onResult?: (result: { sent: number; failed: number }) => void;
     owner?: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string };
     sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
-      onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void } } = {}): () => void {
+      onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void };
+    /** A send was refused because the address bounced, complained or unsubscribed: stop that person's email for good. */
+    onBlocked?: (prospectId: string) => Promise<void> } = {}): () => void {
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
     if (running || stopped) return;
@@ -172,19 +189,22 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
           try {
             const reference = await sender.send(item);
             await growth.settle(item.id, true, reference); sent++;
-          } catch {
+          } catch (error) {
             failed++;
+            if (error instanceof EmailRecipientBlockedError && item.template !== 'application_notify') {
+              try { await options.onBlocked?.(item.prospectId); } catch { /* The address stays refused here; the stop is retried at the next attempt. */ }
+            }
             try { await growth.settle(item.id, false, null); } catch { /* The lease expires and the send retries. */ }
           }
         }
         if (batch.length < 25) break;
       }
       if (options.owner && !stopped) {
-        const owner = await dispatchMhpOwnerEmails({ ...options.owner, testRecipients: config.testRecipients, stopped: () => stopped });
+        const owner = await dispatchMhpOwnerEmails({ ...options.owner, testRecipients: config.testRecipients, stopped: () => stopped, onBlocked: options.onBlocked });
         sent += owner.sent; failed += owner.failed;
       }
       if (options.sequences && !stopped) {
-        const sequences = await dispatchMhpSequenceEmails({ ...options.sequences, testRecipients: config.testRecipients, stopped: () => stopped });
+        const sequences = await dispatchMhpSequenceEmails({ ...options.sequences, testRecipients: config.testRecipients, stopped: () => stopped, onBlocked: options.onBlocked });
         sent += sequences.sent; failed += sequences.failed + sequences.unknown;
       }
     } catch { failed++; }

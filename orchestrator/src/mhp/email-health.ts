@@ -1,0 +1,142 @@
+import { escapeHtml } from '../portal/ui.js';
+import {
+  BLOCK_REASON_PLAIN, BOUNCE_WARNING_RATE, COMPLAINT_WARNING_RATE, PROVIDER_BOUNCE_LIMIT_RATE, PROVIDER_COMPLAINT_LIMIT_RATE,
+  normalizeBounceEmail, type EmailBlockReason,
+} from '../email-bounces/policy.js';
+import type { EmailHealthSnapshot } from '../email-bounces/registry.js';
+import type { EmailBounceEffects, EmailBounceService } from '../email-bounces/service.js';
+import type { EmailBounceSourceDefault } from '../email-bounces/config.js';
+import type { PgMhpGrowthService } from './growth-service.js';
+import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const STREAM = /^[a-z0-9-]{1,60}$/u;
+
+/**
+ * MHP's Postmark server, from the variables its senders already use. The only
+ * new setting is the webhook secret, MHP_POSTMARK_WEBHOOK_SECRET.
+ * 'outbound' is always included: sign-in links and receipts are sent on it.
+ */
+export function mhpEmailBounceSourceDefault(env: NodeJS.ProcessEnv): EmailBounceSourceDefault {
+  const stream = (name: string, fallback: string): string => { const value = env[name]?.trim() || fallback; return STREAM.test(value) ? value : fallback; };
+  return { key: 'mhp', workspaceId: MHP_MARKETING_WORKSPACE_ID, tokenEnv: 'MHP_POSTMARK_SERVER_TOKEN', webhookSecretEnv: 'MHP_POSTMARK_WEBHOOK_SECRET',
+    marketingStreams: [stream('MHP_POSTMARK_BROADCAST_STREAM', 'broadcast')],
+    serviceStreams: [...new Set([stream('MHP_POSTMARK_TRANSACTIONAL_STREAM', 'outbound'), 'outbound'])] };
+}
+
+export interface MhpEmailHealthCheck {
+  /** False when Postmark could not be read for at least one kind of email. */
+  readonly complete: boolean;
+  readonly blocked: number;
+  /** People newly stopped in the contact list by this check. */
+  readonly stopped: number;
+  /** False when this sign-in may not read the contact list, so only sending was blocked. */
+  readonly contactListChecked: boolean;
+}
+
+/**
+ * MHP's side of bounce handling. A blocked address is stopped for good through
+ * the capability the unsubscribe link already uses, so queued emails are
+ * cancelled and running sequences end. Email only: texts and WhatsApp are untouched.
+ */
+export class MhpEmailHealth {
+  readonly workspaceId = MHP_MARKETING_WORKSPACE_ID;
+  constructor(private readonly deps: { bounces: EmailBounceService; growth: Pick<PgMhpGrowthService, 'listRegistrants' | 'unsubscribe'>; patienceMs?: number }) {}
+
+  get configured(): boolean { return this.deps.bounces.hasWorkspace(this.workspaceId); }
+  snapshot(): EmailHealthSnapshot { return this.deps.bounces.registry.snapshot(this.workspaceId); }
+
+  /** A send path refused this person's address: stop their email for good. */
+  readonly onBlocked = async (prospectId: string): Promise<void> => { if (UUID.test(prospectId)) await this.deps.growth.unsubscribe(prospectId); };
+
+  /** Webhook effect: every MHP marketing and sign-up email carries the prospect it was addressed to. */
+  effects(): EmailBounceEffects {
+    return { onMarketingBlock: async ({ metadata }) => { if (metadata.prospect) await this.onBlocked(metadata.prospect); } };
+  }
+
+  /**
+   * Owner-triggered catch-up: read Postmark's lists again, then stop every listed
+   * person in the contact list. Safe to press repeatedly: people already stopped
+   * are skipped, and Postmark is read at most twice a minute.
+   */
+  async check(sessionToken: string): Promise<MhpEmailHealthCheck> {
+    const { bounces, growth } = this.deps;
+    // The web request must answer inside the server's 30-second limit. A slow read carries on in the
+    // background and is picked up by the next press; what is already known is applied now.
+    let timer: NodeJS.Timeout | undefined;
+    const sweep = await Promise.race([bounces.sweepWorkspace(this.workspaceId, 30_000),
+      new Promise<{ failed: number }>(resolve => { timer = setTimeout(() => resolve({ failed: 1 }), this.deps.patienceMs ?? 18_000); timer.unref?.(); })]);
+    clearTimeout(timer);
+    let stopped = 0, contactListChecked = false;
+    try {
+      const registrants = await growth.listRegistrants(sessionToken);
+      contactListChecked = true;
+      for (const person of registrants) {
+        const email = normalizeBounceEmail(person.email);
+        if (person.unsubscribed || !email || !UUID.test(person.id)) continue;
+        if (!bounces.registry.decide(this.workspaceId, email, 'marketing').blocked) continue;
+        if (await growth.unsubscribe(person.id)) stopped++;
+      }
+    } catch { /* Sending stays blocked either way; the page says the contact list was not updated. */ }
+    return { complete: sweep.failed === 0, blocked: this.snapshot().blocked.length, stopped, contactListChecked };
+  }
+}
+
+const percent = (value: number): string => value === 0 ? '0%' : `${(value * 100).toFixed(value < 0.01 ? 2 : 1)}%`;
+const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+const date = (iso: string): string => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric' }).format(Date.parse(iso));
+const dateTime = (iso: string): string => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(Date.parse(iso));
+const STOPPED: Readonly<Record<EmailBlockReason, string>> = Object.freeze({
+  hard_bounce: 'All email to this address', spam_complaint: 'Marketing email', unsubscribed: 'Marketing email', repeated_soft_bounce: 'Marketing email',
+});
+
+/** Plain warnings, strongest first. The lines are ours and sit below the provider's own. */
+export function emailHealthWarnings(snapshot: EmailHealthSnapshot): string[] {
+  const warnings: string[] = [];
+  for (const stream of snapshot.streams) {
+    const what = stream.kind === 'marketing' ? 'marketing emails' : 'webinar and sign-up emails';
+    if (stream.bounceRate !== null && stream.bounceRate >= BOUNCE_WARNING_RATE) {
+      warnings.push(`${percent(stream.bounceRate)} of your ${what} bounced in the last ${snapshot.window.days} days (${stream.bounced} of ${stream.sent}). `
+        + `We warn at ${percent(BOUNCE_WARNING_RATE)}, which is our own line. Postmark expects bounces to stay under about ${percent(PROVIDER_BOUNCE_LIMIT_RATE)} and can pause sending above that. `
+        + 'Before the next big send, check where the newest addresses came from.');
+    }
+    if (stream.complaintRate !== null && stream.complaintRate >= COMPLAINT_WARNING_RATE) {
+      warnings.push(`${plural(stream.complaints ?? 0, 'person', 'people')} marked your ${what} as spam in the last ${snapshot.window.days} days (${percent(stream.complaintRate)} of ${stream.sent} sent). `
+        + `We warn at ${percent(COMPLAINT_WARNING_RATE)}, which is our own line. Postmark expects spam reports to stay under ${percent(PROVIDER_COMPLAINT_LIMIT_RATE)}. `
+        + 'Only email people who asked to hear from you, and make the unsubscribe link easy to find.');
+    }
+  }
+  return warnings;
+}
+
+/** The short card on the marketing screen. */
+export function emailHealthCard(snapshot: EmailHealthSnapshot): string {
+  const warnings = emailHealthWarnings(snapshot);
+  const rate = snapshot.window.bounceRate === null ? '' : ` In the last ${snapshot.window.days} days ${percent(snapshot.window.bounceRate)} of your emails bounced.`;
+  return `<section style="margin-top:40px"><h2>Emails that bounced or complained</h2><p>${snapshot.blocked.length === 0
+    ? 'No addresses are blocked.' : `${plural(snapshot.blocked.length, 'address is', 'addresses are')} blocked, so marketing email no longer goes to ${snapshot.blocked.length === 1 ? 'it' : 'them'}.`}${escapeHtml(rate)}</p>${
+    warnings.length ? `<p role="alert"><strong>Warning:</strong> your bounce or spam-report rate needs attention.</p>` : ''}<a class="button" href="/hq/marketing/email-health">See bounced and blocked emails</a></section>`;
+}
+
+export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, result?: MhpEmailHealthCheck): string {
+  const warnings = emailHealthWarnings(snapshot);
+  const { month, window } = snapshot;
+  const overall = window.sent === null
+    ? `${plural(window.bounced, 'email', 'emails')} bounced and ${plural(window.complaints, 'was', 'were')} reported as spam. The number of emails sent could not be read from Postmark, so no percentage is shown.`
+    : window.sent === 0 ? 'No emails went out in this period.'
+      : `${window.bounced} of ${window.sent} emails bounced (${percent(window.bounceRate ?? 0)}). ${plural(window.complaints, 'email was', 'emails were')} reported as spam (${percent(window.complaintRate ?? 0)}).`;
+  const small = window.sent !== null && window.sent > 0 && window.sent < 200
+    ? `<p class="note">Only ${window.sent} emails went out in this period, so one or two bad addresses move the percentage a lot.</p>` : '';
+  const streams = snapshot.streams.filter(stream => stream.sent !== null).map(stream =>
+    `<tr><td>${stream.kind === 'marketing' ? 'Marketing emails' : 'Webinar and sign-up emails'}</td><td>${stream.sent}</td><td>${stream.bounced ?? 0}${stream.bounceRate === null ? '' : ` (${percent(stream.bounceRate)})`}</td><td>${stream.complaints ?? 0}${stream.complaintRate === null ? '' : ` (${percent(stream.complaintRate)})`}</td></tr>`).join('');
+  const rows = snapshot.blocked.map(item => `<tr><td>${escapeHtml(item.email)}</td><td>${escapeHtml(BLOCK_REASON_PLAIN[item.reason])}</td><td>${escapeHtml(date(item.since))}</td><td>${STOPPED[item.reason]}</td></tr>`).join('');
+  const outcome = result ? `<p role="status" class="status">${result.complete ? 'Checked with Postmark.' : 'Postmark could not be fully read just now, so this may be missing the newest bounces. Try again in a minute.'} ${
+    plural(result.blocked, 'address is', 'addresses are')} blocked. ${result.contactListChecked
+      ? (result.stopped === 0 ? 'Everyone on the list was already stopped in your contacts.' : `${plural(result.stopped, 'person was', 'people were')} newly stopped in your contacts.`)
+      : 'Sending to them is blocked. Your contact list was not updated from this sign-in; open Owner HQ and check again to update it.'}</p>` : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Emails that bounced or complained · Growth HQ</title><style>body{margin:0;background:#f5f3ed;color:#142019;font:17px/1.6 system-ui,sans-serif}header,main{max-width:960px;margin:auto;padding:24px}header{display:flex;gap:20px;flex-wrap:wrap;justify-content:space-between}nav{display:flex;gap:20px;flex-wrap:wrap}a{color:inherit}article{background:white;border:1px solid #dedfd5;border-radius:20px;padding:clamp(24px,5vw,52px)}h1{font:clamp(30px,5vw,46px)/1.12 Georgia,serif;margin:12px 0 24px}h2{margin-top:40px}.eyebrow{font-size:13px;font-weight:800;letter-spacing:.12em;color:#83510c;text-transform:uppercase}p{max-width:68ch}.figures{display:flex;gap:16px;flex-wrap:wrap;padding:0;list-style:none}.figures li{flex:1 1 180px;border:1px solid #dedfd5;border-radius:14px;padding:16px}.figures strong{display:block;font:700 34px/1.1 Georgia,serif}.warning{border:2px solid #9c2f14;background:#fdf1ec;border-radius:14px;padding:16px 20px;margin:20px 0}.status{border:1px solid #bac5b8;background:#eef4ec;border-radius:14px;padding:14px 18px}.note{font-size:15px;color:#526154}table{border-collapse:collapse;width:100%;font-size:16px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e3e4da;vertical-align:top}td:first-child{overflow-wrap:anywhere}.scroll{overflow-x:auto}button{cursor:pointer;border:0;background:#E8A33D;border-radius:10px;padding:15px 22px;color:#142019;font:700 16px system-ui}a:focus-visible,button:focus-visible{outline:3px solid #83510c;outline-offset:4px}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Owner navigation"><a href="/hq/marketing">Marketing workspace</a><a href="/hq">Owner HQ</a></nav></header><main><article><span class="eyebrow">Growth HQ · MHP brand</span><h1>Emails that bounced or complained</h1><p>When an email cannot be delivered, or someone marks it as spam, we stop emailing that address automatically. Email services switch off accounts that keep sending to bad addresses, so this page shows how you are doing. Texts and WhatsApp are not affected.</p>${outcome}${
+    warnings.map(text => `<div class="warning" role="alert"><strong>Warning.</strong> ${escapeHtml(text)}</div>`).join('')}<h2>This month</h2><ul class="figures"><li><strong>${month.bounced}</strong>${month.bounced === 1 ? 'address' : 'addresses'} bounced</li><li><strong>${month.complained}</strong>${month.complained === 1 ? 'person' : 'people'} marked an email as spam</li><li><strong>${month.unsubscribed}</strong>unsubscribed through the email service</li></ul><h2>Last ${window.days} days</h2><p>${escapeHtml(overall)}</p>${small}${
+    streams ? `<div class="scroll"><table><thead><tr><th scope="col">Kind of email</th><th scope="col">Sent</th><th scope="col">Bounced</th><th scope="col">Reported as spam</th></tr></thead><tbody>${streams}</tbody></table></div>` : ''}<p class="note">We warn when bounces reach ${percent(BOUNCE_WARNING_RATE)} or spam reports reach ${percent(COMPLAINT_WARNING_RATE)}. Those lines are ours, set well below Postmark's own (about ${percent(PROVIDER_BOUNCE_LIMIT_RATE)} and ${percent(PROVIDER_COMPLAINT_LIMIT_RATE)}), so you hear about it first.</p><h2>Addresses we no longer email</h2>${
+    rows ? `<div class="scroll"><table><thead><tr><th scope="col">Address</th><th scope="col">Why</th><th scope="col">Since</th><th scope="col">What is stopped</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>No blocked addresses. Nothing has bounced or been reported.</p>'}<p class="note">${
+    snapshot.lastCheckedAt ? `Last checked with Postmark: ${escapeHtml(dateTime(snapshot.lastCheckedAt))}.` : 'Not checked with Postmark yet.'}${snapshot.incomplete ? ' Postmark could not be fully read last time, so the newest bounces may be missing.' : ''} New bounces and spam reports also arrive here on their own as they happen. This list follows Postmark: to email a fixed address again, reactivate it there.</p><form method="post" action="/hq/marketing/email-health/check"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Check with Postmark now</button></form></article></main></body></html>`;
+}

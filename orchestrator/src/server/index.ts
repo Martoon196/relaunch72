@@ -35,6 +35,7 @@ import { startMhpWindowCloser } from '../mhp/window-closer.js';
 import { startMhpPurchaseWelcomes } from '../mhp/purchase-welcome.js';
 import { startMhpKitJobs } from '../mhp/kit-service.js';
 import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
+import { createPostmarkBounceWebhook } from '../email-bounces/webhook.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
@@ -944,6 +945,7 @@ async function main(): Promise<void> {
           portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, mail: runtime.mail, desk: runtime.desk,
           marketingWorkspace: runtime.marketingWorkspace,
           webinarLeads: runtime.webinarLeads,
+          emailHealth: runtime.emailHealth,
           ownerEmail: runtime.ownerEmail,
           sequences: runtime.sequences,
           ownedSms: runtime.ownedSms,
@@ -970,6 +972,9 @@ async function main(): Promise<void> {
       return access.ok && access.snapshot.workspace.workspaceId === identity.workspaceId && access.snapshot.workspace.canManage;
     },
   });
+  // Bounce, complaint and unsubscribe handling: the webhook is mounted below and the catch-up sweep starts with the server.
+  const emailBounces = postgresPortal?.emailBounces;
+  for (const blocker of emailBounces?.blockers ?? []) console.warn(`⚠  Email bounce handling: ${blocker}`);
   const app = createApp({
     stripe,
     cfg,
@@ -1002,6 +1007,8 @@ async function main(): Promise<void> {
           : 'client portal dependencies did not compose'],
     onIntakeAccepted,
     propertyPredatorExternalEvents,
+    postmarkBounceWebhook: emailBounces && emailBounces.sources.length > 0
+      ? createPostmarkBounceWebhook({ service: emailBounces, log: line => console.info(line) }) : undefined,
     propertyPredatorMailgunWebhook,
     propertyPredatorMailgunInbound,
     propertyPredatorSimulatedWhatsAppInbound: simulatedInbound.whatsapp,
@@ -1037,7 +1044,11 @@ async function main(): Promise<void> {
     ? startMhpKitJobs(postgresPortal.mhp.kits, { mail: postgresPortal.mhp.mail, ...postgresPortal.mhpKitJobs },
       () => console.warn(JSON.stringify({ event: 'mhp.kit.jobs.attention' }))) : () => {};
   const mhpMarketing = postgresPortal?.mhp?.marketing;
-  const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret) : undefined;
+  const mhpEmailHealth = postgresPortal?.mhp?.emailHealth;
+  // Every MHP marketing, sequence and sign-up email passes this one sender, which refuses blocked addresses.
+  const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret, fetch,
+    emailBounces && mhpEmailHealth ? { guard: emailBounces.registry, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
+  const stopEmailBounces = emailBounces && emailBounces.sources.length > 0 ? emailBounces.start() : () => {};
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
     ? startMhpMarketingDispatcher(postgresPortal.mhp.growth, mhpMarketingSender!, mhpMarketing, {
         owner: postgresPortal.mhp.ownerEmailDispatch ? { queue: postgresPortal.mhp.ownerEmailDispatch,
@@ -1048,6 +1059,7 @@ async function main(): Promise<void> {
           onEntryError: () => console.warn('MHP future signup entry is unavailable; existing sequence delivery continues.'),
         } : undefined,
         onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
+        onBlocked: mhpEmailHealth?.onBlocked,
       })
     : () => {};
   // Webinar messages and Cloudflare reconciliation. Job claims are lease-based, so
@@ -1079,6 +1091,7 @@ async function main(): Promise<void> {
     stopMhpPurchaseWelcomes();
     stopMhpKitJobs();
     stopMhpMarketing();
+    stopEmailBounces();
     webinarWorker?.stop();
     postgresPortal?.webinarStudio?.stopAll();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);

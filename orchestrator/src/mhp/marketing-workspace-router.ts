@@ -9,6 +9,7 @@ import { MhpCommerceError } from './commerce-service.js';
 import type { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { marketingWorkspacePage } from './marketing-workspace-view.js';
 import type { MhpWebinarLeadService } from './webinar-leads-service.js';
+import { emailHealthPage, type MhpEmailHealth } from './email-health.js';
 
 export interface MhpMarketingWorkspaceDependencies {
   portal: PostgresPortalDeps;
@@ -18,8 +19,12 @@ export interface MhpMarketingWorkspaceDependencies {
   sequenceEditorEnabled?: boolean;
   ownedSmsEnabled?: boolean;
   whatsappEnabled?: boolean;
+  /** Bounced, complained and unsubscribed addresses for the MHP brand; absent when no email service is configured. */
+  emailHealth?: Pick<MhpEmailHealth, 'configured' | 'snapshot' | 'check'>;
 }
-const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads']);
+const EMAIL_HEALTH = '/hq/marketing/email-health', EMAIL_HEALTH_CHECK = '/hq/marketing/email-health/check';
+const READ_PATHS = new Set(['/hq/marketing', EMAIL_HEALTH]);
+const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads', EMAIL_HEALTH, EMAIL_HEALTH_CHECK]);
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 function send(res: ServerResponse, status: number, body: string, html = false): void {
   res.writeHead(status, { 'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
@@ -57,9 +62,11 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
   let outcome: 'success' | 'service_error' = 'success';
   try {
     const method = req.method ?? 'GET';
-    if ((path === '/hq/marketing' && method !== 'GET') || (path !== '/hq/marketing' && method !== 'POST')) {
+    if ((READ_PATHS.has(path) && method !== 'GET') || (!READ_PATHS.has(path) && method !== 'POST')) {
       throw new MhpCommerceError(405, 'Use the controls in the marketing workspace.');
     }
+    const health = deps.emailHealth?.configured ? deps.emailHealth : undefined;
+    if ((path === EMAIL_HEALTH || path === EMAIL_HEALTH_CHECK) && !health) throw new MhpCommerceError(404, 'Page not found.');
     const context = portal.requestContext?.(req);
     if (!context || !portal.abuse || !portal.abuseHashSecret) throw new MhpCommerceError(503, 'Marketing workspace access is temporarily unavailable.');
     const now = portal.now?.() ?? Date.now(); const routeClass = method === 'GET' ? 'read.page' : 'command';
@@ -75,19 +82,32 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     if (!identity) { redirect(res, '/portal/login'); return true; }
     await reserve(principalAbuseAdmission(context, routeClass, portal.abuseHashSecret, identity, now));
     const snapshot = await deps.marketingWorkspace.snapshot(identity);
+    const emailHealth = health && snapshot.marketingSelected ? health.snapshot() : undefined;
+    if (path === EMAIL_HEALTH) {
+      // Addresses appear on this page, so it is only shown inside the MHP brand workspace.
+      if (!emailHealth) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to see bounced emails.');
+      send(res, 200, emailHealthPage(emailHealth, portalCsrfToken(portal.sessionSecret, token)), true);
+      return true;
+    }
     if (method === 'GET') {
       send(res, 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
-        { enabled: Boolean(deps.webinarLeads), emailEditorEnabled: deps.emailEditorEnabled, sequenceEditorEnabled: deps.sequenceEditorEnabled, ownedSmsEnabled: deps.ownedSmsEnabled, whatsappEnabled: deps.whatsappEnabled }), true);
+        { enabled: Boolean(deps.webinarLeads), emailEditorEnabled: deps.emailEditorEnabled, sequenceEditorEnabled: deps.sequenceEditorEnabled, ownedSmsEnabled: deps.ownedSmsEnabled, whatsappEnabled: deps.whatsappEnabled, emailHealth }), true);
       return true;
     }
     if (req.headers.origin !== MHP_AUTH_ORIGIN
         || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
-    const importing = path === '/hq/marketing/webinar-leads';
-    const fields = await form(req, importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
+    const importing = path === '/hq/marketing/webinar-leads', checking = path === EMAIL_HEALTH_CHECK;
+    const fields = await form(req, checking ? ['csrf'] : importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
     if (!verifyPortalCsrf(portal.sessionSecret, token, fields.get('csrf') ?? '')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
+    }
+    if (checking) {
+      if (!health || !snapshot.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to check bounced emails.');
+      const result = await health.check(token);
+      send(res, 200, emailHealthPage(health.snapshot(), portalCsrfToken(portal.sessionSecret, token), result), true);
+      return true;
     }
     if (importing) {
       if (!snapshot.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace before importing sign-ups.');
@@ -95,7 +115,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
       const result = await deps.webinarLeads.importBatch(identity, context.requestId, fields.get('cursor') ?? '', now);
       if (result.failed) outcome = 'service_error';
       send(res, result.failed ? 503 : 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
-        { enabled: true, result, emailEditorEnabled: deps.emailEditorEnabled, sequenceEditorEnabled: deps.sequenceEditorEnabled, ownedSmsEnabled: deps.ownedSmsEnabled, whatsappEnabled: deps.whatsappEnabled }), true);
+        { enabled: true, result, emailEditorEnabled: deps.emailEditorEnabled, sequenceEditorEnabled: deps.sequenceEditorEnabled, ownedSmsEnabled: deps.ownedSmsEnabled, whatsappEnabled: deps.whatsappEnabled, emailHealth }), true);
       return true;
     }
     const action = path === '/hq/marketing/open' ? 'open' : 'return';

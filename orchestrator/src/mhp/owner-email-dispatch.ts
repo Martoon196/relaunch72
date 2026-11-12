@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import { MHP_OWNER_EMAIL_UUID, parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-content.js';
+import { EmailRecipientBlockedError } from '../email-bounces/policy.js';
 
 export interface MhpOwnerEmailLease { id: string; leaseId: string; leaseUntil: string }
 export interface MhpOwnerEmailPrepared extends MhpOwnerEmailLease {
@@ -52,24 +53,31 @@ export class PgMhpOwnerEmailDispatch implements MhpOwnerEmailDispatch {
 
 /** One bounded sweep, called by the existing marketing dispatcher interval. */
 export async function dispatchMhpOwnerEmails(input: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender;
-  unsubscribeSecret: string; testRecipients: readonly string[] | null; stopped?: () => boolean; now?: () => number }): Promise<{ sent: number; failed: number }> {
+  unsubscribeSecret: string; testRecipients: readonly string[] | null; stopped?: () => boolean; now?: () => number;
+  onBlocked?: (prospectId: string) => Promise<void> }): Promise<{ sent: number; failed: number }> {
   let sent = 0, failed = 0;
   for (let page = 0; page < 4 && !input.stopped?.(); page++) {
     const batch = await input.queue.claim(25, 120, input.testRecipients);
     for (const lease of batch) {
+      let prospectId: string | null = null;
       try {
         const prepared = await input.queue.prepare(lease);
         if (!prepared || Date.parse(prepared.leaseUntil) <= (input.now?.() ?? Date.now()) + 11_000) throw new Error('Owner email proof is unavailable or expiring');
+        prospectId = prepared.prospectId;
         const rendered = renderMhpOwnerEmail({ canonicalContent: prepared.exact.canonicalContent, contentSha256: prepared.exact.contentSha256,
           brand: parseMhpOwnerEmailBrand(prepared.exact.brand), firstName: prepared.firstName,
           label: typeof prepared.context.label === 'string' ? prepared.context.label : 'Webinar',
           link: typeof prepared.context.link === 'string' ? prepared.context.link : '',
           unsubscribe: mhpUnsubscribeUrl(input.unsubscribeSecret, prepared.prospectId) });
         // Consent, pinned approval, source and lease were rechecked by prepare.
-        const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'owner_followup', rendered });
+        const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'owner_followup', rendered, prospectId: prepared.prospectId });
         await input.queue.settle(lease, true, reference); sent++;
-      } catch {
+      } catch (error) {
         failed++;
+        // Refused before the provider was called because the address bounced, complained or unsubscribed.
+        if (error instanceof EmailRecipientBlockedError && prospectId) {
+          try { await input.onBlocked?.(prospectId); } catch { /* Still refused here; the stop is retried at the next attempt. */ }
+        }
         try { await input.queue.settle(lease, false, null); } catch { /* Expired leases retry under a new proof; never fallback to legacy copy. */ }
       }
     }
