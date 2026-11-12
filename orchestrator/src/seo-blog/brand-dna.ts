@@ -18,6 +18,7 @@ import type {
   BrandProfile, InventoryPage, Job, KnowledgeCategory, KnowledgeDocument, ProfileConflict, ProfileConflictOption,
   ProfileFactSource, ProfileOffer,
 } from './types.js';
+import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 
 export const BRAND_DNA_STAGE = 'brand_dna';
@@ -137,7 +138,7 @@ const sameValue = (a: string, b: string) => plain(a) === plain(b);
 const loose = (text: string) => plain(text).replace(/[^a-z0-9£]+/g, ' ').trim();
 
 /** The part of a profile these rules read. Structural so the extraction module can use it without a cycle. */
-export type ProfileFacts = Pick<BrandProfile, 'offers' | 'audiences' | 'approvedClaims' | 'conflicts' | 'missingFacts'> & { readonly sources?: readonly ProfileFactSource[] };
+export type ProfileFacts = Pick<BrandProfile, 'offers' | 'audiences' | 'approvedClaims' | 'conflicts' | 'missingFacts'> & Partial<Pick<BrandProfile, 'summary' | 'positioning' | 'voice'>> & { readonly sources?: readonly ProfileFactSource[] };
 type SourceText = Pick<KnowledgeDocument, 'id' | 'text'>;
 
 function conflictOffer<T extends Pick<ProfileOffer, 'name'>>(conflict: ProfileConflict, offers: readonly T[]): T | null {
@@ -177,6 +178,17 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
       if (!doc) problems.push(`conflict "${c.field}" has an option citing a document id that was not supplied`);
       else if (!appearsIn(doc.text, option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is not word for word in document ${doc.id}`);
       else if (c.kind === 'price' && !appearsIn(doc.text, option.value)) problems.push(`conflict "${c.field}": the price option "${option.value}" does not appear character for character in document ${doc.id}`);
+    }
+  }
+  // The free-text parts (the summary, the positioning, offer descriptions, voice examples) carry no source line on
+  // the card, so a figure in them must exist in at least one supplied source. Words are the model's; numbers are not.
+  const everywhere = documents.map((d) => d.text ?? '').join('\n');
+  const freeText: [string, string][] = [['summary', value.summary ?? ''], ['positioning', value.positioning ?? ''],
+    ...value.offers.map((o): [string, string] => [`description of "${o.name}"`, o.description ?? '']),
+    ...(value.voice?.examples ?? []).map((e): [string, string] => ['voice example', e])];
+  for (const [where, text] of freeText) {
+    for (const figure of materialFigures(text)) {
+      if (!appearsIn(everywhere, figure)) problems.push(`the ${where} states "${figure}", which is in none of the supplied documents. Remove the figure or copy one exactly as a document writes it`);
     }
   }
   return problems.slice(0, 12);

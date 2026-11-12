@@ -149,6 +149,11 @@ test('nothing invented: a price must be word for word in its source, and every a
   const invented = strictProfileProblems({ ...good, offers: [{ ...good.offers[0]!, price: '£39 per month' }] }, docs);
   assert.equal(invented.length, 1); assert.match(invented[0]!, /£39 per month.*does not appear character for character/);
   assert.match(strictProfileProblems({ ...good, offers: [{ ...good.offers[0]!, sourceDocumentId: 'made-up' }] }, docs)[0]!, /must name the supplied document/);
+  // Free text has no source line on the card, so a number in it must exist in a source.
+  assert.deepEqual(strictProfileProblems({ ...good, summary: 'Compliance for private landlords in Kent, from £49 per month.' }, docs), []);
+  const boast = strictProfileProblems({ ...good, summary: 'Trusted by 500 landlords with a 98% pass rate.' }, docs);
+  assert.equal(boast.length, 2); assert.match(boast[0]!, /the summary states "500", which is in none of the supplied documents/);
+  assert.match(strictProfileProblems({ ...good, offers: [{ ...good.offers[0]!, description: 'Save £2,000 a year.' }] }, docs)[0]!, /description of "Quay Compliance Plan" states "£2,000"/);
   assert.match(strictProfileProblems({ ...good, audiences: ['Private landlords in Kent', 'Property developers'] }, docs)[0]!, /audience "Property developers" has no sources entry/);
   assert.match(strictProfileProblems({ ...good, approvedClaims: ['Rated best in Kent'] }, docs)[0]!, /approved claim "Rated best in Kent"/);
   assert.match(strictProfileProblems({ ...good, sources: [{ ...good.sources[0]!, quote: 'landlords all over Britain' }] }, docs).join('\n'), /not word for word/);

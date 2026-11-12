@@ -128,7 +128,7 @@ export function brandDnaPage(shell: Shell, state: BrandDnaState, commandId: stri
   const stoppedNotice = stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}</p>` : '';
   const { allowance } = state;
   const allowanceNotice = `<section class="card"><h2>Set a monthly allowance first</h2>
-<p>Reading your website uses part of your monthly writing allowance: room for about ${number(allowance.estimate)} tokens, usually a few pence. Your allowance is ${number(allowance.ceiling)} a month and ${number(allowance.used)} ${allowance.used === 1 ? 'has' : 'have'} been used this month.</p>
+<p>Reading your website uses a little of your monthly writing allowance, usually a few pence. Your allowance is ${number(allowance.ceiling)} a month and ${number(allowance.used)} ${allowance.used === 1 ? 'has' : 'have'} been used this month.</p>
 <p class="muted">Nothing has been read and nothing has been spent.</p><p><a class="button main" href="${link(shell, 'publishing')}#writing-budget">Set my monthly allowance</a></p></section>`;
   const cannotStart = !state.writerReady
     ? '<p class="notice bad" role="alert">The writing service is not switched on for this account yet, so a card cannot be made. Ask whoever looks after your account to switch it on.</p>'
@@ -143,7 +143,7 @@ ${stoppedNotice}${cannotStart || (pasteFirst
     ? `<section class="card"><p><a class="button main" href="${link(shell, 'setup')}#brand-guidance">Paste your details instead</a></p><p class="muted">Paste what you sell, what it costs and who it is for. Then come back here and press “Read my website”.</p></section>
 <details class="card"><summary>Try my website again</summary>${readForm(shell, state, { label: 'Read my website', main: false, again: false, commandId })}</details>`
     : `<section class="card">${readForm(shell, state, { label: 'Read my website', main: true, again: false, commandId })}
-<p class="muted" style="margin-top:12px">This uses part of your monthly writing allowance (room for about ${number(allowance.estimate)} tokens, usually a few pence). Pressing twice does not charge you twice.</p></section>`)}
+<p class="muted" style="margin-top:12px">This uses a little of your monthly writing allowance, usually a few pence. Pressing twice does not charge you twice.</p></section>`)}
 ${pasteFirst ? '' : `<p class="muted">Website does not show its words, or no website yet? ${paste}.</p>`}
 ${state.documents ? `<p class="muted">You have already added ${state.documents} document${state.documents === 1 ? '' : 's'}. ${state.documents === 1 ? 'It is' : 'They are'} read alongside your website, and any disagreement is shown to you.</p>` : ''}`);
   }

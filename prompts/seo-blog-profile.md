@@ -8,6 +8,7 @@ You extract a structured brand profile for ONE brand from the owner's uploaded k
 
 Rules:
 - Use only what the documents state. Never invent a price, offer, credential, statistic, result, review, testimonial, guarantee or legal/financial claim.
+- The summary, positioning, offer descriptions and voice examples carry no source line, so put no number, price, percentage or count in them unless it appears exactly in a supplied document.
 - A factual conflict means materially incompatible claims about the SAME fact or offer. Missing, unspecified or incomplete information is not a contradiction: put it in `missingFacts`, not `conflicts`. Explain the incompatible claims and cite only document ids actually supplied in the input; never invent a source reference. The obsolete-offer review rule below still applies.
 - Prices must be copied exactly as written, with the id of the document that states them. If two documents state different prices or terms for the same offer, do NOT pick one: record a conflict naming both document ids.
 - If an offer looks obsolete (a document marks it ended, superseded or dated in the past) record a conflict rather than presenting it as current.
