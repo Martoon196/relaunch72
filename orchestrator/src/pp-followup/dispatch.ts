@@ -1,6 +1,6 @@
 import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import { ppUnsubscribeUrl, renderPpFollowupEmail } from './content.js';
-import { PpNotSentError, type PpFollowupSender } from './mail.js';
+import { PpNotSentError, type PpFollowupSender, type PpRecipientGuard } from './mail.js';
 import type { PpFollowupOutcome, PpFollowupQueue } from './repository.js';
 
 export interface PpFollowupDispatchInput {
@@ -9,6 +9,8 @@ export interface PpFollowupDispatchInput {
   readonly stopped?: () => boolean; readonly now?: () => number;
   /** Called once per sweep when Postmark refused the sender itself (bad token, unconfirmed sender, rate limit). */
   readonly onSenderRefused?: () => void;
+  /** Addresses that bounced, complained or unsubscribed at Postmark are refused before a dispatch proof is written. */
+  readonly recipients?: PpRecipientGuard;
 }
 export interface PpFollowupDispatchResult { readonly sent: number; readonly failed: number; readonly unknown: number }
 
@@ -29,6 +31,8 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
   let sent = 0, failed = 0, unknown = 0, senderRefused = false;
   const now = () => input.now?.() ?? Date.now();
   const expiring = (leaseUntil: string) => Date.parse(leaseUntil) <= now() + LEASE_MARGIN_MS;
+  // Waited for before anything is claimed, so it never eats into a lease. After the first read of Postmark's lists it returns at once.
+  await input.recipients?.guard.whenReady();
   for (let page = 0; page < 4 && !input.stopped?.() && !senderRefused; page++) {
     const batch = await input.queue.claim(25, 120, input.config.testRecipients);
     for (const lease of batch) {
@@ -38,6 +42,11 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
       const to = normalizePpEmail(lease.email);
       if (!to) { failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is looked at again */ } continue; }
       if (input.config.testRecipients && !input.config.testRecipients.includes(to)) { failed++; continue; }
+      // Bounced, complained or unsubscribed at Postmark: a definite non-send with no proof spent, the same outcome
+      // Postmark's own "inactive recipient" answer would give. The run fails; it is never held as unknown.
+      if (input.recipients?.guard.decide(input.recipients.workspaceId, to, 'marketing').blocked) {
+        failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is refused again */ } continue;
+      }
       let proofIssued = false, handedOff = false, accepted = false;
       try {
         const prepared = await input.queue.prepare(lease);
@@ -49,7 +58,7 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
           displayName: prepared.displayName, label: input.config.fromName, link: input.config.link, unsubscribe,
           productName: input.config.fromName, unsubscribeOrigin: input.config.unsubscribeOrigin });
         handedOff = true;
-        const reference = await input.sender.sendRendered({ id: prepared.id, email: to, tag: 'pp_followup', rendered });
+        const reference = await input.sender.sendRendered({ id: prepared.id, email: to, tag: 'pp_followup', rendered, contactPointId: prepared.contactPointId });
         accepted = true;
         await input.queue.settle(lease, 'accepted', reference); sent++;
       } catch (error) {

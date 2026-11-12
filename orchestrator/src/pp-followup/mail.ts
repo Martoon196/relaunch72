@@ -1,7 +1,12 @@
 import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import type { PpFollowupRendered } from './content.js';
+import type { EmailSendGuard } from '../email-bounces/policy.js';
 
-export interface PpRenderedSend { readonly id: string; readonly email: string; readonly tag: string; readonly rendered: PpFollowupRendered }
+/** contactPointId travels with the message so a later bounce or complaint can stop that exact address for good. */
+export interface PpRenderedSend { readonly id: string; readonly email: string; readonly tag: string; readonly rendered: PpFollowupRendered; readonly contactPointId?: string }
+/** Refuses addresses that bounced, complained or unsubscribed at Postmark, for one workspace, before any provider call. */
+export interface PpRecipientGuard { readonly guard: EmailSendGuard; readonly workspaceId: string }
+const POINT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 export interface PpFollowupSender { sendRendered(item: PpRenderedSend): Promise<string> }
 
 /**
@@ -29,13 +34,19 @@ const scopeOf = (code: unknown): 'sender' | 'message' | 'recipient' =>
  * ErrorCode 0 acceptance. A definite refusal (HTTP 4xx, or an explicit non-zero ErrorCode) throws
  * PpNotSentError; everything uncertain throws a plain error and is treated by the dispatcher as unknown.
  */
-export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeof fetch = fetch): PpFollowupSender {
+export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeof fetch = fetch, recipients?: PpRecipientGuard): PpFollowupSender {
   return {
     async sendRendered(item) {
       const to = normalizePpEmail(item.email);
       if (!to) throw new PpNotSentError('recipient', 'Invalid recipient');
       // Test mode is checked again at the final recipient, after the database claim filter.
       if (config.testRecipients && !config.testRecipients.includes(to)) throw new PpNotSentError('sender', 'Recipient is outside the test list');
+      // Last check before the provider. The dispatcher already refuses these before a proof exists; a block that
+      // arrived in between is still a definite non-send for an address that can never be sent to.
+      if (recipients) {
+        await recipients.guard.whenReady();
+        if (recipients.guard.decide(recipients.workspaceId, to, 'marketing').blocked) throw new PpNotSentError('recipient', 'Recipient is blocked after a bounce, complaint or unsubscribe');
+      }
       const response = await fetcher('https://api.postmarkapp.com/email', {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
         headers: { 'content-type': 'application/json', accept: 'application/json', 'X-Postmark-Server-Token': config.token },
@@ -47,7 +58,7 @@ export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeo
             { Name: 'List-Unsubscribe', Value: `<${item.rendered.unsubscribe}>` },
             { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
           ],
-          Metadata: { send: item.id },
+          Metadata: { send: item.id, ...(item.contactPointId && POINT_ID.test(item.contactPointId) ? { point: item.contactPointId } : {}) },
         }),
       });
       // Provider bodies can echo recipients. Only the numeric error code and, on success, the message id are read.

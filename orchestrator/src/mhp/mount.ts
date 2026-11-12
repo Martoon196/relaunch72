@@ -41,6 +41,7 @@ interface MhpMountDependencies {
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
+  emailHealth?: MhpMarketingWorkspaceDependencies['emailHealth'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
   eventPhone?: { reminders?: Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>
@@ -197,7 +198,7 @@ export function createMhpMount(deps: MhpMountDependencies) {
       if (deps.sequences && await handleMhpSequence(req, res, url, { portal, sequences: deps.sequences })) return;
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;
       if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
-        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), whatsappEnabled: Boolean(deps.eventPhone?.whatsappOwner) })) return;
+        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailHealth: deps.emailHealth, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), whatsappEnabled: Boolean(deps.eventPhone?.whatsappOwner) })) return;
       if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth,
         ...(deps.eventPhone?.reminders?.fromSignup ? { phoneSignup: { fromSignup: deps.eventPhone.reminders.fromSignup.bind(deps.eventPhone.reminders) } } : {}) })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {

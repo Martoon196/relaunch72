@@ -35,6 +35,8 @@ import { assertMetaWhatsAppLiveCommandBoundaryReady } from '../whatsapp-live-pg/
 import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 import { PgMhpKitService } from './kit-service.js';
+import type { EmailBounceService } from '../email-bounces/service.js';
+import { MhpEmailHealth } from './email-health.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -59,6 +61,8 @@ export interface MhpRuntime {
   /** MHP009B: public webinar text reminders (off unless MHP_EVENT_PHONE_PUBLIC=enabled). */
   eventPhone?: { reminders?: PgMhpEventPhonePublic; owner?: MhpEventPhoneOwner; whatsappOwner?: MhpEventWhatsAppOwner; campaign: string };
   marketing: MhpMarketingConfig | null;
+  /** Bounced, complained and unsubscribed addresses for the MHP brand (no migration: the email service is the record). */
+  emailHealth?: MhpEmailHealth;
   readiness(): Promise<readonly string[]>;
 }
 
@@ -76,6 +80,8 @@ export async function buildMhpRuntime(input: {
   commandPool: Pool;
   contentAdapterPool?: Pool;
   contentCommandPool?: Pool;
+  /** Shared bounce/complaint handling; MHP adds only its own lasting effect to it. */
+  emailBounces?: EmailBounceService;
   registerPool(pool: Pool): void;
 }): Promise<MhpRuntime | undefined> {
   const { env, webPool, identityPool, commandPool } = input;
@@ -193,6 +199,9 @@ export async function buildMhpRuntime(input: {
       } : {}) });
   }
   const transactions = createPgCrmTransactionRunner(commandPool);
+  const growth = new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env));
+  const emailHealth = input.emailBounces ? new MhpEmailHealth({ bounces: input.emailBounces, growth }) : undefined;
+  if (emailHealth) input.emailBounces!.setEffects(emailHealth.workspaceId, emailHealth.effects());
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
   if (vaultKey && (vaultKey.length !== 32 || vaultKey.toString('base64') !== rawVaultKey)) {
@@ -213,7 +222,8 @@ export async function buildMhpRuntime(input: {
     ...(kits ? { kits } : {}),
     hq: new PgMhpHqService(webPool, identityPool),
     desk: new PgMhpDeskService(webPool, identityPool),
-    growth: new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env)),
+    growth,
+    ...(emailHealth ? { emailHealth } : {}),
     learning: new PgMhpLearningService(webPool, identityPool),
     marketingWorkspace,
     ownerEmail,

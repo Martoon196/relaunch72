@@ -4,6 +4,7 @@ import { parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-cont
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
+import { EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
 
 export interface MhpSequenceDispatch extends MhpOwnerEmailDispatch {
   unknown(lease: MhpOwnerEmailLease): Promise<void>;
@@ -34,7 +35,8 @@ export class PgMhpSequenceDispatch implements MhpSequenceDispatch {
 /** Phase-aware: every unclassified post-proof failure is unknown, never a definite rejection/retry. */
 export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
   testRecipients: readonly string[] | null; stopped?: () => boolean; now?: () => number;
-  onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void }): Promise<{ sent: number; failed: number; unknown: number }> {
+  onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void;
+  onBlocked?: (prospectId: string) => Promise<void> }): Promise<{ sent: number; failed: number; unknown: number }> {
   let sent = 0, failed = 0, unknown = 0;
   if (input.queue.enrolCaptures && !input.stopped?.()) {
     try { const result = await input.queue.enrolCaptures(100); try { input.onEntryResult?.(result); } catch { /* telemetry only */ } }
@@ -43,19 +45,31 @@ export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispa
   for (let page = 0; page < 4 && !input.stopped?.(); page++) {
     const batch = await input.queue.claim(25, 120, input.testRecipients);
     for (const lease of batch) {
-      let proofIssued = false;
+      let proofIssued = false, prospectId: string | null = null;
       try {
         const prepared = await input.queue.prepare(lease);
         if (!prepared) continue;
-        proofIssued = true;
+        proofIssued = true; prospectId = prepared.prospectId;
         if (Date.parse(prepared.leaseUntil) <= (input.now?.() ?? Date.now()) + 11_000) throw new Error('Sequence proof is expiring');
         const rendered = renderMhpOwnerEmail({ canonicalContent: prepared.exact.canonicalContent, contentSha256: prepared.exact.contentSha256,
           brand: parseMhpOwnerEmailBrand(prepared.exact.brand), firstName: prepared.firstName,
           label: typeof prepared.context.label === 'string' ? prepared.context.label : 'Webinar',
           link: typeof prepared.context.link === 'string' ? prepared.context.link : '', unsubscribe: mhpUnsubscribeUrl(input.unsubscribeSecret, prepared.prospectId) });
-        const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'owner_sequence', rendered });
+        const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'owner_sequence', rendered, prospectId: prepared.prospectId });
         await input.queue.settle(lease, true, reference); sent++;
-      } catch {
+      } catch (error) {
+        if (error instanceof EmailRecipientBlockedError && prospectId) {
+          // Classified and definite: the sender refused before any provider call, so nothing can have been delivered.
+          // The proof is closed as not accepted. A dead address also stops the person, so the next claim ends the run
+          // as 'unsubscribed'; any other block is refused again at each retry and the run fails by rule after five.
+          failed++;
+          if (refusalStopsPerson(error.reason)) {
+            try { await input.onBlocked?.(prospectId); } catch { /* Still refused here; the stop is retried at the next attempt. */ }
+          }
+          try { await input.queue.settle(lease, false, null); }
+          catch { try { await input.queue.unknown(lease); } catch { /* The open proof fences the run until an owner looks. */ } }
+          continue;
+        }
         if (proofIssued) { unknown++; try { await input.queue.unknown(lease); } catch { /* Unresolved durable proof fences retry after lease expiry. */ } }
         else failed++;
         // A proof may also have committed before a failed DB response. Claim detects
