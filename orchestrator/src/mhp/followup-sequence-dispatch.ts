@@ -4,7 +4,7 @@ import { parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-cont
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
-import { EmailRecipientBlockedError } from '../email-bounces/policy.js';
+import { EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
 
 export interface MhpSequenceDispatch extends MhpOwnerEmailDispatch {
   unknown(lease: MhpOwnerEmailLease): Promise<void>;
@@ -60,9 +60,12 @@ export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispa
       } catch (error) {
         if (error instanceof EmailRecipientBlockedError && prospectId) {
           // Classified and definite: the sender refused before any provider call, so nothing can have been delivered.
-          // Stopping the person makes the next claim end the run as 'unsubscribed'; the proof is closed as not accepted.
+          // The proof is closed as not accepted. A dead address also stops the person, so the next claim ends the run
+          // as 'unsubscribed'; any other block is refused again at each retry and the run fails by rule after five.
           failed++;
-          try { await input.onBlocked?.(prospectId); } catch { /* Still refused here; the stop is retried at the next attempt. */ }
+          if (refusalStopsPerson(error.reason)) {
+            try { await input.onBlocked?.(prospectId); } catch { /* Still refused here; the stop is retried at the next attempt. */ }
+          }
           try { await input.queue.settle(lease, false, null); }
           catch { try { await input.queue.unknown(lease); } catch { /* The open proof fences the run until an owner looks. */ } }
           continue;

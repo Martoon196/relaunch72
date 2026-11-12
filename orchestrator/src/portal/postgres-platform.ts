@@ -199,7 +199,7 @@ import { StudioRelay } from '../webinars/studio.js';
 import type { WebinarSetupInput } from './router.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 import type { MhpKitCrmRecorder, MhpKitReplayRegistrar } from '../mhp/kit-service.js';
-import { loadEmailBounceConfig } from '../email-bounces/config.js';
+import { emailBounceHandlingDisabled, loadEmailBounceConfig } from '../email-bounces/config.js';
 import { EmailBounceService } from '../email-bounces/service.js';
 import { mhpEmailBounceSourceDefault } from '../mhp/email-health.js';
 import { ppEmailBounceEffects, ppEmailBounceSourceDefault } from '../pp-followup/bounces.js';
@@ -1343,7 +1343,7 @@ export async function buildPgPortalPlatform(
     // without it the pages show the exact missing settings instead of fake controls.
     const webinarConfig = loadWebinarConfig(env);
     // One bounce handler for every brand, chosen by configuration. EMAIL_BOUNCE_HANDLING=off leaves it with no sources.
-    const emailBounces = new EmailBounceService({ log: line => (line.includes('"level":"warn"') ? console.warn : console.info)(line), config: env.EMAIL_BOUNCE_HANDLING?.trim() === 'off'
+    const emailBounces = new EmailBounceService({ log: line => (line.includes('"level":"warn"') ? console.warn : console.info)(line), config: emailBounceHandlingDisabled(env)
       ? { sources: [], blockers: [] }
       : loadEmailBounceConfig(env, { webinarSenders: webinarConfig.senders.values(),
         // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.

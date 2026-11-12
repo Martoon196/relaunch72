@@ -54,7 +54,7 @@ Delivery is a one-minute lease/settle loop on the existing process: at-least-onc
 | `MHP_WEBINAR_CAMPAIGN` | `webinar-YYYY-MM-DD` | Change for each new webinar so reminders are keyed separately. |
 | `MHP_POSTMARK_WEBHOOK_SECRET` | none | 24 to 200 characters, no spaces. The password Postmark sends with every bounce webhook. Until it is set the webhook stays closed; the catch-up read of Postmark still runs. |
 | `EMAIL_BOUNCE_SOURCES` | none | Optional JSON array that adds another brand's Postmark server to the same handler (see below). MHP needs no entry. |
-| `EMAIL_BOUNCE_HANDLING` | on | `off` switches the whole feature off: no webhook, no reads, nothing refused. |
+| `EMAIL_BOUNCE_HANDLING` | on | `off` (also `false`, `0`, `no` or `disabled`, in any letter case) switches the whole feature off: no webhook, no reads, nothing refused. |
 
 ## Bounces, spam reports and unsubscribes
 
@@ -65,11 +65,25 @@ No migration. Postmark is the record: its own lists are read at start-up (retrie
 | The email came straight back (hard bounce) | All marketing email, and webinar and sign-up emails too: the address does not work. |
 | They marked an email as spam | All marketing email, whatever it is about. A confirmation they ask for later still goes. |
 | They unsubscribed through Postmark's own link or list | All marketing email. |
-| Their mailbox refused email 3 times in 30 days | All marketing email. Fewer than that is only counted. |
+| Their mailbox refused email 3 times in 30 days | All marketing email, for as long as that stays true. Fewer than that is only counted. |
+
+One limit to know: when someone signs up for a webinar with the marketing box ticked, the confirmation itself is the marketing version, so for an address blocked from marketing it is refused; the reminders they asked for still go.
+
+Only failures that say something about the address count towards the three: Postmark's `SoftBounce`, `DnsError` and `Unknown`. `Blocked` and `SpamNotification` mean the receiving provider refused the sender or the content, so they are not counted against the address (one bad day at a large mailbox provider would otherwise block everyone there for a month). A hard bounce that Postmark did not switch the address off for (`Inactive: false`) is counted as one of the three, not treated as a dead address.
 
 Email only: texts and WhatsApp are never touched. Sign-in links, receipts and purchase emails are not refused here: Postmark already stops repeats on that stream, and wrongly refusing a paying member's sign-in link costs more than one extra bounce.
 
-A blocked address is refused before Postmark is called, on any of the brand's streams. The person is then stopped through the same capability as the unsubscribe link, so queued emails are cancelled and running sequences end. If they sign up again with the box ticked while Postmark still lists them, they are refused and stopped again. To email a repaired address, reactivate it in Postmark; the next read follows.
+A blocked address is refused before Postmark is called, on any of the brand's streams. A refused email is a definite, recorded non-send: it is retried by the queue's own rule and fails after five attempts, and a sequence run fails with it.
+
+Separately, a person can be **stopped for good** through the same capability as the unsubscribe link. That capability cancels everything queued for them (including webinar reminders they asked for), ends their sequences, clears their marketing consent and cannot be undone from here, so it is used only where that is right:
+
+| Reason | When the person is stopped for good |
+| --- | --- |
+| Hard bounce | Always: when Postmark reports it, when a send to the address is refused, and at the owner's check. |
+| Spam report, or unsubscribe at Postmark | When Postmark reports it, and at the owner's check unless the person has signed up again since. Never because a later marketing email was refused: someone who signs up for the next webinar still gets the reminders they asked for, while their marketing email stays refused. |
+| 3 soft bounces in 30 days | Never. It is a temporary block held in the running process and lifts by itself. |
+
+The contact record has no reason column, so a person stopped for a bounce or a spam report looks exactly like someone who unsubscribed, and only they can undo it (by signing up again with the box ticked). To email a repaired address, reactivate it in Postmark: the block lifts at once when the webhook reports it, otherwise at the next read. That does not re-subscribe a person who was also stopped in the contact list.
 
 Because nothing is stored here, the block list is held in the running process and rebuilt from Postmark after a restart. With more than one web instance, an instance that did not receive a webhook learns of it at the next hourly read; the stop in the contact list applies everywhere at once. Sends wait up to 15 seconds for that first read; if Postmark cannot be read they go ahead, and Postmark itself still refuses addresses on its own per-stream list.
 

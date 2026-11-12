@@ -45,8 +45,11 @@ export function strongestReason(reasons: Iterable<EmailBlockReason>): EmailBlock
   return best;
 }
 
+/** Reasons that are final in themselves. A repeated soft bounce is a temporary state and lifts when the window passes. */
+export type LastingBlockReason = Exclude<EmailBlockReason, 'repeated_soft_bounce'>;
+
 /** A fact that blocks on its own; a single soft bounce only counts. */
-export function factBlockReason(kind: EmailFactKind): EmailBlockReason | null {
+export function factBlockReason(kind: EmailFactKind): LastingBlockReason | null {
   return kind === 'soft_bounce' ? null : kind;
 }
 
@@ -64,6 +67,16 @@ export interface EmailSendGuard {
   /** Resolves once the first read of the provider's lists has finished (or timed out). */
   whenReady(): Promise<void>;
   decide(workspaceId: string, email: string, purpose: EmailPurpose): EmailSendDecision;
+}
+
+/**
+ * Whether a send path that was just refused should also stop the PERSON for good in the brand's own records.
+ * Only a dead address does: the stop cancels everything queued for them, including event emails they asked for,
+ * and those must keep going to someone who is only blocked from marketing (a spam report or unsubscribe is
+ * recorded when it happens, by the webhook or the owner's check; a soft-bounce block is temporary).
+ */
+export function refusalStopsPerson(reason: EmailBlockReason): boolean {
+  return reason === 'hard_bounce';
 }
 
 /** Thrown by a sender that refused before any provider call: a definite non-send. */

@@ -121,6 +121,11 @@ test('PP webhook and sweep: a bounce reported for our own message records the ex
   assert.equal(service.registry.decide(PP, 'cross@example.com', 'marketing').blocked, true); assert.equal(stopped.length, 1, 'no contact point in the metadata: refused in memory only');
   await post('/api/provider-webhooks/postmark/pp', event({ ID: 503, Email: 'bad@example.com', Metadata: { point: 'not-a-uuid' } })); assert.equal(stopped.length, 1);
   assert.deepEqual(JSON.parse((await post('/api/provider-webhooks/postmark/pp', event({ ID: 504, MessageStream: 'outbound' }))).body), { received: true, outcome: 'ignored_stream' });
+  // Three soft bounces block the address for now, in memory. They never write the permanent "recipient unsubscribed" suppression row.
+  const OTHER_POINT = '5f0c2a9e-7d41-4b53-8a6e-0123456789cd';
+  for (const id of [601, 602, 603]) await post('/api/provider-webhooks/postmark/pp', event({ ID: id, Type: 'SoftBounce', Inactive: false, Email: 'full@example.com', Metadata: { send: 'send-3', point: OTHER_POINT } }));
+  assert.deepEqual(service.registry.decide(PP, 'full@example.com', 'marketing'), { blocked: true, reason: 'repeated_soft_bounce' });
+  assert.deepEqual(stopped, [POINT], 'a temporary block is not recorded as an unsubscribe');
 
   // PP switched off: no source, so the same address answers "not found" and nothing is read or refused.
   const off = new EmailBounceService({ config: loadEmailBounceConfig({ PP_POSTMARK_WEBHOOK_SECRET: WEBHOOK_SECRET },

@@ -15,6 +15,15 @@
 import type { EmailStreamKind } from './registry.js';
 
 export const EMAIL_BOUNCE_SOURCES_ENV = 'EMAIL_BOUNCE_SOURCES';
+export const EMAIL_BOUNCE_HANDLING_ENV = 'EMAIL_BOUNCE_HANDLING';
+
+/**
+ * The switch someone reaches for in a hurry: any usual spelling of "off" disables the whole feature
+ * (no webhook, no reads, nothing refused). Anything else, including unset, leaves it on.
+ */
+export function emailBounceHandlingDisabled(env: NodeJS.ProcessEnv): boolean {
+  return ['off', 'false', '0', 'no', 'disabled'].includes(env[EMAIL_BOUNCE_HANDLING_ENV]?.trim().toLowerCase() ?? '');
+}
 
 export interface EmailBounceSource {
   /** Path segment of this source's webhook address. */

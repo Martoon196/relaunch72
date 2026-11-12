@@ -8,7 +8,7 @@
  */
 
 import type { EmailBounceConfig, EmailBounceSource } from './config.js';
-import type { EmailBlockReason } from './policy.js';
+import type { LastingBlockReason } from './policy.js';
 import { EMAIL_HEALTH_WINDOW_DAYS } from './policy.js';
 import { createPostmarkBounceApi, type PostmarkBounceApi } from './postmark-api.js';
 import type { PostmarkBounceRow } from './postmark-events.js';
@@ -19,9 +19,13 @@ const PAGE_SIZE = 500;
 /** Postmark serves at most count + offset = 10,000 bounces per query. */
 const MAX_OFFSET = 10_000;
 
-/** What a brand does, with capabilities it already has, when an address must stop getting marketing email. */
+/**
+ * What a brand does, with capabilities it already has, when an address must stop getting marketing email for good.
+ * Called only for an event that is final in itself (hard bounce, spam report, unsubscribe), with that event's own
+ * reason; never for repeated soft bounces, which are a temporary block held in this process.
+ */
 export interface EmailBounceEffects {
-  onMarketingBlock(input: { readonly email: string; readonly reason: EmailBlockReason; readonly metadata: Readonly<Record<string, string>> }): Promise<void>;
+  onMarketingBlock(input: { readonly email: string; readonly reason: LastingBlockReason; readonly metadata: Readonly<Record<string, string>> }): Promise<void>;
 }
 export interface SweepResult { readonly streams: number; readonly failed: number; readonly suppressions: number; readonly bounces: number;
   /** Streams with more recent bounces than Postmark serves in one query (10,000). The suppression list, which decides who is blocked, is always complete. */

@@ -23,6 +23,26 @@ const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
+/**
+ * Reads a response body but never holds more than the cap in memory: an oversized answer is abandoned
+ * part-way, not buffered whole and measured afterwards (the web service has 512 MB in all).
+ */
+async function readCapped(response: Response, maximum: number): Promise<string> {
+  const declared = Number(response.headers.get('content-length') ?? '');
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  if (Number.isFinite(declared) && declared > maximum) { await reader.cancel().catch(() => undefined); throw new Error('too large'); }
+  const chunks: Uint8Array[] = []; let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maximum) { await reader.cancel().catch(() => undefined); throw new Error('too large'); }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, size).toString('utf8');
+}
+
 export function createPostmarkBounceApi(token: string, fetcher: typeof fetch = fetch): PostmarkBounceApi {
   const get = async (path: string): Promise<unknown> => {
     let response: Response;
@@ -32,8 +52,7 @@ export function createPostmarkBounceApi(token: string, fetcher: typeof fetch = f
     } catch { throw new PostmarkReadError(null); }
     if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new PostmarkReadError(response.status); }
     let text: string;
-    try { text = await response.text(); } catch { throw new PostmarkReadError(null); }
-    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw new PostmarkReadError(null);
+    try { text = await readCapped(response, MAX_RESPONSE_BYTES); } catch { throw new PostmarkReadError(null); }
     try { return parsePostmarkJson(text); } catch { throw new PostmarkReadError(null); }
   };
   return Object.freeze({

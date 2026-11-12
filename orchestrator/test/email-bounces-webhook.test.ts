@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  createPostmarkBounceWebhook, EmailBounceService, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES, type EmailBounceSource,
+  createPostmarkBounceWebhook, EmailBounceService, FixedWindowLimiter, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES, type EmailBounceSource,
 } from '../src/email-bounces/index.js';
 import { createApp, type AppDeps } from '../src/server/app.js';
 
@@ -98,10 +98,31 @@ test('soft bounces are counted and only the third inside 30 days blocks; unrelat
   assert.equal(f.service.registry.decide(MHP, 'full@example.invalid', 'marketing').blocked, false); assert.equal(f.effects.length, 0);
   assert.equal((await soft(3)).body.blocked, true);
   assert.deepEqual(f.service.registry.decide(MHP, 'full@example.invalid', 'marketing'), { blocked: true, reason: 'repeated_soft_bounce' });
-  assert.deepEqual(f.effects.map(effect => effect.reason), ['repeated_soft_bounce']);
+  assert.deepEqual(f.effects, [], 'a temporary block is held in the process only: it never stops the person for good in the brand\'s records');
   assert.deepEqual((await f.post('mhp', bounce({ ID: 9, Type: 'Transient', Inactive: false }), f.auth)).body, { received: true, outcome: 'ignored' });
   assert.deepEqual((await f.post('mhp', { RecordType: 'Delivery', MessageStream: 'broadcast', Recipient: 'ok@example.invalid' }, f.auth)).body, { received: true, outcome: 'ignored' });
   assert.deepEqual((await f.post('mhp', { RecordType: 'Open', MessageStream: 'broadcast' }, f.auth)).body, { received: true, outcome: 'ignored' });
+});
+
+test('the lasting stop follows what the event itself says: never an older block, a tally, a provider-side refusal or a bounce Postmark did not act on', async () => {
+  const f = fixture();
+  // The receiving provider refused the sender or the content. That says nothing about the address, however often it happens.
+  for (const [id, type] of [[1, 'Blocked'], [2, 'SpamNotification'], [3, 'Blocked'], [4, 'SpamNotification']] as const) {
+    assert.deepEqual((await f.post('mhp', bounce({ ID: id, Type: type, Inactive: false, Email: 'works@example.invalid' }), f.auth)).body, { received: true, outcome: 'ignored' });
+  }
+  assert.equal(f.service.registry.decide(MHP, 'works@example.invalid', 'marketing').blocked, false, 'one bad day at a mailbox provider blocks nobody');
+  // A hard bounce Postmark did NOT switch the address off for: it keeps sending and will not list it, so it is only counted.
+  const kept = await f.post('mhp', bounce({ ID: 10, Inactive: false, Email: 'kept@example.invalid' }), f.auth);
+  assert.deepEqual([kept.body.outcome, kept.body.blocked], ['soft_bounce', false]);
+  assert.equal(f.service.registry.decide(MHP, 'kept@example.invalid', 'service').blocked, false);
+  assert.deepEqual(f.effects, []);
+  // Someone who unsubscribed at Postmark earlier, then has one soft bounce on an email they asked for: blocked from marketing as before, not stopped again.
+  await f.post('mhp', { RecordType: 'SubscriptionChange', ServerID: 23, MessageStream: 'broadcast', ChangedAt: '2026-11-12T09:00:00Z', Recipient: 'left@example.invalid',
+    SuppressSending: true, SuppressionReason: 'ManualSuppression', Metadata: {} }, f.auth);
+  assert.equal(f.effects.length, 1);
+  const later = await f.post('mhp', bounce({ ID: 11, Type: 'SoftBounce', Inactive: false, MessageStream: 'outbound', Email: 'left@example.invalid' }), f.auth);
+  assert.deepEqual([later.body.outcome, later.body.blocked], ['soft_bounce', true]);
+  assert.equal(f.effects.length, 1, 'a soft bounce never re-applies the stop, which would cancel the reminders they asked for');
 });
 
 test('an unsubscribe through Postmark\'s own link blocks marketing; a later re-subscribe there lifts only that block', async () => {
@@ -166,6 +187,21 @@ test('rate limits: a flood from one caller and repeated wrong secrets are slowed
   assert.equal(f.service.registry.decide(MHP, 'd@example.invalid', 'marketing').blocked, false);
   f.advance(61_000);
   assert.equal((await f.post('mhp', bounce({ ID: 4, Email: 'd@example.invalid' }), f.auth)).status, 200, 'Postmark\'s retry lands after the window');
+});
+
+test('the rate limiter costs a bounded amount of memory and work however many different callers arrive', () => {
+  const limiter = new FixedWindowLimiter(3, 60_000);
+  const started = process.hrtime.bigint();
+  // One caller rotating through 200,000 addresses inside a single window: nothing has expired, so nothing can be purged.
+  for (let i = 0; i < 200_000; i++) assert.equal(limiter.allow(`2001:db8::${i.toString(16)}`, NOW + Math.floor(i / 10)), true);
+  assert.ok(limiter.size <= 40_000, `the table is capped (${limiter.size} entries)`);
+  assert.ok(Number(process.hrtime.bigint() - started) / 1e6 < 5_000, 'and each request does not rescan it');
+  // The real sender, arriving in the middle of the flood, is still counted correctly.
+  const at = NOW + 20_000;
+  assert.deepEqual([1, 2, 3, 4].map(() => limiter.allow('postmark', at)), [true, true, true, false]);
+  for (let i = 0; i < 15_000; i++) limiter.allow(`2001:db8:1::${i.toString(16)}`, at + 1);
+  assert.equal(limiter.allow('postmark', at + 2), false, 'its window survives while newer callers come and go');
+  assert.equal(limiter.allow('postmark', at + 60_001), true, 'and opens again when the window ends');
 });
 
 test('when the lasting stop fails the event is not remembered, so Postmark\'s retry completes it; the address is already refused meanwhile', async () => {

@@ -23,5 +23,9 @@ export function ppEmailBounceSourceDefault(config: PpMarketingConfig | null | un
  * the true reason, and stopping an address known only from Postmark's list, needs an address-keyed function (0153).
  */
 export function ppEmailBounceEffects(unsubscriber: PpFollowupUnsubscriber): EmailBounceEffects {
-  return { onMarketingBlock: async ({ metadata }) => { if (metadata.point && UUID.test(metadata.point)) await unsubscriber.unsubscribe(metadata.point); } };
+  // Called only for an event that is final in itself (hard bounce, spam report, unsubscribe at Postmark), never for a
+  // temporary soft-bounce block: the suppression row is permanent and says "recipient unsubscribed".
+  return { onMarketingBlock: async ({ metadata, reason }) => {
+    if ((reason === 'hard_bounce' || reason === 'spam_complaint' || reason === 'unsubscribed') && metadata.point && UUID.test(metadata.point)) await unsubscriber.unsubscribe(metadata.point);
+  } };
 }

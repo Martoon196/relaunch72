@@ -15,7 +15,12 @@ export function parsePostmarkJson(text: string): unknown {
 }
 
 const HARD = new Set(['HardBounce', 'BadEmailAddress']);
-const SOFT = new Set(['SoftBounce', 'DnsError', 'SpamNotification', 'Blocked', 'Unknown']);
+/**
+ * Only failures that say something about the ADDRESS count towards the repeated-soft-bounce block.
+ * 'Blocked' and 'SpamNotification' are a receiving provider refusing the sender or the content: one bad day at
+ * a large mailbox provider would otherwise block every one of its (working) addresses for a month.
+ */
+const SOFT = new Set(['SoftBounce', 'DnsError', 'Unknown']);
 const MANUAL = new Set(['ManuallyDeactivated', 'Unsubscribe']);
 
 /** Maps a Postmark bounce Type to what it means for the address. Null means "nothing to act on". */
@@ -87,8 +92,11 @@ export function readPostmarkWebhook(payload: unknown): PostmarkWebhookReading {
   if (payload.RecordType === 'Bounce' || payload.RecordType === 'SpamComplaint') {
     const email = normalizeBounceEmail(payload.Email), id = identifier(payload.ID), at = instant(payload.BouncedAt);
     if (!stream || !email || !id || at === null) return { outcome: 'invalid' };
-    const kind = payload.RecordType === 'SpamComplaint' ? 'spam_complaint' : classifyPostmarkBounce(payload.Type, payload.Inactive);
+    let kind = payload.RecordType === 'SpamComplaint' ? 'spam_complaint' : classifyPostmarkBounce(payload.Type, payload.Inactive);
     if (!kind) return { outcome: 'ignored', why: 'bounce_type' };
+    // Postmark says it did NOT switch the address off, so it will keep sending and its list will not show it.
+    // Blocking every email and stopping the person for good on that would outlive Postmark's own view: count it instead.
+    if (kind === 'hard_bounce' && payload.Inactive === false) kind = 'soft_bounce';
     return { outcome: 'event', event: Object.freeze({ eventId: `bounce:${id}`, kind, email, stream, serverId, at, metadata: metadata(payload.Metadata), counts: true }) };
   }
   if (payload.RecordType === 'SubscriptionChange') {

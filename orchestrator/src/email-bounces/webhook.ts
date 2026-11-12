@@ -16,6 +16,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { EmailBounceSource } from './config.js';
+import { factBlockReason } from './policy.js';
 import { parsePostmarkJson, readPostmarkWebhook } from './postmark-events.js';
 import type { EmailBounceService } from './service.js';
 
@@ -23,13 +24,33 @@ export const POSTMARK_BOUNCE_WEBHOOK_PREFIX = '/api/provider-webhooks/postmark/'
 export const POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 export const POSTMARK_BOUNCE_WEBHOOK_SECRET_HEADER = 'x-postmark-webhook-secret';
 
-class FixedWindowLimiter {
+const LIMITER_PURGE_ABOVE = 20_000, LIMITER_MAX_KEYS = 40_000;
+/**
+ * Per-caller fixed window. Its own cost is bounded whatever the callers do: an unauthenticated flood from many
+ * addresses (one IPv6 allocation is enough) must not make each request scan the whole table, or grow it for ever.
+ */
+export class FixedWindowLimiter {
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
+  private nextPurgeAt = 0;
   constructor(private readonly limit: number, private readonly windowMs: number) {}
+  get size(): number { return this.hits.size; }
   allow(key: string, now: number): boolean {
-    if (this.hits.size > 20_000) for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+    // Expired windows are swept at most once a second, not on every request.
+    if (this.hits.size > LIMITER_PURGE_ABOVE && now >= this.nextPurgeAt) {
+      this.nextPurgeAt = now + 1_000;
+      for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+    }
     const hit = this.hits.get(key);
-    if (!hit || hit.resetAt <= now) { this.hits.set(key, { count: 1, resetAt: now + this.windowMs }); return true; }
+    if (!hit || hit.resetAt <= now) {
+      this.hits.delete(key); this.hits.set(key, { count: 1, resetAt: now + this.windowMs });
+      // Hard bound: the oldest windows are forgotten first, a quarter of the table in one pass (removing them
+      // one at a time is slow on a large Map). A real sender's window is recent, so it is kept.
+      if (this.hits.size > LIMITER_MAX_KEYS) {
+        let excess = LIMITER_MAX_KEYS / 4;
+        for (const k of this.hits.keys()) { if (excess-- <= 0) break; this.hits.delete(k); }
+      }
+      return true;
+    }
     hit.count += 1;
     return hit.count <= this.limit;
   }
@@ -139,9 +160,11 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           const result = service.registry.record(source.workspaceId, { sourceKey: source.key, stream: event.stream, id: event.eventId,
             kind: event.kind, email: event.email, at: event.at }, event.counts);
           blocked = result.marketingBlock !== null;
-          if (result.marketingBlock) {
-            await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: result.marketingBlock, metadata: event.metadata });
-          }
+          // The lasting stop follows what THIS event says, never an older block or a tally: a hard bounce, a spam
+          // report or an unsubscribe is final in itself. A soft bounce, even the one that tips the address over the
+          // limit, is a temporary state held in this process and lifts by itself; it never rewrites a person's record.
+          const lasting = factBlockReason(event.kind);
+          if (lasting) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
         }
       } catch {
         // Not remembered: Postmark's retry repeats the lasting effect. The in-process block already holds.

@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import { MHP_OWNER_EMAIL_UUID, parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-content.js';
-import { EmailRecipientBlockedError } from '../email-bounces/policy.js';
+import { EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
 
 export interface MhpOwnerEmailLease { id: string; leaseId: string; leaseUntil: string }
 export interface MhpOwnerEmailPrepared extends MhpOwnerEmailLease {
@@ -74,8 +74,9 @@ export async function dispatchMhpOwnerEmails(input: { queue: MhpOwnerEmailDispat
         await input.queue.settle(lease, true, reference); sent++;
       } catch (error) {
         failed++;
-        // Refused before the provider was called because the address bounced, complained or unsubscribed.
-        if (error instanceof EmailRecipientBlockedError && prospectId) {
+        // Refused before the provider was called. Every refusal is a definite non-send; only a dead address also
+        // stops the person, because that stop cancels the event emails a marketing-only block must leave alone.
+        if (error instanceof EmailRecipientBlockedError && refusalStopsPerson(error.reason) && prospectId) {
           try { await input.onBlocked?.(prospectId); } catch { /* Still refused here; the stop is retried at the next attempt. */ }
         }
         try { await input.queue.settle(lease, false, null); } catch { /* Expired leases retry under a new proof; never fallback to legacy copy. */ }

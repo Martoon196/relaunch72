@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  blocksPurpose, classifyPostmarkBounce, EmailBlockRegistry, EmailBounceService, loadEmailBounceConfig, londonMonthStart, parsePostmarkJson,
+  blocksPurpose, classifyPostmarkBounce, EmailBlockRegistry, EmailBounceService, emailBounceHandlingDisabled, loadEmailBounceConfig, londonMonthStart, parsePostmarkJson,
+  refusalStopsPerson, factBlockReason,
   readPostmarkWebhook, sweepPostmarkSource, createPostmarkBounceApi, PostmarkReadError, SOFT_BOUNCE_LIMIT,
   type EmailBounceSource, type EmailFact, type PostmarkBounceApi,
 } from '../src/email-bounces/index.js';
@@ -17,6 +18,18 @@ test('policy: a hard bounce stops all email, everything else stops marketing onl
   }
 });
 
+test('policy: only a dead address stops the person from a send path, and a soft bounce is never final in itself', () => {
+  assert.equal(refusalStopsPerson('hard_bounce'), true);
+  for (const reason of ['spam_complaint', 'unsubscribed', 'repeated_soft_bounce'] as const) assert.equal(refusalStopsPerson(reason), false);
+  assert.equal(factBlockReason('soft_bounce'), null);
+  assert.deepEqual((['hard_bounce', 'spam_complaint', 'unsubscribed'] as const).map(factBlockReason), ['hard_bounce', 'spam_complaint', 'unsubscribed']);
+});
+
+test('the off switch is forgiving about how "off" is typed, and nothing else switches the feature off', () => {
+  for (const value of ['off', 'OFF', ' Off ', 'false', 'FALSE', '0', 'no', 'disabled']) assert.equal(emailBounceHandlingDisabled({ EMAIL_BOUNCE_HANDLING: value }), true, value);
+  for (const value of [undefined, '', 'on', 'true', '1', 'offf']) assert.equal(emailBounceHandlingDisabled({ EMAIL_BOUNCE_HANDLING: value }), false, String(value));
+});
+
 test('Postmark records: bounce IDs beyond a JavaScript number stay exact, and each type maps to one meaning', () => {
   const body = '{"RecordType":"Bounce","MessageStream":"broadcast","ID": 4323372036854775807,"Type":"HardBounce","TypeCode":1,"Email":"Gone@Example.invalid","BouncedAt":"2026-11-11T16:33:54.9070259Z","Inactive":true,"ServerID":23,"Metadata":{"send":"s-1","prospect":"0b5a3d52-3c6a-4f43-9c0e-0123456789ab","n":5},"Details":"a \\"ID\\": 7 inside text"}';
   const reading = readPostmarkWebhook(parsePostmarkJson(body));
@@ -29,6 +42,9 @@ test('Postmark records: bounce IDs beyond a JavaScript number stay exact, and ea
   assert.equal(classifyPostmarkBounce('SoftBounce', false), 'soft_bounce'); assert.equal(classifyPostmarkBounce('DnsError', false), 'soft_bounce');
   assert.equal(classifyPostmarkBounce('SpamComplaint', true), 'spam_complaint'); assert.equal(classifyPostmarkBounce('ManuallyDeactivated', true), 'unsubscribed');
   assert.equal(classifyPostmarkBounce('Transient', false), null); assert.equal(classifyPostmarkBounce('AutoResponder', false), null);
+  assert.equal(classifyPostmarkBounce('Blocked', false), null, 'the receiving provider refused the sender, not the address');
+  assert.equal(classifyPostmarkBounce('SpamNotification', false), null, 'filtered as spam by the receiving provider: about the content, not the address');
+  assert.equal(classifyPostmarkBounce('Blocked', true), 'hard_bounce', 'unless Postmark itself switched the address off');
   assert.equal(classifyPostmarkBounce('SomethingNew', true), 'hard_bounce', 'an address Postmark switched off is treated as not working');
   assert.deepEqual(readPostmarkWebhook({ RecordType: 'Delivery', MessageStream: 'broadcast' }), { outcome: 'ignored', why: 'record_type' });
   assert.deepEqual(readPostmarkWebhook({ RecordType: 'Bounce', MessageStream: 'broadcast', ID: 1, Type: 'HardBounce', Email: 'not-an-address', BouncedAt: '2026-11-11T10:00:00Z' }), { outcome: 'invalid' });
@@ -93,6 +109,27 @@ test('registry: a list read replaces a stream, releases what Postmark no longer 
   assert.equal(registry.decide(WS, 'left@example.invalid', 'marketing').blocked, false);
 });
 
+test('registry: an address reactivated at Postmark while a list read is in flight stays released; a stale list cannot block it again', () => {
+  let now = NOW;
+  const registry = new EmailBlockRegistry(() => now);
+  const read = (emails: string[], startedAt: number) => registry.reconcile(WS, { sourceKey: 'mhp', stream: 'broadcast', kind: 'marketing', startedAt,
+    suppressions: emails.map(email => ({ email, kind: 'hard_bounce' as const, at: NOW - 5 * DAY })), bounces: [], sent: 10, bounced: 1, complaints: 0 });
+  read(['fixed@example.invalid', 'dead@example.invalid'], now);
+  assert.equal(registry.decide(WS, 'fixed@example.invalid', 'service').blocked, true);
+  // A read starts and fetches the list; before it is applied, Postmark's webhook says the address was reactivated.
+  const startedAt = now; now += 2_000;
+  registry.release(WS, 'mhp', 'broadcast', 'fixed@example.invalid');
+  now += 2_000;
+  read(['fixed@example.invalid', 'dead@example.invalid'], startedAt);
+  assert.equal(registry.decide(WS, 'fixed@example.invalid', 'service').blocked, false, 'the newer word from Postmark wins over the list fetched before it');
+  assert.equal(registry.decide(WS, 'dead@example.invalid', 'service').blocked, true, 'only that address, only that stream');
+  assert.equal(registry.decide(OTHER, 'fixed@example.invalid', 'service').blocked, false);
+  // A later read is newer than the reactivation: if Postmark lists the address again (it bounced again), it is blocked again.
+  now += 3_600_000;
+  read(['fixed@example.invalid', 'dead@example.invalid'], now);
+  assert.equal(registry.decide(WS, 'fixed@example.invalid', 'service').blocked, true);
+});
+
 test('registry: the owner snapshot counts people this month and uses the provider totals for the 30-day rate', () => {
   const registry = new EmailBlockRegistry(() => NOW);
   registry.reconcile(WS, { sourceKey: 'mhp', stream: 'broadcast', kind: 'marketing', startedAt: NOW,
@@ -112,6 +149,26 @@ test('registry: the owner snapshot counts people this month and uses the provide
   assert.equal(registry.snapshot(WS).incomplete, true); assert.equal(registry.snapshot(WS).window.sent, 100, 'the last good totals are kept');
   assert.equal(new Date(londonMonthStart(NOW)).toISOString(), '2026-11-01T00:00:00.000Z');
   assert.equal(new Date(londonMonthStart(Date.parse('2026-07-15T12:00:00Z'))).toISOString(), '2026-06-30T23:00:00.000Z', 'British Summer Time');
+});
+
+test('"this month" starts at UK midnight on the 1st even after the clocks change inside the month', () => {
+  const start = (iso: string) => new Date(londonMonthStart(Date.parse(iso))).toISOString();
+  // March starts in GMT and ends in BST (clocks forward 29 March 2026): the start is still midnight GMT on the 1st.
+  assert.equal(start('2026-03-28T12:00:00Z'), '2026-03-01T00:00:00.000Z');
+  assert.equal(start('2026-03-30T11:00:00Z'), '2026-03-01T00:00:00.000Z', 'not 23:00 on 28 February');
+  assert.equal(start('2026-03-31T22:59:59Z'), '2026-03-01T00:00:00.000Z');
+  assert.equal(start('2026-03-31T23:00:00Z'), '2026-03-31T23:00:00.000Z', 'midnight BST on 1 April');
+  // October starts in BST and ends in GMT (clocks back 25 October 2026): the start is still midnight BST on the 1st.
+  assert.equal(start('2026-10-24T12:00:00Z'), '2026-09-30T23:00:00.000Z');
+  assert.equal(start('2026-10-28T12:00:00Z'), '2026-09-30T23:00:00.000Z', 'not an hour into 1 October');
+  assert.equal(start('2026-10-31T23:59:59Z'), '2026-09-30T23:00:00.000Z');
+  assert.equal(start('2026-11-01T00:00:00Z'), '2026-11-01T00:00:00.000Z');
+  assert.equal(start('2027-01-01T00:00:00Z'), '2027-01-01T00:00:00.000Z'); assert.equal(start('2026-12-31T23:59:59.999Z'), '2026-12-01T00:00:00.000Z');
+  // A bounce in the first hour of 1 October (UK time) belongs to October when read at the end of the month.
+  const late = Date.parse('2026-10-28T12:00:00Z'), registry = new EmailBlockRegistry(() => late);
+  registry.record(WS, fact({ id: 'bounce:oct', at: Date.parse('2026-09-30T23:30:00Z') }));
+  registry.record(WS, fact({ id: 'bounce:sep', email: 'sept@example.invalid', at: Date.parse('2026-09-30T22:30:00Z') }));
+  assert.equal(registry.snapshot(WS).month.bounced, 1);
 });
 
 test('registry: send paths wait for the first list read once, then never again', async () => {
@@ -212,6 +269,21 @@ test('Postmark reads use the server token, a fixed host and never surface a resp
   await assert.rejects(api.suppressions('missing'), (error: unknown) => error instanceof PostmarkReadError && error.status === 401 && !/example|secret/u.test(String(error)));
   await assert.rejects(createPostmarkBounceApi('t', (async () => { throw new Error('network gone@example.invalid'); }) as typeof fetch).totals('x', 'a', 'b'),
     (error: unknown) => error instanceof PostmarkReadError && !/example/u.test(String(error)));
+});
+
+test('an oversized Postmark answer is abandoned part-way: it is never buffered whole and measured afterwards', async () => {
+  const MB = 1024 * 1024, chunk = new Uint8Array(MB).fill(0x20);
+  let pulled = 0, cancelled = false;
+  const endless = (headers: Record<string, string> = {}) => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) { pulled++; if (pulled > 200) controller.close(); else controller.enqueue(chunk); }, cancel() { cancelled = true; } }, { highWaterMark: 0 }), { status: 200, headers });
+  await assert.rejects(createPostmarkBounceApi('t', (async () => endless()) as typeof fetch).suppressions('broadcast'), PostmarkReadError);
+  assert.equal(cancelled, true, 'the download is cancelled');
+  assert.ok(pulled <= 14, `stopped just past the 12 MB cap, not after all 200 MB (read ${pulled} MB)`);
+  pulled = 0; cancelled = false;
+  await assert.rejects(createPostmarkBounceApi('t', (async () => endless({ 'content-length': String(500 * MB) })) as typeof fetch).totals('x', 'a', 'b'), PostmarkReadError);
+  assert.ok(pulled <= 1, 'a declared size over the cap is refused before the body is read');
+  const empty = createPostmarkBounceApi('t', (async () => new Response(null, { status: 200 })) as typeof fetch);
+  await assert.rejects(empty.totals('x', 'a', 'b'), PostmarkReadError);
 });
 
 test('service: one sweep per source at a time, an owner check does not hammer Postmark, and the timer opens the gate even on failure', async () => {

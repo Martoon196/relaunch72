@@ -4,7 +4,7 @@ import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
-import { EmailRecipientBlockedError, type EmailSendGuard } from '../email-bounces/policy.js';
+import { EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -175,7 +175,7 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
     owner?: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string };
     sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
       onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void };
-    /** A send was refused because the address bounced, complained or unsubscribed: stop that person's email for good. */
+    /** A send was refused because the address does not work (hard bounce): stop that person's email for good. */
     onBlocked?: (prospectId: string) => Promise<void> } = {}): () => void {
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
@@ -191,7 +191,9 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
             await growth.settle(item.id, true, reference); sent++;
           } catch (error) {
             failed++;
-            if (error instanceof EmailRecipientBlockedError && item.template !== 'application_notify') {
+            // Only a dead address stops the person here. Anyone blocked from marketing alone keeps the event emails
+            // they asked for (their webinar reminders are queued beside this one, and the stop would cancel them).
+            if (error instanceof EmailRecipientBlockedError && refusalStopsPerson(error.reason) && item.template !== 'application_notify') {
               try { await options.onBlocked?.(item.prospectId); } catch { /* The address stays refused here; the stop is retried at the next attempt. */ }
             }
             try { await growth.settle(item.id, false, null); } catch { /* The lease expires and the send retries. */ }

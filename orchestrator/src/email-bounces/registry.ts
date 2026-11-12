@@ -21,6 +21,7 @@ const DAY = 86_400_000;
 const FACT_RETENTION_DAYS = 45;
 const MAX_FACTS_PER_WORKSPACE = 50_000;
 const MAX_SEEN_EVENTS = 10_000;
+const MAX_RELEASES = 10_000;
 /** A webhook fact newer than this is kept even when a list read does not show it yet. */
 const FRESH_BLOCK_GRACE_MS = 15 * 60_000;
 
@@ -67,20 +68,32 @@ export interface EmailHealthSnapshot {
 const blockKey = (sourceKey: string, stream: string, reason: EmailBlockReason): string => `${sourceKey}\u0000${stream}\u0000${reason}`;
 const streamKey = (sourceKey: string, stream: string): string => `${sourceKey}\u0000${stream}`;
 const factKey = (sourceKey: string, id: string): string => `${sourceKey}\u0000${id}`;
+const releaseKey = (workspaceId: string, sourceKey: string, stream: string, email: string): string => `${workspaceId.toLowerCase()}\u0000${sourceKey}\u0000${stream}\u0000${email}`;
 const rate = (part: number | null, whole: number | null): number | null => part !== null && whole !== null && whole > 0 ? part / whole : null;
 
-/** Start of the calendar month in Europe/London, as a UTC instant. */
-export function londonMonthStart(now: number): number {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+const LONDON_PARTS = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+function londonWallClock(at: number): { year: number; month: number; asUtc: number } {
+  const parts = LONDON_PARTS.formatToParts(at);
   const part = (type: string): number => Number(parts.find(p => p.type === type)?.value ?? 0);
-  const elapsed = ((part('day') - 1) * 24 + part('hour')) * 3_600_000 + part('minute') * 60_000 + part('second') * 1000 + (now % 1000);
-  return now - elapsed;
+  return { year: part('year'), month: part('month'), asUtc: Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second')) };
+}
+/**
+ * Start of the calendar month in Europe/London, as a UTC instant. The clocks change INSIDE March and October,
+ * so the offset is taken at the first of the month itself, never from "now".
+ */
+export function londonMonthStart(now: number): number {
+  const { year, month } = londonWallClock(now);
+  const guess = Date.UTC(year, month - 1, 1);
+  // London's offset at midnight on the 1st (0 or +1 hour); the clocks never change at that moment.
+  return guess - (londonWallClock(guess).asUtc - guess);
 }
 
 export class EmailBlockRegistry implements EmailSendGuard {
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly seen = new Set<string>();
+  /** When the provider last said "this address may be emailed again", so a list read that started earlier cannot undo it. */
+  private readonly released = new Map<string, number>();
   private ready = false;
   private readonly readyWaiters: (() => void)[] = [];
 
@@ -192,6 +205,9 @@ export class EmailBlockRegistry implements EmailSendGuard {
   /** The provider says this address may be emailed again on this stream (the person re-subscribed or was reactivated). */
   release(workspaceId: string, sourceKey: string, stream: string, email: string): void {
     const state = this.state(workspaceId), blocks = state.blocks.get(email);
+    this.released.delete(releaseKey(workspaceId, sourceKey, stream, email));
+    this.released.set(releaseKey(workspaceId, sourceKey, stream, email), this.now());
+    if (this.released.size > MAX_RELEASES) this.released.delete(this.released.keys().next().value as string);
     if (!blocks) return;
     for (const [key, block] of blocks) if (block.sourceKey === sourceKey && block.stream === stream) blocks.delete(key);
     if (blocks.size === 0) state.blocks.delete(email);
@@ -219,8 +235,12 @@ export class EmailBlockRegistry implements EmailSendGuard {
       if (blocks.size === 0) state.blocks.delete(email);
     }
     for (const row of input.suppressions) {
+      // The list was fetched before the provider told us the address was reactivated: the newer word wins, the next read confirms it.
+      const releasedAt = this.released.get(releaseKey(workspaceId, input.sourceKey, input.stream, row.email));
+      if (releasedAt !== undefined && releasedAt >= input.startedAt) continue;
       this.setBlock(state, row.email, { reason: row.kind, since: row.at ?? input.startedAt, sourceKey: input.sourceKey, stream: input.stream, recordedAt: now, origin: 'list' });
     }
+    for (const [key, releasedAt] of this.released) if (releasedAt < input.startedAt - FRESH_BLOCK_GRACE_MS) this.released.delete(key);
     for (const row of input.bounces) this.addFact(state, { sourceKey: input.sourceKey, stream: input.stream, id: `bounce:${row.id}`, kind: row.kind, email: row.email, at: row.at });
     this.prune(state, now);
     state.streams.set(streamKey(input.sourceKey, input.stream), Object.freeze({ sourceKey: input.sourceKey, stream: input.stream, kind: input.kind,
@@ -246,7 +266,8 @@ export class EmailBlockRegistry implements EmailSendGuard {
       let since = Infinity;
       for (const block of state.blocks.get(email)?.values() ?? []) if (block.reason === reason) since = Math.min(since, block.since);
       if (reason === 'repeated_soft_bounce') {
-        const soft = [...(state.factsByEmail.get(email) ?? [])].map(key => state.facts.get(key)!).filter(fact => fact.kind === 'soft_bounce').map(fact => fact.at).sort((a, b) => a - b);
+        const soft = [...(state.factsByEmail.get(email) ?? [])].map(key => state.facts.get(key)!)
+          .filter(fact => fact.kind === 'soft_bounce' && fact.at > now - SOFT_BOUNCE_WINDOW_DAYS * DAY).map(fact => fact.at).sort((a, b) => a - b);
         since = soft[SOFT_BOUNCE_LIMIT - 1] ?? now;
       }
       blocked.push(Object.freeze({ email, reason, since: new Date(Number.isFinite(since) ? since : now).toISOString(), allEmail: blocksPurpose(reason, 'service') }));

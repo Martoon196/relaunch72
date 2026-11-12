@@ -27,7 +27,7 @@ const skip = testDatabaseSkipReason();
 const SECRET = 'bounce-proof-webhook-secret-0123456789';
 const DAY = 86_400_000;
 
-test('MHP sign-up emails on real roles: a bounced or complained address is refused, the person is stopped by the existing unsubscribe capability, and only email is touched', { skip, timeout: 120_000 }, async () => {
+test('MHP sign-up emails on real roles: a bounced or complained address is refused, a dead address stops the person by the existing unsubscribe capability, a marketing-only block leaves the reminders they asked for, and only email is touched', { skip, timeout: 120_000 }, async () => {
   const admin = await openTestDatabase();
   const identity = await loginRole(admin, 'r72_identity_command');
   try {
@@ -37,7 +37,9 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
     const signup = (email: string, consent: boolean) => growth.capture({ email, firstName: 'Sam', level: null, consent, kind: 'webinar', label: 'Webinar',
       module: null, link: 'https://martinhowardproperty.co.uk/webinar/' }, null);
     const people = { gone: await signup(address('gone'), true), cross: await signup(address('cross'), true), fine: await signup(address('fine'), true),
-      crossService: await signup(address('cross-service'), false), deadService: await signup(address('dead-service'), false) };
+      crossService: await signup(address('cross-service'), false), deadService: await signup(address('dead-service'), false),
+      // Their mailbox was full three times this month; they have just signed up, box ticked, for this webinar.
+      full: await signup(address('full'), true) };
     const before = async (table: string) => Number((await ownerQuery<{ n: string }>(admin, `SELECT count(*) AS n FROM ${table}`))[0]!.n);
     const otherChannels = { consent: await before('app.communication_consent_events'), suppression: await before('app.communication_suppression_events') };
 
@@ -49,6 +51,8 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       bounces.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id, kind, email, at: Date.now() - 60_000 });
     block(address('gone'), 'hard_bounce', 'bounce:1'); block(address('cross'), 'spam_complaint', 'bounce:2');
     block(address('cross-service'), 'spam_complaint', 'bounce:3'); block(address('dead-service'), 'hard_bounce', 'bounce:4');
+    for (const n of [5, 6, 7]) bounces.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: `bounce:${n}`, kind: 'soft_bounce', email: address('full'), at: Date.now() - n * DAY });
+    assert.deepEqual(bounces.registry.decide(MHP, address('full'), 'marketing'), { blocked: true, reason: 'repeated_soft_bounce' });
 
     const bodies: { To: string; MessageStream: string; Metadata: Record<string, string> }[] = [];
     const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
@@ -71,9 +75,9 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
         settle: async (id: string, accepted: boolean, reference: string | null) => { await scoped.settle(id, accepted, reference); settled++; if (accepted) sent++; else failed++; finish(); },
       }, sender, { testRecipients: null }, { intervalMs: 3_600_000, onBlocked: health.onBlocked });
     });
-    assert.deepEqual(await sweep(), { sent: 2, failed: 3 });
+    assert.deepEqual(await sweep(), { sent: 2, failed: 4 });
     assert.deepEqual(bodies.map(b => [b.To, b.MessageStream]).sort(), [[address('cross-service'), 'outbound'], [address('fine'), 'broadcast']],
-      'the healthy address got its email; a complainer still got the confirmation they asked for; the dead and complained marketing addresses got nothing');
+      'the healthy address got its email; a complainer still got the confirmation they asked for; the dead, complained and soft-bounced marketing addresses got nothing');
     assert.equal(bodies.find(b => b.To === address('fine'))!.Metadata.prospect, people.fine.prospectId);
 
     const prospects = async () => new Map((await ownerQuery<{ id: string; unsubscribed: boolean; marketing_consent: boolean }>(admin,
@@ -82,10 +86,19 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       `SELECT template_key, sent_at IS NOT NULL AS sent, cancelled_at IS NOT NULL AS cancelled, builtin_purpose AS purpose
        FROM app_private.mhp_marketing_sends WHERE prospect_id = $1 AND delivery_channel = 'email' ORDER BY template_key`, [prospectId]);
     let state = await prospects();
-    for (const key of ['gone', 'cross', 'deadService'] as const) {
+    for (const key of ['gone', 'deadService'] as const) {
       assert.deepEqual([state.get(people[key].prospectId)!.unsubscribed, state.get(people[key].prospectId)!.marketing_consent], [true, false], `${key} is stopped in the contact list`);
       const rows = await sends(people[key].prospectId);
       assert.ok(rows.length >= 2 && rows.every(row => !row.sent && row.cancelled), `${key}: every queued email, including the later ones, is cancelled`);
+    }
+    // Blocked from marketing only. The stop is the unsubscribe capability, which would cancel the reminders queued beside
+    // the refused confirmation; a refused marketing email must never set it off.
+    for (const key of ['cross', 'full'] as const) {
+      assert.deepEqual([state.get(people[key].prospectId)!.unsubscribed, state.get(people[key].prospectId)!.marketing_consent], [false, true], `${key} is not stopped by a refused marketing email`);
+      const rows = await sends(people[key].prospectId);
+      assert.ok(rows.every(row => !row.sent), `${key}: nothing marketing was sent`);
+      const reminders = rows.filter(row => row.purpose === 'webinar_service');
+      assert.ok(reminders.length >= 1 && reminders.every(row => !row.cancelled), `${key}: the webinar reminders they asked for are still queued`);
     }
     assert.equal(state.get(people.fine.prospectId)!.unsubscribed, false);
     assert.equal(state.get(people.crossService.prospectId)!.unsubscribed, false, 'a complaint alone never cancels an event email the person asked for');
@@ -120,6 +133,20 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
     assert.deepEqual([state.get(people.fine.prospectId)!.unsubscribed, state.get(people.fine.prospectId)!.marketing_consent], [true, false]);
     assert.ok((await sends(people.fine.prospectId)).every(row => row.sent || row.cancelled), 'nothing further is queued for them');
     assert.match((await post(event)).body, /"replayed":true/u);
+
+    // A fourth soft bounce, reported for our own message: counted, still refused for marketing, and the person's record is not touched.
+    const softBounce = { RecordType: 'Bounce', MessageStream: 'outbound', ID: 990002, Type: 'SoftBounce', TypeCode: 4096, Email: address('full'), BouncedAt: new Date().toISOString(),
+      Inactive: false, ServerID: 1, Metadata: { send: 'send-x', prospect: people.full.prospectId } };
+    assert.match((await post(softBounce)).body, /"outcome":"soft_bounce","replayed":false,"blocked":true/u);
+    state = await prospects();
+    assert.deepEqual([state.get(people.full.prospectId)!.unsubscribed, state.get(people.full.prospectId)!.marketing_consent], [false, true], 'a temporary block never rewrites the contact record');
+    assert.ok((await sends(people.full.prospectId)).some(row => row.purpose === 'webinar_service' && !row.cancelled));
+    // A spam report is final in itself: it is recorded the moment Postmark reports it, exactly as the unsubscribe link would be.
+    const complaint = { RecordType: 'SpamComplaint', MessageStream: 'broadcast', ID: 990003, Type: 'SpamComplaint', TypeCode: 100001, Email: address('cross'), BouncedAt: new Date().toISOString(),
+      Inactive: true, ServerID: 1, Metadata: { send: 'send-y', prospect: people.cross.prospectId } };
+    assert.equal((await post(complaint)).status, 200);
+    state = await prospects();
+    assert.deepEqual([state.get(people.cross.prospectId)!.unsubscribed, state.get(people.cross.prospectId)!.marketing_consent], [true, false]);
     assert.deepEqual(await sweep(), { sent: 0, failed: 0 }, 'nothing is left to send to anyone who bounced or complained');
 
     assert.deepEqual({ consent: await before('app.communication_consent_events'), suppression: await before('app.communication_suppression_events') }, otherChannels,
