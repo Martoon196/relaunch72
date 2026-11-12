@@ -9,6 +9,7 @@ import type { CrmTransactionRunner, SqlExecutor } from '../../crm-pg/types.js';
 import { MHP_MARKETING_WORKSPACE_ID } from '../../mhp/marketing-workspace-service.js';
 import { readOwnerWhatsapp } from './whatsapp-reader.js';
 import { OwnerWhatsAppCommands, OwnerWhatsAppError, isOwnerWhatsAppAction } from './whatsapp-owner.js';
+import { LeadRelayCrmFeed, type LeadRelayFeedStatus } from '../leadrelay/crm-feed.js';
 
 export const GROUP_HQ_INBOX_CRM_PATH = '/api/group-hq/inbox/crm';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -114,11 +115,17 @@ export function inboxSocialPoint(input: InboxSource): string {
   return `${input.channel}:ghq:${sha(JSON.stringify([input.channel, input.accountId, input.participantId]))}`;
 }
 
+export interface InboxCrmOptions {
+  /** Read-only state of the LeadRelay → CRM feed running in this process (counts are in memory). */
+  leadrelayFeed?: Pick<LeadRelayCrmFeed, 'status'>;
+}
+const LEADRELAY_FEED_OFF = new LeadRelayCrmFeed({ state: 'off' });
+
 export class GroupHqInboxCrmService {
   private readonly commands: CrmCommandService;
   private readonly owner: OwnerWhatsAppCommands;
   constructor(private readonly readPool: Pick<Pool, 'connect'>, private readonly runner: CrmTransactionRunner,
-              private readonly config: InboxCrmConfig) {
+              private readonly config: InboxCrmConfig, private readonly options: InboxCrmOptions = {}) {
     this.commands = new CrmCommandService({ transactionRunner: runner });
     this.owner = new OwnerWhatsAppCommands(runner, config.mhpWhatsappOwnerSends === true, config.mhpWhatsappManualReplies === true);
   }
@@ -175,6 +182,12 @@ export class GroupHqInboxCrmService {
         return {brand,accountId:inboxId,threadId:thread,requestId,state};
       }
       return result;
+    }
+    if (input.action === 'leadrelayFeedStatus') {
+      // Read only, after the same actor and brand check as every other action. Touches no CRM rows and reaches no
+      // outside service: it reports what this process's LeadRelay feed last saw.
+      const status: LeadRelayFeedStatus = (this.options.leadrelayFeed ?? LEADRELAY_FEED_OFF).status(brand);
+      return { ...status, workspaceId: scope.workspaceId };
     }
     if (input.action === 'contact') {
       const contactId=uuid(input.contactId);
@@ -323,8 +336,9 @@ function reply(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'content-type':'application/json; charset=utf-8','cache-control':'no-store' });
   res.end(JSON.stringify(value));
 }
-export function createGroupHqInboxCrmMount(readPool: Pick<Pool,'connect'>, commandPool: Pick<Pool,'connect'>, config: InboxCrmConfig) {
-  const service = new GroupHqInboxCrmService(readPool,createInboxCrmRunner(commandPool),config);
+export function createGroupHqInboxCrmMount(readPool: Pick<Pool,'connect'>, commandPool: Pick<Pool,'connect'>, config: InboxCrmConfig,
+  options: InboxCrmOptions = {}) {
+  const service = new GroupHqInboxCrmService(readPool,createInboxCrmRunner(commandPool),config,options);
   return { async handle(req: IncomingMessage,res: ServerResponse,url: URL) {
     if (req.method !== 'POST' || url.pathname !== GROUP_HQ_INBOX_CRM_PATH || url.search) return reply(res,404,{ error:'not_found' });
     try {

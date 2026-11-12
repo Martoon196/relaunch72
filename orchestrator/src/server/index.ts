@@ -1053,6 +1053,9 @@ async function main(): Promise<void> {
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret, fetch,
     emailBounces && mhpEmailHealth ? { guard: emailBounces.guard, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
   const stopEmailBounces = emailBounces && emailBounces.sources.length > 0 ? emailBounces.start() : () => {};
+  // LeadRelay enquiries and call results into the brand CRM: reads and acknowledges only, sends nothing.
+  // Does nothing unless LEADRELAY_CRM_FEED=enabled with complete settings.
+  const stopLeadRelayFeed = postgresPortal?.leadrelayFeed?.start() ?? (() => {});
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
     ? startMhpMarketingDispatcher(postgresPortal.mhp.growth, mhpMarketingSender!, mhpMarketing, {
         owner: postgresPortal.mhp.ownerEmailDispatch ? { queue: postgresPortal.mhp.ownerEmailDispatch,
@@ -1111,6 +1114,7 @@ async function main(): Promise<void> {
     stopMhpKitJobs();
     stopMhpMarketing();
     stopEmailBounces();
+    stopLeadRelayFeed();
     stopPpFollowup();
     webinarWorker?.stop();
     postgresPortal?.webinarStudio?.stopAll();
