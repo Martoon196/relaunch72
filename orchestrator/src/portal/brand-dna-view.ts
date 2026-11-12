@@ -135,11 +135,17 @@ export function brandDnaPage(shell: Shell, state: BrandDnaState, commandId: stri
   // link when the server says that page is open to them); anyone else sets this business's own allowance in its settings.
   // Plain digits: this is typed into a number box, which does not take a comma.
   const needed = String(Math.ceil(allowance.used + allowance.estimate)), brandName = e(state.brand.name);
-  const allowanceAction = shell.limitsAvailable
+  // An account whose allowance is capped below what is needed cannot raise it in its own settings: saving would be
+  // refused. Say who can, instead of sending the owner to a box that will not take the number.
+  const cap = state.brand.settings.operatorLimits?.modelTokens;
+  const capped = !shell.limitsAvailable && typeof cap === 'number' && cap < Number(needed);
+  const allowanceAction = capped
+    ? `<p class="muted">The allowance for <strong>${brandName}</strong> is set on your account and is not high enough yet. Ask whoever looks after your account to raise it, then come back here.</p>`
+    : shell.limitsAvailable
     ? `<p><a class="button main" href="${SEO_BLOG_BASE}/limits#limits-${e(state.brand.id)}">Set my monthly allowance</a></p>
 <p class="muted">On the next page, find <strong>${brandName}</strong>. Under “Writing tokens”, type ${needed} or more (or tick Unlimited), then press “Save limits for ${brandName}” and come back here.</p>`
     : `<p><a class="button main" href="${link(shell, 'publishing')}#writing-budget">Set my monthly allowance</a></p>
-<p class="muted">On the next page, type ${needed} or more in “Writing allowance”, press the save button at the bottom, then come back here.</p>`;
+<p class="muted">On the next page, type ${needed} or more in “Writing allowance”, press “Save settings and authorise the draft programme” at the bottom, then come back here.</p>`;
   const allowanceNotice = `<section class="card"><h2>Set a monthly allowance first</h2>
 <p>Reading your website uses a little of your monthly writing allowance, usually a few pence. Your allowance is ${number(allowance.ceiling)} a month and ${number(allowance.used)} ${allowance.used === 1 ? 'has' : 'have'} been used this month.</p>
 <p class="muted">Nothing has been read and nothing has been spent.</p>${allowanceAction}</section>`;

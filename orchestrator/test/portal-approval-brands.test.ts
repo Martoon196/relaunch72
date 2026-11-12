@@ -188,9 +188,26 @@ test('follow-up flows and Your content stay with the signed-in workspace: never 
   assert.equal(published.length, 1);
   // A session whose workspace is not a brand keeps its own view, and it is not mixed into a business's queue.
   const outside = who(randomUUID());
-  assert.deepEqual((await q.list(outside, 'req')).sections.map((s) => s.kind), seoOnly, 'default is the first business, SEO items only');
+  // With nothing asked for it opens on its own items, exactly as the page did before businesses could be switched.
+  const byDefault = await q.list(outside, 'req');
+  assert.deepEqual(byDefault.sections.map((s) => s.kind), ['content', 'flow'], 'default is the account\'s own items, never hidden behind a business');
+  assert.equal(byDefault.selection.view, 'account'); assert.equal(byDefault.selection.account, true);
   const account = await q.list(outside, 'req', BRAND_ACCOUNT);
   assert.deepEqual(account.sections.map((s) => s.kind), ['content', 'flow']); assert.equal(account.brandKey, outside.workspaceId);
+  assert.deepEqual((await q.list(outside, 'req', a.id)).sections.map((s) => s.kind), seoOnly, 'a business shows SEO items only');
+  // "All businesses" counts those items too, on their own row, and one business is read at a time.
+  const everything = await q.overview(outside, 'req');
+  assert.deepEqual(everything.account, { total: account.total, ready: account.ready });
+  const page = renderApprovalOverviewBody(everything, { actionCentre: false });
+  assert.match(page, /<h2>Follow-ups and your content<\/h2>/); assert.ok(page.includes('href="/portal/approvals?brand=account">Open follow-ups and your content</a>'));
+  const brandTotal = everything.rows.reduce((sum, r) => sum + (r.total ?? 0), 0);
+  assert.ok(page.includes(`${brandTotal + account.total} item`), 'the headline number includes the account\'s own items');
+  // Where the signed-in workspace is one of the businesses there is no separate entry.
+  assert.equal((await q.select(owner, 'req')).account, false); assert.equal((await q.overview(owner, 'req')).account, null);
+  // An address that serves no such items (the central one) never offers the entry and opens on the first business.
+  const central = queue({ seoBlog: seoService(engine) });
+  const there = await central.select(outside, 'req');
+  assert.equal(there.account, false); assert.equal(there.view, 'brand'); assert.equal(there.selected?.id, there.brands[0]!.id);
 });
 
 test('All businesses: exact counts per business, unknown is never shown as zero, and nothing can be approved from the list', async () => {
@@ -224,18 +241,21 @@ test('All businesses: exact counts per business, unknown is never shown as zero,
 
 test('the Business picker: names are escaped, the current one is marked, the count is only for the business shown', () => {
   const a = { id: randomUUID(), name: 'Property Predator' }, b = { id: randomUUID(), name: 'Tom & "Jerry" <img src=x onerror=alert(1)>' };
-  const selection: BrandSelection = { brands: [a, b], selected: a, view: 'brand', sessionWorkspaceId: a.id, canAdd: true };
+  const selection: BrandSelection = { brands: [a, b], selected: a, view: 'brand', sessionWorkspaceId: a.id, canAdd: true, account: false };
   const html = renderBrandPicker(selection, { route: '/portal/approvals', waiting: 7, all: true, addHref: '/portal/seo-blog#add-business' });
   assert.match(html, /^<nav class="aq-brands" aria-label="Business"><span class="aq-brands-label">Business<\/span><div class="aq-brands-row">/);
   assert.ok(html.includes(`<a class="aq-brand" href="/portal/approvals?brand=${a.id}" aria-current="page">Property Predator<span class="aq-count" title="7 waiting">7<span class="aq-sr"> waiting</span></span></a>`));
   assert.ok(html.includes(`<a class="aq-brand" href="/portal/approvals?brand=${b.id}">Tom &amp; &quot;Jerry&quot; &lt;img src=x onerror=alert(1)&gt;</a>`), 'no count is guessed for a business that was not read');
   assert.doesNotMatch(html, /<img|onerror=alert\(1\)>/);
   assert.ok(html.includes('href="/portal/approvals?brand=all">All businesses</a>')); assert.ok(html.includes('href="/portal/seo-blog#add-business">Add a business</a>'));
-  assert.doesNotMatch(html, /Signed-in account/, 'only offered when the signed-in workspace is not one of the businesses');
+  assert.doesNotMatch(html, /Signed-in account|Follow-ups and your content/, 'only offered when the account has items of its own outside the businesses');
   assert.doesNotMatch(renderBrandPicker(selection, { route: '/portal/approvals', waiting: 0, all: true }), /aq-count|Add a business/, 'nothing waiting shows no badge');
-  assert.match(renderBrandPicker({ ...selection, sessionWorkspaceId: randomUUID() }, { route: '/portal/approvals', all: true }), /brand=account">Signed-in account<\/a>/);
-  // One business: no "All businesses". Campaign results: no "All businesses" and no count.
-  assert.doesNotMatch(renderBrandPicker({ ...selection, brands: [a] }, { route: '/portal/approvals', all: true }), /All businesses/);
+  assert.match(renderBrandPicker({ ...selection, sessionWorkspaceId: randomUUID(), account: true }, { route: '/portal/approvals', all: true }), /brand=account">Follow-ups and your content<\/a>/);
+  assert.doesNotMatch(renderBrandPicker({ ...selection, sessionWorkspaceId: randomUUID() }, { route: '/portal/approvals', all: true }), /brand=account/, 'not offered where those items are not served (the central address)');
+  // One business and nothing else to switch to: no picker at all. With the account's own items beside it, the two are offered.
+  assert.equal(renderBrandPicker({ ...selection, brands: [a] }, { route: '/portal/approvals', all: true, addHref: '/portal/seo-blog#add-business' }), '');
+  const pair = renderBrandPicker({ ...selection, brands: [a], sessionWorkspaceId: randomUUID(), account: true }, { route: '/portal/approvals', all: true });
+  assert.match(pair, /Property Predator<\/a>/); assert.match(pair, /Follow-ups and your content<\/a>/); assert.doesNotMatch(pair, /All businesses/);
   const results = renderBrandPicker(selection, { route: '/portal/campaign-journey' });
   assert.ok(results.includes(`href="/portal/campaign-journey?brand=${b.id}"`)); assert.doesNotMatch(results, /All businesses|aq-count/);
   // Many businesses: one labelled select, still escaped, still a plain GET form.
@@ -246,6 +266,9 @@ test('the Business picker: names are escaped, the current one is marked, the cou
   // No businesses: an invitation to add one where that is possible, otherwise nothing.
   assert.match(renderBrandPicker({ ...selection, brands: [], selected: null, view: 'account' }, { route: '/portal/approvals', addHref: '/portal/seo-blog#add-business' }), /No business is set up for content yet/);
   assert.equal(renderBrandPicker({ ...selection, brands: [], selected: null, view: 'account', canAdd: false }, { route: '/portal/approvals', addHref: '/portal/seo-blog#add-business' }), '');
+  // ...and never the "no business" note above items that are waiting.
+  const waiting = renderBrandPicker({ ...selection, brands: [], selected: null, view: 'account' }, { route: '/portal/approvals', waiting: 2, addHref: '/portal/seo-blog#add-business' });
+  assert.match(waiting, /Add a business/); assert.doesNotMatch(waiting, /No business is set up/);
 });
 
 // ─── Through the real portal router ────────────────────────────────────────
@@ -314,7 +337,9 @@ test('queue page: Business picker at the top, ?brand is validated, and a decisio
   const planRef = p.refs(other.body)[0]!;
   const wrong = await p.request('POST', '/portal/approvals/decide', p.form(csrf, { brand: p.b.id, ref: articleRef!, action: 'approve' }));
   assert.equal(wrong.status, 409); assert.match(wrong.body, /belongs to a different business/);
-  assert.equal((await p.request('POST', '/portal/approvals/decide', p.form(csrf, { ref: articleRef!, action: 'approve' }))).status, 400, 'the business must be stated');
+  // A page left open from before businesses could be switched has no business on its buttons: it is told to refresh, not blamed.
+  const stale = await p.request('POST', '/portal/approvals/decide', p.form(csrf, { ref: articleRef!, action: 'approve' }));
+  assert.equal(stale.status, 409, 'the business must be stated'); assert.match(stale.body, /This page is out of date\. Refresh it/); assert.match(stale.body, /Nothing was changed/);
   assert.equal((await p.request('POST', '/portal/approvals/decide', p.form(csrf, { brand: [p.a.id, p.b.id], ref: articleRef!, action: 'approve' }))).status, 400);
   assert.equal((await p.request('POST', `/portal/approvals/decide?brand=${p.b.id}`, p.form(csrf, { brand: p.a.id, ref: articleRef!, action: 'approve' }))).status, 403, 'no query string on a decision');
   assert.equal(await p.approved(), null);

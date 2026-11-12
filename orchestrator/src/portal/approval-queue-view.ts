@@ -61,13 +61,20 @@ export interface BrandPickerInput {
   readonly addHref?: string | null;
 }
 
+/** What the signed-in account's own items are called (they sit outside the businesses). */
+export const ACCOUNT_LABEL = 'Follow-ups and your content';
+
 /** "Business" picker: plain links (or one select when there are many). Names are escaped; every target is re-checked by the server. */
 export function renderBrandPicker(selection: BrandSelection, input: BrandPickerInput): string {
   const { brands, selected, view } = selection;
   // The signed-in workspace's own items need their own entry only when that workspace is not one of the businesses.
-  const account = brands.length > 0 && !brands.some((b) => b.id === selection.sessionWorkspaceId.toLowerCase()) && input.all === true;
+  // (`selection.account` is false on the central address, where those items are never served.)
+  const account = brands.length > 0 && selection.account && input.all === true;
   const add = input.addHref && selection.canAdd ? `<a class="aq-brand quiet" href="${e(input.addHref)}">Add a business</a>` : '';
-  if (!brands.length) return add ? `<nav class="aq-brands" aria-label="Business"><span class="aq-brands-label">Business</span><div class="aq-brands-row">${add}</div><p class="aq-brands-note">No business is set up for content yet.</p></nav>` : '';
+  // No business yet: say so only when nothing else is on the page, never above items that are waiting.
+  if (!brands.length) return add ? `<nav class="aq-brands" aria-label="Business"><span class="aq-brands-label">Business</span><div class="aq-brands-row">${add}</div>${typeof input.waiting === 'number' && input.waiting > 0 ? '' : '<p class="aq-brands-note">No business is set up for content yet.</p>'}</nav>` : '';
+  // One business and nothing else to switch to: a picker with nothing to pick is noise. The page already names the business.
+  if (brands.length === 1 && !account) return '';
   const count = (id: string) => selected?.id === id && typeof input.waiting === 'number' && input.waiting > 0
     ? `<span class="aq-count" title="${input.waiting} waiting">${input.waiting}<span class="aq-sr"> waiting</span></span>` : '';
   const all = input.all && brands.length > 1;
@@ -77,13 +84,13 @@ export function renderBrandPicker(selection: BrandSelection, input: BrandPickerI
     const options = [
       ...brands.map((b) => `<option value="${e(b.id)}"${selected?.id === b.id ? ' selected' : ''}>${e(b.name)}${selected?.id === b.id && typeof input.waiting === 'number' && input.waiting > 0 ? ` (${input.waiting} waiting)` : ''}</option>`),
       ...(all ? [`<option value="${BRAND_ALL}"${view === 'all' ? ' selected' : ''}>All businesses</option>`] : []),
-      ...(account ? [`<option value="${BRAND_ACCOUNT}"${view === 'account' ? ' selected' : ''}>Signed-in account</option>`] : []),
+      ...(account ? [`<option value="${BRAND_ACCOUNT}"${view === 'account' ? ' selected' : ''}>${ACCOUNT_LABEL}</option>`] : []),
     ].join('');
     choices = `<form method="get" action="${e(input.route)}"><label class="aq-brands-label" for="aq-business">Business</label><select id="aq-business" name="brand">${options}</select><button class="button" type="submit">Show</button></form>${add}`;
   } else {
     choices = `${brands.map((b) => `<a class="aq-brand" href="${e(input.route)}?brand=${e(b.id)}"${selected?.id === b.id ? ' aria-current="page"' : ''}>${e(b.name)}${count(b.id)}</a>`).join('')}`
       + (all ? `<a class="aq-brand" href="${e(input.route)}?brand=${BRAND_ALL}"${view === 'all' ? ' aria-current="page"' : ''}>All businesses</a>` : '')
-      + (account ? `<a class="aq-brand" href="${e(input.route)}?brand=${BRAND_ACCOUNT}"${view === 'account' ? ' aria-current="page"' : ''}>Signed-in account</a>` : '') + add;
+      + (account ? `<a class="aq-brand" href="${e(input.route)}?brand=${BRAND_ACCOUNT}"${view === 'account' ? ' aria-current="page"' : ''}>${ACCOUNT_LABEL}</a>` : '') + add;
   }
   return `<nav class="aq-brands" aria-label="Business">${label}<div class="aq-brands-row">${choices}</div></nav>`;
 }
@@ -146,14 +153,18 @@ export function renderApprovalOverviewBody(overview: ApprovalOverview, input: { 
     return `<section class="aq-card"><div class="aq-biz"><div><h2>${e(r.brand.name)}</h2><p>${line}</p></div>
 <a class="button aq-main" href="${APPROVAL_QUEUE_ROUTE}?brand=${e(r.brand.id)}">Open ${e(r.brand.name)}</a></div></section>`;
   }).join('');
-  const known = overview.rows.filter((r) => r.total !== null), total = known.reduce((sum, r) => sum + (r.total ?? 0), 0);
-  const partial = known.length < overview.rows.length;
+  const own = overview.account ?? null;
+  const ownRow = !own ? '' : `<section class="aq-card"><div class="aq-biz"><div><h2>${ACCOUNT_LABEL}</h2><p>${own.total === null ? 'This could not be counted just now. That is unknown, not zero. Open it to check.'
+    : own.total === 0 ? 'Nothing is waiting.' : `<strong>${own.total} waiting</strong> · ${own.ready} ready to approve now`}</p></div>
+<a class="button aq-main" href="${APPROVAL_QUEUE_ROUTE}?brand=${BRAND_ACCOUNT}">Open ${ACCOUNT_LABEL.toLowerCase()}</a></div></section>`;
+  const known = overview.rows.filter((r) => r.total !== null), total = known.reduce((sum, r) => sum + (r.total ?? 0), 0) + (own?.total ?? 0);
+  const partial = known.length < overview.rows.length || (own !== null && own.total === null);
   return `${STYLE}<div class="aq"><h1>All businesses</h1>
 ${renderBrandPicker(overview.selection, { route: APPROVAL_QUEUE_ROUTE, all: true, addHref: addBusinessHref })}
 <p class="aq-lede">${total} item${total === 1 ? '' : 's'} waiting across ${known.length} business${known.length === 1 ? '' : 'es'}${partial ? ' that could be counted' : ''}. Open a business to approve its items.</p>
 <p class="aq-boundary">Each business is approved on its own page, so nothing is ever approved for the wrong business.${overview.rows.length > APPROVAL_ALL_COUNT_MAX ? ` Only the first ${APPROVAL_ALL_COUNT_MAX} businesses are counted here.` : ''}</p>
 <nav class="aq-links" aria-label="Related pages">${links.actionCentre && !links.central ? '<a href="/portal/actions">Action Centre</a>' : ''}${homeLink(links)}</nav>
-${rows}</div>`;
+${ownRow}${rows}</div>`;
 }
 
 export function renderBatchResultsBody(results: readonly ApprovalDecisionResult[], back = APPROVAL_QUEUE_ROUTE as string): string {

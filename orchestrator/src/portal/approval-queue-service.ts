@@ -91,26 +91,34 @@ export interface BrandSelection {
   readonly sessionWorkspaceId: string;
   /** Whether a new business can be added here (the SEO area is mounted). */
   readonly canAdd: boolean;
+  /**
+   * True when this address serves items that belong to the signed-in account itself (follow-up flows, "Your content")
+   * and that account is not one of the businesses, so those items need their own entry and are shown first.
+   */
+  readonly account: boolean;
 }
 
 /**
  * Resolves the business a page is for. The requested id is only a selector: it must be one of the brand
  * workspaces this user manages, otherwise the request is refused (the same answer for a malformed id, an
  * unknown id and somebody else's brand). With nothing requested: the signed-in workspace when it is a
- * brand, otherwise the first brand the user manages.
+ * brand; otherwise the signed-in account's own items where this address serves any (`accountItems`), so a page
+ * that showed them before still does; otherwise the first brand the user manages.
  */
 export async function selectApprovalBrand(seoBlog: PortalSeoBlogService | undefined, identity: PortalSessionIdentity, requestId: string,
-  requested: string | null | undefined): Promise<BrandSelection> {
+  requested: string | null | undefined, accountItems = false): Promise<BrandSelection> {
   let managed: Brand[] = [];
   if (seoBlog) {
     try { managed = await seoBlog.engineFor(identity, requestId).listBrands({ userId: identity.userId }); }
     catch (error) { if (!(error instanceof SeoBlogError && [403, 404, 409].includes(error.status))) throw error; }
   }
   const brands = managed.map((b) => ({ id: b.id.toLowerCase(), name: b.name }));
-  const base = { brands, sessionWorkspaceId: identity.workspaceId, canAdd: Boolean(seoBlog) };
+  const own = brands.find((b) => b.id === identity.workspaceId.toLowerCase()) ?? null;
+  const account = accountItems && !own;
+  const base = { brands, sessionWorkspaceId: identity.workspaceId, canAdd: Boolean(seoBlog), account };
   const wanted = (requested ?? '').trim();
   if (!wanted) {
-    const selected = brands.find((b) => b.id === identity.workspaceId.toLowerCase()) ?? brands[0] ?? null;
+    const selected = own ?? (account ? null : brands[0] ?? null);
     return { ...base, selected, view: selected ? 'brand' : 'account' };
   }
   if (wanted === BRAND_ACCOUNT || (wanted === BRAND_ALL && !brands.length)) return { ...base, selected: null, view: 'account' };
@@ -198,7 +206,11 @@ export interface ApprovalQueueSnapshot {
   readonly sessionSections: boolean;
 }
 export interface ApprovalBrandCount { readonly brand: QueueBrand; readonly total: number | null; readonly ready: number | null; readonly counted: boolean }
-export interface ApprovalOverview { readonly selection: BrandSelection; readonly rows: readonly ApprovalBrandCount[] }
+export interface ApprovalOverview {
+  readonly selection: BrandSelection; readonly rows: readonly ApprovalBrandCount[];
+  /** The signed-in account's own items (follow-ups, "Your content") when they are not inside one of the businesses. Null numbers mean unknown, not zero. */
+  readonly account?: { readonly total: number | null; readonly ready: number | null } | null;
+}
 export interface ApprovalDecisionResult { readonly ok: boolean; readonly title: string; readonly message: string }
 
 export interface ApprovalQueueDependencies {
@@ -239,7 +251,8 @@ export class ApprovalQueueService {
 
   /** The businesses this user manages and the one a request is for. Refuses an id the user does not manage. */
   select(identity: PortalSessionIdentity, requestId: string, requested?: string | null): Promise<BrandSelection> {
-    return selectApprovalBrand(this.deps.seoBlog, identity, requestId, requested);
+    const accountItems = Boolean((this.deps.flows && this.deps.flowsAvailable) || this.deps.companyContent);
+    return selectApprovalBrand(this.deps.seoBlog, identity, requestId, requested, accountItems);
   }
 
   /** One business's queue. `requested` is the untrusted ?brand value; it is resolved against the managed brand list here. */
@@ -253,16 +266,23 @@ export class ApprovalQueueService {
   async overview(identity: PortalSessionIdentity, requestId: string): Promise<ApprovalOverview> {
     const selection = await this.select(identity, requestId, BRAND_ALL);
     const ctx: Ctx = { identity, requestId, now: this.now() };
-    const rows = await Promise.all(selection.brands.map(async (brand, index): Promise<ApprovalBrandCount> => {
-      if (index >= APPROVAL_ALL_COUNT_MAX) return { brand, total: null, ready: null, counted: false };
+    const count = async (target: Pick<BrandSelection, 'selected' | 'view'>): Promise<{ total: number | null; ready: number | null }> => {
       try {
-        const snapshot = await this.listFor(ctx, { ...selection, selected: brand, view: 'brand' });
+        const snapshot = await this.listFor(ctx, { ...selection, ...target });
         // A section that could not be read makes the number a guess, so no number is shown.
-        if (snapshot.sections.some((s) => s.error)) return { brand, total: null, ready: null, counted: true };
-        return { brand, total: snapshot.total, ready: snapshot.ready, counted: true };
-      } catch { return { brand, total: null, ready: null, counted: true }; }
-    }));
-    return { selection, rows };
+        if (snapshot.sections.some((s) => s.error)) return { total: null, ready: null };
+        return { total: snapshot.total, ready: snapshot.ready };
+      } catch { return { total: null, ready: null }; }
+    };
+    // One business at a time: each queue already reads its sections in parallel, and counting every business at once
+    // would hold the whole database pool for one page and make other requests wait.
+    const rows: ApprovalBrandCount[] = [];
+    for (const [index, brand] of selection.brands.entries()) {
+      rows.push(index >= APPROVAL_ALL_COUNT_MAX ? { brand, total: null, ready: null, counted: false }
+        : { brand, ...(await count({ selected: brand, view: 'brand' })), counted: true });
+    }
+    const account = selection.account ? await count({ selected: null, view: 'account' }) : null;
+    return { selection, rows, account };
   }
 
   private async listFor(ctx: Ctx, selection: BrandSelection): Promise<ApprovalQueueSnapshot> {

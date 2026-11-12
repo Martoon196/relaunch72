@@ -311,7 +311,7 @@ test('add a business → Start with your website: the path is plain, lands on th
   // A name that will not do keeps the owner on the form with the reason; nothing is created.
   const short = await call(base, owner, 'POST', '/portal/seo-blog/brands', { _csrf: csrf, commandId: randomUUID(), name: 'X', website: '' });
   assert.equal(short.status, 303); assert.match(short.headers.location!, /^\/portal\/seo-blog\?e=[^#]+#add-business$/);
-  assert.match((await call(base, owner, 'GET', short.headers.location!.replace(/#.*$/u, ''))).body, /role="alert">Enter a brand name between 2 and 120 characters\./);
+  assert.match((await call(base, owner, 'GET', short.headers.location!.replace(/#.*$/u, ''))).body, /role="alert">Enter a business name between 2 and 120 characters\./);
   assert.equal((await h.engine.listBrands(OWNER)).length, 0);
 
   // Add two businesses. Each lands on its own Brand DNA door.
@@ -329,9 +329,19 @@ test('add a business → Start with your website: the path is plain, lands on th
   assert.match(door, /<h2>Set a monthly allowance first<\/h2>/); assert.match(door, /Nothing has been read and nothing has been spent\./);
   assert.ok(door.includes(`<a class="button main" href="/portal/seo-blog/b/${key.id}/publishing#writing-budget">Set my monthly allowance</a>`));
   const needed = (await h.engine.brandDna(OWNER, key.id)).allowance.estimate;
-  assert.ok(door.includes(`type ${needed} or more in “Writing allowance”`)); assert.doesNotMatch(door, /\/portal\/seo-blog\/limits/);
+  assert.ok(door.includes(`type ${needed} or more in “Writing allowance”, press “Save settings and authorise the draft programme” at the bottom`)); assert.doesNotMatch(door, /\/portal\/seo-blog\/limits/);
   const settings = (await call(base, owner, 'GET', `/portal/seo-blog/b/${key.id}/publishing`)).body;
   assert.match(settings, /<div id="writing-budget"><label for="bm">Writing allowance/); assert.match(settings, /<input id="bm" name="modelTokens" type="number" min="0" value="0">/);
+
+  // An account whose allowance is capped below what is needed cannot raise it there (saving would be refused), so the
+  // door says who can instead of sending the owner to a box that will not take the number.
+  const brands = (h.store as unknown as { brands: Map<string, Awaited<ReturnType<typeof h.engine.getBrand>>> }).brands;
+  const uncapped = brands.get(key.id)!;
+  brands.set(key.id, { ...uncapped, settings: { ...uncapped.settings, operatorLimits: { modelTokens: 0, searchCalls: 0, images: 0, studioImages: 0, configuredBy: 'founder', configuredAt: '2026-11-02T10:00:00.000Z' } } });
+  const cappedDoor = (await call(base, owner, 'GET', `/portal/seo-blog/b/${key.id}/dna`)).body;
+  assert.match(cappedDoor, /<h2>Set a monthly allowance first<\/h2>/); assert.match(cappedDoor, /Ask whoever looks after your account to raise it, then come back here\./);
+  assert.doesNotMatch(cappedDoor, /Set my monthly allowance<\/a>|or more in “Writing allowance”/, 'no button and no instruction that would end in a refusal');
+  brands.set(key.id, uncapped);
 
   // The founder is sent to the limits page, at that business, and only because the server says the page is open to him.
   const saved: unknown[] = [];

@@ -109,7 +109,7 @@ export async function handleApprovalQueue(req: IncomingMessage, res: ServerRespo
       // Untrusted selector: a repeated value is refused, and the services check it against the brands this user manages.
       const asked = url.searchParams.getAll('brand');
       if (asked.length > 1) throw new ApprovalRouteError(400, 'Choose one business.');
-      const requested = asked[0] ?? null;
+      const requested = asked[0]?.trim() || null;
       if (path === CAMPAIGN_JOURNEY_ROUTE) {
         send(res, 200, input.shell('Campaign results', renderCampaignJourneyBody(await input.journey.snapshot(identity, input.requestId, requested), { central: input.central }), csrf)); return true;
       }
@@ -130,6 +130,8 @@ export async function handleApprovalQueue(req: IncomingMessage, res: ServerRespo
     const now = input.now();
     // The business the page was showing. It never chooses where a decision lands (the signed ref does); it must simply agree.
     const pages = form.getAll('brand');
+    // A page opened before this version has no business on its buttons: that is an old page, not a mistake by the owner.
+    if (pages.length === 0) throw new ApprovalRouteError(409, 'This page is out of date. Refresh it and review the item again. Nothing was changed.');
     if (pages.length !== 1) throw new ApprovalRouteError(400, 'Use the buttons on the page.');
     const pageBrand = pages[0]!.toLowerCase();
     const WRONG_BUSINESS = 'This item belongs to a different business. Open that business and review it there. Nothing was changed.';

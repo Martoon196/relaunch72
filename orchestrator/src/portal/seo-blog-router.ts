@@ -475,7 +475,10 @@ async function handlePost(
     catch (error) {
       // Stay on the form with the reason (a name that is too short, a duplicate, or an account that may not add one).
       if (error instanceof SeoBlogError && error.status < 500 && error.status !== 404) {
-        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message)}#add-business`);
+        // The engine says "brand"; every page says "business".
+        const text = error.status === 403 ? 'Only the account owner can add a business. Ask them to add it.'
+          : error.message.replace(/^Enter a brand name/u, 'Enter a business name');
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', text)}#add-business`);
       }
       throw error;
     }
