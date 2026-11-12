@@ -22,6 +22,9 @@ import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
 import { handleInvestorPublicSite,INVESTOR_SITES_ROUTE } from '../portal/investor-site.js';
 import { ENQUIRY_ROUTE, handleEnquiryPublic } from '../creative-studio/enquiry-capture.js';
+import { PP_FOLLOWUP_UNSUBSCRIBE_ROUTE } from '../pp-followup/content.js';
+import { handlePpFollowupUnsubscribe } from '../pp-followup/unsubscribe-route.js';
+import type { PpFollowupUnsubscriber } from '../pp-followup/repository.js';
 import { handleWebinarPublic, WEBINAR_PUBLIC_PREFIX } from '../webinars/public-router.js';
 import { handleStreamWebhook, STREAM_WEBHOOK_ROUTE, webinarClientKey } from '../webinars/http.js';
 import { POSTMARK_BOUNCE_WEBHOOK_PREFIX, type PostmarkBounceWebhook } from '../email-bounces/webhook.js';
@@ -87,6 +90,8 @@ export interface AppDeps {
   groupHqInboxCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Founder-only webinar listing for Group HQ's Webinars section (same bearer token as the CRM read bridge). */
   groupHqWebinars?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
+  /** Signed unsubscribe for PP follow-up emails (0152); absent until the run store is composed. */
+  ppFollowupUnsubscribe?: { secret: string; unsubscriber: PpFollowupUnsubscriber };
   /** Operator API for Claude (MCP + OAuth) on the canonical host; absent = its paths 404. */
   operator?: { paths: readonly string[]; handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Per-process no-queue shield in front of the distributed portal guard. */
@@ -426,6 +431,17 @@ export function createApp(deps: AppDeps) {
       activePortalRequests+=1;
       try {await handleInvestorPublicSite(req,res,deps.portal.investors,deps.portal.sessionSecret);}
       finally {activePortalRequests-=1;}
+      return;
+    }
+
+    // Public signed unsubscribe for PP follow-up emails. It can only add a marketing-email suppression.
+    if (url.pathname === PP_FOLLOWUP_UNSUBSCRIBE_ROUTE) {
+      if (!deps.ppFollowupUnsubscribe) { send(res, 404, { error: 'not found' }); return; }
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try { await handlePpFollowupUnsubscribe(req, res, url, deps.ppFollowupUnsubscribe); }
+      catch { if (!res.headersSent) send(res, 500, SAFE_ERROR.internal); }
+      finally { activePortalRequests -= 1; }
       return;
     }
 

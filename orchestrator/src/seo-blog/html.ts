@@ -59,6 +59,30 @@ export interface ParsedPage {
   readonly publishedAt: string | null;
   readonly modifiedAt: string | null;
   readonly links: readonly string[];
+  /** The page's declared share image (og:image), absolute, when it states one. */
+  readonly ogImage: string | null;
+  /** Declared icons, absolute, touch icons first then by declared size (largest first). */
+  readonly icons: readonly string[];
+  /** Declared theme colour normalised to #rrggbb, when the page states a plain hex colour. */
+  readonly themeColour: string | null;
+}
+
+/** #rgb or #rrggbb only; named colours, gradients and functions are not guessed at. */
+export function normaliseHexColour(value: string | null | undefined): string | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((value ?? '').trim());
+  if (!m) return null;
+  const hex = m[1]!.toLowerCase();
+  return `#${hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex}`;
+}
+
+function absoluteHttpUrl(href: string | null, baseUrl: string): string | null {
+  if (!href) return null;
+  try {
+    const u = new URL(href, baseUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    u.hash = '';
+    return u.toString();
+  } catch { return null; }
 }
 
 export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
@@ -116,7 +140,20 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
     } catch { /* ignore malformed links */ }
   }
   const robots = (metaContent('robots') ?? '').toLowerCase();
+  const icons: { url: string; touch: boolean; size: number }[] = [];
+  for (const tag of linksInHead) {
+    const rel = (attr(tag, 'rel') ?? '').toLowerCase().split(/\s+/);
+    const touch = rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed');
+    if (!touch && !rel.includes('icon')) continue;
+    const url = absoluteHttpUrl(attr(tag, 'href'), baseUrl);
+    if (!url || icons.some((i) => i.url === url) || icons.length >= 12) continue;
+    icons.push({ url, touch, size: Number(/^(\d{1,4})x\d{1,4}$/i.exec(attr(tag, 'sizes') ?? '')?.[1] ?? 0) });
+  }
+  icons.sort((a, b) => Number(b.touch) - Number(a.touch) || b.size - a.size);
   return {
+    ogImage: absoluteHttpUrl(metaContent('og:image:secure_url') ?? metaContent('og:image'), baseUrl),
+    icons: icons.map((i) => i.url),
+    themeColour: normaliseHexColour(metaContent('theme-color')),
     title: titleMatch ? stripTags(titleMatch[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 300) || null : null,
     description: metaContent('description'),
     canonical,

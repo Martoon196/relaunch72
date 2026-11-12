@@ -33,7 +33,7 @@ export class Clock {
 
 // ─── Public web ──────────────────────────────────────────────────────────────
 
-type Page = { status?: number; contentType?: string; body: string };
+type Page = { status?: number; contentType?: string; body: string; /** Exact bytes for a binary response (an image); `body` is ignored when set. */ bytes?: Buffer };
 
 export class FakeWeb implements FetchTransport {
   readonly pages = new Map<string, Page>();
@@ -47,7 +47,7 @@ export class FakeWeb implements FetchTransport {
     this.requests.push(url);
     let page: Page | null = this.pages.get(url) ?? null;
     for (const d of this.dynamic) page ??= d(url);
-    const body = Buffer.from(page?.body ?? 'Not found');
+    const body = page?.bytes ?? Buffer.from(page?.body ?? 'Not found');
     const max = options.maxBytes ?? 2_000_000;
     return { url: raw, finalUrl: url, status: page ? page.status ?? 200 : 404, contentType: page?.contentType ?? 'text/html; charset=utf-8', body: body.subarray(0, max), truncated: body.length > max, headers: {} };
   }

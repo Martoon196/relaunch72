@@ -69,6 +69,7 @@ const APP_ROLES = [
   'r72_owned_seed_message_command',
   'r72_owned_seed_message_definer',
   'r72_owner',
+  'r72_pp_followup_definer',
   'r72_provisioning_command',
   'r72_provider_operation_definer',
   'r72_public_social_command',

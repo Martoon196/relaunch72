@@ -387,6 +387,33 @@ services:
       - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
         value: mailgun
 
+      # PP follow-up flow emails (migration 0152) through Postmark, the same way
+      # MHP's sequences send. Unset PP_MARKETING_MODE means off: runs can be
+      # viewed, paused and stopped but nothing is claimed or sent. The switch is
+      # dashboard-owned (test, then live) so a Blueprint sync cannot overwrite an
+      # operated value. test sends only to PP_MARKETING_TEST_TO. The sender must be
+      # on the Postmark-verified propertypredator.com domain (DKIM + Return-Path).
+      # PP_POSTMARK_BROADCAST_STREAM defaults to "broadcast"; PP_MARKETING_REPLY_TO
+      # defaults to the sender. Unsubscribe links use PORTAL_BASE_URL and
+      # SESSION_SECRET above. Sending also needs PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
+      # to be the pinned PP workspace d975ff66-336a-46c2-b36b-d7095a11af97.
+      - key: PP_MARKETING_MODE
+        sync: false
+      - key: PP_POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: PP_MARKETING_FROM
+        sync: false
+      - key: PP_MARKETING_FROM_NAME
+        sync: false
+      - key: PP_MARKETING_REPLY_TO
+        sync: false
+      - key: PP_POSTMARK_BROADCAST_STREAM
+        sync: false
+      - key: PP_MARKETING_TEST_TO
+        sync: false
+      - key: PP_MARKETING_LINK
+        sync: false
+
       # Mailgun EU INGRESS slots only. The public web service never receives the
       # outbound API key. Signed provider test events are permitted; they cause
       # no outbound provider effect.

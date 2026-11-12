@@ -4,6 +4,8 @@ import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import { PgSeoBlogReleasedMediaReader } from '../seo-blog/media-store.js';
 import { createHash } from 'node:crypto';
 import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
+import { ppMarketingConfig, type PpMarketingConfig, type PpMarketingStatus } from '../pp-followup/config.js';
+import { PgPpFollowupQueue, PgPpFollowupRepository, PP_FOLLOWUP_WORKSPACE_ID } from '../pp-followup/repository.js';
 import { InvestorService } from './investor-service.js';
 import { InvestorMailService } from './investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
@@ -227,6 +229,8 @@ export interface PgPortalPlatform {
   /** Omitted unless the dedicated r72_content_command identity passes readiness. */
   companyContent?: PgPortalCompanyContentService;
   followupFlows?: PortalFollowupFlowService;
+  /** PP follow-up email delivery (0152): run store, unsubscribe and dispatch queue; config is null unless PP_MARKETING_MODE is test/live and complete. */
+  ppFollowup?: { queue: PgPpFollowupQueue; unsubscriber: PgPpFollowupRepository; config: PpMarketingConfig | null; status: PpMarketingStatus };
   /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
   seoBlog?: PortalSeoBlogService;
   /** Native webinars; omitted unless r72_content_command is ready and migration 0146 is applied. */
@@ -1314,8 +1318,22 @@ export async function buildPgPortalPlatform(
     }
 
     const ppFlowWorkspace = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+    // PP follow-up email delivery (0152) composes only for its pinned workspace once the migration is applied.
+    // While 0152 is pending the flow authoring below is unchanged and readiness reports email as not connected.
+    let ppFollowup: PgPortalPlatform['ppFollowup'];
+    if (ppFlowWorkspace === PP_FOLLOWUP_WORKSPACE_ID) {
+      try {
+        const probe = await webPool.query<{ ready: boolean }>(`/* portal.pp-followup-schema-readiness */
+          SELECT to_regprocedure('app_private.pp_followup_snapshot(bytea,uuid,text)') IS NOT NULL AND to_regprocedure('app_private.pp_followup_claim(integer,integer,text[])') IS NOT NULL AS ready`);
+        if (probe.rows[0]?.ready === true) {
+          const { status, config } = ppMarketingConfig(env);
+          ppFollowup = { queue: new PgPpFollowupQueue(identityPool), unsubscriber: new PgPpFollowupRepository(webPool, identityPool), config, status };
+        }
+      } catch { ppFollowup = undefined; }
+    }
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
-      ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
+      ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace,
+        ...(ppFollowup ? { delivery: { identityPool, status: ppFollowup.status, testRecipients: ppFollowup.config?.testRecipients ?? null } } : {}) }) : undefined;
     const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
       ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined, commandPool)
       : undefined;
@@ -1473,6 +1491,7 @@ export async function buildPgPortalPlatform(
       }),
       companyContent,
       followupFlows,
+      ppFollowup,
       seoBlog,
       releasedSeoMedia: new PgSeoBlogReleasedMediaReader(webPool),
       seoBlogZernioWebhook,

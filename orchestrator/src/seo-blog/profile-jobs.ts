@@ -13,10 +13,18 @@ export interface ProfileJobPayload {
   readonly requestedBy: string;
   readonly requestIds: readonly string[];
   readonly inputSha: string;
-  readonly source: { readonly brandName: string; readonly website: string | null; readonly knowledge: readonly KnowledgeRef[]; readonly prompt: { readonly version: string; readonly sha256: string; readonly model: string } };
+  readonly source: { readonly brandName: string; readonly website: string | null; readonly knowledge: readonly KnowledgeRef[]; readonly prompt: { readonly version: string; readonly sha256: string; readonly model: string };
+    /** Brand DNA (site-fed) extraction: word-for-word prices and quoted sources are enforced. Part of the input identity. */
+    readonly strict?: true };
   readonly baseVersion: number;
   readonly baseProfileSha: string;
   readonly acknowledgedPriorUsage: readonly string[];
+  /**
+   * Brand DNA only: the website pages read for this card (and pages of an earlier address to retire). They are
+   * NOT brand documents yet. They are saved, together with the card, only when the card is made; a refused or
+   * failed task leaves the brand's documents exactly as they were. Cleared once the task has ended either way.
+   */
+  readonly staged?: readonly KnowledgeDocument[];
   readonly start?: { readonly nonce: string; readonly at: string };
   /** Receipt and actual usage are committed together, exactly once per start nonce. */
   readonly receipt?: ProfileJobReceipt;
@@ -28,7 +36,8 @@ export function profilePayload(job: Job): ProfileJobPayload { return job.payload
 export function unacknowledgedProfileCalls(jobs: readonly Job[]): Job[] {
   const profiles = jobs.filter(isProfileJob);
   const acknowledged = new Set(profiles.flatMap((j) => profilePayload(j).acknowledgedPriorUsage));
-  return profiles.filter((j) => profilePayload(j).start && !profilePayload(j).receipt && !acknowledged.has(j.id));
+  // A rejected result is a known outcome with its usage recorded; only a call that never reported back is uncertain.
+  return profiles.filter((j) => profilePayload(j).start && !profilePayload(j).receipt && profilePayload(j).reason !== 'rejected' && !acknowledged.has(j.id));
 }
 export interface ProfileJobSnapshot {
   readonly brand: Brand;
@@ -44,6 +53,8 @@ export interface ProfileJobDecision {
   /** False returns an existing receipt without mutating it. */
   readonly write: boolean;
   readonly profile?: BrandProfile;
+  /** New document versions saved in the same transaction as the profile built from them. */
+  readonly knowledge?: readonly KnowledgeDocument[];
   readonly usage?: UsageRecord;
   readonly event?: ActivityEvent;
 }

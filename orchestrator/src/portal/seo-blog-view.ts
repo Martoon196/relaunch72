@@ -101,8 +101,15 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
 <main>${shell.limitsAvailable ? `<p><a href="${SEO_BLOG_BASE}/limits">Usage &amp; limits</a></p>` : ''}${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
 
-export function brandsPage(shell: Shell, commandId: string): string {
-  const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p><p>Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p></article>`).join('');
+export type BrandDnaDoorStatus = 'none' | 'proposed' | 'confirmed' | 'out_of_date';
+/** The Brand DNA front door, linked from the brands list and the top of Brand setup. */
+export function brandDnaDoor(brand: Brand, status: BrandDnaDoorStatus | undefined): string {
+  const label = status === 'confirmed' ? 'See your Brand DNA' : status === 'out_of_date' ? 'Your Brand DNA is out of date' : status === 'proposed' ? 'Check your Brand DNA card' : 'Start with your website';
+  return `<a class="button${status === 'confirmed' ? ' secondary' : ''}" href="${url(brand, 'dna')}">${label}</a>`;
+}
+
+export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>): string {
+  const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p><p>Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p>${dna ? `<p>${brandDnaDoor(b, dna.get(b.id))}</p>` : ''}</article>`).join('');
   return layout(shell, 'Brands', `<h1>Brands</h1>
 <div class="grid">${cards || '<p class="muted">No brands yet. Add your first brand to start its blog.</p>'}</div>
 <section class="card" aria-labelledby="add-brand"><h2 id="add-brand">Add brand</h2><form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}">
@@ -231,7 +238,10 @@ ${p.confirmedAt ? '' : `<form method="post" action="${url(b, 'profile/confirm')}
 ${pub.fields.map((f) => `<label for="df-${pub.type}-${f.key}">${e(f.label)}</label><input id="df-${pub.type}-${f.key}" name="cfg_${e(f.key)}" type="text" ${f.required ? 'required' : ''} placeholder="${e(f.placeholder ?? '')}"><small class="muted">${e(f.help)}</small>`).join('')}
 <label for="dc-${pub.type}">${e(pub.credentialLabel)}</label><input id="dc-${pub.type}" name="credential" type="password" autocomplete="off" required>
 <p class="muted">Stored encrypted on the server and never shown again.</p><button type="submit"${data.vaultReady ? '' : ' disabled'}>Connect and check</button>${data.vaultReady ? '' : ' <span class="muted">Secure credential storage is not configured on the server.</span>'}</form></details>`).join('');
-  return layout(shell, 'Brand setup', `<h1>Brand setup</h1><p class="muted">Build the context once, review the facts, then let the programme prepare drafts within your limits.</p><nav class="tabs" aria-label="Setup steps"><a href="#website-inventory">1 Website</a><a href="#brand-guidance">2 Guidance</a><a href="#brand-profile">3 Profile</a><a href="#website-connection">4 Connect</a><a href="#editorial-structure">5 Editorial</a></nav>
+  const dnaStatus: BrandDnaDoorStatus = !p ? 'none' : p.confirmedAt ? 'confirmed' : 'proposed';
+  return layout(shell, 'Brand setup', `<h1>Brand setup</h1><p class="muted">Build the context once, review the facts, then let the programme prepare drafts within your limits.</p>
+<section class="card" id="brand-dna-door"><h2>${p ? 'Your Brand DNA' : 'The quick way: start with your website'}</h2><p>${p ? 'See your card with where each fact came from, or read your website again.' : 'Paste your website address and we read your pages for you. You get a card showing what you sell, who it is for and how you sound, with where each line came from. Nothing is made up.'}</p><p>${brandDnaDoor(b, dnaStatus)}</p></section>
+<nav class="tabs" aria-label="Setup steps"><a href="#website-inventory">1 Website</a><a href="#brand-guidance">2 Guidance</a><a href="#brand-profile">3 Profile</a><a href="#website-connection">4 Connect</a><a href="#editorial-structure">5 Editorial</a></nav>
 <section class="card" id="website-inventory"><h2 class="step-heading"><span class="step-number">1</span>Website and language</h2><form method="post" action="${url(b, 'basics')}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${b.rowVersion}">
 <div><label for="bw">Website</label><input id="bw" name="website" type="text" value="${e(b.website ?? '')}"></div><p class="section-note">${e(languageLabel)} · ${e(timezoneLabel)}</p><details><summary>Advanced language and time zone</summary><div class="row"><div><label for="bl">Language and region</label><input id="bl" name="locale" type="text" value="${e(b.locale)}"></div><div><label for="bt">Time zone</label><input id="bt" name="timezone" type="text" value="${e(b.timezone)}"></div></div></details><button type="submit">Save</button></form>
 <form method="post" action="${url(b, 'inventory')}" style="margin-top:8px">${csrfField(shell.csrf)}<button class="secondary" type="submit"${b.website ? '' : ' disabled'}>Read website pages</button>
