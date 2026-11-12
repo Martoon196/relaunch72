@@ -14,4 +14,4 @@
  * migration contract and readiness tests.
  */
 export const EMAIL_BLOCK_MIGRATION = '0153_stop_per_channel_and_email_block_ledger.sql';
-export const EMAIL_BLOCK_CHECKSUM = 'afb7fdd15d4ad3654b518d7b68fb6d6780ce8422b0e699f26180ab0ca43b5eb3';
+export const EMAIL_BLOCK_CHECKSUM = 'a1994e93eae2e8caf2ff2156ad4efe4082126b4f57b0a63cf8080d221f400975';

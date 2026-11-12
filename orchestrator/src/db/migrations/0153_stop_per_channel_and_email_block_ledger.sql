@@ -109,6 +109,29 @@ CREATE POLICY email_address_blocks_definer ON app_private.email_address_blocks T
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app_private','email_address_blocks','workspace_id');
 GRANT SELECT,INSERT ON app_private.email_address_blocks TO r72_email_block_definer;
 GRANT UPDATE(occurred_at,provider_event_id,stream,updated_at,lifted_at,lifted_event_id,lifted_by_user_id,lift_note) ON app_private.email_address_blocks TO r72_email_block_definer;
+-- Every owner lift leaves a permanent trace here, even after a later bounce re-arms the block row (which clears the
+-- row's own who/why). Append-only: the definer may only insert and read; nothing updates or deletes it.
+CREATE TABLE app_private.email_address_block_lifts(
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ workspace_id uuid NOT NULL CHECK(workspace_id IN('2789228d-55a6-4688-b1e8-2f70abca990b','d975ff66-336a-46c2-b36b-d7095a11af97')),
+ block_id uuid NOT NULL REFERENCES app_private.email_address_blocks(id) ON DELETE RESTRICT,
+ email text NOT NULL CHECK(email=lower(btrim(email)) AND length(email) BETWEEN 3 AND 320),
+ reason text NOT NULL CHECK(reason='hard_bounce'),
+ lifted_by_user_id uuid NOT NULL,
+ note text NOT NULL CHECK(length(btrim(note)) BETWEEN 3 AND 300 AND note!~'[[:cntrl:]]'),
+ crm_released integer NOT NULL CHECK(crm_released>=0),
+ lifted_at timestamptz NOT NULL
+);
+CREATE INDEX email_address_block_lifts_address ON app_private.email_address_block_lifts(workspace_id,email,lifted_at DESC);
+ALTER TABLE app_private.email_address_block_lifts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_private.email_address_block_lifts FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON app_private.email_address_block_lifts FROM PUBLIC;
+CREATE POLICY email_address_block_lifts_owner ON app_private.email_address_block_lifts TO r72_owner USING(true) WITH CHECK(true);
+CREATE POLICY email_address_block_lifts_definer ON app_private.email_address_block_lifts TO r72_email_block_definer
+ USING(session_user='r72_identity_command' AND workspace_id IN('2789228d-55a6-4688-b1e8-2f70abca990b','d975ff66-336a-46c2-b36b-d7095a11af97'))
+ WITH CHECK(session_user='r72_identity_command' AND workspace_id IN('2789228d-55a6-4688-b1e8-2f70abca990b','d975ff66-336a-46c2-b36b-d7095a11af97'));
+INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app_private','email_address_block_lifts','workspace_id');
+GRANT SELECT,INSERT ON app_private.email_address_block_lifts TO r72_email_block_definer;
 -- The owner lift authenticates the owner's own portal session, exactly as the owner pages do.
 GRANT EXECUTE ON FUNCTION app_private.resolve_session(bytea),app_private.mhp_marketing_workspace_allowed(uuid,uuid),
  app_private.can_manage_workspace(uuid,uuid) TO r72_email_block_definer;
@@ -145,7 +168,19 @@ SET LOCAL ROLE r72_email_block_definer;
 -- event changes nothing; a newer unsubscribe moves the row forward (and re-blocks after a lift); a hard bounce or
 -- spam complaint keeps its first time, except that a hard bounce the owner lifted is re-armed by a bounce that
 -- happened after the lift. Times are event times, never arrival order. p_at NULL (a provider list row with no time)
--- records the first time it is seen and never moves a row forward.
+-- records the first time it is seen and never moves a row forward, so an untimed list row never re-arms a lifted row
+-- (accepted: only a timed event after the lift can). Re-arming clears the row's own who/why of the owner lift; the
+-- permanent trace of that lift stays in email_address_block_lifts. The existing row is read without a lock first
+-- and is locked only when it will actually change, so an hourly read of a long unchanged list takes no row locks.
+-- Whether a timed event at p_at moves this row forward: a newer unsubscribe (after any lift), or a bounce after the
+-- owner lifted a hard bounce. Equal times never do. A replay of the row's own event never does.
+CREATE FUNCTION app_private.email_block_renews(b app_private.email_address_blocks,p_at timestamptz,p_event text) RETURNS boolean
+LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
+ SELECT p_at IS NOT NULL AND NOT (p_event IS NOT NULL AND p_event IS NOT DISTINCT FROM b.provider_event_id)
+  AND ((b.reason='unsubscribe' AND p_at>b.occurred_at AND (b.lifted_at IS NULL OR p_at>b.lifted_at))
+   OR (b.reason='hard_bounce' AND b.lifted_at IS NOT NULL AND p_at>b.lifted_at))
+$f$;
+
 CREATE FUNCTION app_private.email_block_put(p_workspace uuid,p_source text,p_email text,p_reason text,p_provider text,p_event text,p_stream text,p_at timestamptz)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b app_private.email_address_blocks%ROWTYPE; v_email text:=lower(btrim(p_email));
@@ -156,21 +191,21 @@ BEGIN
   OR v_email IS NULL OR length(v_email) NOT BETWEEN 3 AND 320 OR v_email!~'^[^[:space:]@<>]+@[^[:space:]@<>]+\.[^[:space:]@<>]+$'
   OR (p_event IS NOT NULL AND p_event!~'^[!-~]{1,200}$') OR (p_stream IS NOT NULL AND p_stream!~'^[a-z0-9-]{1,60}$')
  THEN RAISE EXCEPTION 'Invalid email block' USING ERRCODE='22023'; END IF;
- INSERT INTO app_private.email_address_blocks(workspace_id,source_key,email,reason,scope,provider,provider_event_id,stream,occurred_at)
- VALUES(p_workspace,p_source,v_email,p_reason,CASE p_reason WHEN 'unsubscribe' THEN 'marketing' ELSE 'all' END,p_provider,p_event,p_stream,
-  coalesce(p_at,statement_timestamp()))
- ON CONFLICT(workspace_id,source_key,email,reason) DO NOTHING;
- IF FOUND THEN RETURN 'recorded'; END IF;
- IF p_at IS NULL THEN RETURN 'exists'; END IF;
- SELECT * INTO b FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.source_key=p_source AND x.email=v_email AND x.reason=p_reason FOR UPDATE;
- IF (b.reason='unsubscribe' AND p_at>b.occurred_at AND (b.lifted_at IS NULL OR p_at>b.lifted_at))
-  OR (b.reason='hard_bounce' AND b.lifted_at IS NOT NULL AND p_at>b.lifted_at) THEN
-  IF p_event IS NOT NULL AND p_event IS NOT DISTINCT FROM b.provider_event_id THEN RETURN 'exists'; END IF;
-  UPDATE app_private.email_address_blocks SET occurred_at=p_at,provider_event_id=p_event,stream=coalesce(p_stream,stream),
-   lifted_at=NULL,lifted_event_id=NULL,lifted_by_user_id=NULL,lift_note=NULL,updated_at=clock_timestamp() WHERE id=b.id;
-  RETURN 'renewed';
+ SELECT * INTO b FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.source_key=p_source AND x.email=v_email AND x.reason=p_reason;
+ IF NOT FOUND THEN
+  INSERT INTO app_private.email_address_blocks(workspace_id,source_key,email,reason,scope,provider,provider_event_id,stream,occurred_at)
+  VALUES(p_workspace,p_source,v_email,p_reason,CASE p_reason WHEN 'unsubscribe' THEN 'marketing' ELSE 'all' END,p_provider,p_event,p_stream,
+   coalesce(p_at,statement_timestamp()))
+  ON CONFLICT(workspace_id,source_key,email,reason) DO NOTHING;
+  IF FOUND THEN RETURN 'recorded'; END IF;
+  SELECT * INTO b FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.source_key=p_source AND x.email=v_email AND x.reason=p_reason;
  END IF;
- RETURN 'exists';
+ IF p_at IS NULL OR NOT app_private.email_block_renews(b,p_at,p_event) THEN RETURN 'exists'; END IF;
+ SELECT * INTO b FROM app_private.email_address_blocks x WHERE x.id=b.id FOR UPDATE;
+ IF NOT app_private.email_block_renews(b,p_at,p_event) THEN RETURN 'exists'; END IF;
+ UPDATE app_private.email_address_blocks SET occurred_at=p_at,provider_event_id=p_event,stream=coalesce(p_stream,stream),
+  lifted_at=NULL,lifted_event_id=NULL,lifted_by_user_id=NULL,lift_note=NULL,updated_at=clock_timestamp() WHERE id=b.id;
+ RETURN 'renewed';
 END $f$;
 
 -- One provider event (webhook): 'recorded', 'renewed' or 'exists'.
@@ -221,8 +256,10 @@ BEGIN
    AND email=v_email AND reason='unsubscribe') THEN
   -- Validated by the same rules as any other write; the tombstone blocks nothing.
   PERFORM app_private.email_block_put(p_workspace,p_source,v_email,'unsubscribe','postmark',NULL,NULL,p_at);
+  -- occurred_at<=p_at: if a newer unsubscribe landed between the check above and this write, it is never lifted.
   UPDATE app_private.email_address_blocks SET lifted_at=p_at,lifted_event_id=p_event,updated_at=clock_timestamp()
-  WHERE workspace_id=p_workspace AND source_key=p_source AND email=v_email AND reason='unsubscribe';
+  WHERE workspace_id=p_workspace AND source_key=p_source AND email=v_email AND reason='unsubscribe' AND occurred_at<=p_at
+   AND (lifted_at IS NULL OR lifted_at<p_at);
  END IF;
  RETURN lifted;
 END $f$;
@@ -233,7 +270,8 @@ END $f$;
 -- lifted. For Property Predator the CRM stop written by that bounce is released too, so PP sends can go again.
 CREATE FUNCTION app_private.email_block_owner_lift(p_session bytea,p_workspace uuid,p_email text,p_note text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE actor uuid; selected uuid; allowed boolean; v_email text:=lower(btrim(p_email)); lifted integer; released integer:=0; spam boolean;
+DECLARE actor uuid; selected uuid; allowed boolean; v_email text:=lower(btrim(p_email)); lifted integer:=0; released integer:=0; spam boolean;
+ already boolean; r record;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email block boundary required' USING ERRCODE='42501'; END IF;
  IF p_session IS NULL OR octet_length(p_session)<>32 OR p_workspace IS NULL OR v_email IS NULL OR length(v_email) NOT BETWEEN 3 AND 320
@@ -246,14 +284,24 @@ BEGIN
    ELSE false END,false);
  IF NOT allowed THEN RAISE EXCEPTION 'Brand owner required' USING ERRCODE='42501'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('email-block:'||p_workspace::text||':'||v_email,153));
- UPDATE app_private.email_address_blocks SET lifted_at=statement_timestamp(),lifted_by_user_id=actor,lift_note=btrim(p_note),updated_at=clock_timestamp()
- WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce' AND lifted_at IS NULL;
- GET DIAGNOSTICS lifted=ROW_COUNT;
- IF lifted>0 AND p_workspace='d975ff66-336a-46c2-b36b-d7095a11af97' THEN
+ -- A spam report also stands behind the CRM stop: then nothing in the CRM is released, whatever the bounce says.
+ spam:=EXISTS(SELECT 1 FROM app_private.email_address_blocks WHERE workspace_id=p_workspace AND email=v_email AND reason='spam_complaint' AND lifted_at IS NULL);
+ already:=EXISTS(SELECT 1 FROM app_private.email_address_blocks WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce'
+  AND lifted_at IS NOT NULL AND lifted_by_user_id IS NOT NULL);
+ FOR r IN UPDATE app_private.email_address_blocks SET lifted_at=statement_timestamp(),lifted_by_user_id=actor,lift_note=btrim(p_note),updated_at=clock_timestamp()
+  WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce' AND lifted_at IS NULL RETURNING id LOOP
+  lifted:=lifted+1;
+ END LOOP;
+ -- The PP CRM stop is released when this press lifted the bounce, and again when the bounce was already owner-lifted
+ -- (a replay of the original bounce may have re-stopped the person in between): a second press repairs it.
+ IF (lifted>0 OR already) AND NOT spam AND p_workspace='d975ff66-336a-46c2-b36b-d7095a11af97' THEN
   released:=app_private.pp_followup_release_bounce(v_email,actor,btrim(p_note));
  END IF;
- spam:=EXISTS(SELECT 1 FROM app_private.email_address_blocks WHERE workspace_id=p_workspace AND email=v_email AND reason='spam_complaint' AND lifted_at IS NULL);
- RETURN jsonb_build_object('lifted',lifted,'released',released,'spamComplaint',spam,'liftedAt',statement_timestamp());
+ INSERT INTO app_private.email_address_block_lifts(workspace_id,block_id,email,reason,lifted_by_user_id,note,crm_released,lifted_at)
+ SELECT p_workspace,x.id,v_email,'hard_bounce',actor,btrim(p_note),released,statement_timestamp() FROM app_private.email_address_blocks x
+ WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.reason='hard_bounce' AND x.lifted_at=statement_timestamp() AND x.lifted_by_user_id=actor
+  AND (lifted>0 OR released>0);
+ RETURN jsonb_build_object('lifted',lifted,'released',released,'spamComplaint',spam,'alreadyLifted',already AND lifted=0,'liftedAt',statement_timestamp());
 END $f$;
 
 -- True when the person signed up again, or gave marketing permission again, after p_since (the unsubscribe).
@@ -270,45 +318,54 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog 
 $f$;
 
 -- What a send guard asks: may this brand email this address for this purpose? Pure read.
--- {blocked, reason, scope, since, reallowed, clearedAt}: reallowed is true when an unsubscribe exists but a sign-up
--- since lets marketing go again. clearedAt is the latest event time up to which this ledger has cleared the address
--- (a lift, or the time of a re-allowed unsubscribe): the process cache ignores its own copies of blocks at or before
--- it, and still counts a block that happened after it.
+-- {blocked, reason, scope, since, reallowed, cleared}: reallowed is true when an unsubscribe exists but a sign-up
+-- since lets marketing go again. cleared maps each reason to the latest event time up to which this ledger has cleared
+-- the address FOR THAT REASON (a lift, or the time of a re-allowed unsubscribe): the process cache ignores its own
+-- webhook copies of that reason at or before it, and still counts one that happened after it. One reason's lift never
+-- clears another reason.
 CREATE FUNCTION app_private.email_block_decide(p_workspace uuid,p_email text,p_purpose text)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE v_email text:=lower(btrim(p_email)); b app_private.email_address_blocks%ROWTYPE; reallowed boolean:=false; cleared timestamptz;
+DECLARE v_email text:=lower(btrim(p_email)); b app_private.email_address_blocks%ROWTYPE; reallowed boolean:=false; cleared jsonb;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email block boundary required' USING ERRCODE='42501'; END IF;
  IF p_purpose IS NULL OR p_purpose NOT IN('marketing','service') THEN RAISE EXCEPTION 'Invalid email purpose' USING ERRCODE='22023'; END IF;
- IF p_workspace IS NULL OR v_email IS NULL THEN RETURN jsonb_build_object('blocked',false,'reallowed',false,'clearedAt',NULL); END IF;
- SELECT max(x.lifted_at) INTO cleared FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.lifted_at IS NOT NULL;
+ IF p_workspace IS NULL OR v_email IS NULL THEN RETURN jsonb_build_object('blocked',false,'reallowed',false,'cleared','{}'::jsonb); END IF;
+ -- Per reason: the latest time up to which the ledger has cleared this address for that reason (a lift).
+ SELECT coalesce(jsonb_object_agg(c.reason,c.at),'{}'::jsonb) INTO cleared FROM (SELECT x.reason,max(x.lifted_at) AS at FROM app_private.email_address_blocks x
+  WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.lifted_at IS NOT NULL GROUP BY x.reason) c;
  SELECT * INTO b FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.lifted_at IS NULL AND x.scope='all'
  ORDER BY CASE x.reason WHEN 'hard_bounce' THEN 0 WHEN 'spam_complaint' THEN 1 ELSE 2 END,x.occurred_at,x.id LIMIT 1;
- IF FOUND THEN RETURN jsonb_build_object('blocked',true,'reason',b.reason,'scope',b.scope,'since',b.occurred_at,'reallowed',false,'clearedAt',cleared); END IF;
+ IF FOUND THEN RETURN jsonb_build_object('blocked',true,'reason',b.reason,'scope',b.scope,'since',b.occurred_at,'reallowed',false,'cleared',cleared); END IF;
  IF p_purpose='marketing' THEN
   FOR b IN SELECT * FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.lifted_at IS NULL AND x.scope='marketing'
    ORDER BY x.occurred_at DESC,x.id LOOP
    IF NOT app_private.email_block_signed_up_since(p_workspace,v_email,b.occurred_at) THEN
-    RETURN jsonb_build_object('blocked',true,'reason',b.reason,'scope',b.scope,'since',b.occurred_at,'reallowed',false,'clearedAt',cleared);
+    RETURN jsonb_build_object('blocked',true,'reason',b.reason,'scope',b.scope,'since',b.occurred_at,'reallowed',false,'cleared',cleared);
    END IF;
-   reallowed:=true; cleared:=greatest(cleared,b.occurred_at);
+   reallowed:=true;
+   cleared:=cleared||jsonb_build_object('unsubscribe',greatest((cleared->>'unsubscribe')::timestamptz,b.occurred_at));
   END LOOP;
  END IF;
- RETURN jsonb_build_object('blocked',false,'reallowed',reallowed,'clearedAt',cleared);
+ RETURN jsonb_build_object('blocked',false,'reallowed',reallowed,'cleared',cleared);
 END $f$;
 
--- The owner page and the process cache: current (unlifted) rows for one brand, newest first, at most p_limit.
+-- The owner page and the process cache: {current: unlifted rows newest first, lifted: lifted hard bounces and
+-- unsubscribes with their lift time}, each at most p_limit. The cache hides its own provider-list copies of a lifted
+-- (address, reason), so every web instance stops showing an address the owner has lifted.
 CREATE FUNCTION app_private.email_block_rows(p_workspace uuid,p_limit integer)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email block boundary required' USING ERRCODE='42501'; END IF;
  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 20000 THEN RAISE EXCEPTION 'Invalid email block limit' USING ERRCODE='22023'; END IF;
- RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('email',r.email,'reason',r.reason,'scope',r.scope,'source',r.source_key,'stream',r.stream,
+ RETURN jsonb_build_object('current',coalesce((SELECT jsonb_agg(jsonb_build_object('email',r.email,'reason',r.reason,'scope',r.scope,'source',r.source_key,'stream',r.stream,
    'since',r.occurred_at,'reallowed',r.scope='marketing' AND app_private.email_block_signed_up_since(p_workspace,r.email,r.occurred_at)) ORDER BY r.occurred_at DESC,r.id)
-  FROM (SELECT * FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.lifted_at IS NULL ORDER BY x.occurred_at DESC,x.id LIMIT p_limit) r),'[]'::jsonb);
+  FROM (SELECT * FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.lifted_at IS NULL ORDER BY x.occurred_at DESC,x.id LIMIT p_limit) r),'[]'::jsonb),
+  'lifted',coalesce((SELECT jsonb_agg(jsonb_build_object('email',l.email,'reason',l.reason,'liftedAt',l.lifted_at) ORDER BY l.lifted_at DESC,l.id)
+  FROM (SELECT * FROM app_private.email_address_blocks x WHERE x.workspace_id=p_workspace AND x.lifted_at IS NOT NULL ORDER BY x.lifted_at DESC,x.id LIMIT p_limit) l),'[]'::jsonb));
 END $f$;
 
-REVOKE ALL ON FUNCTION app_private.email_block_put(uuid,text,text,text,text,text,text,timestamptz),
+REVOKE ALL ON FUNCTION app_private.email_block_renews(app_private.email_address_blocks,timestamptz,text),
+ app_private.email_block_put(uuid,text,text,text,text,text,text,timestamptz),
  app_private.email_block_record(uuid,text,text,text,text,text,timestamptz),app_private.email_block_record_list(uuid,text,text,jsonb),
  app_private.email_block_lift(uuid,text,text,text,timestamptz),app_private.email_block_signed_up_since(uuid,text,timestamptz),
  app_private.email_block_decide(uuid,text,text),app_private.email_block_rows(uuid,integer),
