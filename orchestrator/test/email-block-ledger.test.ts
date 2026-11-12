@@ -12,7 +12,12 @@ import {
   type EmailBlockLedger, type EmailBounceSource, type LedgerDecision, type LedgerRow, type PostmarkBounceApi,
 } from '../src/email-bounces/index.js';
 import { ppEmailBounceEffects } from '../src/pp-followup/bounces.js';
-import { PgPpFollowupRepository } from '../src/pp-followup/repository.js';
+import { PgPpFollowupRepository, type PpFollowupPrepared, type PpFollowupQueue } from '../src/pp-followup/repository.js';
+import { EmailGuardUnavailableError, EmailRecipientBlockedError } from '../src/email-bounces/policy.js';
+import { createMhpMarketingSender, mhpMarketingConfig } from '../src/mhp/marketing-mail.js';
+import { createPpPostmarkSender, PpNotSentError } from '../src/pp-followup/mail.js';
+import { dispatchPpFollowupEmails } from '../src/pp-followup/dispatch.js';
+import { ppMarketingConfig } from '../src/pp-followup/config.js';
 
 const MHP = '2789228d-55a6-4688-b1e8-2f70abca990b', PP = 'd975ff66-336a-46c2-b36b-d7095a11af97', OTHER = '0b151000-0000-4000-8000-000000000002';
 const NOW = Date.parse('2026-11-12T10:00:00Z'), DAY = 86_400_000;
@@ -30,42 +35,66 @@ function pool0152() {
 
 /** An in-memory stand-in for the ledger with the same rules as the SQL (scope, sign-up since, lift). */
 class FakeLedger implements EmailBlockLedger {
-  rows_: { workspaceId: string; sourceKey: string; email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; at: number; eventId: string | null; lifted: boolean }[] = [];
+  rows_: { workspaceId: string; sourceKey: string; email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; at: number; eventId: string | null; lifted: boolean; liftedAt?: number }[] = [];
   signedUp = new Map<string, number>();
   writes: string[] = [];
   fail = false;
+  failDecide = false;
   covers(workspaceId: string) { return workspaceId === MHP || workspaceId === PP; }
+  status() { return 'available' as const; }
   async decide(workspaceId: string, email: string, purpose: 'marketing' | 'service'): Promise<LedgerDecision | null> {
     if (!this.covers(workspaceId)) return null;
-    const live = this.rows_.filter(r => r.workspaceId === workspaceId && r.email === email && !r.lifted);
+    if (this.failDecide) throw new Error('connection reset');
+    const mine = this.rows_.filter(r => r.workspaceId === workspaceId && r.email === email);
+    let clearedAt: number | null = null;
+    for (const r of mine) if (r.lifted && r.liftedAt !== undefined) clearedAt = Math.max(clearedAt ?? -Infinity, r.liftedAt);
+    const live = mine.filter(r => !r.lifted);
     const all = live.find(r => r.reason !== 'unsubscribed');
-    if (all) return { blocked: true, reason: all.reason, reallowed: false };
+    if (all) return { blocked: true, reason: all.reason, reallowed: false, clearedAt };
     let reallowed = false;
     if (purpose === 'marketing') for (const row of live) {
-      if (!((this.signedUp.get(email) ?? 0) > row.at)) return { blocked: true, reason: 'unsubscribed', reallowed: false };
-      reallowed = true;
+      if (!((this.signedUp.get(email) ?? 0) > row.at)) return { blocked: true, reason: 'unsubscribed', reallowed: false, clearedAt };
+      reallowed = true; clearedAt = Math.max(clearedAt ?? -Infinity, row.at);
     }
-    return { blocked: false, reallowed };
+    return { blocked: false, reallowed, clearedAt };
   }
   async record(input: { workspaceId: string; sourceKey: string; email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; eventId: string | null; stream: string | null; at: number }) {
     if (this.fail) throw new Error('database unavailable');
     this.writes.push(`record ${input.reason} ${input.eventId}`);
-    if (this.rows_.some(r => r.workspaceId === input.workspaceId && r.sourceKey === input.sourceKey && r.email === input.email && r.reason === input.reason)) return 'exists' as const;
+    const existing = this.rows_.find(r => r.workspaceId === input.workspaceId && r.sourceKey === input.sourceKey && r.email === input.email && r.reason === input.reason);
+    if (existing) {
+      // Event times, never arrival order: only a newer event re-arms a lifted row.
+      if (existing.lifted && existing.liftedAt !== undefined && input.at > existing.liftedAt) { existing.lifted = false; existing.at = input.at; existing.liftedAt = undefined; return 'renewed' as const; }
+      return 'exists' as const;
+    }
     this.rows_.push({ ...input, lifted: false }); return 'recorded' as const;
   }
-  async recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; at: number }[] }) {
+  firstSeen = NOW;
+  async recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; at: number | null }[] }) {
     if (this.fail) throw new Error('database unavailable');
     this.writes.push(`list ${input.stream} ${input.rows.length}`);
     let added = 0;
-    for (const row of input.rows) if ((await this.record({ ...input, ...row, eventId: null, stream: input.stream })) === 'recorded') added++;
-    return added;
+    for (const row of input.rows) if ((await this.record({ ...input, ...row, at: row.at ?? this.firstSeen, eventId: null, stream: input.stream })) === 'recorded') added++;
+    return { added, skipped: 0 };
   }
   async lift(input: { workspaceId: string; sourceKey: string; email: string; eventId: string | null; at: number }) {
     if (this.fail) throw new Error('database unavailable');
     this.writes.push(`lift ${input.eventId?.slice(0, 13)}`);
-    let n = 0;
-    for (const row of this.rows_) if (row.workspaceId === input.workspaceId && row.sourceKey === input.sourceKey && row.email === input.email && row.reason === 'unsubscribed' && !row.lifted) { row.lifted = true; n++; }
+    let n = 0, known = false;
+    for (const row of this.rows_) if (row.workspaceId === input.workspaceId && row.sourceKey === input.sourceKey && row.email === input.email && row.reason === 'unsubscribed') {
+      known = true;
+      if (row.at < input.at && (!row.lifted || (row.liftedAt ?? 0) < input.at)) { row.lifted = true; row.liftedAt = input.at; n++; }
+    }
+    // The re-subscribe overtook a retried older unsubscribe: leave a lifted tombstone at the re-subscribe's own time.
+    if (!known) this.rows_.push({ workspaceId: input.workspaceId, sourceKey: input.sourceKey, email: input.email, reason: 'unsubscribed', at: input.at, eventId: null, lifted: true, liftedAt: input.at });
     return n;
+  }
+  lifts: string[] = [];
+  async ownerLift(input: { sessionToken: string; workspaceId: string; email: string; note: string }) {
+    this.lifts.push(`${input.workspaceId} ${input.email} ${input.note}`);
+    let lifted = 0;
+    for (const row of this.rows_) if (row.workspaceId === input.workspaceId && row.email === input.email && row.reason === 'hard_bounce' && !row.lifted) { row.lifted = true; row.liftedAt = NOW - 30 * 60_000; lifted++; }
+    return { lifted, released: 0, spamComplaint: this.rows_.some(r => r.workspaceId === input.workspaceId && r.email === input.email && r.reason === 'spam_complaint' && !r.lifted) };
   }
   async rows(workspaceId: string): Promise<readonly LedgerRow[]> {
     return this.rows_.filter(r => r.workspaceId === workspaceId && !r.lifted).map(r => ({ email: r.email, reason: r.reason, scope: r.reason === 'unsubscribed' ? 'marketing' as const : 'all' as const,
@@ -129,11 +158,11 @@ test('database still at 0152: every ledger call is "unavailable", the guard answ
   assert.deepEqual(f.effects, ['hard_bounce']);
 });
 
-test('a database error that is not "missing" never fails a send: the guard falls back; a webhook write asks Postmark to retry', async () => {
+test('a database error that is not "missing": the read is reported, never swallowed; a webhook write asks Postmark to retry', async () => {
   const broken = { query: async () => { throw Object.assign(new Error('connection reset'), { code: '08006' }); } };
   const logs: string[] = [];
-  const ledger = new PgEmailBlockLedger(broken, { log: line => logs.push(line) });
-  assert.equal(await ledger.decide(PP, 'ann@example.invalid', 'marketing'), null);
+  const ledger = new PgEmailBlockLedger(broken as never, { log: line => logs.push(line) });
+  await assert.rejects(ledger.decide(PP, 'ann@example.invalid', 'marketing'), /connection reset/u);
   assert.match(logs[0]!, /ledger_read_failed/u); assert.doesNotMatch(logs.join(''), /@/u);
   await assert.rejects(ledger.record({ workspaceId: PP, sourceKey: 'pp', email: 'ann@example.invalid', reason: 'spam_complaint', eventId: 'bounce:9', stream: 'pp-news', at: NOW }));
   const fake = new FakeLedger(); fake.fail = true;
@@ -193,7 +222,7 @@ test('the webhook writes the true reason durably before the brand effect, replay
   // A Postmark-side "reactivate" of the hard bounce or the complaint is a subscription change too: it lifts nothing durable.
   assert.equal((await f.post({ ...subscription(false, '2026-11-12T09:30:00Z'), Recipient: 'gone@example.invalid' })).status, 200);
   assert.equal((await f.post(subscription(false, '2026-11-12T09:40:00Z'))).status, 200);
-  assert.deepEqual(ledger.rows_.map(r => r.lifted), [false, false, true]);
+  assert.deepEqual(ledger.rows_.map(r => r.lifted), [false, false, true, true], 'the hard-bounced address re-subscribe left only a lifted unsubscribe marker');
   assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' });
   assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'left@example.invalid', 'marketing'), { blocked: false });
   assert.equal(ledgerEventId(null), null); assert.equal(ledgerEventId('bounce:42'), 'bounce:42'); assert.equal(ledgerEventId('bad id with spaces'), null);
@@ -263,4 +292,149 @@ test('Property Predator: a reported bounce, complaint or unsubscribe is recorded
   await assert.rejects(repo.blockEmail('not-a-uuid', 'hard_bounce'));
   const failing = new PgPpFollowupRepository({} as never, { query: async () => { throw Object.assign(new Error('boom'), { code: '08006' }); } } as never);
   await assert.rejects(failing.blockEmail(POINT, 'hard_bounce'), /boom/u, 'any other database error is not swallowed: the webhook asks Postmark to retry');
+});
+
+// ---- Review fixes (0153 second pass) ----
+
+const mhpConfig = () => mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
+const rendered = { subject: 's', text: 't', html: '<p>t</p>', unsubscribe: 'https://app.martinhowardproperty.co.uk/email/unsubscribe?p=x' };
+
+test('Postmark 406 after a re-allow: the guard lets marketing go, Postmark still refuses, and that is a definite non-send (never an unknown that holds a sequence)', async () => {
+  const ledger = new FakeLedger();
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'back@example.invalid', reason: 'unsubscribed', at: NOW - 40 * DAY, eventId: null, lifted: false });
+  ledger.signedUp.set('back@example.invalid', NOW - DAY);
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  service.registry.markReady();
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'back@example.invalid', 'marketing'), { blocked: false });
+  let calls = 0;
+  const fetcher = (async () => { calls++; return new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 }); }) as unknown as typeof fetch;
+  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', fetcher, { guard: service.guard, workspaceId: MHP });
+  await assert.rejects(sender.sendRendered({ id: 'a', email: 'back@example.invalid', tag: 'owner_sequence', rendered }),
+    (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'unsubscribed');
+  assert.equal(calls, 1, 'Postmark was asked once and said no');
+  // Another 4xx without 406 stays a plain refusal, as before.
+  const other = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters',
+    (async () => new Response(JSON.stringify({ ErrorCode: 300 }), { status: 422 })) as unknown as typeof fetch);
+  await assert.rejects(other.sendRendered({ id: 'a', email: 'x@example.invalid', tag: 't', rendered }), (error: unknown) => !(error instanceof EmailRecipientBlockedError));
+});
+
+test('a ledger read error with an empty cache: marketing fails closed as a retryable non-send everywhere; event email falls back to the in-process list', async () => {
+  const ledger = new FakeLedger(); ledger.failDecide = true;
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  service.registry.markReady();
+  await assert.rejects(service.guard.check!(MHP, 'anyone@example.invalid', 'marketing'), EmailGuardUnavailableError);
+  assert.deepEqual(await service.guard.check!(MHP, 'anyone@example.invalid', 'service'), { blocked: false }, 'event email: in-process list (empty) decides');
+  // MHP: refused before any provider call, never stops the person.
+  let calls = 0;
+  const fetcher = (async () => { calls++; return new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-1' }), { status: 200 }); }) as unknown as typeof fetch;
+  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', fetcher, { guard: service.guard, workspaceId: MHP });
+  await assert.rejects(sender.sendRendered({ id: 'a', email: 'anyone@example.invalid', tag: 'owner_sequence', rendered }),
+    (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'check_unavailable');
+  assert.equal(calls, 0);
+  // PP: the dispatcher spends nothing and leaves the lease to run out (claimed again later); the sender hands the attempt back.
+  const ppService = new EmailBounceService({ config: { sources: [{ ...source, key: 'pp', workspaceId: PP }], blockers: [] }, now: () => NOW, ledger });
+  ppService.registry.markReady();
+  const recipients = { guard: ppService.guard, workspaceId: PP };
+  const calls2: string[] = [];
+  const lease = { id: '4d7fa05e-6b3a-4e9c-9f4d-3c4d5e6f7081', leaseId: '5e80b16f-7c4b-4fad-a05e-4d5e6f708192', leaseUntil: new Date(Date.now() + 120_000).toISOString(), email: 'ann@example.com' };
+  const queue: PpFollowupQueue = { claim: async () => { calls2.push('claim'); return [lease]; }, prepare: async () => { calls2.push('prepare'); return null as unknown as PpFollowupPrepared; },
+    settle: async (_l, outcome) => { calls2.push(`settle:${outcome}`); }, unknown: async () => { calls2.push('unknown'); } };
+  const pp = ppMarketingConfig({ PP_MARKETING_MODE: 'live', PP_POSTMARK_SERVER_TOKEN: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', PP_MARKETING_FROM: 'hello@propertypredator.com',
+    PP_POSTMARK_BROADCAST_STREAM: 'pp-news', PORTAL_BASE_URL: 'https://hq.propertypredator.com', SESSION_SECRET: 'synthetic-pp-followup-secret-at-least-32-chars' }).config!;
+  let ppCalls = 0;
+  const ppSender = createPpPostmarkSender(pp, (async () => { ppCalls++; return new Response('{}'); }) as unknown as typeof fetch, recipients);
+  const result = await dispatchPpFollowupEmails({ queue, sender: ppSender, unsubscribeSecret: 'synthetic-pp-followup-secret-at-least-32-chars', recipients,
+    config: { testRecipients: null, link: 'https://propertypredator.com/', unsubscribeOrigin: 'https://hq.propertypredator.com', fromName: 'Property Predator' } });
+  assert.deepEqual(result, { sent: 0, failed: 1, unknown: 0 });
+  assert.deepEqual(calls2, ['claim'], 'no proof prepared and nothing settled: the step is claimed again later');
+  await assert.rejects(ppSender.sendRendered({ id: 'x', email: 'ann@example.com', tag: 't', rendered: { subject: 's', text: 't', html: 'h', unsubscribe: 'https://hq.propertypredator.com/u' } }),
+    (error: unknown) => error instanceof PpNotSentError && error.scope === 'sender');
+  assert.equal(ppCalls, 0);
+});
+
+test('a missing ledger function after the ledger has answered in this process is a fault: thrown and warned every time, never "not applied yet"', async () => {
+  let answered = 0;
+  const pool = { query: async () => {
+    if (answered++ === 0) return { rows: [{ value: { blocked: false, reallowed: false, clearedAt: null } }] };
+    throw Object.assign(new Error('function app_private.email_block_decide(uuid, text, text) does not exist'), { code: '42883' });
+  } };
+  const logs: string[] = [];
+  const ledger = new PgEmailBlockLedger(pool as never, { log: line => logs.push(line) });
+  assert.equal(ledger.status(), 'unknown');
+  assert.deepEqual(await ledger.decide(MHP, 'a@example.invalid', 'marketing'), { blocked: false, reallowed: false, clearedAt: null });
+  assert.equal(ledger.status(), 'available');
+  for (let i = 0; i < 2; i++) await assert.rejects(ledger.decide(MHP, 'a@example.invalid', 'marketing'), /does not exist/u);
+  assert.equal(logs.filter(line => line.includes('ledger_missing_after_use') && line.includes('"level":"warn"')).length, 2, 'warned every time');
+  assert.equal(ledger.status(), 'available');
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  await assert.rejects(service.guard.check!(MHP, 'a@example.invalid', 'marketing'), EmailGuardUnavailableError);
+});
+
+test('out-of-order events: a re-subscribe that arrives before a retried older unsubscribe leaves a lifted marker; event times decide in both orders', async () => {
+  const resub = (at: string) => ({ RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: 'left@example.invalid', ChangedAt: at, SuppressSending: false, ServerID: 23 });
+  for (const order of ['unsubscribe-first', 'resubscribe-first'] as const) {
+    const ledger = new FakeLedger();
+    const f = webhookFixture(ledger);
+    const events = [subscription(true, '2026-11-12T09:00:00Z'), resub('2026-11-12T09:30:00Z')];
+    for (const event of order === 'unsubscribe-first' ? events : events.reverse()) assert.equal((await f.post(event)).status, 200);
+    assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'left@example.invalid', 'marketing'), { blocked: false }, order);
+    // A genuinely newer unsubscribe still blocks again.
+    assert.equal((await f.post(subscription(true, '2026-11-12T09:45:00Z'))).status, 200);
+    assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'left@example.invalid', 'marketing'), { blocked: true, reason: 'unsubscribed' }, `${order}, newer unsubscribe`);
+  }
+});
+
+test('the hourly read: a list row with no time keeps its first-seen time; a refused row is counted and warned, the rest still written', async () => {
+  const ledger = new FakeLedger();
+  ledger.firstSeen = NOW - 10 * DAY;
+  const api: PostmarkBounceApi = { suppressions: async stream => stream === 'broadcast' ? [{ email: 'left@example.invalid', kind: 'unsubscribed', at: null }] : [],
+    bounces: async () => ({ total: 0, received: 0, rows: [] }), totals: async () => ({ sent: 1, bounced: 0, complaints: 0 }) };
+  let now = NOW;
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => now, apiFor: () => api, ledger });
+  await service.sweepWorkspace(MHP);
+  ledger.firstSeen = NOW; now = NOW + DAY;
+  await new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => now, apiFor: () => api, ledger }).sweepWorkspace(MHP);
+  assert.deepEqual(ledger.rows_.map(r => [r.email, r.at]), [['left@example.invalid', NOW - 10 * DAY]], 'the second read does not renew the time');
+  ledger.signedUp.set('left@example.invalid', NOW - DAY);
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'left@example.invalid', 'marketing'), { blocked: false }, 'so a sign-up since still re-allows marketing');
+  // A ledger that refused one row: counted, and the timed read logs a warning.
+  const skipping: EmailBlockLedger = Object.assign(new FakeLedger(), { recordList: async (input: { rows: readonly unknown[] }) => ({ added: 0, skipped: input.rows.length }) });
+  const logs: string[] = [];
+  const warned = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, apiFor: () => api, ledger: skipping, log: line => logs.push(line) });
+  assert.deepEqual(await warned.sweepWorkspace(MHP), { streams: 2, failed: 0, suppressions: 1, bounces: 0, ledgerSkipped: 1 });
+  const stop = warned.start(3_600_000);
+  for (let i = 0; i < 50 && logs.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  stop();
+  assert.match(logs[0]!, /"event":"email\.bounces\.sweep_ledger_incomplete","level":"warn"/u); assert.doesNotMatch(logs[0]!, /@/u);
+});
+
+test('a newer in-process unsubscribe is not ignored because an older ledger unsubscribe was re-allowed', async () => {
+  const ledger = new FakeLedger();
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'back@example.invalid', reason: 'unsubscribed', at: NOW - 40 * DAY, eventId: null, lifted: false });
+  ledger.signedUp.set('back@example.invalid', NOW - 2 * DAY);
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'back@example.invalid', 'marketing'), { blocked: false });
+  // A webhook reported a NEW unsubscribe a moment ago whose durable write has not landed yet.
+  service.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'subscription:new', kind: 'unsubscribed', email: 'back@example.invalid', at: NOW - 60_000 }, false);
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'back@example.invalid', 'marketing'), { blocked: true, reason: 'unsubscribed' });
+  // ...while an older in-process copy of the re-allowed unsubscribe is ignored.
+  const older = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  older.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'subscription:old', kind: 'unsubscribed', email: 'back@example.invalid', at: NOW - 40 * DAY }, false);
+  assert.deepEqual(await decideRecipient(older.guard, MHP, 'back@example.invalid', 'marketing'), { blocked: false });
+});
+
+test('undo of a wrong hard bounce: the ledger lifts it, the process forgets its copy, and a later genuine bounce blocks again', async () => {
+  const ledger = new FakeLedger();
+  const f = webhookFixture(ledger);
+  assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).status, 200);
+  assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' });
+  assert.deepEqual(await f.service.ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false });
+  assert.equal(f.service.registry.decide(MHP, 'gone@example.invalid', 'service').blocked, false, 'the process copy is forgotten');
+  assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'marketing'), { blocked: false });
+  // The same old bounce replayed later by Postmark changes nothing; a new bounce after the lift blocks again.
+  assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).body.replayed, true);
+  assert.equal((await f.post(bounce({ ID: 99, BouncedAt: '2026-11-12T09:59:00Z' }))).status, 200);
+  assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' });
+  // Without a durable ledger nothing is lifted and the caller is told so.
+  assert.equal(await new EmailBounceService({ config: { sources: [source], blockers: [] } }).ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'x' }), null);
 });

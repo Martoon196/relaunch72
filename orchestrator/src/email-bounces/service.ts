@@ -8,9 +8,9 @@
  */
 
 import type { EmailBounceConfig, EmailBounceSource } from './config.js';
-import type { EmailBlockLedger } from './ledger.js';
+import type { EmailBlockLedger, OwnerLiftResult } from './ledger.js';
 import type { EmailPurpose, EmailSendDecision, EmailSendGuard, LastingBlockReason } from './policy.js';
-import { EMAIL_HEALTH_WINDOW_DAYS, strongestReason } from './policy.js';
+import { EMAIL_HEALTH_WINDOW_DAYS, EmailGuardUnavailableError, strongestReason } from './policy.js';
 import { createPostmarkBounceApi, type PostmarkBounceApi } from './postmark-api.js';
 import type { PostmarkBounceRow } from './postmark-events.js';
 import { EmailBlockRegistry } from './registry.js';
@@ -32,17 +32,22 @@ export interface SweepResult { readonly streams: number; readonly failed: number
   /** Streams with more recent bounces than Postmark serves in one query (10,000). The suppression list, which decides who is blocked, is always complete. */
   readonly truncated?: number;
   /** Streams whose suppression list was read but could not be written to the durable ledger (it is tried again at the next read). */
-  readonly ledgerFailed?: number }
+  readonly ledgerFailed?: number;
+  /** List rows the durable ledger refused one by one (the rest of the list was still written). */
+  readonly ledgerSkipped?: number }
 
-/** Writes one stream's suppression list to the durable ledger. Absent (database before 0153) is not a failure. */
-export type SuppressionPersister = (stream: string, rows: readonly { email: string; kind: LastingBlockReason; at: number | null }[], startedAt: number) => Promise<void>;
+/**
+ * Writes one stream's suppression list to the durable ledger and returns how many rows it skipped. Absent (database
+ * before 0153) is not a failure. A row with no time from the provider keeps its first-seen time in the ledger.
+ */
+export type SuppressionPersister = (stream: string, rows: readonly { email: string; kind: LastingBlockReason; at: number | null }[]) => Promise<number>;
 
 const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
 export async function sweepPostmarkSource(input: { source: EmailBounceSource; api: PostmarkBounceApi; registry: EmailBlockRegistry; now: number;
   persist?: SuppressionPersister }): Promise<SweepResult> {
   const { source, api, registry, now } = input;
-  let ledgerFailed = 0;
+  let ledgerFailed = 0, ledgerSkipped = 0;
   // One day either side covers the provider reporting dates in its own time zone.
   const from = day(now - (EMAIL_HEALTH_WINDOW_DAYS + 1) * DAY), statsFrom = day(now - EMAIL_HEALTH_WINDOW_DAYS * DAY), to = day(now + DAY);
   let failed = 0, suppressionCount = 0, bounceCount = 0, truncated = 0;
@@ -63,14 +68,14 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
       registry.reconcile(source.workspaceId, { sourceKey: source.key, stream, kind, startedAt: now, suppressions, bounces, ...totals });
       suppressionCount += suppressions.length; bounceCount += bounces.length;
       // The read itself succeeded; a failed durable write is reported on its own and written again next time.
-      if (input.persist) { try { await input.persist(stream, suppressions, now); } catch { ledgerFailed++; } }
+      if (input.persist) { try { ledgerSkipped += await input.persist(stream, suppressions); } catch { ledgerFailed++; } }
     } catch {
       failed++;
       registry.readFailed(source.workspaceId, source.key, stream, kind);
     }
   }
   return { streams: source.streams.size, failed, suppressions: suppressionCount, bounces: bounceCount, ...(truncated ? { truncated } : {}),
-    ...(ledgerFailed ? { ledgerFailed } : {}) };
+    ...(ledgerFailed ? { ledgerFailed } : {}), ...(ledgerSkipped ? { ledgerSkipped } : {}) };
 }
 
 export class EmailBounceService {
@@ -118,11 +123,36 @@ export class EmailBounceService {
    */
   async check(workspaceId: string, email: string, purpose: EmailPurpose): Promise<EmailSendDecision> {
     const to = email.trim().toLowerCase();
-    const durable = this.ledger?.covers(workspaceId) ? await this.ledger.decide(workspaceId, to, purpose) : null;
-    const memory = this.registry.decide(workspaceId, to, purpose, { ignoreUnsubscribed: durable?.reallowed === true });
-    if (!durable?.blocked) return memory;
+    let durable: Awaited<ReturnType<EmailBlockLedger['decide']>> = null;
+    if (this.ledger?.covers(workspaceId)) {
+      try { durable = await this.ledger.decide(workspaceId, to, purpose); }
+      catch {
+        // Marketing fails closed: a definite, retryable non-send. Event email the person asked for falls back to the
+        // in-process list (and Postmark's own lists), as before 0153.
+        if (purpose === 'marketing') throw new EmailGuardUnavailableError();
+        return this.registry.decide(workspaceId, to, purpose);
+      }
+    }
+    // 0153 not applied (or a workspace the ledger does not keep): the in-process list alone, exactly as before.
+    if (!durable) return this.registry.decide(workspaceId, to, purpose);
+    const memory = this.registry.decide(workspaceId, to, purpose, { durableAfter: durable.clearedAt ?? -Infinity });
+    if (!durable.blocked) return memory;
     const reason = strongestReason([durable.reason, ...(memory.blocked ? [memory.reason] : [])])!;
     return { blocked: true, reason };
+  }
+
+  /** True once the durable ledger has answered in this process (so the owner page may say it is kept in our records). */
+  get durable(): boolean { return this.ledger?.status() === 'available'; }
+
+  /**
+   * The brand owner confirmed a hard-bounced address works now. Lifts the durable hard bounce (with who, when, why)
+   * and forgets this process's copies. null: no durable ledger here (0153 not applied); nothing was changed.
+   */
+  async ownerLiftHardBounce(input: { sessionToken: string; workspaceId: string; email: string; note: string }): Promise<OwnerLiftResult | null> {
+    if (!this.ledger?.ownerLift || !this.ledger.covers(input.workspaceId)) return null;
+    const result = await this.ledger.ownerLift(input);
+    if (result && result.lifted > 0) this.registry.clearHardBounce(input.workspaceId, input.email);
+    return result;
   }
 
   /** Loads the ledger's current rows into the in-process picture (owner page, quick refusals). Never throws. */
@@ -141,9 +171,10 @@ export class EmailBounceService {
   private persister(source: EmailBounceSource): SuppressionPersister | undefined {
     const ledger = this.ledger;
     if (!ledger?.covers(source.workspaceId)) return undefined;
-    return async (stream, rows, startedAt) => {
-      await ledger.recordList({ workspaceId: source.workspaceId, sourceKey: source.key, stream,
-        rows: rows.map(row => ({ email: row.email, reason: row.kind, at: row.at ?? startedAt })) });
+    return async (stream, rows) => {
+      const result = await ledger.recordList({ workspaceId: source.workspaceId, sourceKey: source.key, stream,
+        rows: rows.map(row => ({ email: row.email, reason: row.kind, at: row.at })) });
+      return result?.skipped ?? 0;
     };
   }
 
@@ -169,17 +200,17 @@ export class EmailBounceService {
 
   /** Owner-triggered or timed. Sources read within minIntervalMs are not read again. */
   async sweepWorkspace(workspaceId: string | null, minIntervalMs = 0): Promise<SweepResult> {
-    const total = { streams: 0, failed: 0, suppressions: 0, bounces: 0, truncated: 0, ledgerFailed: 0 };
+    const total = { streams: 0, failed: 0, suppressions: 0, bounces: 0, truncated: 0, ledgerFailed: 0, ledgerSkipped: 0 };
     for (const source of this.sources) {
       if (workspaceId !== null && source.workspaceId !== workspaceId.toLowerCase()) continue;
       const last = this.lastSwept.get(source.key);
       if (minIntervalMs > 0 && last !== undefined && this.now() - last < minIntervalMs) { total.streams += source.streams.size; continue; }
       const result: SweepResult = await this.sweepSource(source).catch(() => ({ streams: source.streams.size, failed: source.streams.size, suppressions: 0, bounces: 0 }));
       total.streams += result.streams; total.failed += result.failed; total.suppressions += result.suppressions; total.bounces += result.bounces;
-      total.truncated += result.truncated ?? 0; total.ledgerFailed += result.ledgerFailed ?? 0;
+      total.truncated += result.truncated ?? 0; total.ledgerFailed += result.ledgerFailed ?? 0; total.ledgerSkipped += result.ledgerSkipped ?? 0;
     }
-    const { truncated, ledgerFailed, ...counts } = total;
-    return { ...counts, ...(truncated ? { truncated } : {}), ...(ledgerFailed ? { ledgerFailed } : {}) };
+    const { truncated, ledgerFailed, ledgerSkipped, ...counts } = total;
+    return { ...counts, ...(truncated ? { truncated } : {}), ...(ledgerFailed ? { ledgerFailed } : {}), ...(ledgerSkipped ? { ledgerSkipped } : {}) };
   }
 
   /**
@@ -199,7 +230,10 @@ export class EmailBounceService {
       try {
         const result = await this.sweepWorkspace(null);
         failed = result.failed; streams = result.streams;
-        if (streams > 0) this.log(JSON.stringify({ event: failed ? 'email.bounces.sweep_incomplete' : 'email.bounces.sweep', level: failed ? 'warn' : 'info', ...result }));
+        // A durable write that failed, or rows the ledger refused, is a warning too: the in-process list holds them for now.
+        const durableTrouble = (result.ledgerFailed ?? 0) + (result.ledgerSkipped ?? 0) > 0;
+        if (streams > 0) this.log(JSON.stringify({ event: failed ? 'email.bounces.sweep_incomplete' : durableTrouble ? 'email.bounces.sweep_ledger_incomplete' : 'email.bounces.sweep',
+          level: failed || durableTrouble ? 'warn' : 'info', ...result }));
       } catch { failed = 1; this.log(JSON.stringify({ event: 'email.bounces.sweep_failed', level: 'warn' })); }
       finally {
         // The durable rows are loaded after every read, so a restart or a second instance sees them too.

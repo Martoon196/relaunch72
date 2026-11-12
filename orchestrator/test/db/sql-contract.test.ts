@@ -1000,16 +1000,19 @@ test('0153 makes a STOP per channel and keeps the email block ledger pinned, add
   assert.match(sql, /CHECK\(workspace_id IN\('2789228d-55a6-4688-b1e8-2f70abca990b','d975ff66-336a-46c2-b36b-d7095a11af97'\)\)/u);
   assert.match(sql, /UNIQUE\(workspace_id,source_key,email,reason\)/u);
   assert.match(sql, /CHECK\(scope=CASE reason WHEN 'unsubscribe' THEN 'marketing' ELSE 'all' END\)/u);
-  assert.match(sql, /CHECK\(lifted_at IS NULL OR reason IN\('unsubscribe','manual'\)\)/u, 'nothing lifts a hard bounce or spam complaint');
+  assert.match(sql, /CHECK\(lifted_at IS NULL OR reason IN\('unsubscribe','manual'\) OR \(reason='hard_bounce' AND lifted_by_user_id IS NOT NULL AND lift_note IS NOT NULL AND lifted_event_id IS NULL\)\)/u,
+    'a spam complaint is never lifted; a hard bounce only by a named owner with a reason');
   assert.match(sql, /ALTER TABLE app_private\.email_address_blocks FORCE ROW LEVEL SECURITY/u);
   assert.match(sql, /CREATE ROLE r72_email_block_definer NOLOGIN NOINHERIT/u);
   assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_email_block_definer,r72_pp_followup_definer/u);
   assert.doesNotMatch(sql, /GRANT [^;]*email_address_blocks[^;]* TO r72_(?:web|identity_command)/u);
   const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
-  assert.equal(definers, 8);
+  assert.equal(definers, 10);
   assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
-  assert.equal((sql.match(/IF session_user<>'r72_identity_command'/g) ?? []).length, 5, 'every granted ledger entry point checks its caller');
-  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.email_block_record\(uuid,text,text,text,text,text,timestamptz\),app_private\.email_block_record_list\(uuid,text,text,jsonb\), app_private\.email_block_lift\(uuid,text,text,text,timestamptz\),app_private\.email_block_decide\(uuid,text,text\),app_private\.email_block_rows\(uuid,integer\) TO r72_identity_command;/u);
+  assert.equal((sql.match(/IF session_user<>'r72_identity_command'/g) ?? []).length, 6, 'every granted ledger entry point checks its caller');
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.email_block_record\(uuid,text,text,text,text,text,timestamptz\),app_private\.email_block_record_list\(uuid,text,text,jsonb\), app_private\.email_block_lift\(uuid,text,text,text,timestamptz\),app_private\.email_block_decide\(uuid,text,text\),app_private\.email_block_rows\(uuid,integer\), app_private\.email_block_owner_lift\(bytea,uuid,text,text\) TO r72_identity_command;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_release_bounce\(text,uuid,text\) TO r72_email_block_definer;/u, 'the PP release is reachable only through the owner lift');
+  assert.match(sql, /state='released' AND purpose IS NULL AND reason='owner_confirmed_working' AND source='pp\.owner\.email_health' AND actor_kind='user' AND actor_user_id IS NOT NULL/u);
   assert.doesNotMatch(sql, /email_block_(?:put|signed_up_since)\([^)]*\)[^;]* TO r72_/u, 'inner helpers are never granted');
   // C. PP's true-reason CRM stop: purpose-free for a dead address or spam report, the two marketing purposes for an unsubscribe.
   assert.match(sql, /\(reason IN\('hard_bounce','spam_complaint'\) AND purpose IS NULL\) OR \(reason='recipient_unsubscribe' AND purpose IN\('marketing','property_predator_marketing'\)\)/u);

@@ -149,9 +149,20 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
           Metadata: { send: item.id, ...(item.prospectId && PROSPECT_ID.test(item.prospectId) ? { prospect: item.prospectId } : {}) },
         }),
       });
-      // Provider bodies can echo recipients. Only the message id is read on success.
-      if (!response.ok) { await response.body?.cancel(); throw new Error('Marketing delivery was not accepted'); }
-      const body = await response.json() as { MessageID?: unknown; ErrorCode?: unknown };
+      // Provider bodies can echo recipients. Only the numeric error code and, on success, the message id are read.
+      if (!response.ok) {
+        // Postmark 406 (HTTP 422): the recipient is inactive on that stream, e.g. still unsubscribed there after a fresh
+        // sign-up re-allowed marketing on our side. A definite non-send, never an unknown that holds a sequence run.
+        if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+          let code: unknown;
+          try { code = (await response.json() as { ErrorCode?: unknown })?.ErrorCode; } catch { code = undefined; }
+          if (code === 406) throw new EmailRecipientBlockedError('unsubscribed', 'Postmark refused an inactive recipient');
+        } else await response.body?.cancel().catch(() => undefined);
+        throw new Error('Marketing delivery was not accepted');
+      }
+      const parsed = await response.json() as { MessageID?: unknown; ErrorCode?: unknown };
+      if (parsed?.ErrorCode === 406) throw new EmailRecipientBlockedError('unsubscribed', 'Postmark refused an inactive recipient');
+      const body = parsed;
       if (body.ErrorCode !== 0 || typeof body.MessageID !== 'string' || body.MessageID.length < 1 || body.MessageID.length > 200) {
         throw new Error('Marketing delivery was not accepted');
       }

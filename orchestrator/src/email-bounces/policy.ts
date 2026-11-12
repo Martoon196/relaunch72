@@ -93,13 +93,25 @@ export async function decideRecipient(guard: EmailSendGuard, workspaceId: string
  * no longer go. Someone who is blocked from marketing alone (an unsubscribe, a temporary soft-bounce block) keeps
  * the event emails they asked for, which the stop would cancel. An owner's manual block is recorded by the owner.
  */
-export function refusalStopsPerson(reason: EmailBlockReason): boolean {
+export function refusalStopsPerson(reason: EmailRefusalReason): boolean {
   return reason === 'hard_bounce' || reason === 'spam_complaint';
 }
 
+/** Why a sender refused before any provider call: a block, or (marketing only) the durable list could not be read. */
+export type EmailRefusalReason = EmailBlockReason | 'check_unavailable';
+
 /** Thrown by a sender that refused before any provider call: a definite non-send. */
 export class EmailRecipientBlockedError extends Error {
-  constructor(readonly reason: EmailBlockReason) { super('Recipient is blocked after a bounce, complaint or unsubscribe'); }
+  constructor(readonly reason: EmailRefusalReason, message = 'Recipient is blocked after a bounce, complaint or unsubscribe') { super(message); }
+}
+
+/**
+ * The durable block list could not be read for a MARKETING email. Fail closed: a definite non-send that is tried again
+ * later by the queue's own rule, never a send decided by the in-process list alone. Never stops the person.
+ * Event (service) email is not refused for this: it falls back to the in-process list.
+ */
+export class EmailGuardUnavailableError extends EmailRecipientBlockedError {
+  constructor() { super('check_unavailable', 'The email block list could not be read; the marketing email is held for a later attempt'); }
 }
 
 export const BLOCK_REASON_PLAIN: Readonly<Record<EmailBlockReason, string>> = Object.freeze({

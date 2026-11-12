@@ -133,6 +133,22 @@ test('sequences: a refused address ends as a definite rejection that stops the p
   assert.deepEqual(sent, { sent: 1, failed: 0, unknown: 0 }); assert.deepEqual(open.bodies[0]!.Metadata, { send: ids.send, prospect: ids.prospect });
 });
 
+test('Postmark 406 (inactive recipient) in a sequence is a definite non-send, never the unknown hold, and never stops the person', async () => {
+  const calls: string[] = [];
+  const queue: MhpSequenceDispatch = { claim: async () => [lease], prepare: async () => prepared,
+    settle: async (_lease, accepted, reference) => { calls.push(`settle ${accepted} ${reference}`); }, unknown: async () => { calls.push('unknown'); } };
+  const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
+  const sender = createMhpMarketingSender(config, secret, (async () => new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 })) as unknown as typeof fetch);
+  const result = await dispatchMhpSequenceEmails({ queue, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now,
+    onBlocked: async prospectId => { calls.push(`stop ${prospectId}`); } });
+  assert.deepEqual(result, { sent: 0, failed: 1, unknown: 0 });
+  assert.deepEqual(calls, ['settle false null']);
+  // Before this fix any 4xx was a plain error: after the proof that is the unknown hold. A 500 still is.
+  const unsure = createMhpMarketingSender(config, secret, (async () => new Response('', { status: 500 })) as unknown as typeof fetch);
+  calls.length = 0;
+  assert.deepEqual(await dispatchMhpSequenceEmails({ queue, sender: unsure, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 0, failed: 0, unknown: 1 });
+});
+
 test('a marketing-only block refuses the marketing email but never stops the person from a send path: the webinar reminders they asked for stay queued', async () => {
   // Three soft bounces, an unsubscribe at Postmark: each blocks marketing only. The stop is the unsubscribe capability,
   // which cancels EVERYTHING queued for the person, so a refused marketing email must not trigger it. (A spam report
@@ -252,12 +268,25 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
   assert.match(html, /<h1>Emails that bounced or complained<\/h1>/u);
   assert.match(html, /<strong>3<\/strong>addresses bounced/u); assert.match(html, /<strong>1<\/strong>person marked an email as spam/u);
   assert.match(html, /3 of 100 emails bounced \(3\.0%\)/u);
-  assert.match(html, /gone@example\.invalid<\/td><td>The address does not work \(the email came straight back\)<\/td><td>29 Oct 2026<\/td><td>All email to this address/u);
-  assert.match(html, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>30 Oct 2026<\/td><td>All email to this address/u);
+  assert.match(html, /gone@example\.invalid<\/td><td>The address does not work \(the email came straight back\)<\/td><td>29 Oct 2026<\/td><td>Marketing and event emails/u);
+  assert.match(html, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>30 Oct 2026<\/td><td>Marketing and event emails/u);
   assert.match(html, /role="alert"><strong>Warning\.<\/strong> 10\.0% of your marketing emails bounced in the last 30 days \(3 of 30\)\. We warn at 5\.0%, which is our own line\. Postmark expects bounces to stay under about 10\.0%/u);
   assert.match(html, /1 person marked your requested emails \(sign-in links, receipts and webinar emails\) as spam/u);
   assert.match(html, /<td>Requested emails \(sign-in links, receipts and webinar emails\)<\/td><td>70<\/td>/u, 'the row is named for everything its totals count');
   assert.match(html, /Postmark, the service that sends your emails\./u);
+  // Without the durable list in this process: no button, and no claim that it is kept in our own records.
+  assert.doesNotMatch(html, /This address works now|own records/u);
+  assert.match(html, /reactivate it in Postmark and it leaves this list at the next check/u);
+  assert.match(html, /Sign-in links and receipts still go\./u);
+  assert.doesNotMatch(html, /no email at all|All email/u);
+  const durableHtml = emailHealthPage(snapshot, 'csrf-token', undefined, { durable: true });
+  assert.match(durableHtml, /also kept in your own records/u);
+  assert.match(durableHtml, /press Reactivate for it in Postmark first/u);
+  assert.equal((durableHtml.match(/This address works now<\/button>/g) ?? []).length, 3, 'one button per hard-bounced address');
+  assert.doesNotMatch(durableHtml, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>[^<]*<\/td><td>Marketing and event emails<form/u, 'never for a spam report');
+  assert.match(durableHtml, /<form method="post" action="\/hq\/marketing\/email-health\/lift"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="email" value="gone@example\.invalid">/u);
+  assert.match(emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome: 'lifted' } }),
+    /gone@example\.invalid can be emailed again\. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that\./u);
   assert.match(html, /stays stopped, exactly as if they had unsubscribed, until they sign up again and tick the box themselves/u, 'reactivating at Postmark does not re-subscribe anyone');
   assert.match(html, /Only 100 emails went out in this period/u);
   assert.match(html, /2 people were newly stopped in your contacts/u);
@@ -276,7 +305,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
 const HOST = 'app.martinhowardproperty.co.uk', ORIGIN = `https://${HOST}`, SESSION_SECRET = 'mhp-bounce-synthetic-session-secret-at-least-32';
 const TOKEN = Buffer.alloc(32, 7).toString('base64url'), PERSONAL = '12400000-0000-4000-8000-000000000002';
 function routes(options: { selected?: string; owner?: boolean; configured?: boolean } = {}) {
-  const selected = options.selected ?? WS, checks: string[] = [];
+  const selected = options.selected ?? WS, checks: string[] = [], lifts: string[] = [];
   const f = health({ registrants: [registrant({})] });
   const portal = { kind: 'postgres', secure: true, sessionSecret: SESSION_SECRET, sessionCookieName: '__Host-mhp_session', productProfile: MARTIN_HOWARD_PROPERTY_PROFILE,
     portalBaseUrl: ORIGIN, now: () => now, auth: { resolve: async (token: string) => token === TOKEN ? { sessionToken: TOKEN, userId: ids.user, workspaceId: selected, userEmail: 'owner@example.invalid' } : null,
@@ -290,8 +319,9 @@ function routes(options: { selected?: string; owner?: boolean; configured?: bool
     marketingWorkspace: { snapshot: async () => { if (options.owner === false) throw new MhpCommerceError(403, 'Owner access to the MHP marketing workspace is required.');
       return { userId: ids.user, selectedWorkspaceId: selected, personalWorkspaceId: PERSONAL, marketingWorkspaceId: selected === WS ? WS : null, marketingSelected: selected === WS }; },
       select: async () => { throw new Error('unused'); } },
-    ...(options.configured === false ? {} : { emailHealth: { configured: true, snapshot: () => f.service.snapshot(),
-      check: async (token: string) => { checks.push(token); return f.service.check('session-token'); } } }) });
+    ...(options.configured === false ? {} : { emailHealth: { configured: true, durable: true, snapshot: () => f.service.snapshot(),
+      check: async (token: string) => { checks.push(token); return f.service.check('session-token'); },
+      lift: async (token: string, email: string) => { lifts.push(`${token} ${email}`); return { email, outcome: 'lifted' as const }; } } }) });
   async function request(method: string, url: string, body = '', headers: Record<string, string> = {}) {
     const captured = { status: 0, body: '', headers: {} as Record<string, string> };
     const req = Object.assign(Readable.from([Buffer.from(body)]), { method, url, headers: { host: HOST, cookie: `__Host-mhp_session=${TOKEN}`,
@@ -301,7 +331,7 @@ function routes(options: { selected?: string; owner?: boolean; configured?: bool
     await mount.handle(req, res); return captured;
   }
   const form = (csrf = portalCsrfToken(SESSION_SECRET, TOKEN)) => new URLSearchParams({ csrf }).toString();
-  return { request, form, checks, f };
+  return { request, form, checks, lifts, f };
 }
 
 test('marketing screen: the card and the page appear only inside the MHP brand workspace, and the check needs the owner\'s own form', async () => {
@@ -329,4 +359,36 @@ test('marketing screen: the card and the page appear only inside the MHP brand w
   assert.doesNotMatch((await routes({ configured: false }).request('GET', '/hq/marketing')).body, /bounced or complained/u);
   const signedOut = await r.request('GET', '/hq/marketing/email-health', '', { cookie: '' });
   assert.deepEqual([signedOut.status, signedOut.headers.location], [303, '/portal/login']);
+});
+
+test('"This address works now": the owner\'s own form (same origin, CSRF) in the brand workspace only, and a one-line confirmation', async () => {
+  const r = routes();
+  const body = (csrf = portalCsrfToken(SESSION_SECRET, TOKEN), email = 'gone@example.invalid') => new URLSearchParams({ csrf, email }).toString();
+  assert.equal((await r.request('POST', '/hq/marketing/email-health/lift', body())).status, 403, 'no cross-site posts');
+  assert.equal((await r.request('POST', '/hq/marketing/email-health/lift', body('wrong'), { origin: ORIGIN })).status, 403);
+  assert.equal((await r.request('POST', '/hq/marketing/email-health/lift', r.form(), { origin: ORIGIN })).status, 400, 'the address is required');
+  assert.equal((await r.request('GET', '/hq/marketing/email-health/lift')).status, 405);
+  assert.deepEqual(r.lifts, []);
+  const done = await r.request('POST', '/hq/marketing/email-health/lift', body(), { origin: ORIGIN });
+  assert.equal(done.status, 200); assert.deepEqual(r.lifts, [`${TOKEN} gone@example.invalid`]);
+  assert.match(done.body, /<p role="status" class="status">gone@example\.invalid can be emailed again\./u);
+  const personal = routes({ selected: PERSONAL });
+  assert.equal((await personal.request('POST', '/hq/marketing/email-health/lift', body(), { origin: ORIGIN })).status, 403);
+  assert.deepEqual(personal.lifts, []);
+});
+
+test('MhpEmailHealth.lift: lifts through the durable list with the owner session, reloads it, and reports a spam report honestly', async () => {
+  const calls: string[] = [];
+  const bounces = { hasWorkspace: () => true, durable: true,
+    ownerLiftHardBounce: async (input: { sessionToken: string; email: string; note: string }) => { calls.push(`lift ${input.sessionToken} ${input.email} ${input.note}`);
+      return input.email.startsWith('spam') ? { lifted: 1, released: 0, spamComplaint: true } : input.email.startsWith('none') ? { lifted: 0, released: 0, spamComplaint: false } : { lifted: 1, released: 0, spamComplaint: false }; },
+    refreshLedger: async () => { calls.push('refresh'); } } as unknown as EmailBounceService;
+  const health = new MhpEmailHealth({ bounces, growth: { listRegistrants: async () => [], unsubscribe: async () => true } });
+  assert.equal(health.durable, true);
+  assert.deepEqual(await health.lift('tok', ' Gone@Example.invalid '), { email: 'gone@example.invalid', outcome: 'lifted' });
+  assert.deepEqual(calls, ['lift tok gone@example.invalid Owner confirmed in Growth HQ that this address works now', 'refresh']);
+  assert.equal((await health.lift('tok', 'spam@example.invalid')).outcome, 'spam');
+  assert.equal((await health.lift('tok', 'none@example.invalid')).outcome, 'not_blocked');
+  const old = new MhpEmailHealth({ bounces: { ...bounces, ownerLiftHardBounce: async () => null } as unknown as EmailBounceService, growth: { listRegistrants: async () => [], unsubscribe: async () => true } });
+  assert.equal((await old.lift('tok', 'gone@example.invalid')).outcome, 'unavailable');
 });

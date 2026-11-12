@@ -20,11 +20,11 @@ export interface MhpMarketingWorkspaceDependencies {
   ownedSmsEnabled?: boolean;
   whatsappEnabled?: boolean;
   /** Bounced, complained and unsubscribed addresses for the MHP brand; absent when no email service is configured. */
-  emailHealth?: Pick<MhpEmailHealth, 'configured' | 'snapshot' | 'check'>;
+  emailHealth?: Pick<MhpEmailHealth, 'configured' | 'snapshot' | 'check'> & Partial<Pick<MhpEmailHealth, 'durable' | 'lift'>>;
 }
-const EMAIL_HEALTH = '/hq/marketing/email-health', EMAIL_HEALTH_CHECK = '/hq/marketing/email-health/check';
+const EMAIL_HEALTH = '/hq/marketing/email-health', EMAIL_HEALTH_CHECK = '/hq/marketing/email-health/check', EMAIL_HEALTH_LIFT = '/hq/marketing/email-health/lift';
 const READ_PATHS = new Set(['/hq/marketing', EMAIL_HEALTH]);
-const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads', EMAIL_HEALTH, EMAIL_HEALTH_CHECK]);
+const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads', EMAIL_HEALTH, EMAIL_HEALTH_CHECK, EMAIL_HEALTH_LIFT]);
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 function send(res: ServerResponse, status: number, body: string, html = false): void {
   res.writeHead(status, { 'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
@@ -66,7 +66,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
       throw new MhpCommerceError(405, 'Use the controls in the marketing workspace.');
     }
     const health = deps.emailHealth?.configured ? deps.emailHealth : undefined;
-    if ((path === EMAIL_HEALTH || path === EMAIL_HEALTH_CHECK) && !health) throw new MhpCommerceError(404, 'Page not found.');
+    if ((path === EMAIL_HEALTH || path === EMAIL_HEALTH_CHECK || path === EMAIL_HEALTH_LIFT) && !health) throw new MhpCommerceError(404, 'Page not found.');
     const context = portal.requestContext?.(req);
     if (!context || !portal.abuse || !portal.abuseHashSecret) throw new MhpCommerceError(503, 'Marketing workspace access is temporarily unavailable.');
     const now = portal.now?.() ?? Date.now(); const routeClass = method === 'GET' ? 'read.page' : 'command';
@@ -86,7 +86,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     if (path === EMAIL_HEALTH) {
       // Addresses appear on this page, so it is only shown inside the MHP brand workspace.
       if (!emailHealth) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to see bounced emails.');
-      send(res, 200, emailHealthPage(emailHealth, portalCsrfToken(portal.sessionSecret, token)), true);
+      send(res, 200, emailHealthPage(emailHealth, portalCsrfToken(portal.sessionSecret, token), undefined, { durable: health?.durable === true }), true);
       return true;
     }
     if (method === 'GET') {
@@ -98,15 +98,22 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
         || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
-    const importing = path === '/hq/marketing/webinar-leads', checking = path === EMAIL_HEALTH_CHECK;
-    const fields = await form(req, checking ? ['csrf'] : importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
+    const importing = path === '/hq/marketing/webinar-leads', checking = path === EMAIL_HEALTH_CHECK, lifting = path === EMAIL_HEALTH_LIFT;
+    const fields = await form(req, checking ? ['csrf'] : lifting ? ['csrf', 'email'] : importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
     if (!verifyPortalCsrf(portal.sessionSecret, token, fields.get('csrf') ?? '')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
     if (checking) {
       if (!health || !snapshot.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to check bounced emails.');
       const result = await health.check(token);
-      send(res, 200, emailHealthPage(health.snapshot(), portalCsrfToken(portal.sessionSecret, token), result), true);
+      send(res, 200, emailHealthPage(health.snapshot(), portalCsrfToken(portal.sessionSecret, token), result, { durable: health.durable === true }), true);
+      return true;
+    }
+    if (lifting) {
+      if (!health || !snapshot.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to change bounced emails.');
+      if (!health.lift) throw new MhpCommerceError(404, 'Page not found.');
+      const lift = await health.lift(token, fields.get('email') ?? '');
+      send(res, 200, emailHealthPage(health.snapshot(), portalCsrfToken(portal.sessionSecret, token), undefined, { durable: health.durable === true, lift }), true);
       return true;
     }
     if (importing) {

@@ -7,7 +7,10 @@
  *
  * While the database still ends at 0152 the functions do not exist. Every call then answers "unavailable" and the
  * caller carries on exactly as before 0153 (the in-process list and the provider's own lists). The ledger looks
- * again after a few minutes, so applying 0153 takes effect without a restart. Errors never carry an address.
+ * again after a few minutes, so applying 0153 takes effect without a restart. Once the ledger has answered in this
+ * process, a missing function or table is a real fault, not "0153 not applied yet": it is thrown and logged at warn
+ * every time. Any other database error is thrown too; the send guard decides (marketing fails closed). Errors and
+ * log lines never carry an address.
  */
 
 import { createHash } from 'node:crypto';
@@ -24,8 +27,14 @@ export type LedgerReason = 'hard_bounce' | 'spam_complaint' | 'unsubscribe' | 'm
 export const toLedgerReason = (reason: LastingBlockReason): LedgerReason => reason === 'unsubscribed' ? 'unsubscribe' : reason;
 const fromLedgerReason = (reason: LedgerReason): 'hard_bounce' | 'spam_complaint' | 'manual' | 'unsubscribed' => reason === 'unsubscribe' ? 'unsubscribed' : reason;
 
-/** A durable answer. reallowed: an unsubscribe exists but a sign-up since lets marketing go again. */
-export type LedgerDecision = EmailSendDecision & { readonly reallowed: boolean };
+/**
+ * A durable answer. reallowed: an unsubscribe exists but a sign-up since lets marketing go again. clearedAt: the
+ * latest event time up to which the ledger has cleared this address (a lift, or a re-allowed unsubscribe); a block
+ * this process holds from a webhook AFTER that time still counts.
+ */
+export type LedgerDecision = EmailSendDecision & { readonly reallowed: boolean; readonly clearedAt: number | null };
+export interface OwnerLiftResult { readonly lifted: number; readonly released: number; readonly spamComplaint: boolean }
+export type LedgerStatus = 'unknown' | 'available' | 'absent';
 export interface LedgerRow {
   readonly email: string; readonly reason: 'hard_bounce' | 'spam_complaint' | 'manual' | 'unsubscribed'; readonly scope: 'all' | 'marketing';
   readonly sourceKey: string; readonly stream: string | null; readonly since: number; readonly reallowed: boolean;
@@ -35,16 +44,26 @@ export type LedgerWrite = 'recorded' | 'renewed' | 'exists' | 'unavailable';
 export interface EmailBlockLedger {
   /** True when this workspace is kept in the ledger at all (whether or not 0153 is applied yet). */
   covers(workspaceId: string): boolean;
-  /** null: the ledger cannot answer (0153 not applied, or the database did not answer); use the in-process list. */
+  /** 'available' once a call has answered in this process; 'absent' while the database still ends before 0153. */
+  status(): LedgerStatus;
+  /** null: 0153 is not applied (use the in-process list, as before). Throws when the database could not answer. */
   decide(workspaceId: string, email: string, purpose: EmailPurpose): Promise<LedgerDecision | null>;
   /** One provider event. Throws only when the ledger exists and the write failed (so a webhook can ask for a retry). */
   record(input: { workspaceId: string; sourceKey: string; email: string; reason: LastingBlockReason; eventId: string | null; stream: string | null; at: number }): Promise<LedgerWrite>;
-  /** One stream's provider list. Returns how many rows were new, or null when the ledger is unavailable. */
-  recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: LastingBlockReason; at: number }[] }): Promise<number | null>;
+  /**
+   * One stream's provider list. at null: the provider gave no time; the first time it is seen is kept, never renewed.
+   * Returns how many rows were new and how many could not be recorded, or null when the ledger is unavailable.
+   */
+  recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: LastingBlockReason; at: number | null }[] }): Promise<{ added: number; skipped: number } | null>;
   /** An explicit provider re-subscribe: lifts that source's unsubscribe for the address, nothing else. */
   lift(input: { workspaceId: string; sourceKey: string; email: string; eventId: string | null; at: number }): Promise<number | null>;
   /** Current rows for the owner page and the process cache, or null when unavailable. */
   rows(workspaceId: string, limit?: number): Promise<readonly LedgerRow[] | null>;
+  /**
+   * The brand owner says a hard-bounced address works now (their own portal session token is checked in SQL). Lifts
+   * the hard bounce with who, when and why; never a spam complaint. null when 0153 is not applied.
+   */
+  ownerLift?(input: { sessionToken: string; workspaceId: string; email: string; note: string }): Promise<OwnerLiftResult | null>;
 }
 
 /** 42883 undefined function, 42P01 undefined table, 3F000 undefined schema: the database still ends before 0153. */
@@ -69,22 +88,30 @@ export function ledgerEventId(eventId: string | null): string | null {
 
 export class PgEmailBlockLedger implements EmailBlockLedger {
   private absentUntil = 0;
+  /** Set once any call has answered: from then on a missing function is a fault, never "not applied yet". */
+  private answered = false;
   constructor(private readonly pool: Pick<Pool, 'query'>, private readonly options: { now?: () => number; log?: (line: string) => void } = {}) {}
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
   covers(workspaceId: string): boolean { return EMAIL_LEDGER_WORKSPACES.has(workspaceId.toLowerCase()); }
   /** False while the last call found the database before 0153; looked at again after a few minutes. */
   get available(): boolean { return this.now() >= this.absentUntil; }
+  status(): LedgerStatus { return this.answered ? 'available' : this.absentUntil > 0 ? 'absent' : 'unknown'; }
 
   /** Runs one ledger call. 'absent' when 0153 is not applied; other database errors are rethrown. */
   private async call<T>(sql: string, values: unknown[]): Promise<{ value: T } | 'absent'> {
-    if (!this.available) return 'absent';
+    if (!this.answered && !this.available) return 'absent';
     try {
       const result = await this.pool.query<{ value: T }>(sql, values);
-      this.absentUntil = 0;
+      this.absentUntil = 0; this.answered = true;
       return { value: result.rows[0]!.value };
     } catch (error) {
       const code = (error as { code?: unknown })?.code;
+      if (typeof code === 'string' && ABSENT.has(code) && this.answered) {
+        this.options.log?.(JSON.stringify({ event: 'email.bounces.ledger_missing_after_use', level: 'warn', code,
+          message: 'The email block ledger answered earlier in this process and is now missing; treated as a database fault.' }));
+        throw error;
+      }
       if (typeof code === 'string' && ABSENT.has(code)) {
         if (this.absentUntil === 0) this.options.log?.(JSON.stringify({ event: 'email.bounces.ledger_absent', level: 'info',
           message: 'The email block ledger (0153) is not in this database yet; the in-process list is used alone.' }));
@@ -99,17 +126,19 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
     if (!this.covers(workspaceId)) return null;
     let answer: { value: unknown } | 'absent';
     try { answer = await this.call<unknown>('SELECT app_private.email_block_decide($1,$2,$3) AS value', [workspaceId.toLowerCase(), email.trim().toLowerCase(), purpose]); }
-    catch {
-      // A send guard never fails on the ledger: it falls back to the in-process list, as before 0153.
-      this.options.log?.(JSON.stringify({ event: 'email.bounces.ledger_read_failed', level: 'warn' }));
-      return null;
+    catch (error) {
+      // The send guard decides what a failed read means (marketing fails closed); the line carries no address.
+      this.options.log?.(JSON.stringify({ event: 'email.bounces.ledger_read_failed', level: 'warn', purpose }));
+      throw error;
     }
     if (answer === 'absent') return null;
     const value = answer.value;
-    if (!record(value) || typeof value.blocked !== 'boolean' || typeof value.reallowed !== 'boolean') return null;
-    if (!value.blocked) return { blocked: false, reallowed: value.reallowed };
-    if (typeof value.reason !== 'string' || !LEDGER_REASONS.has(value.reason)) return null;
-    return { blocked: true, reason: fromLedgerReason(value.reason as LedgerReason), reallowed: false };
+    const clearedAt = record(value) && typeof value.clearedAt === 'string' ? Date.parse(value.clearedAt) : null;
+    if (!record(value) || typeof value.blocked !== 'boolean' || typeof value.reallowed !== 'boolean'
+        || (value.clearedAt !== null && value.clearedAt !== undefined && !Number.isFinite(clearedAt))) throw new Error('Invalid email block ledger answer');
+    if (!value.blocked) return { blocked: false, reallowed: value.reallowed, clearedAt };
+    if (typeof value.reason !== 'string' || !LEDGER_REASONS.has(value.reason)) throw new Error('Invalid email block ledger answer');
+    return { blocked: true, reason: fromLedgerReason(value.reason as LedgerReason), reallowed: false, clearedAt };
   }
 
   async record(input: { workspaceId: string; sourceKey: string; email: string; reason: LastingBlockReason; eventId: string | null; stream: string | null; at: number }): Promise<LedgerWrite> {
@@ -122,20 +151,31 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
     return answer.value;
   }
 
-  async recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: LastingBlockReason; at: number }[] }): Promise<number | null> {
+  async recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: LastingBlockReason; at: number | null }[] }): Promise<{ added: number; skipped: number } | null> {
     if (!this.covers(input.workspaceId) || !STREAM.test(input.stream)) return null;
-    let added = 0;
+    let added = 0, skipped = 0;
     const now = this.now();
-    for (let offset = 0; offset < input.rows.length || offset === 0; offset += LIST_CHUNK) {
+    for (let offset = 0; offset < input.rows.length; offset += LIST_CHUNK) {
       const chunk = input.rows.slice(offset, offset + LIST_CHUNK).map(row => ({ email: row.email.trim().toLowerCase(), reason: toLedgerReason(row.reason),
-        at: new Date(Math.min(row.at, now)).toISOString() }));
-      if (chunk.length === 0) break;
-      const answer = await this.call<number>('SELECT app_private.email_block_record_list($1,$2,$3,$4::jsonb) AS value',
+        at: row.at === null ? null : new Date(Math.min(row.at, now)).toISOString() }));
+      const answer = await this.call<{ added?: unknown; skipped?: unknown }>('SELECT app_private.email_block_record_list($1,$2,$3,$4::jsonb) AS value',
         [input.workspaceId.toLowerCase(), input.sourceKey, input.stream, JSON.stringify(chunk)]);
       if (answer === 'absent') return null;
-      added += Number(answer.value) || 0;
+      added += Number(answer.value?.added) || 0; skipped += Number(answer.value?.skipped) || 0;
     }
-    return added;
+    return { added, skipped };
+  }
+
+  async ownerLift(input: { sessionToken: string; workspaceId: string; email: string; note: string }): Promise<OwnerLiftResult | null> {
+    if (!this.covers(input.workspaceId)) return null;
+    const answer = await this.call<{ lifted?: unknown; released?: unknown; spamComplaint?: unknown }>('SELECT app_private.email_block_owner_lift($1,$2,$3,$4) AS value',
+      [createHash('sha256').update(input.sessionToken).digest(), input.workspaceId.toLowerCase(), input.email.trim().toLowerCase(), input.note]);
+    if (answer === 'absent') return null;
+    const value = answer.value;
+    if (!record(value) || !Number.isSafeInteger(value.lifted) || !Number.isSafeInteger(value.released) || typeof value.spamComplaint !== 'boolean') {
+      throw new Error('Invalid email block ledger answer');
+    }
+    return { lifted: Number(value.lifted), released: Number(value.released), spamComplaint: value.spamComplaint };
   }
 
   async lift(input: { workspaceId: string; sourceKey: string; email: string; eventId: string | null; at: number }): Promise<number | null> {

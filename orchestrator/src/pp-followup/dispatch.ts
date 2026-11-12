@@ -1,7 +1,7 @@
 import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import { ppUnsubscribeUrl, renderPpFollowupEmail } from './content.js';
 import { PpNotSentError, type PpFollowupSender, type PpRecipientGuard } from './mail.js';
-import { decideRecipient } from '../email-bounces/policy.js';
+import { decideRecipient, type EmailSendDecision } from '../email-bounces/policy.js';
 import type { PpFollowupOutcome, PpFollowupQueue } from './repository.js';
 
 export interface PpFollowupDispatchInput {
@@ -45,7 +45,13 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
       if (input.config.testRecipients && !input.config.testRecipients.includes(to)) { failed++; continue; }
       // Bounced, complained or unsubscribed at Postmark: a definite non-send with no proof spent, the same outcome
       // Postmark's own "inactive recipient" answer would give. The run fails; it is never held as unknown.
-      if (input.recipients && (await decideRecipient(input.recipients.guard, input.recipients.workspaceId, to, 'marketing')).blocked) {
+      // The durable block list could not be read: nothing is spent, the lease runs out and the step is claimed again later.
+      let decision: EmailSendDecision = { blocked: false };
+      if (input.recipients) {
+        try { decision = await decideRecipient(input.recipients.guard, input.recipients.workspaceId, to, 'marketing'); }
+        catch { failed++; continue; }
+      }
+      if (decision.blocked) {
         failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is refused again */ } continue;
       }
       let proofIssued = false, handedOff = false, accepted = false;

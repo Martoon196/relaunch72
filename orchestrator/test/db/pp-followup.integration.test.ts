@@ -540,17 +540,17 @@ test('PP scope rule on the durable ledger (0153): a hard bounce or spam report s
       assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: address(name), reason, eventId: `bounce:${name}-${run}`, stream: 'broadcast', at }), 'recorded');
     }
     for (const purpose of ['marketing', 'service'] as const) {
-      assert.deepEqual(await ledger.decide(WS, address('dead'), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false });
-      assert.deepEqual(await ledger.decide(WS, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false });
+      assert.deepEqual(await ledger.decide(WS, address('dead'), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false, clearedAt: null });
+      assert.deepEqual(await ledger.decide(WS, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false, clearedAt: null });
     }
-    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false });
-    assert.deepEqual(await ledger.decide(WS, address('left'), 'service'), { blocked: false, reallowed: false }, 'email the person asked for may still go');
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false, clearedAt: null });
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'service'), { blocked: false, reallowed: false, clearedAt: null }, 'email the person asked for may still go');
     // Newer marketing permission on that address re-allows marketing after an unsubscribe; never after a bounce or a spam report.
     const back = await w.person('Back', `left-${run}`); await w.admin.query('UPDATE app.contact_points SET value=$2,normalized_value=$2 WHERE id=$1', [back.point, address('left')]);
     const deadAgain = await w.person('Gone', `dead-${run}`); await w.admin.query('UPDATE app.contact_points SET value=$2,normalized_value=$2 WHERE id=$1', [deadAgain.point, address('dead')]);
     await w.consent({ ...back, email: address('left') }, 'marketing', 'granted', '1 minute');
     await w.consent({ ...deadAgain, email: address('dead') }, 'marketing', 'granted', '1 minute');
-    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: false, reallowed: true });
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: false, reallowed: true, clearedAt: at });
     assert.equal((await ledger.decide(WS, address('dead'), 'marketing'))!.blocked, true);
     // A permission older than the unsubscribe does not count.
     const old = randomUUID().slice(0, 8);
@@ -611,4 +611,38 @@ test('PP with the database still at 0152: the true-reason function and the ledge
     await service.refreshLedger(WS);
     assert.ok(logs.some(line => line.includes('ledger_absent')) && !logs.some(line => line.includes('@')));
   } finally { await rename(false); await w.close(); }
+});
+
+test('PP owner undo of a wrong hard bounce (0153): the ledger lift and a released CRM event re-allow the PP send gate; a spam report stays; a later bounce blocks again', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(1, 24);
+    const ledger = new PgEmailBlockLedger(w.identityPool);
+    const token = (w.ownerId as { sessionToken: string }).sessionToken;
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); return who; };
+    const dead = await start('Undo'), spam = await start('Spammy');
+    const at = Date.now() - 3_600_000;
+    for (const [who, reason] of [[dead, 'hard_bounce'], [spam, 'spam_complaint']] as const) {
+      assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: who.email, reason, eventId: `bounce:${who.point}`, stream: 'broadcast', at }), 'recorded');
+      assert.equal((await w.repo.blockEmail(who.point, reason)).recorded, true);
+      assert.equal((await w.act(flow, 'enrol', { point: who.point })).reason, 'not_permitted', `${reason}: the PP send gate refuses`);
+    }
+    // Only a manager of PP with PP selected; the wrong session changes nothing.
+    await assert.rejects(ledger.ownerLift({ sessionToken: 'not-a-session', workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), /Brand owner required/u);
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), { lifted: 1, released: 1, spamComplaint: false });
+    const released = (await w.admin.query("SELECT purpose,state,reason,source,actor_kind,actor_user_id,evidence FROM app.communication_suppression_events WHERE contact_point_id=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1", [dead.point])).rows[0];
+    assert.deepEqual({ ...released, evidence: released.evidence }, { purpose: null, state: 'released', reason: 'owner_confirmed_working', source: 'pp.owner.email_health', actor_kind: 'user',
+      actor_user_id: w.ownerId.userId, evidence: { route: 'owner_email_health', note: 'Owner confirmed' } });
+    assert.equal((await ledger.decide(WS, dead.email, 'marketing'))!.blocked, false);
+    assert.equal((await w.act(flow, 'enrol', { point: dead.point })).changed, 1, 'the PP send gate allows the address again');
+    // A second press changes nothing; a spam report is never lifted and its CRM stop stays.
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: false });
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: spam.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true });
+    assert.equal((await w.act(flow, 'enrol', { point: spam.point })).reason, 'not_permitted');
+    // A genuine bounce after the lift blocks again, in the ledger and (through the effect) in the CRM.
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: dead.email, reason: 'hard_bounce', eventId: `bounce:again-${dead.point}`, stream: 'broadcast', at: Date.now() }), 'renewed');
+    assert.equal((await ledger.decide(WS, dead.email, 'service'))!.blocked, true);
+    assert.equal((await w.repo.blockEmail(dead.point, 'hard_bounce')).recorded, true, 'the released CRM stop is written again');
+    assert.deepEqual([(await w.run(dead)).state, (await w.run(dead)).reason], ['stopped', 'delivery_failed']);
+  } finally { await w.close(); }
 });

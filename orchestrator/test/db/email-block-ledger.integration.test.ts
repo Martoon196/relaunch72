@@ -6,10 +6,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { expectPostgresError, openTestDatabase, ownerQuery, testDatabaseSkipReason } from './database-helper.js';
+import { expectPostgresError, openTestDatabase, ownerQuery, resetIdentityTables, testDatabaseSkipReason } from './database-helper.js';
 import { loginRole } from './webinar-harness.js';
 import { createPostmarkBounceWebhook, decideRecipient, EmailBounceService, PgEmailBlockLedger } from '../../src/email-bounces/index.js';
 import { MhpEmailHealth } from '../../src/mhp/email-health.js';
@@ -41,18 +41,18 @@ test('email block ledger on real roles: pinned, idempotent, scoped by reason, ne
     assert.deepEqual((await row('spam')).map(r => [r.reason, r.scope]), [['spam_complaint', 'all']]);
     assert.deepEqual((await row('left')).map(r => [r.reason, r.scope]), [['unsubscribe', 'marketing']]);
     for (const purpose of ['marketing', 'service'] as const) {
-      assert.deepEqual(await ledger.decide(MHP, address('DEAD').replace('DEAD', 'dead').toUpperCase(), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false }, 'addresses compare case-blind');
-      assert.deepEqual(await ledger.decide(MHP, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false });
+      assert.deepEqual(await ledger.decide(MHP, address('DEAD').replace('DEAD', 'dead').toUpperCase(), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false, clearedAt: null }, 'addresses compare case-blind');
+      assert.deepEqual(await ledger.decide(MHP, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false, clearedAt: null });
     }
-    assert.deepEqual(await ledger.decide(MHP, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false });
-    assert.deepEqual(await ledger.decide(MHP, address('left'), 'service'), { blocked: false, reallowed: false });
-    assert.deepEqual(await ledger.decide(PP, address('dead'), 'service'), { blocked: false, reallowed: false }, 'one brand never blocks another');
+    assert.deepEqual(await ledger.decide(MHP, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false, clearedAt: null });
+    assert.deepEqual(await ledger.decide(MHP, address('left'), 'service'), { blocked: false, reallowed: false, clearedAt: null });
+    assert.deepEqual(await ledger.decide(PP, address('dead'), 'service'), { blocked: false, reallowed: false, clearedAt: null }, 'one brand never blocks another');
 
     // A provider re-subscribe lifts only an unsubscribe; nothing lifts a hard bounce or spam report, not even the owner role by hand.
     assert.equal(await ledger.lift({ workspaceId: MHP, sourceKey: 'mhp', email: address('dead'), eventId: null, at: Date.now() }), 0);
     assert.equal(await ledger.lift({ workspaceId: MHP, sourceKey: 'mhp', email: address('spam'), eventId: null, at: Date.now() }), 0);
     assert.equal(await ledger.lift({ workspaceId: MHP, sourceKey: 'mhp', email: address('left'), eventId: 'subscription:on', at: Date.now() - DAY }), 1);
-    assert.deepEqual(await ledger.decide(MHP, address('left'), 'marketing'), { blocked: false, reallowed: false });
+    assert.equal((await ledger.decide(MHP, address('left'), 'marketing'))!.blocked, false);
     await expectPostgresError(ownerQuery(admin, 'UPDATE app_private.email_address_blocks SET lifted_at=now() WHERE email=$1', [address('dead')]), '23514');
     await expectPostgresError(ownerQuery(admin, "UPDATE app_private.email_address_blocks SET scope='marketing' WHERE email=$1", [address('spam')]), '23514');
     // A newer unsubscribe blocks again; one older than the re-subscribe does not.
@@ -63,8 +63,8 @@ test('email block ledger on real roles: pinned, idempotent, scoped by reason, ne
 
     // The sweep's list write: idempotent, counted, pinned.
     const list = [{ email: address('l1'), reason: 'hard_bounce' as const, at }, { email: address('l2'), reason: 'unsubscribed' as const, at }];
-    assert.equal(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), 2);
-    assert.equal(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), 0);
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), { added: 2, skipped: 0 });
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), { added: 0, skipped: 0 });
     const rows = (await ledger.rows(MHP))!.filter(r => r.email.endsWith(`-${run}@example.invalid`));
     assert.deepEqual(rows.map(r => [r.email.split('-')[0], r.reason, r.scope]).sort(), [['dead', 'hard_bounce', 'all'], ['l1', 'hard_bounce', 'all'], ['l2', 'unsubscribed', 'marketing'],
       ['left', 'unsubscribed', 'marketing'], ['spam', 'spam_complaint', 'all']]);
@@ -81,7 +81,7 @@ test('email block ledger on real roles: pinned, idempotent, scoped by reason, ne
     await expectPostgresError(web.query('SELECT * FROM app_private.email_address_blocks'), '42501');
     // Nothing about the message is stored: the columns are the address, reason, scope, provider, event id, stream and times.
     const columns = (await ownerQuery<{ column_name: string }>(admin, "SELECT column_name FROM information_schema.columns WHERE table_schema='app_private' AND table_name='email_address_blocks' ORDER BY ordinal_position")).map(c => c.column_name);
-    assert.deepEqual(columns, ['id', 'workspace_id', 'source_key', 'email', 'reason', 'scope', 'provider', 'provider_event_id', 'stream', 'occurred_at', 'recorded_at', 'updated_at', 'lifted_at', 'lifted_event_id']);
+    assert.deepEqual(columns, ['id', 'workspace_id', 'source_key', 'email', 'reason', 'scope', 'provider', 'provider_event_id', 'stream', 'occurred_at', 'recorded_at', 'updated_at', 'lifted_at', 'lifted_event_id', 'lifted_by_user_id', 'lift_note']);
   } finally {
     await identity.end(); await web.end(); await admin.end();
   }
@@ -139,6 +139,98 @@ test('MHP scope rule end to end: the webhook writes the true reason durably; aft
     await restarted.refreshLedger(MHP);
     const mine = restarted.registry.snapshot(MHP).blocked.filter(b => b.email.endsWith(`-${run}@example.invalid`));
     assert.deepEqual(mine.map(b => [b.email.split('-')[0], b.reason, b.allEmail]).sort(), [['dead', 'hard_bounce', true], ['spam', 'spam_complaint', true]]);
+  } finally {
+    await identity.end(); await admin.end();
+  }
+});
+
+test('review fixes on real roles: owner undo of a wrong hard bounce (session-checked, evidenced, re-armed by a later bounce), spam never lifted, out-of-order re-subscribe, poison rows, list rows without a time', { skip, timeout: 120_000 }, async () => {
+  const admin = await openTestDatabase();
+  const identity = await loginRole(admin, 'r72_identity_command');
+  try {
+    // A minimal MHP brand workspace with its marketing owner and an MHP session (synthetic).
+    await resetIdentityTables(admin);
+    const org = 'ba41b1a4-9752-4dbf-8312-d04a0f03d0b8', owner = randomUUID(), stranger = randomUUID();
+    const token = `mhp-owner-${randomUUID()}`, strangerToken = `mhp-stranger-${randomUUID()}`;
+    await ownerQuery(admin, `DO $s$ BEGIN
+      PERFORM set_config('app.user_id','${owner}',true); PERFORM set_config('app.request_id','ledger-owner-fixture',true);
+      INSERT INTO app.organizations(id,name,slug,kind) VALUES('${org}','Martin Howard Property','mhp-ledger-proof','direct_customer');
+      INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES('${MHP}','${org}','MHP brand marketing','mhp-brand-marketing');
+      INSERT INTO app.users(id,email,display_name,status,email_verified_at) VALUES('${owner}','martin.howard1984@gmail.com','Synthetic owner','active',clock_timestamp()),
+       ('${stranger}','stranger-ledger@example.invalid','Stranger','active',clock_timestamp());
+      INSERT INTO app_private.investor_programme_admins(user_id) VALUES('${owner}');
+      INSERT INTO app.organization_memberships(organization_id,user_id,role,status) VALUES('${org}','${owner}','owner','active'),('${org}','${stranger}','billing','active');
+      INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status) VALUES('${MHP}','${org}','${owner}','owner','active'),('${MHP}','${org}','${stranger}','viewer','active');
+    END $s$`);
+    for (const [user, t] of [[owner, token], [stranger, strangerToken]] as const) {
+      await ownerQuery(admin, `INSERT INTO app.user_sessions(token_hash,csrf_secret_hash,user_id,selected_workspace_id,expires_at,product_audience)
+        VALUES($1,$2,$3,$4,now()+interval '1 hour','martin_howard_property')`, [createHash('sha256').update(t).digest(), createHash('sha256').update(`csrf${t}`).digest(), user, MHP]);
+    }
+    const run = randomUUID().slice(0, 8), address = (name: string) => `${name}-${run}@example.invalid`;
+    const ledger = new PgEmailBlockLedger(identity);
+    const hour = 3_600_000, t0 = Date.now() - 5 * hour;
+    const put = (name: string, reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed', eventId: string | null, at: number) =>
+      ledger.record({ workspaceId: MHP, sourceKey: 'mhp', email: address(name), reason, eventId, stream: 'broadcast', at });
+
+    // 1. Owner undo of a hard bounce, with evidence; only the brand's marketing owner may do it.
+    assert.equal(await put('dead', 'hard_bounce', `bounce:d1-${run}`, t0), 'recorded');
+    assert.equal(await put('spam', 'spam_complaint', `bounce:s1-${run}`, t0), 'recorded');
+    await expectPostgresError(ledger.ownerLift({ sessionToken: strangerToken, workspaceId: MHP, email: address('dead'), note: 'Owner confirmed' }), '42501');
+    await expectPostgresError(ledger.ownerLift({ sessionToken: 'not-a-session', workspaceId: MHP, email: address('dead'), note: 'Owner confirmed' }), '42501');
+    await expectPostgresError(ledger.ownerLift({ sessionToken: token, workspaceId: PP, email: address('dead'), note: 'Owner confirmed' }), '42501');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('DEAD').toLowerCase(), note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false });
+    const lifted = (await ownerQuery<{ lifted_at: Date; lifted_by_user_id: string; lift_note: string }>(admin,
+      "SELECT lifted_at,lifted_by_user_id,lift_note FROM app_private.email_address_blocks WHERE email=$1 AND reason='hard_bounce'", [address('dead')]))[0]!;
+    assert.equal(lifted.lifted_by_user_id, owner); assert.equal(lifted.lift_note, 'Owner confirmed'); assert.ok(lifted.lifted_at instanceof Date);
+    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: false, reallowed: false, clearedAt: lifted.lifted_at.getTime() });
+    // The old bounce, replayed or re-listed with its old time, does not block again; a bounce after the lift does.
+    assert.equal(await put('dead', 'hard_bounce', `bounce:d1-${run}`, t0), 'exists');
+    assert.equal(await put('dead', 'hard_bounce', `bounce:d0-${run}`, t0 - hour), 'exists');
+    assert.equal(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows: [{ email: address('dead'), reason: 'hard_bounce', at: null }] }).then(r => r!.added), 0);
+    assert.equal((await ledger.decide(MHP, address('dead'), 'service'))!.blocked, false);
+    assert.equal(await put('dead', 'hard_bounce', `bounce:d2-${run}`, Date.now()), 'renewed');
+    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: true, reason: 'hard_bounce', reallowed: false, clearedAt: null });
+    assert.deepEqual((await ownerQuery<{ lifted_by_user_id: string | null; lift_note: string | null }>(admin,
+      "SELECT lifted_by_user_id,lift_note FROM app_private.email_address_blocks WHERE email=$1 AND reason='hard_bounce'", [address('dead')])), [{ lifted_by_user_id: null, lift_note: null }]);
+    // A spam complaint is never lifted, by the owner or by hand.
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('spam'), note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true });
+    assert.equal((await ledger.decide(MHP, address('spam'), 'service'))!.blocked, true);
+    await expectPostgresError(ownerQuery(admin, "UPDATE app_private.email_address_blocks SET lifted_at=now(),lifted_by_user_id=$2,lift_note='x y z' WHERE email=$1", [address('spam'), owner]), '23514');
+    await expectPostgresError(ownerQuery(admin, "UPDATE app_private.email_address_blocks SET lifted_at=now() WHERE email=$1", [address('dead')]), '23514'); // a hard bounce lift needs who and why
+
+    // 2. Out-of-order: a re-subscribe that overtakes a retried older unsubscribe leaves a lifted marker. Both orders.
+    const unsub = (name: string, at: number) => put(name, 'unsubscribed', `subscription:${name}-${at}`, at);
+    const resub = (name: string, at: number) => ledger.lift({ workspaceId: MHP, sourceKey: 'mhp', email: address(name), eventId: `subscription:on-${name}-${at}`, at });
+    assert.equal(await unsub('inorder', t0), 'recorded'); assert.equal(await resub('inorder', t0 + hour), 1);
+    assert.equal(await resub('late', t0 + hour), 0); assert.equal(await unsub('late', t0), 'exists', 'the late older unsubscribe finds the marker');
+    for (const name of ['inorder', 'late']) {
+      assert.deepEqual(await ledger.decide(MHP, address(name), 'marketing'), { blocked: false, reallowed: false, clearedAt: t0 + hour }, name);
+      assert.equal(await unsub(name, t0 + 2 * hour), 'renewed', `${name}: a genuinely newer unsubscribe blocks again`);
+      assert.equal((await ledger.decide(MHP, address(name), 'marketing'))!.blocked, true);
+    }
+
+    // 3. Poison rows: skipped and counted, never failing the rows around them or the next chunk.
+    const rows = [{ email: address('p1'), reason: 'hard_bounce' as const, at: t0 }, { email: 'not an address', reason: 'hard_bounce' as const, at: t0 },
+      { email: address('p2'), reason: 'unsubscribed' as const, at: t0 }];
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows }), { added: 2, skipped: 1 });
+    assert.deepEqual(await identity.query("SELECT app_private.email_block_record_list($1,'mhp','broadcast',$2::jsonb) AS v",
+      [MHP, JSON.stringify([{ email: address('p3'), reason: 'bogus', at: null }, 'x', { email: address('p4'), reason: 'hard_bounce', at: 'not a time' }, { email: address('p5'), reason: 'spam_complaint', at: null }])])
+      .then(r => r.rows[0].v), { added: 1, skipped: 3 });
+    const many = Array.from({ length: 1201 }, (_, i) => ({ email: i === 3 ? 'bad' : address(`m${i}`), reason: 'unsubscribed' as const, at: t0 }));
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows: many }), { added: 1200, skipped: 1 }, 'three chunks, one bad row');
+
+    // 4. A list row without a time keeps its first-seen time; a later sign-up then re-allows marketing.
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows: [{ email: address('notime'), reason: 'unsubscribed', at: null }] }), { added: 1, skipped: 0 });
+    const first = (await ownerQuery<{ occurred_at: Date }>(admin, 'SELECT occurred_at FROM app_private.email_address_blocks WHERE email=$1', [address('notime')]))[0]!.occurred_at;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const growth = new PgMhpGrowthService(identity, identity, { campaign: `ledger-notime-${run}`, startsAt: new Date(Date.now() + DAY).toISOString() });
+    await growth.capture({ email: address('notime'), firstName: 'Sam', level: null, consent: true, kind: 'webinar', label: 'Webinar', module: null,
+      link: 'https://martinhowardproperty.co.uk/webinar/' }, null);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows: [{ email: address('notime'), reason: 'unsubscribed', at: null }] }), { added: 0, skipped: 0 });
+    assert.equal((await ownerQuery<{ occurred_at: Date }>(admin, 'SELECT occurred_at FROM app_private.email_address_blocks WHERE email=$1', [address('notime')]))[0]!.occurred_at.getTime(), first.getTime(),
+      'the hourly read never renews a time it does not know');
+    assert.equal((await ledger.decide(MHP, address('notime'), 'marketing'))!.blocked, false, 'so the sign-up since still re-allows marketing');
   } finally {
     await identity.end(); await admin.end();
   }

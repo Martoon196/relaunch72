@@ -155,14 +155,24 @@ export class EmailBlockRegistry implements EmailSendGuard {
   }
 
   /**
-   * ignoreUnsubscribed: the durable ledger knows this address's unsubscribe and lets marketing go again (the person
-   * signed up since), so this process's own copy of the unsubscribe does not count. Every other reason still does.
+   * durableAfter: the durable ledger has just answered for this address and is the record for every lasting reason.
+   * This process then adds only what the ledger cannot know: a repeated soft bounce, and a block a webhook reported
+   * here that happened AFTER the ledger's clearedAt for the address (a newer event whose durable write is still being
+   * retried). Copies of list reads and of ledger rows, and anything at or before clearedAt, are left to the ledger.
    */
-  decide(workspaceId: string, email: string, purpose: EmailPurpose, options: { ignoreUnsubscribed?: boolean } = {}): EmailSendDecision {
+  decide(workspaceId: string, email: string, purpose: EmailPurpose, options: { durableAfter?: number } = {}): EmailSendDecision {
     const state = this.workspaces.get(workspaceId.toLowerCase());
     if (!state) return { blocked: false };
-    const blocking = this.reasons(state, email.trim().toLowerCase(), this.now())
-      .filter(reason => blocksPurpose(reason, purpose) && !(options.ignoreUnsubscribed && reason === 'unsubscribed'));
+    const address = email.trim().toLowerCase(), now = this.now();
+    let reasons: EmailBlockReason[];
+    if (options.durableAfter === undefined) reasons = this.reasons(state, address, now);
+    else {
+      const set = new Set<EmailBlockReason>();
+      for (const block of state.blocks.get(address)?.values() ?? []) if (block.origin === 'webhook' && block.since > options.durableAfter) set.add(block.reason);
+      if (this.softCount(state, address, now) >= SOFT_BOUNCE_LIMIT) set.add('repeated_soft_bounce');
+      reasons = [...set];
+    }
+    const blocking = reasons.filter(reason => blocksPurpose(reason, purpose));
     const reason = strongestReason(blocking);
     return reason ? { blocked: true, reason } : { blocked: false };
   }
@@ -223,6 +233,14 @@ export class EmailBlockRegistry implements EmailSendGuard {
       if (block.origin === 'ledger' ? block.reason === 'unsubscribed' : block.stream === stream) blocks.delete(key);
     }
     if (blocks.size === 0) state.blocks.delete(email);
+  }
+
+  /** The owner confirmed a hard-bounced address works: forget this process's copies of that hard bounce. */
+  clearHardBounce(workspaceId: string, email: string): void {
+    const state = this.state(workspaceId), address = email.trim().toLowerCase(), blocks = state.blocks.get(address);
+    if (!blocks) return;
+    for (const [key, block] of blocks) if (block.reason === 'hard_bounce') blocks.delete(key);
+    if (blocks.size === 0) state.blocks.delete(address);
   }
 
   /**
