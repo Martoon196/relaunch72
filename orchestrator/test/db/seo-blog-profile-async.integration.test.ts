@@ -9,6 +9,7 @@ import { profilePayload } from '../../src/seo-blog/profile-jobs.js';
 import { harness } from '../seo-blog-fixtures.js';
 import { openTestDatabase, testDatabaseSkipReason } from './database-helper.js';
 import { withTransaction } from '../../src/db/transaction.js';
+import { grantFounderAllowance } from './seo-blog-allowance-fixture.js';
 
 const skip = testDatabaseSkipReason();
 
@@ -46,7 +47,12 @@ test('profile async actual-role boundary: coalesce, cancelled/stale late receipt
     const identity = await withTransaction(content, { actorKind: 'worker', workspaceId: brand.id, requestId: 'profile-identity-proof' }, async (t) => (await t.query("SELECT session_user,current_user,current_setting('app.actor_kind',true) AS actor,current_setting('app.user_id',true) AS user_id,current_setting('app.workspace_id',true) AS workspace_id")).rows[0]);
     assert.equal(identity.session_user, 'r72_content_command'); assert.equal(identity.current_user, 'r72_content_command');
     assert.equal(identity.actor, 'worker'); assert.equal(identity.user_id, ''); assert.equal(identity.workspace_id, brand.id);
-    await owner.updateSettings(actor, brand.id, brand.rowVersion, { budgets: { modelTokensPerMonth: 1_000_000, searchCallsPerMonth: 0, imagesPerMonth: 0 } });
+    // Since 0145 a new brand has no spend authority until the founder grants one; the owner then sets a budget inside it.
+    await grantFounderAllowance(admin, content, alice, brand.id, { modelTokens: 2_000_000 });
+    const allowed = await owner.getBrand(actor, brand.id);
+    assert.equal(allowed.settings.operatorLimits?.modelTokens, 2_000_000);
+    await owner.updateSettings(actor, brand.id, allowed.rowVersion, { budgets: { modelTokensPerMonth: 1_000_000, searchCallsPerMonth: 0, imagesPerMonth: 0 } });
+    await assert.rejects(owner.updateSettings(actor, brand.id, (await owner.getBrand(actor, brand.id)).rowVersion, { budgets: { modelTokensPerMonth: 2_000_001, searchCallsPerMonth: 0, imagesPerMonth: 0 } }), /exceeds your account allowance/);
     await owner.uploadKnowledge(actor, brand.id, { category: 'product_facts', title: 'Offers', pastedText: 'Harbour Compliance Plan costs £49 per month.' });
     const request = (acknowledgePriorUsage = false) => owner.requestProfileExtraction(actor, brand.id, { commandId: randomUUID(), baseVersion: 0, acknowledgePriorUsage });
     let release!: () => void; let entered!: () => void;
