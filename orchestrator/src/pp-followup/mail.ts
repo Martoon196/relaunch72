@@ -1,6 +1,6 @@
 import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import type { PpFollowupRendered } from './content.js';
-import type { EmailSendGuard } from '../email-bounces/policy.js';
+import { decideRecipient, type EmailSendGuard } from '../email-bounces/policy.js';
 
 /** contactPointId travels with the message so a later bounce or complaint can stop that exact address for good. */
 export interface PpRenderedSend { readonly id: string; readonly email: string; readonly tag: string; readonly rendered: PpFollowupRendered; readonly contactPointId?: string }
@@ -45,7 +45,7 @@ export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeo
       // arrived in between is still a definite non-send for an address that can never be sent to.
       if (recipients) {
         await recipients.guard.whenReady();
-        if (recipients.guard.decide(recipients.workspaceId, to, 'marketing').blocked) throw new PpNotSentError('recipient', 'Recipient is blocked after a bounce, complaint or unsubscribe');
+        if ((await decideRecipient(recipients.guard, recipients.workspaceId, to, 'marketing')).blocked) throw new PpNotSentError('recipient', 'Recipient is blocked after a bounce, complaint or unsubscribe');
       }
       const response = await fetcher('https://api.postmarkapp.com/email', {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),

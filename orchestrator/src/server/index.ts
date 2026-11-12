@@ -1051,7 +1051,7 @@ async function main(): Promise<void> {
   const mhpEmailHealth = postgresPortal?.mhp?.emailHealth;
   // Every MHP marketing, sequence and sign-up email passes this one sender, which refuses blocked addresses.
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret, fetch,
-    emailBounces && mhpEmailHealth ? { guard: emailBounces.registry, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
+    emailBounces && mhpEmailHealth ? { guard: emailBounces.guard, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
   const stopEmailBounces = emailBounces && emailBounces.sources.length > 0 ? emailBounces.start() : () => {};
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
     ? startMhpMarketingDispatcher(postgresPortal.mhp.growth, mhpMarketingSender!, mhpMarketing, {
@@ -1072,7 +1072,7 @@ async function main(): Promise<void> {
   const ppFollowup = postgresPortal?.ppFollowup;
   if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
   // PP follow-ups use the same bounce handler: blocked addresses are refused before a proof and again at the sender.
-  const ppRecipients = emailBounces?.hasWorkspace(PP_FOLLOWUP_WORKSPACE_ID) ? { guard: emailBounces.registry, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } : undefined;
+  const ppRecipients = emailBounces?.hasWorkspace(PP_FOLLOWUP_WORKSPACE_ID) ? { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } : undefined;
   const stopPpFollowup = ppFollowup?.config
     ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config, fetch, ppRecipients), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config,
         recipients: ppRecipients,

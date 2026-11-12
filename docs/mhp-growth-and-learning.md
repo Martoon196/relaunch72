@@ -58,14 +58,16 @@ Delivery is a one-minute lease/settle loop on the existing process: at-least-onc
 
 ## Bounces, spam reports and unsubscribes
 
-No migration. Postmark is the record: its own lists are read at start-up (retried within minutes, with a warning in the log, if Postmark cannot be read), every hour and whenever the owner presses **Check with Postmark now**; its webhooks add to the picture as things happen. The code is in `orchestrator/src/email-bounces/` (shared by every brand) and `orchestrator/src/mhp/email-health.ts` (MHP's page and its lasting effect).
+Postmark's own lists are read at start-up (retried within minutes, with a warning in the log, if Postmark cannot be read), every hour and whenever the owner presses **Check with Postmark now**; its webhooks add to the picture as things happen. From migration 0153 every hard bounce, spam report and unsubscribe is also kept in our own database (`app_private.email_address_blocks`, one row per brand, email source, address and reason), written by the webhook and by every read of Postmark and read by every send guard; the list held in the running process is a cache in front of it. While the database still ends at 0152 the process list is used alone, exactly as before. The code is in `orchestrator/src/email-bounces/` (shared by every brand; `ledger.ts` is the database side) and `orchestrator/src/mhp/email-health.ts` (MHP's page and its lasting effect).
 
 | What happened | What stops, for that exact address in that brand |
 | --- | --- |
-| The email came straight back (hard bounce) | All marketing email, and webinar and sign-up emails too: the address does not work. |
-| They marked an email as spam | All marketing email, whatever it is about. A confirmation they ask for later still goes. |
-| They unsubscribed through Postmark's own link or list | All marketing email. |
-| Their mailbox refused email 3 times in 30 days | All marketing email, for as long as that stays true. Fewer than that is only counted. |
+| The email came straight back (hard bounce) | Every email: marketing, webinar and sign-up emails too. The address does not work. |
+| They marked an email as spam | Every email from the brand, a confirmation they ask for later included (owner rule, 12 November 2026). |
+| They unsubscribed through Postmark's own link or list | Marketing email only. An event email they asked for (a booking or webinar confirmation, a reminder) still goes. A fresh sign-up after the unsubscribe lets marketing go again; so does Postmark telling us they re-subscribed. |
+| Their mailbox refused email 3 times in 30 days | All marketing email, for as long as that stays true. Fewer than that is only counted. Held in the running process only. |
+
+Nothing ever lifts a hard bounce or a spam report automatically: once it is in the database, reactivating the address in Postmark or signing up again does not let email go to it. (There is no owner button to lift one yet.)
 
 One limit to know: when someone signs up for a webinar with the marketing box ticked, the confirmation itself is the marketing version, so for an address blocked from marketing it is refused; the reminders they asked for still go.
 
@@ -79,13 +81,15 @@ Separately, a person can be **stopped for good** through the same capability as 
 
 | Reason | When the person is stopped for good |
 | --- | --- |
-| Hard bounce | Always: when Postmark reports it, when a send to the address is refused, and at the owner's check. |
-| Spam report, or unsubscribe at Postmark | When Postmark reports it, and at the owner's check unless the person has signed up again since. Never because a later marketing email was refused: someone who signs up for the next webinar still gets the reminders they asked for, while their marketing email stays refused. |
+| Hard bounce or spam report | Always: when Postmark reports it, when a send to the address is refused, and at the owner's check. Every email to them is refused anyway. |
+| Unsubscribe at Postmark | When Postmark reports it, and at the owner's check unless the person has signed up again since. Never because a later marketing email was refused: someone who signs up for the next webinar still gets the reminders they asked for. |
 | 3 soft bounces in 30 days | Never. It is a temporary block held in the running process and lifts by itself. |
 
-The contact record has no reason column, so a person stopped for a bounce or a spam report looks exactly like someone who unsubscribed, and only they can undo it (by signing up again with the box ticked). To email a repaired address, reactivate it in Postmark: the block lifts at once when the webhook reports it, otherwise at the next read. That does not re-subscribe a person who was also stopped in the contact list.
+"Signed up again since" means a sign-up (any kind, ticked box or not) recorded after the unsubscribe: the owner's check compares the latest sign-up with the block date, and the database compares each sign-up with the stored unsubscribe time.
 
-Because nothing is stored here, the block list is held in the running process and rebuilt from Postmark after a restart. With more than one web instance, an instance that did not receive a webhook learns of it at the next hourly read; the stop in the contact list applies everywhere at once. Sends wait up to 15 seconds for that first read; if Postmark cannot be read they go ahead, and Postmark itself still refuses addresses on its own per-stream list.
+The contact record has no reason column, so a person stopped for a bounce or a spam report looks exactly like someone who unsubscribed, and only they can undo it (by signing up again with the box ticked). The database ledger keeps the true reason.
+
+Without 0153 the block list is held in the running process and rebuilt from Postmark after a restart, and an instance that did not receive a webhook learns of it at the next hourly read. With 0153 every instance asks the database before each send, so a restart or a second instance forgets nothing. Sends wait up to 15 seconds for the first read of Postmark; if Postmark cannot be read they go ahead, and Postmark itself still refuses addresses on its own per-stream list. If the database cannot be asked, the send guard falls back to the process list rather than failing the send. `EMAIL_BOUNCE_HANDLING=off` switches the database ledger off too.
 
 ### Postmark set-up (once per message stream)
 
@@ -102,7 +106,7 @@ In Postmark open the MHP server, then **each** message stream it sends on (the b
 
 ### Another brand
 
-Property Predator is already joined: see `docs/pp-followup-email.md` (`PP_POSTMARK_WEBHOOK_SECRET`, webhook path `/api/provider-webhooks/postmark/pp`). MHP's variables are set on the service in the Render dashboard; no blueprint in this repository declares them. For any further brand, add one entry to `EMAIL_BOUNCE_SOURCES` and set the two variables it names. Its webhook URL ends in its `key`. Its send path asks `registry.decide(workspaceId, address, 'marketing' | 'service')` before sending, and may register one effect to record the stop in its own contact records.
+Property Predator is already joined: see `docs/pp-followup-email.md` (`PP_POSTMARK_WEBHOOK_SECRET`, webhook path `/api/provider-webhooks/postmark/pp`). MHP's variables are set on the service in the Render dashboard; no blueprint in this repository declares them. For any further brand, add one entry to `EMAIL_BOUNCE_SOURCES` and set the two variables it names. Its webhook URL ends in its `key`. Its send path asks `decideRecipient(service.guard, workspaceId, address, 'marketing' | 'service')` before sending, and may register one effect to record the stop in its own contact records. The database ledger keeps only the MHP and PP workspaces (the 0153 table is pinned to them); any other brand stays on the process list.
 
 ```json
 [{"key":"pp","workspaceId":"<workspace uuid>","tokenEnv":"PP_POSTMARK_SERVER_TOKEN","webhookSecretEnv":"PP_POSTMARK_WEBHOOK_SECRET","marketingStreams":["broadcast"],"serviceStreams":["outbound"]}]

@@ -46,8 +46,15 @@ test('the one MHP sender refuses a blocked address before any provider call, by 
 
   const complained = transport(registryWith({ kind: 'spam_complaint' }));
   await assert.rejects(complained.sender.send(claimed()), (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'spam_complaint');
-  await complained.sender.send(claimed({ template: 'webinar_confirm', context: { emailPurpose: 'webinar_service' } }));
-  assert.deepEqual(complained.bodies.map(b => b.MessageStream), ['outbound'], 'the event email they asked for still goes on the transactional stream');
+  await assert.rejects(complained.sender.send(claimed({ template: 'webinar_confirm', context: { emailPurpose: 'webinar_service' } })), EmailRecipientBlockedError,
+    'a spam complaint stops every email from the brand, the confirmation included');
+  assert.equal(complained.bodies.length, 0);
+
+  // An unsubscribe stops marketing only: the confirmation they asked for still goes on the transactional stream.
+  const left = transport(registryWith({ kind: 'unsubscribed' }));
+  await assert.rejects(left.sender.send(claimed()), (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'unsubscribed');
+  await left.sender.send(claimed({ template: 'webinar_confirm', context: { emailPurpose: 'webinar_service' } }));
+  assert.deepEqual(left.bodies.map(b => b.MessageStream), ['outbound'], 'the event email they asked for still goes on the transactional stream');
 
   const unsubscribed = transport(registryWith({ kind: 'unsubscribed' }));
   await assert.rejects(unsubscribed.sender.sendRendered({ id: ids.send, email: 'GONE@example.invalid', tag: 'owner_sequence', prospectId: ids.prospect,
@@ -127,10 +134,11 @@ test('sequences: a refused address ends as a definite rejection that stops the p
 });
 
 test('a marketing-only block refuses the marketing email but never stops the person from a send path: the webinar reminders they asked for stay queued', async () => {
-  // Three soft bounces, a spam report, an unsubscribe at Postmark: each blocks marketing only. The stop is the unsubscribe
-  // capability, which cancels EVERYTHING queued for the person, so a refused marketing email must not trigger it.
+  // Three soft bounces, an unsubscribe at Postmark: each blocks marketing only. The stop is the unsubscribe capability,
+  // which cancels EVERYTHING queued for the person, so a refused marketing email must not trigger it. (A spam report
+  // stops all email from the brand, so it is not a marketing-only block; see the sender test above.)
   const softs = [1, 2, 3].map(n => ({ kind: 'soft_bounce' as const, id: `bounce:s${n}`, at: now - n * DAY }));
-  for (const facts of [softs, [{ kind: 'spam_complaint' as const }], [{ kind: 'unsubscribed' as const }]]) {
+  for (const facts of [softs, [{ kind: 'unsubscribed' as const }]]) {
     const registry = registryWith(...facts);
     assert.equal(registry.decide(WS, 'gone@example.invalid', 'marketing').blocked, true);
     const calls: string[] = [];
@@ -195,22 +203,26 @@ test('the owner check blocks the three addresses Postmark already lists and stop
     'a slow Postmark never holds the page past the server\'s request limit');
 });
 
-test('the owner check stops a dead address always, a complaint or unsubscribe only if the person has not signed up again since, and a soft-bounce block never', async () => {
+test('the owner check stops a dead or complained address always, an unsubscribe only if the person has not signed up again since, and a soft-bounce block never', async () => {
   const at = (days: number) => new Date(now - days * DAY).toISOString();
   const f = health({
     listed: [{ email: 'dead@example.invalid', kind: 'hard_bounce', at: now - 20 * DAY }, { email: 'cross@example.invalid', kind: 'spam_complaint', at: now - 20 * DAY },
-      { email: 'back@example.invalid', kind: 'spam_complaint', at: now - 20 * DAY }, { email: 'left@example.invalid', kind: 'unsubscribed', at: now - 20 * DAY }],
+      { email: 'back@example.invalid', kind: 'spam_complaint', at: now - 20 * DAY }, { email: 'left@example.invalid', kind: 'unsubscribed', at: now - 20 * DAY },
+      { email: 'again@example.invalid', kind: 'unsubscribed', at: now - 20 * DAY }],
     registrants: [
       registrant({ id: ids.prospect, email: 'dead@example.invalid', lastSignupAt: at(1) }),
       registrant({ id: ids.user, email: 'cross@example.invalid', lastSignupAt: at(40) }),
-      // Complained three weeks ago, registered for the next webinar yesterday: reminders are queued for them.
+      // Complained three weeks ago, registered for the next webinar yesterday: a spam report still stops every email.
       registrant({ id: ids.item, email: 'back@example.invalid', lastSignupAt: at(1) }),
       registrant({ id: ids.version, email: 'left@example.invalid', lastSignupAt: at(25) }),
+      // Unsubscribed three weeks ago, registered for the next webinar yesterday: reminders are queued for them.
+      registrant({ id: ids.command, email: 'again@example.invalid', lastSignupAt: at(1) }),
       registrant({ id: ids.request, email: 'full@example.invalid', lastSignupAt: at(40) })] });
   [1, 2, 3].forEach(n => f.bounces.registry.record(WS, fact({ id: `bounce:full${n}`, kind: 'soft_bounce', email: 'full@example.invalid', at: now - n * DAY })));
-  assert.deepEqual(await f.service.check('session-token'), { complete: true, blocked: 5, stopped: 3, contactListChecked: true });
-  assert.deepEqual(f.stopped, [ids.prospect, ids.user, ids.version]);
-  for (const email of ['back@example.invalid', 'full@example.invalid']) {
+  assert.deepEqual(await f.service.check('session-token'), { complete: true, blocked: 6, stopped: 4, contactListChecked: true });
+  assert.deepEqual(f.stopped, [ids.prospect, ids.user, ids.item, ids.version]);
+  assert.equal(f.bounces.registry.decide(WS, 'back@example.invalid', 'service').blocked, true, 'a spam report refuses the emails they asked for too');
+  for (const email of ['again@example.invalid', 'full@example.invalid']) {
     assert.equal(f.bounces.registry.decide(WS, email, 'marketing').blocked, true, 'their marketing email is still refused');
     assert.equal(f.bounces.registry.decide(WS, email, 'service').blocked, false, 'and the emails they asked for still go');
   }
@@ -241,7 +253,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
   assert.match(html, /<strong>3<\/strong>addresses bounced/u); assert.match(html, /<strong>1<\/strong>person marked an email as spam/u);
   assert.match(html, /3 of 100 emails bounced \(3\.0%\)/u);
   assert.match(html, /gone@example\.invalid<\/td><td>The address does not work \(the email came straight back\)<\/td><td>29 Oct 2026<\/td><td>All email to this address/u);
-  assert.match(html, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>30 Oct 2026<\/td><td>Marketing email/u);
+  assert.match(html, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>30 Oct 2026<\/td><td>All email to this address/u);
   assert.match(html, /role="alert"><strong>Warning\.<\/strong> 10\.0% of your marketing emails bounced in the last 30 days \(3 of 30\)\. We warn at 5\.0%, which is our own line\. Postmark expects bounces to stay under about 10\.0%/u);
   assert.match(html, /1 person marked your requested emails \(sign-in links, receipts and webinar emails\) as spam/u);
   assert.match(html, /<td>Requested emails \(sign-in links, receipts and webinar emails\)<\/td><td>70<\/td>/u, 'the row is named for everything its totals count');

@@ -156,6 +156,8 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       try {
         if (event.kind === 'resubscribed') {
           service.registry.release(source.workspaceId, source.key, event.stream, event.email);
+          // The provider's explicit re-subscribe lifts a durable unsubscribe from this source; never a bounce or complaint.
+          await service.ledger?.lift({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, eventId: event.eventId, at: event.at });
         } else {
           const result = service.registry.record(source.workspaceId, { sourceKey: source.key, stream: event.stream, id: event.eventId,
             kind: event.kind, email: event.email, at: event.at }, event.counts);
@@ -164,6 +166,10 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           // report or an unsubscribe is final in itself. A soft bounce, even the one that tips the address over the
           // limit, is a temporary state held in this process and lifts by itself; it never rewrites a person's record.
           const lasting = factBlockReason(event.kind);
+          // Durable first (0153): if the ledger exists and the write fails, Postmark's retry writes it again.
+          // Before 0153 the ledger answers 'unavailable' and the event is handled exactly as it was.
+          if (lasting) await service.ledger?.record({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, reason: lasting,
+            eventId: event.eventId, stream: event.stream, at: event.at });
           if (lasting) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
         }
       } catch {

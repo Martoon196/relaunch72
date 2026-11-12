@@ -17,15 +17,20 @@ export function ppEmailBounceSourceDefault(config: PpMarketingConfig | null | un
 }
 
 /**
- * The lasting stop, with no new SQL: every PP follow-up email carries the contact point it was addressed to, so a
- * bounce or complaint reported for it records the existing email suppression for both PP marketing purposes and
- * stops that address's open runs. Email only. The existing capability labels the row as an unsubscribe; recording
- * the true reason, and stopping an address known only from Postmark's list, needs an address-keyed function (0153).
+ * The lasting stop. Every PP follow-up email carries the contact point it was addressed to, so a bounce, spam report
+ * or provider unsubscribe reported for it is written to the CRM with its TRUE reason (0153: hard_bounce and
+ * spam_complaint stop all PP email to that point, recipient_unsubscribe stops PP marketing) and that address's open
+ * runs stop. Email only. While the database still ends at 0152 the existing unsubscribe capability is used instead,
+ * exactly as before (it labels every row an unsubscribe). An address known only from Postmark's list (no point in the
+ * metadata) is refused by every send guard through the durable block ledger instead.
  */
 export function ppEmailBounceEffects(unsubscriber: PpFollowupUnsubscriber): EmailBounceEffects {
   // Called only for an event that is final in itself (hard bounce, spam report, unsubscribe at Postmark), never for a
-  // temporary soft-bounce block: the suppression row is permanent and says "recipient unsubscribed".
+  // temporary soft-bounce block: the suppression row is permanent.
   return { onMarketingBlock: async ({ metadata, reason }) => {
-    if ((reason === 'hard_bounce' || reason === 'spam_complaint' || reason === 'unsubscribed') && metadata.point && UUID.test(metadata.point)) await unsubscriber.unsubscribe(metadata.point);
+    if (!metadata.point || !UUID.test(metadata.point)) return;
+    if (reason !== 'hard_bounce' && reason !== 'spam_complaint' && reason !== 'unsubscribed') return;
+    if (unsubscriber.blockEmail) await unsubscriber.blockEmail(metadata.point, reason === 'unsubscribed' ? 'unsubscribe' : reason);
+    else await unsubscriber.unsubscribe(metadata.point);
   } };
 }

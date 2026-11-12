@@ -1,12 +1,14 @@
 /**
  * The in-process picture of which addresses a workspace must not email, and why.
  *
- * The provider (Postmark) is the system of record: its per-stream suppression
- * list and bounce log are read at start-up and on a slow timer, and its webhooks
- * add to the picture the moment something happens. Nothing is stored in our own
- * database here, so no migration is needed and a restart simply reads the lists
- * again. Lasting effects (stopping a person's marketing in the CRM) are applied
- * by each brand's own effect, through capabilities it already has.
+ * The provider's (Postmark's) per-stream suppression list and bounce log are read
+ * at start-up and on a slow timer, and its webhooks add to the picture the moment
+ * something happens. Where the database ledger exists (0153, see ledger.ts) this is
+ * a cache in front of it: ledger rows are loaded in with origin 'ledger', a provider
+ * list read never removes them, and the send guard asks the ledger as well. Without
+ * the ledger (a database that still ends at 0152) this picture is all there is and a
+ * restart simply reads the lists again. Lasting effects (stopping a person's
+ * marketing in the CRM) are applied by each brand's own effect.
  *
  * One address blocked on ANY of a workspace's streams or servers is blocked on
  * all of them, which is what the provider's own per-stream lists cannot do.
@@ -30,7 +32,7 @@ export interface EmailFact {
   readonly sourceKey: string; readonly stream: string; readonly id: string;
   readonly kind: EmailFactKind; readonly email: string; readonly at: number;
 }
-interface BlockRecord { reason: EmailBlockReason; since: number; sourceKey: string; stream: string; recordedAt: number; origin: 'webhook' | 'list' }
+interface BlockRecord { reason: EmailBlockReason; since: number; sourceKey: string; stream: string; recordedAt: number; origin: 'webhook' | 'list' | 'ledger' }
 export interface StreamReading {
   readonly sourceKey: string; readonly stream: string; readonly kind: EmailStreamKind;
   /** Provider's own totals for the window; null when it could not be read. */
@@ -152,10 +154,15 @@ export class EmailBlockRegistry implements EmailSendGuard {
     return [...reasons];
   }
 
-  decide(workspaceId: string, email: string, purpose: EmailPurpose): EmailSendDecision {
+  /**
+   * ignoreUnsubscribed: the durable ledger knows this address's unsubscribe and lets marketing go again (the person
+   * signed up since), so this process's own copy of the unsubscribe does not count. Every other reason still does.
+   */
+  decide(workspaceId: string, email: string, purpose: EmailPurpose, options: { ignoreUnsubscribed?: boolean } = {}): EmailSendDecision {
     const state = this.workspaces.get(workspaceId.toLowerCase());
     if (!state) return { blocked: false };
-    const blocking = this.reasons(state, email.trim().toLowerCase(), this.now()).filter(reason => blocksPurpose(reason, purpose));
+    const blocking = this.reasons(state, email.trim().toLowerCase(), this.now())
+      .filter(reason => blocksPurpose(reason, purpose) && !(options.ignoreUnsubscribed && reason === 'unsubscribed'));
     const reason = strongestReason(blocking);
     return reason ? { blocked: true, reason } : { blocked: false };
   }
@@ -209,8 +216,29 @@ export class EmailBlockRegistry implements EmailSendGuard {
     this.released.set(releaseKey(workspaceId, sourceKey, stream, email), this.now());
     if (this.released.size > MAX_RELEASES) this.released.delete(this.released.keys().next().value as string);
     if (!blocks) return;
-    for (const [key, block] of blocks) if (block.sourceKey === sourceKey && block.stream === stream) blocks.delete(key);
+    // A durable hard bounce or spam complaint is never lifted by the provider. A durable unsubscribe is lifted by the
+    // ledger for the whole source (as the ledger itself does), whichever stream it was first seen on.
+    for (const [key, block] of blocks) {
+      if (block.sourceKey !== sourceKey) continue;
+      if (block.origin === 'ledger' ? block.reason === 'unsubscribed' : block.stream === stream) blocks.delete(key);
+    }
     if (blocks.size === 0) state.blocks.delete(email);
+  }
+
+  /**
+   * Replaces this workspace's durable blocks with a fresh read of the ledger. An unsubscribe the person has signed up
+   * again since is left out: it no longer blocks anything the ledger answers for.
+   */
+  hydrate(workspaceId: string, rows: readonly { email: string; reason: EmailBlockReason; sourceKey: string; stream: string | null; since: number; reallowed: boolean }[]): void {
+    const state = this.state(workspaceId), now = this.now();
+    for (const [email, blocks] of state.blocks) {
+      for (const [key, block] of blocks) if (block.origin === 'ledger') blocks.delete(key);
+      if (blocks.size === 0) state.blocks.delete(email);
+    }
+    for (const row of rows) {
+      if (row.reallowed) continue;
+      this.setBlock(state, row.email, { reason: row.reason, since: row.since, sourceKey: row.sourceKey, stream: row.stream ?? 'ledger', recordedAt: now, origin: 'ledger' });
+    }
   }
 
   /**
@@ -228,7 +256,7 @@ export class EmailBlockRegistry implements EmailSendGuard {
     const listed = new Set(input.suppressions.map(row => `${row.email}\u0000${row.kind}`));
     for (const [email, blocks] of state.blocks) {
       for (const [key, block] of blocks) {
-        if (block.sourceKey !== input.sourceKey || block.stream !== input.stream) continue;
+        if (block.sourceKey !== input.sourceKey || block.stream !== input.stream || block.origin === 'ledger') continue;
         if (listed.has(`${email}\u0000${block.reason}`)) continue;
         if (block.origin === 'list' || block.recordedAt < input.startedAt - FRESH_BLOCK_GRACE_MS) blocks.delete(key);
       }
@@ -279,7 +307,7 @@ export class EmailBlockRegistry implements EmailSendGuard {
     const counted = { hard_bounce: month.bounced, spam_complaint: month.complained, unsubscribed: month.unsubscribed } as const;
     for (const fact of state.facts.values()) if (fact.at >= monthStart && fact.kind !== 'soft_bounce') counted[fact.kind].add(fact.email);
     for (const [email, blocks] of state.blocks) for (const block of blocks.values()) {
-      if (block.since >= monthStart && block.reason !== 'repeated_soft_bounce') counted[block.reason].add(email);
+      if (block.since >= monthStart && block.reason !== 'repeated_soft_bounce' && block.reason !== 'manual') counted[block.reason].add(email);
     }
 
     const streams: EmailHealthStream[] = [];

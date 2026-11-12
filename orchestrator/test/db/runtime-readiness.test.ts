@@ -14,6 +14,7 @@ import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/
 import { MHP_KITS_CHECKSUM, MHP_KITS_MIGRATION, MHP_KIT_CREDIT_CHECKSUM, MHP_KIT_CREDIT_MIGRATION } from '../../src/db/mhp-kits-schema.js';
 import { MHP_WA_OWNER_CHECKSUM, MHP_WA_OWNER_MIGRATION } from '../../src/db/mhp-wa-owner-schema.js';
 import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
+import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -593,12 +594,38 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
   await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
 });
 
-test('PP follow-up email 152 cutover requires the exact applied owner WhatsApp 151 ledger and nothing beyond it', async()=>{
+test('stop-per-channel and email block ledger 153 cutover requires the exact applied PP follow-up 152 ledger and nothing beyond it', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,153);
+  assert.deepEqual(all[152],{filename:EMAIL_BLOCK_MIGRATION,checksum:EMAIL_BLOCK_CHECKSUM});
+  const through152=all.slice(0,152), ledger=all[152]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through152); await capable(all);
+  await assert.rejects(capable(all.slice(0,151)),/schema is behind by 2/);
+  await assert.rejects(capable([...through152,{...ledger,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,151),ledger]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...through152.slice(0,151),{...through152[151]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0154_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('PP follow-up email 152 binary stays ready after the exact additive email block ledger 153 and nothing else', async()=>{
+  const directory=await prefixDirectory(152,'followup152-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,152);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[152]!]);
+  await assert.rejects(check([...rows,{...all[152]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0154_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('PP follow-up email 152 cutover requires the exact applied owner WhatsApp 151 ledger and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,152).map(({filename,checksum})=>({filename,checksum}));
+  const followupDirectory=await prefixDirectory(152,'followup152-cutover');
   assert.equal(all.length,152);
   assert.deepEqual(all[151],{filename:PP_FOLLOWUP_MIGRATION,checksum:PP_FOLLOWUP_CHECKSUM});
   const through151=all.slice(0,151), followup=all[151]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),followupDirectory,{});
   await capable(through151); await capable(all);
   await assert.rejects(capable(all.slice(0,150)),/schema is behind by 2/);
   await assert.rejects(capable([...through151,{...followup,checksum:'0'.repeat(64)}]),/checksum changed/);

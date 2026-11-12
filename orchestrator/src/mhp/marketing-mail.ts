@@ -4,7 +4,7 @@ import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
-import { EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
+import { decideRecipient, EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -132,7 +132,7 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
       // The single choke point for built-in emails, owner emails and sequences. The owner's own test send is exempt.
       if (recipients && !item.ownerTest) {
         await recipients.guard.whenReady();
-        const decision = recipients.guard.decide(recipients.workspaceId, to, transactional ? 'service' : 'marketing');
+        const decision = await decideRecipient(recipients.guard, recipients.workspaceId, to, transactional ? 'service' : 'marketing');
         if (decision.blocked) throw new EmailRecipientBlockedError(decision.reason);
       }
       const response = await fetcher('https://api.postmarkapp.com/email', {

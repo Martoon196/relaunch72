@@ -38,7 +38,15 @@ export interface PpFollowupRepository {
   /** testRecipients is the test list while delivery is in test mode, otherwise null. */
   command(identity: PortalSessionIdentity, input: PpFollowupCommand & { requestId: string; testRecipients?: readonly string[] | null }): Promise<PpFollowupCommandResult>;
 }
-export interface PpFollowupUnsubscriber { unsubscribe(contactPointId: string): Promise<{ known: boolean; recorded: boolean; stopped: number }> }
+export interface PpFollowupUnsubscriber {
+  unsubscribe(contactPointId: string): Promise<{ known: boolean; recorded: boolean; stopped: number }>;
+  /**
+   * A bounce, spam report or provider unsubscribe for an email we sent to this point, recorded with its true reason
+   * (0153). Absent on an older implementation; before 0153 it falls back to the unsubscribe above.
+   */
+  blockEmail?(contactPointId: string, reason: PpEmailBlockReason): Promise<{ known: boolean; recorded: boolean; stopped: number; durable: boolean }>;
+}
+export type PpEmailBlockReason = 'hard_bounce' | 'spam_complaint' | 'unsubscribe';
 
 /** Shown when a form was sent from a page that is no longer current (back button, second tab, a newer version). */
 export const PP_FOLLOWUP_STALE_PAGE = 'This page was out of date. Please try again.';
@@ -99,6 +107,27 @@ export class PgPpFollowupRepository implements PpFollowupRepository, PpFollowupU
     if (!value || typeof value.known !== 'boolean' || typeof value.recorded !== 'boolean' || !count(value.stopped)) throw new Error('Invalid unsubscribe result');
     return { known: value.known, recorded: value.recorded, stopped: Number(value.stopped) };
   }
+  /**
+   * The true-reason stop (0153). While the database still ends at 0152 the function does not exist (42883) and the
+   * 0152 unsubscribe is used instead, exactly as before: it stops the same runs but labels the row an unsubscribe.
+   */
+  async blockEmail(contactPointId: string, reason: PpEmailBlockReason): Promise<{ known: boolean; recorded: boolean; stopped: number; durable: boolean }> {
+    if (!uuid(contactPointId) || !['hard_bounce', 'spam_complaint', 'unsubscribe'].includes(reason)) throw new Error('Invalid email block subject');
+    if (Date.now() >= this.blockAbsentUntil) {
+      try {
+        const result = await this.commands.query<{ value: { known?: unknown; recorded?: unknown; stopped?: unknown } }>('SELECT app_private.pp_followup_block_email($1,$2) AS value', [contactPointId, reason]);
+        const value = result.rows[0]?.value;
+        if (!value || typeof value.known !== 'boolean' || typeof value.recorded !== 'boolean' || !count(value.stopped)) throw new Error('Invalid email block result');
+        this.blockAbsentUntil = 0;
+        return { known: value.known, recorded: value.recorded, stopped: Number(value.stopped), durable: true };
+      } catch (error) {
+        if ((error as { code?: unknown })?.code !== '42883') throw error;
+        this.blockAbsentUntil = Date.now() + 5 * 60_000;
+      }
+    }
+    return { ...await this.unsubscribe(contactPointId), durable: false };
+  }
+  private blockAbsentUntil = 0;
 }
 
 /** email is the address the claim verified for this run; the dispatcher checks it before any proof is written. */

@@ -18,7 +18,7 @@ import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js'
 import { composeMessage, deliveryDecision, type MessagePurpose, type WebinarMailer } from './messages.js';
 import { applyVideoState, readProfile, runProvisionJob, settleJob, type PgWebinarService } from './service.js';
 import type { CloudflareStreamClient } from './stream.js';
-import type { EmailSendGuard } from '../email-bounces/policy.js';
+import { decideRecipient, type EmailSendGuard } from '../email-bounces/policy.js';
 import { toEvent, type WebinarEvent } from './types.js';
 
 export interface WebinarWorkerDependencies {
@@ -27,9 +27,9 @@ export interface WebinarWorkerDependencies {
   readonly stream: CloudflareStreamClient | null;
   readonly mailer: WebinarMailer;
   /**
-   * Addresses that hard-bounced for this brand (on any of its email streams) are not emailed again:
-   * the address does not work, so even a requested confirmation or reminder would only bounce.
-   * Complaints and unsubscribes do not stop these requested event emails.
+   * Addresses that hard-bounced or reported spam for this brand (on any of its email streams) are not emailed
+   * again, not even a requested confirmation or reminder. An unsubscribe does not stop these requested event emails.
+   * The durable ledger (0153) is asked where it exists; otherwise the in-process list alone.
    */
   readonly recipients?: EmailSendGuard;
   /** Automatic CRM handoff for published webinars that opted in; absent means owners send registrants by hand. */
@@ -203,8 +203,8 @@ export class WebinarWorker {
       const decision = deliveryDecision(config, workspaceId, String(r.email));
       if (decision.kind === 'hold') { await settleJob(tx, job.id, 'queued', decision.reason, {}, new Date(this.now() + 5 * 60_000).toISOString()); return null; }
       if (decision.kind === 'block') { await settleJob(tx, job.id, 'blocked', decision.reason, {}); return null; }
-      if (this.deps.recipients?.decide(workspaceId, String(r.email).trim().toLowerCase(), 'service').blocked) {
-        await settleJob(tx, job.id, 'blocked', 'Not sent: an earlier email to this address bounced, so the address does not work.', {});
+      if (this.deps.recipients && (await decideRecipient(this.deps.recipients, workspaceId, String(r.email).trim().toLowerCase(), 'service')).blocked) {
+        await settleJob(tx, job.id, 'blocked', 'Not sent: an earlier email to this address bounced or was reported as spam, so it is not emailed again.', {});
         return null;
       }
       const origin = publicOriginFor(config, workspaceId);
