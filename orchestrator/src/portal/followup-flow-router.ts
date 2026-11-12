@@ -11,8 +11,12 @@ import { FollowupSequenceValidationError } from '../followup-sequences/definitio
 import { FLOW_SIMULATION_CASES } from '../followup-sequences/simulation.js';
 import { PP_FOLLOWUP_ROUTE as BASE, ppNewFlow, type PortalFollowupFlowService, type PortalFlowSaveInput } from './followup-flow-service.js';
 import { renderPortalFlowPage, type PortalFlowPageInput } from './followup-flow-view.js';
+import type { PpFollowupAction } from '../pp-followup/repository.js';
+const RUN_ACTIONS = ['enrol', 'pause', 'resume', 'cancel', 'stop'] as const;
+const FLOW_FORM_ENROL = [...FLOW_FORM_SAVED, 'contactPointId'] as const;
+const FLOW_FORM_CONTROL = [...FLOW_FORM_SAVED, 'runId', 'ackProofId'] as const;
 export async function handlePortalFollowupFlow(req: IncomingMessage, res: ServerResponse, url: URL, input: {
-  portal: PostgresPortalDeps; flows: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
+  portal: PostgresPortalDeps; flows: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'> & Partial<Pick<PortalFollowupFlowService, 'command'>>;
   identity: PortalSessionIdentity | null; requestId: string;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (path !== BASE && !path.startsWith(`${BASE}/`)) return false;
@@ -43,10 +47,21 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
     }
     if (url.search || req.headers.origin !== origin.origin || req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin') throw new FlowWorkspaceError(403, 'Refresh the native PP flow form.');
     const action = path.slice(BASE.length + 1), editing = ['save', 'preview', 'simulate'].includes(action);
-    if (!editing && !['publish', 'start', 'enrol', 'entry-activate', 'resume'].includes(action)) throw new FlowWorkspaceError(404, 'This flow action is unavailable.');
-    const fields = await readNativeFlowForm(req, editing ? FLOW_FORM_DRAFT : FLOW_FORM_SAVED, editing), field = (name: string) => fields.get(name) ?? '';
+    const control = (RUN_ACTIONS as readonly string[]).includes(action), connected = control && Boolean(flows.command);
+    if (!editing && !control && !['publish', 'start', 'entry-activate'].includes(action)) throw new FlowWorkspaceError(404, 'This flow action is unavailable.');
+    const fields = await readNativeFlowForm(req, editing ? FLOW_FORM_DRAFT : !connected ? FLOW_FORM_SAVED : action === 'enrol' ? FLOW_FORM_ENROL : FLOW_FORM_CONTROL, editing), field = (name: string) => fields.get(name) ?? '';
     if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, field('csrf'))) throw new FlowWorkspaceError(403, 'Refresh the PP flow form before continuing.');
-    if (['start', 'enrol', 'entry-activate', 'resume'].includes(action)) { await flows.snapshot(identity, requestId); throw new FlowWorkspaceError(409, 'Your PP flow is saved. Connect and test delivery before starting it.'); }
+    if (action === 'start' || action === 'entry-activate' || (control && !connected)) { await flows.snapshot(identity, requestId); throw new FlowWorkspaceError(409, 'Your PP flow is saved. Connect and test delivery before starting it.'); }
+    if (connected) {
+      const result = await flows.command!(identity, requestId, { action: action as PpFollowupAction, commandId: field('commandId'), itemId: field('itemId'), versionId: field('versionId'),
+        contactPointId: field('contactPointId'), runId: field('runId'), ackProofId: field('ackProofId') });
+      const reason = result.reason === 'not_permitted' ? ' This contact has no current email marketing permission, or the address is suppressed or changed.'
+        : result.reason === 'already_enrolled' ? ' This contact has already been enrolled in this exact version.'
+        : result.reason === 'older_version_open' ? ' This contact is still in an older version of this flow; cancel that run first.' : '';
+      const verb = { enrol: 'started', pause: 'paused', resume: 'resumed', cancel: 'cancelled', stop: 'stopped' }[result.action];
+      const message = `${result.changed} run${result.changed === 1 ? '' : 's'} ${verb}.${reason} ${action === 'enrol' ? '' : `${result.remaining} remain for another explicit batch; ${result.blocked} need review. ${result.inFlight} already being processed may still finish.`}${result.replayed ? ' This is the saved result of your earlier request.' : ''}`.trim();
+      sendNativeFlow(res, 200, await page({ detail: await flows.review(identity, requestId, field('itemId'), field('versionId')), message }), 'text/html; charset=utf-8'); return true;
+    }
     if (editing) {
       let definition: unknown, inlineMessages: unknown;
       try { definition = JSON.parse(field('definition')); if (fields.has('inlineMessages')) inlineMessages = JSON.parse(field('inlineMessages')); }
@@ -62,7 +77,7 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
     }
     await flows.publish(identity, requestId, field('itemId'), field('versionId'), field('commandId'), portal.now?.() ?? Date.now());
     sendNativeFlow(res, 200, await page({ detail: await flows.review(identity, requestId, field('itemId'), field('versionId')),
-      message: 'Your messages and flow are published. Nothing was connected, no one was added and nothing was sent.' }), 'text/html; charset=utf-8'); return true;
+      message: 'Your messages and flow are published. No one was added and nothing was sent. Choose who to start below when you are ready.' }), 'text/html; charset=utf-8'); return true;
   } catch (error) {
     const known = error instanceof FlowWorkspaceError, validation = error instanceof FlowDraftValidationError || error instanceof FollowupSequenceValidationError;
     sendNativeFlow(res, known ? error.status : validation ? 400 : 503, known || validation ? error.message : 'PP flow controls are temporarily unavailable.'); return true;

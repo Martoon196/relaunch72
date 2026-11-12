@@ -35,6 +35,8 @@ import { startMhpWindowCloser } from '../mhp/window-closer.js';
 import { startMhpPurchaseWelcomes } from '../mhp/purchase-welcome.js';
 import { startMhpKitJobs } from '../mhp/kit-service.js';
 import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
+import { createPpPostmarkSender } from '../pp-followup/mail.js';
+import { startPpFollowupDispatcher } from '../pp-followup/dispatch.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
@@ -989,6 +991,7 @@ async function main(): Promise<void> {
     groupHqCrm: postgresPortal?.groupHqCrm,
     groupHqInboxCrm: postgresPortal?.groupHqInboxCrm,
     groupHqWebinars: postgresPortal?.groupHqWebinars,
+    ppFollowupUnsubscribe: postgresPortal?.ppFollowup ? { secret: cfg.sessionSecret, unsubscriber: postgresPortal.ppFollowup.unsubscriber } : undefined,
     operator: postgresPortal?.operator && portal?.kind === 'postgres'
       ? createOperatorMount({ config: postgresPortal.operator.config, tools: postgresPortal.operator.tools, auth: postgresPortal.auth,
           ...(postgresPortal.operator.store ? { store: postgresPortal.operator.store } : {}),
@@ -1050,6 +1053,17 @@ async function main(): Promise<void> {
         onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
       })
     : () => {};
+  // PP follow-up emails (0152), the same way as MHP's sequences: one-minute sweeps in this process, sending only
+  // when PP_MARKETING_MODE is test or live with a complete Postmark sender. Off composes the run store and the
+  // unsubscribe route but never claims or sends.
+  const ppFollowup = postgresPortal?.ppFollowup;
+  if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
+  const stopPpFollowup = ppFollowup?.config
+    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config }, {
+        onResult: result => { if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} will retry, ${result.unknown} held for an owner decision.`); },
+        onError: () => console.warn('PP follow-up email dispatch is temporarily unavailable; runs wait.'),
+      })
+    : () => {};
   // Webinar messages and Cloudflare reconciliation. Job claims are lease-based, so
   // several web instances can run this safely; WEBINAR_WORKER_ENABLED=false turns it off.
   const webinarWorker = process.env.WEBINAR_WORKER_ENABLED?.trim() === 'false' ? undefined : postgresPortal?.webinarWorker;
@@ -1079,6 +1093,7 @@ async function main(): Promise<void> {
     stopMhpPurchaseWelcomes();
     stopMhpKitJobs();
     stopMhpMarketing();
+    stopPpFollowup();
     webinarWorker?.stop();
     postgresPortal?.webinarStudio?.stopAll();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
