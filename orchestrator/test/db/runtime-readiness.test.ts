@@ -12,6 +12,8 @@ import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-sche
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 import { MHP_KITS_CHECKSUM, MHP_KITS_MIGRATION, MHP_KIT_CREDIT_CHECKSUM, MHP_KIT_CREDIT_MIGRATION } from '../../src/db/mhp-kits-schema.js';
+import { MHP_WA_OWNER_CHECKSUM, MHP_WA_OWNER_MIGRATION } from '../../src/db/mhp-wa-owner-schema.js';
+import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -591,12 +593,62 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
   await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
 });
 
-test('kit course credit 150 cutover requires the exact applied kits 149 ledger and nothing beyond it', async()=>{
+test('PP follow-up email 152 cutover requires the exact applied owner WhatsApp 151 ledger and nothing beyond it', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,152);
+  assert.deepEqual(all[151],{filename:PP_FOLLOWUP_MIGRATION,checksum:PP_FOLLOWUP_CHECKSUM});
+  const through151=all.slice(0,151), followup=all[151]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through151); await capable(all);
+  await assert.rejects(capable(all.slice(0,150)),/schema is behind by 2/);
+  await assert.rejects(capable([...through151,{...followup,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,150),followup]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...all,{filename:'0153_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('owner WhatsApp 151 binary stays ready after the exact additive PP follow-up email 152 and nothing else', async()=>{
+  const directory=await prefixDirectory(151,'owner151-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,151);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[151]!]);
+  await assert.rejects(check([...rows,{...all[151]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0153_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('owner one-to-one WhatsApp 151 cutover requires the exact applied kit credit 150 ledger and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,151).map(({filename,checksum})=>({filename,checksum}));
+  const ownerDirectory=await prefixDirectory(151,'owner151-cutover');
+  assert.equal(all.length,151);
+  assert.deepEqual(all[150],{filename:MHP_WA_OWNER_MIGRATION,checksum:MHP_WA_OWNER_CHECKSUM});
+  const through150=all.slice(0,150), owner=all[150]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),ownerDirectory,{});
+  await capable(through150); await capable(all);
+  await assert.rejects(capable(all.slice(0,149)),/schema is behind by 2/);
+  await assert.rejects(capable([...through150,{...owner,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,149),owner]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...all,{filename:'0152_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('kit course credit 150 binary stays ready after the exact additive owner WhatsApp 151 and nothing else', async()=>{
+  const directory=await prefixDirectory(150,'credit150-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,150);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[150]!]);
+  await assert.rejects(check([...rows,{...all[150]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0152_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('kit course credit 150 cutover requires the exact applied kits 149 ledger and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,150).map(({filename,checksum})=>({filename,checksum}));
+  const creditDirectory=await prefixDirectory(150,'credit150-cutover');
   assert.equal(all.length,150);
   assert.deepEqual(all[149],{filename:MHP_KIT_CREDIT_MIGRATION,checksum:MHP_KIT_CREDIT_CHECKSUM});
   const through149=all.slice(0,149), credit=all[149]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),creditDirectory,{});
   await capable(through149); await capable(all);
   await assert.rejects(capable(all.slice(0,148)),/schema is behind by 2/);
   await assert.rejects(capable([...through149,{...credit,checksum:'0'.repeat(64)}]),/checksum changed/);

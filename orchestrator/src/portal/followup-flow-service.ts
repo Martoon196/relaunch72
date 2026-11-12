@@ -11,31 +11,49 @@ import { FlowLocalStore, checkedFlowLocalManifest, publishFlowLocal } from '../f
 import { LocalFlowMessages, type FlowMessageReview } from '../followup-sequences/messages.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { flowSimulationPreset, simulateFollowupFlow } from '../followup-sequences/simulation.js';
+import type { PpMarketingStatus } from '../pp-followup/config.js';
+import { PP_FOLLOWUP_STALE_PAGE, PgPpFollowupRepository, type PpFollowupCommand, type PpFollowupCommandResult, type PpFollowupRepository, type PpFollowupView } from '../pp-followup/repository.js';
 export const PP_FOLLOWUP_ROUTE = '/portal/follow-ups';
 export const PP_FOLLOWUP_SOURCE = 'pp.followup-sequence';
 export const PP_FOLLOWUP_CAMPAIGN = 'pp-owner-followup';
 export interface PortalFlowSaveInput { readonly commandId: string; readonly contentItemId: string; readonly previousVersionId: string; readonly definition: unknown; readonly inlineMessages?: unknown }
 const messageSteps = (definition: FollowupSequenceDefinition): readonly FollowupMessage[] => definition.steps.filter((step): step is FollowupMessage => step.kind !== 'wait');
-/** Durable blueprint-only facade. Deliberately contains no enrol/activation/provider dependency. */
+/**
+ * PP delivery: the 0152 run store plus the Postmark sender status. Absent when the database or sender is not composed.
+ * testRecipients is the test list while the mode is test: people outside it can be added but are held for the owner.
+ */
+export interface PortalFlowDelivery { readonly repository: PpFollowupRepository; readonly status: PpMarketingStatus; readonly testRecipients?: readonly string[] | null }
+/**
+ * Native PP flow authoring and, when delivery is composed, owner-controlled email runs. Email is ready only
+ * when the 0152 run store exists and PP_MARKETING_MODE is test or live with a complete Postmark sender.
+ * SMS, WhatsApp and the reply/booked/purchased stops stay unconnected.
+ */
 export class PortalFollowupFlowService {
   constructor(private readonly dependencies: {
     context: Pick<PortalFlowContext, 'authorize' | 'brand' | 'workspaceId'>;
     reader: Pick<CompanyContentService, 'listCatalog' | 'getExactReview'>; adapter: Pick<CompanyContentService, 'createVersion' | 'refreshSourceAttestation'>;
     approvals: Pick<CompanyContentService, 'requestApproval' | 'decideApproval'>; transactions: CompanyContentTransactionRunner; local: FlowLocalStore;
-    messages: Pick<LocalFlowMessages, 'choices' | 'review' | 'save' | 'publish'>;
+    messages: Pick<LocalFlowMessages, 'choices' | 'review' | 'save' | 'publish'>; delivery?: PortalFlowDelivery;
   }) {}
-  readonly readiness: FollowupSequenceReadiness = Object.freeze({ email: false, sms: false, whatsapp: false, reply: false, booked: false, purchased: false });
+  get readiness(): FollowupSequenceReadiness {
+    const delivery = this.dependencies.delivery;
+    return Object.freeze({ email: Boolean(delivery && delivery.status.ready && delivery.status.mode !== 'off'), sms: false, whatsapp: false, reply: false, booked: false, purchased: false });
+  }
   private context(identity: PortalSessionIdentity, requestId: string) { return this.dependencies.context.authorize({ sessionToken: identity.sessionToken, requestId }); }
   private checked(value: unknown) {
     const definition = parseFollowupSequence(value);
     if (definition.brand !== 'pp' || definition.campaign !== PP_FOLLOWUP_CAMPAIGN || definition.entry && definition.entry.mode !== 'manual') throw new FlowWorkspaceError(400, 'Use the Property Predator manual blueprint workspace.');
     return definition;
   }
-  async snapshot(identity: PortalSessionIdentity, requestId: string) {
+  /** view narrows the run list to one flow and, with a search, the runs and the people who can be started. */
+  async snapshot(identity: PortalSessionIdentity, requestId: string, view: PpFollowupView = {}) {
     const context = await this.context(identity, requestId);
     const [brand, catalog, messageChoices] = await Promise.all([this.dependencies.context.brand(context),
       this.dependencies.reader.listCatalog(context, { sourceSystem: PP_FOLLOWUP_SOURCE, limit: 50 }), this.dependencies.messages.choices(identity, requestId)]);
-    return { brand, catalog, messageChoices, readiness: this.readiness, executable: false as const, workspaceId: context.workspaceId, campaign: PP_FOLLOWUP_CAMPAIGN };
+    const readiness = this.readiness, delivery = this.dependencies.delivery;
+    return { brand, catalog, messageChoices, readiness, executable: readiness.email, workspaceId: context.workspaceId, campaign: PP_FOLLOWUP_CAMPAIGN,
+      ...(delivery ? { delivery: { mode: delivery.status.mode, problems: delivery.status.problems, search: view.search?.trim() ?? '',
+        database: await delivery.repository.snapshot(identity, view).catch(() => null) } } : {}) };
   }
   async review(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string) {
     if (!FOLLOWUP_SEQUENCE_UUID.test(itemId) || !FOLLOWUP_SEQUENCE_UUID.test(versionId)) throw new FlowWorkspaceError(400, 'Choose an exact saved PP blueprint.');
@@ -51,6 +69,7 @@ export class PortalFollowupFlowService {
     for (const step of new Map(messageSteps(definition).map(step => [step.contentVersionId, step])).values()) try {
       const message = await this.dependencies.messages.review(identity, requestId, step.kind, step.contentItemId, step.contentVersionId); messages.push(message);
       if (!message.valid || !message.review.isLatest || message.review.contentSha256 !== step.contentSha256) blockers.add('message_needs_review');
+      else if (message.review.approvalStatus !== 'approved' || message.review.approvalStale) blockers.add('message_not_published');
     } catch (error) { if (error instanceof FlowWorkspaceError && [404, 409].includes(error.status)) blockers.add('message_needs_review'); else throw error; }
     return { review, local, brand, definition, valid, manifestSha256, messages, blockers: [...blockers], timeline: followupTimeline(definition) };
   }
@@ -112,6 +131,30 @@ export class PortalFollowupFlowService {
     await publishFlowLocal({ context, review: detail.review, local: detail.local, snapshot: detail.brand, manifestSha256: detail.manifestSha256,
       commandId, now, adapter: this.dependencies.adapter, approvals: this.dependencies.approvals, transactions: this.dependencies.transactions });
   }
+  /**
+   * Owner run controls. Enrol and resume need this exact flow version and every selected email to be the latest,
+   * valid for the current brand and published (approved), with email delivery ready. Pause, cancel and stop are
+   * always allowed. The database repeats the approval, permission and suppression checks under its own locks.
+   */
+  async command(identity: PortalSessionIdentity, requestId: string, input: PpFollowupCommand): Promise<PpFollowupCommandResult> {
+    const delivery = this.dependencies.delivery;
+    if (!delivery) throw new FlowWorkspaceError(503, 'Email sending isn’t set up yet. Nothing was changed.');
+    if (!FOLLOWUP_SEQUENCE_UUID.test(input.commandId) || !FOLLOWUP_SEQUENCE_UUID.test(input.itemId) || !FOLLOWUP_SEQUENCE_UUID.test(input.versionId)
+        || (input.action === 'enrol') !== Boolean(input.contactPointId) || (input.contactPointId && !FOLLOWUP_SEQUENCE_UUID.test(input.contactPointId))
+        || (input.runId && !FOLLOWUP_SEQUENCE_UUID.test(input.runId)) || (input.ackProofId && !FOLLOWUP_SEQUENCE_UUID.test(input.ackProofId))
+        || (input.action === 'enrol' && (input.runId || input.ackProofId)) || (input.ackProofId && (input.action !== 'resume' || !input.runId))) throw new FlowWorkspaceError(400, PP_FOLLOWUP_STALE_PAGE);
+    const detail = await this.review(identity, requestId, input.itemId, input.versionId);
+    if (input.action === 'enrol' || input.action === 'resume') {
+      if (!this.readiness.email) throw new FlowWorkspaceError(409, 'Email sending isn’t set up yet. Nothing was started.');
+      if (!detail.valid || !detail.review.isLatest || detail.review.approvalStatus !== 'approved' || detail.review.approvalStale || detail.blockers.length)
+        throw new FlowWorkspaceError(409, 'This flow isn’t ready to start. Publish the latest version first. Nothing was started.');
+    }
+    // In test mode the database holds anyone outside the test list instead of letting them wait to send.
+    const testRecipients = delivery.status.mode === 'test' ? delivery.testRecipients ?? null : null;
+    if (delivery.status.mode === 'test' && (input.action === 'enrol' || input.action === 'resume') && !testRecipients?.length)
+      throw new FlowWorkspaceError(409, 'Email sending isn’t set up yet. Nothing was started.');
+    return delivery.repository.command(identity, { ...input, requestId, testRecipients });
+  }
   async message(identity: PortalSessionIdentity, requestId: string, channel: FollowupChannel, itemId: string, versionId: string) {
     const detail = await this.dependencies.messages.review(identity, requestId, channel, itemId, versionId);
     return { channel, title: detail.review.title, contentItemId: detail.review.contentItemId, contentVersionId: detail.review.contentVersionId, contentSha256: detail.review.contentSha256, payload: detail.payload };
@@ -121,13 +164,16 @@ export function ppNewFlow(commandId: string): PortalFlowSaveInput {
   return { commandId, contentItemId: '', previousVersionId: '', definition: { schema: FOLLOWUP_SEQUENCE_V2_SCHEMA, brand: 'pp', campaign: PP_FOLLOWUP_CAMPAIGN,
     title: 'New PP follow-up flow', expiryHours: 24, entry: { mode: 'manual', source: 'manual_owner' }, stopOn: { reply: false, booked: false, purchased: false }, steps: [] } };
 }
-export function createPortalFollowupFlowService(input: { webPool: Pool; adapterPool: Pool; commandPool: Pool; workspaceId: string }) {
+export function createPortalFollowupFlowService(input: { webPool: Pool; adapterPool: Pool; commandPool: Pool; workspaceId: string;
+  delivery?: { identityPool: Pool; status: PpMarketingStatus; testRecipients?: readonly string[] | null } }) {
   const native = createPortalFlowContext(input.webPool, input.workspaceId), web = ppFlowContentRunner(input.webPool, input.workspaceId), transactions = ppFlowContentRunner(input.adapterPool, input.workspaceId);
   const reader = new CompanyContentService({ transactionRunner: web }), adapter = new CompanyContentService({ transactionRunner: transactions });
   const approvals = new CompanyContentService({ transactionRunner: ppFlowContentRunner(input.commandPool, input.workspaceId) }), local = new FlowLocalStore(web);
   const messages = new LocalFlowMessages({ brand: 'pp', authorize: (identity, requestId) => native.authorize({ sessionToken: identity.sessionToken, requestId }),
     brandSnapshot: context => native.brand(context), reader, adapter, approvals, transactions, local });
-  return new PortalFollowupFlowService({ context: native, reader, adapter, approvals, transactions, local, messages });
+  const delivery = input.delivery ? { repository: new PgPpFollowupRepository(input.webPool, input.delivery.identityPool), status: input.delivery.status,
+    testRecipients: input.delivery.testRecipients ?? null } : undefined;
+  return new PortalFollowupFlowService({ context: native, reader, adapter, approvals, transactions, local, messages, ...(delivery ? { delivery } : {}) });
 }
 export type PortalFlowSnapshot = Awaited<ReturnType<PortalFollowupFlowService['snapshot']>>;
 export type PortalFlowReview = Awaited<ReturnType<PortalFollowupFlowService['review']>>;

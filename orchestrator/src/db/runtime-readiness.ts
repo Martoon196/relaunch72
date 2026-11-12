@@ -7,6 +7,8 @@ import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import { GROUP_HQ_SSO_MIGRATION, GROUP_HQ_SSO_CHECKSUM } from './group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_MIGRATION, OPERATOR_OAUTH_CHECKSUM } from './operator-oauth-schema.js';
 import { MHP_KITS_MIGRATION, MHP_KITS_CHECKSUM, MHP_KIT_CREDIT_MIGRATION, MHP_KIT_CREDIT_CHECKSUM } from './mhp-kits-schema.js';
+import { MHP_WA_OWNER_MIGRATION, MHP_WA_OWNER_CHECKSUM } from './mhp-wa-owner-schema.js';
+import { PP_FOLLOWUP_MIGRATION, PP_FOLLOWUP_CHECKSUM } from './pp-followup-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -276,6 +278,16 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[148]?.checksum===MHP_KITS_CHECKSUM
       && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM
       && applied.get(MHP_KIT_CREDIT_MIGRATION)===MHP_KIT_CREDIT_CHECKSUM) applied.delete(MHP_KIT_CREDIT_MIGRATION);
+  // The released kit course credit 150 stays ready after the exact additive owner one-to-one WhatsApp 151 is applied.
+  if (migrations.length===150 && migrations[149]?.filename===MHP_KIT_CREDIT_MIGRATION
+      && migrations[149]?.checksum===MHP_KIT_CREDIT_CHECKSUM
+      && applied.get(MHP_KIT_CREDIT_MIGRATION)===MHP_KIT_CREDIT_CHECKSUM
+      && applied.get(MHP_WA_OWNER_MIGRATION)===MHP_WA_OWNER_CHECKSUM) applied.delete(MHP_WA_OWNER_MIGRATION);
+  // The released owner one-to-one WhatsApp 151 stays ready after the exact additive PP follow-up email 152 is applied.
+  if (migrations.length===151 && migrations[150]?.filename===MHP_WA_OWNER_MIGRATION
+      && migrations[150]?.checksum===MHP_WA_OWNER_CHECKSUM
+      && applied.get(MHP_WA_OWNER_MIGRATION)===MHP_WA_OWNER_CHECKSUM
+      && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM) applied.delete(PP_FOLLOWUP_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -317,6 +329,20 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===MHP_KIT_CREDIT_MIGRATION && pending[0]?.checksum===MHP_KIT_CREDIT_CHECKSUM
       && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM
       && applied.get(OPERATOR_OAUTH_MIGRATION)===OPERATOR_OAUTH_CHECKSUM) return;
+  // Owner one-to-one WhatsApp 151 is capable only after the exact kit course credit 150 ledger is applied. While it
+  // is pending, the Growth HQ owner WhatsApp actions answer 'owner_send_unavailable' and the worker skips owner jobs.
+  if (migrations.length===151 && migrations[150]?.filename===MHP_WA_OWNER_MIGRATION
+      && migrations[149]?.filename===MHP_KIT_CREDIT_MIGRATION && pending.length===1
+      && pending[0]?.filename===MHP_WA_OWNER_MIGRATION && pending[0]?.checksum===MHP_WA_OWNER_CHECKSUM
+      && applied.get(MHP_KIT_CREDIT_MIGRATION)===MHP_KIT_CREDIT_CHECKSUM
+      && applied.get(MHP_KITS_MIGRATION)===MHP_KITS_CHECKSUM) return;
+  // PP follow-up email 152 is capable only after the exact owner WhatsApp 151 ledger is applied. While it is pending
+  // the PP follow-up page stays authoring-only (email not connected), no dispatcher starts and nothing is sent.
+  if (migrations.length===152 && migrations[151]?.filename===PP_FOLLOWUP_MIGRATION
+      && migrations[150]?.filename===MHP_WA_OWNER_MIGRATION && pending.length===1
+      && pending[0]?.filename===PP_FOLLOWUP_MIGRATION && pending[0]?.checksum===PP_FOLLOWUP_CHECKSUM
+      && applied.get(MHP_WA_OWNER_MIGRATION)===MHP_WA_OWNER_CHECKSUM
+      && applied.get(MHP_KIT_CREDIT_MIGRATION)===MHP_KIT_CREDIT_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
