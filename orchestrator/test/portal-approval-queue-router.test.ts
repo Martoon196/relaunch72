@@ -40,7 +40,8 @@ function fixture() {
   // Journey: fake engine and studio exposing only the readers the journey page uses.
   const campaignId = randomUUID(), versionId = randomUUID(), setId = randomUUID();
   const utmCampaign = `spring-viewings-${campaignId.replace(/-/gu, '').slice(0, 8)}`, utmContent = `concept-1-cs${versionId.replace(/-/gu, '').slice(0, 8)}`;
-  const engine = { campaignCreatorsReady: true, creators: () => ({ list: async () => [{ id: campaignId, brief: { kind: 'acquisition', name: 'Spring viewings' }, createdAt: new Date().toISOString(),
+  const engine = { listBrands: async () => [{ id: workspaceId, name: 'Property Predator' }], getBrand: async () => ({ id: workspaceId, name: 'Property Predator' }),
+    campaignCreatorsReady: true, creators: () => ({ list: async () => [{ id: campaignId, brief: { kind: 'acquisition', name: 'Spring viewings' }, createdAt: new Date().toISOString(),
     version: { content: { title: 'Spring', summary: '', concepts: [{ name: 'Busy landlords' }] } } }] }) };
   const studio = {
     overview: async () => ({ sets: [{ set: { id: setId, createdAt: new Date().toISOString() }, versionCount: 1, approvedCount: 1 }] }),
@@ -67,7 +68,7 @@ function fixture() {
   }
   const refs = (html: string) => [...html.matchAll(/name="ref" value="([^"]+)"/gu)].map((m) => m[1]!.replace(/&#39;/gu, "'"));
   const form = (fields: Record<string, string | string[]>) => {
-    const p = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, TOKEN) });
+    const p = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, TOKEN), ...('brand' in fields ? {} : { brand: workspaceId }) });
     for (const [k, v] of Object.entries(fields)) for (const value of [v].flat()) p.append(k, value);
     return p.toString();
   };
@@ -82,7 +83,7 @@ test('the queue page lists each area once, escapes content and sends a strict CS
   assert.match(page.body, /Welcome flow/); assert.doesNotMatch(page.body, /Post from relaunch72\.seo-blog/, 'SEO-owned content is never listed as general content');
   assert.equal((page.body.match(/Post from pp\.followup-sequence|Welcome flow/gu) ?? []).length, 1, 'the flow appears once, under follow-up flows');
   assert.match(page.headers['content-security-policy']!, /img-src 'self'/); assert.match(page.headers['content-security-policy']!, /frame-ancestors 'none'/);
-  assert.match(page.body, /href="\/portal\/campaign-journey"/);
+  assert.ok(page.body.includes(`href="/portal/campaign-journey?brand=${workspaceId}"`), 'results open for the same business');
   f.state.authenticated = false;
   const anonymous = await f.request('GET', '/portal/approvals');
   assert.equal(anonymous.status, 303); assert.equal(anonymous.headers.location, '/portal/login');
@@ -107,12 +108,12 @@ test('a single decision goes through the item path and returns a signed notice; 
   const f = fixture(), page = (await f.request('GET', '/portal/approvals')).body;
   const contentRef = f.refs(page).find((r) => r.length > 0)!;
   const approved = await f.request('POST', '/portal/approvals/decide', f.form({ ref: contentRef, action: 'approve' }));
-  assert.equal(approved.status, 303); assert.match(approved.headers.location!, /^\/portal\/approvals\?n=/u);
+  assert.equal(approved.status, 303); assert.match(approved.headers.location!, new RegExp(`^/portal/approvals\\?brand=${workspaceId}&n=`, 'u'));
   const shown = await f.request('GET', approved.headers.location!); assert.match(shown.body, /Approved\. Posting is still a separate step/);
   const refused = await f.request('POST', '/portal/approvals/decide', f.form({ ref: contentRef, action: 'refuse' }));
   assert.equal(refused.status, 303);
   assert.deepEqual(f.state.calls, ['decideExactReviewedApproval', 'decideApproval:rejected']);
-  const forged = signApprovalRef(SECRET, 'some-other-session', { k: 'content', ids: {}, x: {}, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'x' } satisfies ApprovalRef);
+  const forged = signApprovalRef(SECRET, 'some-other-session', { k: 'content', b: workspaceId, ids: {}, x: {}, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'x' } satisfies ApprovalRef);
   assert.equal((await f.request('POST', '/portal/approvals/decide', f.form({ ref: forged, action: 'approve' }))).status, 409);
   assert.equal((await f.request('POST', '/portal/approvals/decide', f.form({ ref: [contentRef, contentRef], action: 'approve' }))).status, 400);
   assert.equal((await f.request('POST', '/portal/approvals/decide', f.form({ ref: contentRef, action: 'send' }))).status, 400);
@@ -130,7 +131,7 @@ test('batch approves each selected item through its own path, reports per item, 
   assert.match(result.body, /Welcome flow<\/strong>: Flow and its messages published\. Nothing was started/);
   assert.match(result.body, /Approve this one on its own/);
   assert.deepEqual(f.state.calls, ['publish'], 'no enrol, start, send or other flow method was called');
-  const tooMany = Array.from({ length: 21 }, () => signApprovalRef(SECRET, TOKEN, { k: 'flow', ids: {}, x: {}, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'x' }));
+  const tooMany = Array.from({ length: 21 }, () => signApprovalRef(SECRET, TOKEN, { k: 'flow', b: workspaceId, ids: {}, x: {}, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'x' }));
   assert.equal((await f.request('POST', '/portal/approvals/batch', f.form({ ref: tooMany }))).status, 400);
   assert.equal((await f.request('POST', '/portal/approvals/batch', f.form({}))).status, 400);
   assert.deepEqual(f.state.calls, ['publish']);

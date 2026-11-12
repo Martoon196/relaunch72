@@ -75,7 +75,15 @@ export interface Shell {
   readonly notice?: string | null;
   readonly error?: string | null;
   readonly applicationName?: string;
+  /** The page the "Business" picker keeps open when another business is chosen (default: its overview). */
+  readonly switchTo?: SeoBlogSwitchTarget;
 }
+
+/** Pages the "Business" picker may land on. Anything else falls back to the overview. */
+export const SEO_BLOG_SWITCH_TARGETS = ['overview', 'dna', 'setup', 'topics', 'articles', 'calendar', 'publishing', 'social', 'activity', 'creative', 'campaigns'] as const;
+export type SeoBlogSwitchTarget = typeof SEO_BLOG_SWITCH_TARGETS[number];
+export const APPROVALS_HREF = '/portal/approvals';
+export const CAMPAIGN_RESULTS_HREF = '/portal/campaign-journey';
 
 function url(brand: Brand, tab: string): string {
   return `${SEO_BLOG_BASE}/b/${brand.id}/${tab}`;
@@ -87,9 +95,12 @@ export function csrfField(csrf: string): string {
 
 export function layout(shell: Shell, title: string, body: string, extraHead = ''): string {
   const feedback = shell.applicationName === 'Relaunch72 Content';
+  // One "Business" picker on every page. It keeps the same kind of page open (the server checks the target and the membership).
+  const stay = shell.switchTo ?? (shell.tab && (SEO_BLOG_SWITCH_TARGETS as readonly string[]).includes(shell.tab) ? shell.tab as SeoBlogSwitchTarget : 'overview');
   const switcher = shell.brands.length
-    ? `<form method="get" action="${SEO_BLOG_BASE}/switch"><label for="brand-switch" class="muted" style="margin:0">Brand</label><select id="brand-switch" name="brand">${shell.brands.map((b) => `<option value="${e(b.id)}"${b.id === shell.brand?.id ? ' selected' : ''}>${e(b.name)}</option>`).join('')}</select><button class="secondary" type="submit">Open</button></form>`
+    ? `<form method="get" action="${SEO_BLOG_BASE}/switch"><label for="brand-switch" class="muted" style="margin:0">Business</label><select id="brand-switch" name="brand">${shell.brand ? '' : '<option value="" selected disabled>Choose a business</option>'}${shell.brands.map((b) => `<option value="${e(b.id)}"${b.id === shell.brand?.id ? ' selected' : ''}>${e(b.name)}</option>`).join('')}</select><input type="hidden" name="to" value="${stay}"><button class="secondary" type="submit">Open</button></form>`
     : '';
+  const approvals = `<a href="${APPROVALS_HREF}${shell.brand ? `?brand=${e(shell.brand.id)}` : ''}">Approvals</a>`;
   const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['social', 'Social'], ['activity', 'Activity']];
   if (feedback) tabs.push(['authority', 'Authority']);
   if (shell.creativeAvailable) tabs.push(['creative','Creative studio']);
@@ -97,7 +108,7 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
   if (shell.methodsAvailable) tabs.push(['methods','Production rules']);
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}${centralActionFeedbackHead(feedback)}</head><body>${centralActionFeedbackStatus(feedback)}
-<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}${feedback ? '<a href="/portal/webinars">Webinars</a>' : ''}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
+<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Your businesses</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}${approvals}${feedback ? '<a href="/portal/webinars">Webinars</a>' : ''}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
 <main>${shell.limitsAvailable ? `<p><a href="${SEO_BLOG_BASE}/limits">Usage &amp; limits</a></p>` : ''}${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
 
@@ -109,12 +120,19 @@ export function brandDnaDoor(brand: Brand, status: BrandDnaDoorStatus | undefine
 }
 
 export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>): string {
-  const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p><p>Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p>${dna ? `<p>${brandDnaDoor(b, dna.get(b.id))}</p>` : ''}</article>`).join('');
-  return layout(shell, 'Brands', `<h1>Brands</h1>
-<div class="grid">${cards || '<p class="muted">No brands yet. Add your first brand to start its blog.</p>'}</div>
-<section class="card" aria-labelledby="add-brand"><h2 id="add-brand">Add brand</h2><form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}">
-<div class="row"><div><label for="name">Brand name</label><input id="name" name="name" type="text" required minlength="2" maxlength="120"></div><div><label for="website">Website (optional)</label><input id="website" name="website" type="text" placeholder="www.example.co.uk"></div></div>
-<p class="muted">Creates a separate workspace for this brand. You can add the website and guidance later.</p><button type="submit">Add brand</button></form></section>`);
+  const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p>${dna ? `<p>${brandDnaDoor(b, dna.get(b.id))}</p>` : ''}
+<p><a href="${APPROVALS_HREF}?brand=${e(b.id)}">Approvals</a> · <a href="${CAMPAIGN_RESULTS_HREF}?brand=${e(b.id)}">Campaign results</a></p>
+<p class="muted">Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p></article>`).join('');
+  const many = shell.brands.length > 1;
+  return layout(shell, 'Your businesses', `<h1>Your businesses</h1>
+<p>Each business has its own content, its own approvals and its own results. ${shell.brands.length ? 'Open one to carry on, or add another.' : 'Add your first business to start.'}</p>
+<p class="row" style="align-items:center"><a class="button" href="#add-business" style="flex:0 1 auto">Add a business</a>${shell.brands.length ? `<a class="button secondary" href="${APPROVALS_HREF}${many ? '?brand=all' : `?brand=${e(shell.brands[0]!.id)}`}" style="flex:0 1 auto">${many ? 'See what is waiting in every business' : 'See what is waiting for approval'}</a>` : ''}</p>
+<div class="grid">${cards || '<p class="muted">No businesses yet.</p>'}</div>
+<section class="card" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title">Add a business</h2>
+<p>Type the name of the business. On the next screen you paste its website address and we read it for you.</p>
+<form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}">
+<div class="row"><div><label for="name">Business name</label><input id="name" name="name" type="text" required minlength="2" maxlength="120" autocomplete="organization"></div><div><label for="website">Website address (you can add it on the next screen)</label><input id="website" name="website" type="text" inputmode="url" placeholder="www.example.co.uk"></div></div>
+<p class="muted">This keeps the new business separate from your others. Adding it publishes nothing, contacts no one and spends nothing.</p><button type="submit">Add a business</button></form></section>`);
 }
 
 function check(ok: boolean, label: string): string {

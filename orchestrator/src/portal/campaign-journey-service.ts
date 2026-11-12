@@ -3,6 +3,9 @@
  * It composes existing readers only (campaign creator records, Creative Studio hand-offs and the existing
  * outcome counter in app_private.creative_studio_outcome_buckets) and adds no table or migration.
  * Anything the records cannot connect is labelled unknown rather than guessed.
+ *
+ * The business comes from the same validated selection as the approval queue: ?brand=<id> is only a
+ * selector and must be a brand workspace the signed-in user manages.
  */
 import type { PortalSessionIdentity } from './auth-service.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
@@ -11,6 +14,7 @@ import { SeoBlogError } from '../seo-blog/types.js';
 import type { AcquisitionProposal, CreatorRecord } from '../seo-blog/campaign-creator.js';
 import { campaignUtm } from '../seo-blog/acquisition-assembly.js';
 import { ATTRIBUTION_LIMITS, parseCreativeUtmContent, type OutcomeBucket } from '../creative-studio/distribution.js';
+import { ApprovalQueueError, BRAND_ALL, selectApprovalBrand, type BrandSelection } from './approval-queue-service.js';
 
 export const CAMPAIGN_JOURNEY_ROUTE = '/portal/campaign-journey' as const;
 const CAMPAIGN_LIMIT = 12;
@@ -37,6 +41,8 @@ export interface JourneyCampaign {
   readonly qualifiedMapped: boolean | null;
 }
 export interface CampaignJourneySnapshot {
+  /** The businesses this user manages and the one these results are for. */
+  readonly selection: BrandSelection;
   readonly available: boolean;
   readonly campaigns: readonly JourneyCampaign[];
   /** Enquiries recorded with a tag that matched a tracked link this brand issued (all campaigns). Null when unreadable. */
@@ -60,12 +66,15 @@ export const UNKNOWN_SOURCES: readonly string[] = Object.freeze([
 export class CampaignJourneyService {
   constructor(private readonly deps: { readonly seoBlog?: PortalSeoBlogService }) {}
 
-  async snapshot(identity: PortalSessionIdentity, requestId: string): Promise<CampaignJourneySnapshot> {
-    const empty = { available: false, campaigns: [], taggedEnquiries: null, unknownSources: UNKNOWN_SOURCES, limits: ATTRIBUTION_LIMITS };
-    if (!this.deps.seoBlog) return empty;
+  /** `requested` is the untrusted ?brand value. Results are always for one business; there is no combined view. */
+  async snapshot(identity: PortalSessionIdentity, requestId: string, requested?: string | null): Promise<CampaignJourneySnapshot> {
+    if (requested === BRAND_ALL) throw new ApprovalQueueError(400, 'Choose one business to see its campaign results.');
+    const selection = await selectApprovalBrand(this.deps.seoBlog, identity, requestId, requested);
+    const empty = { selection, available: false, campaigns: [], taggedEnquiries: null, unknownSources: UNKNOWN_SOURCES, limits: ATTRIBUTION_LIMITS };
+    if (!this.deps.seoBlog || !selection.selected) return empty;
     const engine = this.deps.seoBlog.engineFor(identity, requestId);
     const studio = this.deps.seoBlog.creativeFor?.(identity, requestId, engine) ?? null;
-    const userId = identity.userId, brandId = identity.workspaceId;
+    const userId = identity.userId, brandId = selection.selected.id;
     if (!studio || !engine.campaignCreatorsReady) return empty;
     let records: CreatorRecord[];
     try { records = await engine.creators().list(userId, brandId); }
@@ -119,6 +128,6 @@ export class CampaignJourneyService {
       });
     }
     const taggedEnquiries = await studio.enquiries(userId, brandId).then((s) => s.touches).catch(() => null);
-    return { available: true, campaigns, taggedEnquiries, unknownSources: UNKNOWN_SOURCES, limits: ATTRIBUTION_LIMITS };
+    return { selection, available: true, campaigns, taggedEnquiries, unknownSources: UNKNOWN_SOURCES, limits: ATTRIBUTION_LIMITS };
   }
 }

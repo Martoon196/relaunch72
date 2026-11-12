@@ -5,7 +5,9 @@ import type { LimitKey } from '../seo-blog/limits.js';
 
 const LABELS: Record<LimitKey, string> = { modelTokens: 'Writing tokens', searchCalls: 'Research calls', images: 'Images (shared)', studioImages: 'Studio images' };
 export function limitsPage(shell: Shell, data: LimitsPageData): string {
-  const brands = data.brands.map(b => `<section class="card"><h2>${e(b.name)}</h2><p>${e(b.owner)}</p>
+  // Anchored so "Set my monthly allowance" lands on the right business; the way back is offered only for a business this user manages.
+  const mine = new Set(shell.brands.map(b => b.id));
+  const brands = data.brands.map(b => `<section class="card" id="limits-${e(b.id)}"><h2>${e(b.name)}</h2><p>${e(b.owner)}</p>${mine.has(b.id) ? `<p><a href="/portal/seo-blog/b/${e(b.id)}/dna">Back to ${e(b.name)}: start with your website</a></p>` : ''}
 <form method="post" action="/portal/seo-blog/limits">${csrfField(shell.csrf)}<input type="hidden" name="target" value="${e(b.id)}"><input type="hidden" name="rowVersion" value="${b.rowVersion}">
 <div class="grid">${(Object.keys(LABELS) as LimitKey[]).map(k => `<fieldset><legend>${LABELS[k]}</legend><p>Used this UTC month: <strong>${b.usage[k].toLocaleString('en-GB')}</strong> · Limit: <strong>${b.limits[k] === null ? 'Unlimited' : b.limits[k].toLocaleString('en-GB')}</strong></p>
 <label><input type="checkbox" name="${k}Unlimited" value="1"${b.limits[k] === null ? ' checked' : ''}> Unlimited</label>

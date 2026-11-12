@@ -29,7 +29,7 @@ const refOf = (identity: PortalSessionIdentity, item: ApprovalItem): ApprovalRef
 const items = async (q: ApprovalQueueService, identity: PortalSessionIdentity) => (await q.list(identity, 'req')).sections.flatMap((s) => s.items);
 
 test('signed refs are bound to the session, unforgeable and expire', () => {
-  const ref: ApprovalRef = { k: 'article', ids: { articleId: randomUUID(), versionId: randomUUID() }, x: { rowVersion: '1' }, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'A title' };
+  const ref: ApprovalRef = { k: 'article', b: randomUUID(), ids: { articleId: randomUUID(), versionId: randomUUID() }, x: { rowVersion: '1' }, c: randomUUID(), d: randomUUID(), t: Date.now(), n: 'A title' };
   const token = signApprovalRef(SECRET, 'session-a', ref);
   assert.deepEqual(verifyApprovalRef(SECRET, 'session-a', token, Date.now()), ref);
   assert.equal(verifyApprovalRef(SECRET, 'session-b', token, Date.now()), null, 'another session cannot replay it');
@@ -234,8 +234,10 @@ test('campaign drafts: approve passes the owner’s explicit review confirmation
   const record = { id, state: 'draft', rowVersion: 4, createdAt: new Date().toISOString(), approval: null,
     brief: { kind: 'email', name: 'Welcome series', goal: 'Welcome new landlords' }, version: { contentSha: 'd'.repeat(64), createdAt: new Date().toISOString(), content: { title: 'Welcome', summary: 'Three emails.' } } };
   const creator = { list: async () => [record], get: async () => record, approve: async (...args: unknown[]) => { calls.push(args); return record; } };
-  const engine = { campaignCreatorsReady: true, creators: () => creator, listArticles: async () => [], listPlans: async () => [] } as unknown as SeoBlogEngine;
-  const brandId = randomUUID(), identity = who(brandId), q = queue({ seoBlog: seoService(engine) });
+  const brandId = randomUUID();
+  const engine = { campaignCreatorsReady: true, creators: () => creator, listArticles: async () => [], listPlans: async () => [],
+    listBrands: async () => [{ id: brandId, name: 'Welcome Lettings' }], getBrand: async () => ({ id: brandId, name: 'Welcome Lettings' }) } as unknown as SeoBlogEngine;
+  const identity = who(brandId), q = queue({ seoBlog: seoService(engine) });
   const item = (await items(q, identity)).find((i) => i.kind === 'creator')!;
   assert.equal(item.batchable, false); assert.match(item.confirmation!, /I reviewed the wording, facts and permission process/);
   assert.equal((await q.batch(identity, 'req', [refOf(identity, item)]))[0]!.ok, false);
