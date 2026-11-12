@@ -58,7 +58,7 @@ Delivery is a one-minute lease/settle loop on the existing process: at-least-onc
 
 ## Bounces, spam reports and unsubscribes
 
-No migration. Postmark is the record: its own lists are read at start-up, every hour and whenever the owner presses **Check with Postmark now**; its webhooks add to the picture as things happen. The code is in `orchestrator/src/email-bounces/` (shared by every brand) and `orchestrator/src/mhp/email-health.ts` (MHP's page and its lasting effect).
+No migration. Postmark is the record: its own lists are read at start-up (retried within minutes, with a warning in the log, if Postmark cannot be read), every hour and whenever the owner presses **Check with Postmark now**; its webhooks add to the picture as things happen. The code is in `orchestrator/src/email-bounces/` (shared by every brand) and `orchestrator/src/mhp/email-health.ts` (MHP's page and its lasting effect).
 
 | What happened | What stops, for that exact address in that brand |
 | --- | --- |
@@ -88,7 +88,7 @@ In Postmark open the MHP server, then **each** message stream it sends on (the b
 
 ### Another brand
 
-Add one entry to `EMAIL_BOUNCE_SOURCES` and set the two variables it names. Its webhook URL ends in its `key`. Its send path asks `registry.decide(workspaceId, address, 'marketing' | 'service')` before sending, and may register one effect to record the stop in its own contact records.
+Property Predator is already joined: see `docs/pp-followup-email.md` (`PP_POSTMARK_WEBHOOK_SECRET`, webhook path `/api/provider-webhooks/postmark/pp`). MHP's variables are set on the service in the Render dashboard; no blueprint in this repository declares them. For any further brand, add one entry to `EMAIL_BOUNCE_SOURCES` and set the two variables it names. Its webhook URL ends in its `key`. Its send path asks `registry.decide(workspaceId, address, 'marketing' | 'service')` before sending, and may register one effect to record the stop in its own contact records.
 
 ```json
 [{"key":"pp","workspaceId":"<workspace uuid>","tokenEnv":"PP_POSTMARK_SERVER_TOKEN","webhookSecretEnv":"PP_POSTMARK_WEBHOOK_SECRET","marketingStreams":["broadcast"],"serviceStreams":["outbound"]}]

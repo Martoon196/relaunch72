@@ -17,6 +17,8 @@ import { createPpPostmarkSender, type PpFollowupSender, type PpRenderedSend } fr
 import type { PpMarketingConfig } from '../../src/pp-followup/config.js';
 import { verifyPpUnsubscribeToken } from '../../src/pp-followup/content.js';
 import type { PortalSessionIdentity } from '../../src/portal/auth-service.js';
+import { EmailBlockRegistry } from '../../src/email-bounces/registry.js';
+import { ppEmailBounceEffects } from '../../src/pp-followup/bounces.js';
 
 const skip = testDatabaseSkipReason();
 const WS = PP_FOLLOWUP_WORKSPACE_ID, SECRET = 'synthetic-pp-followup-unsubscribe-secret-0152';
@@ -452,5 +454,44 @@ test('PP follow-up test mode holds other people for the owner, and search reache
     assert.equal(whole.runMatches, 2); assert.ok(whole.permitted >= whole.contactMatches && whole.contactMatches >= 3);
     assert.ok(whole.runs.every(x => x.contentItemId === flow.itemId), 'the run list follows the flow on screen');
     await assert.rejects(w.repo.snapshot(w.ownerId, { itemId: flow.itemId, search: 'x'.repeat(101) }), /shorter/u);
+  } finally { await w.close(); }
+});
+
+test('PP follow-up bounces: a blocked address is refused before any proof, and a bounce reported for our own email records the existing suppression', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(2, 24);
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); assert.equal((await w.act(flow, 'enrol', { point: who.point })).changed, 1); return who; };
+    const gone = await start('Gone'), fine = await start('Fine');
+    const registry = new EmailBlockRegistry(); registry.markReady();
+    registry.record(WS, { sourceKey: 'pp', stream: 'broadcast', id: 'bounce:1', kind: 'hard_bounce', email: gone.email, at: Date.now() - 60_000 });
+    const recipients = { guard: registry, workspaceId: WS };
+    const bodies: { To: string; Metadata: Record<string, string> }[] = [];
+    const sender = createPpPostmarkSender(SENDER, (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${randomUUID()}` }), { status: 200 }); }) as unknown as typeof fetch, recipients);
+    const result = await dispatchPpFollowupEmails({ queue: w.queue, sender, unsubscribeSecret: SECRET, recipients, config: { ...CONFIG, testRecipients: [gone.email, fine.email] } });
+    assert.deepEqual(result, { sent: 1, failed: 1, unknown: 0 });
+    assert.deepEqual(bodies.map(body => body.To), [fine.email], 'Postmark was only asked to send to the healthy address');
+    assert.equal(bodies[0]!.Metadata.point, fine.point, 'each email carries the contact point it was addressed to');
+    // Refused before a proof existed: the run fails as undeliverable and is never held as an unknown outcome.
+    assert.deepEqual([(await w.run(gone)).state, (await w.run(gone)).reason], ['failed', 'delivery_failed']);
+    assert.equal((await w.send(gone)).last_failure, 'recipient_refused');
+    assert.equal(Number((await w.admin.query('SELECT count(*) AS n FROM app_private.pp_followup_dispatch_proofs WHERE send_id=$1', [(await w.send(gone)).id])).rows[0].n), 0, 'no proof was spent');
+    assert.equal((await w.run(fine)).state, 'active');
+
+    // Postmark then reports a bounce for the email we did send: the existing capability records the stop.
+    const suppressions = async (point: string) => (await w.admin.query<{ channel: string; purpose: string; state: string }>(
+      'SELECT channel,purpose,state FROM app.communication_suppression_events WHERE workspace_id=$1 AND contact_point_id=$2 ORDER BY purpose', [WS, point])).rows;
+    assert.deepEqual(await suppressions(fine.point), []);
+    const effects = ppEmailBounceEffects(w.repo);
+    await effects.onMarketingBlock({ email: fine.email, reason: 'hard_bounce', metadata: bodies[0]!.Metadata });
+    assert.deepEqual(await suppressions(fine.point), [{ channel: 'email', purpose: 'marketing', state: 'suppressed' }, { channel: 'email', purpose: 'property_predator_marketing', state: 'suppressed' }],
+      'email only, both Property Predator marketing purposes');
+    assert.deepEqual([(await w.run(fine)).state, (await w.run(fine)).reason], ['stopped', 'unsubscribed'], 'the remaining step will never be sent');
+    await effects.onMarketingBlock({ email: fine.email, reason: 'hard_bounce', metadata: bodies[0]!.Metadata });
+    assert.equal((await suppressions(fine.point)).length, 2, 'a repeated report writes nothing new');
+    assert.equal((await w.act(flow, 'enrol', { point: fine.point })).reason, 'not_permitted', 'and the address cannot be started again');
+    await effects.onMarketingBlock({ email: gone.email, reason: 'hard_bounce', metadata: { send: 'x' } });
+    assert.deepEqual(await suppressions(gone.point), [], 'without our contact point in the metadata the stop stays in the process (0153 makes it durable)');
   } finally { await w.close(); }
 });

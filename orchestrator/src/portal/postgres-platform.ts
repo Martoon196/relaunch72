@@ -202,6 +202,7 @@ import type { MhpKitCrmRecorder, MhpKitReplayRegistrar } from '../mhp/kit-servic
 import { loadEmailBounceConfig } from '../email-bounces/config.js';
 import { EmailBounceService } from '../email-bounces/service.js';
 import { mhpEmailBounceSourceDefault } from '../mhp/email-health.js';
+import { ppEmailBounceEffects, ppEmailBounceSourceDefault } from '../pp-followup/bounces.js';
 
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
@@ -1342,9 +1343,12 @@ export async function buildPgPortalPlatform(
     // without it the pages show the exact missing settings instead of fake controls.
     const webinarConfig = loadWebinarConfig(env);
     // One bounce handler for every brand, chosen by configuration. EMAIL_BOUNCE_HANDLING=off leaves it with no sources.
-    const emailBounces = new EmailBounceService({ log: line => console.info(line), config: env.EMAIL_BOUNCE_HANDLING?.trim() === 'off'
+    const emailBounces = new EmailBounceService({ log: line => (line.includes('"level":"warn"') ? console.warn : console.info)(line), config: env.EMAIL_BOUNCE_HANDLING?.trim() === 'off'
       ? { sources: [], blockers: [] }
-      : loadEmailBounceConfig(env, { defaults: mhpEnabledForBounces(env) ? [mhpEmailBounceSourceDefault(env)] : [], webinarSenders: webinarConfig.senders.values() }) });
+      : loadEmailBounceConfig(env, { webinarSenders: webinarConfig.senders.values(),
+        // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.
+        defaults: [...(mhpEnabledForBounces(env) ? [mhpEmailBounceSourceDefault(env)] : []), ...[ppEmailBounceSourceDefault(ppFollowup?.config)].filter(source => source !== null)] }) });
+    if (ppFollowup?.config) emailBounces.setEffects(PP_FOLLOWUP_WORKSPACE_ID, ppEmailBounceEffects(ppFollowup.unsubscriber));
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
     let webinarStudio: StudioRelay | undefined;

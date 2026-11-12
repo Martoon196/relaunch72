@@ -413,6 +413,14 @@ services:
         sync: false
       - key: PP_MARKETING_LINK
         sync: false
+      # Bounce, spam-report and unsubscribe webhook from Postmark for the PP
+      # follow-up stream: POST /api/provider-webhooks/postmark/pp on the portal
+      # host, HTTP Basic user "pp" with this value as the password (24-200
+      # characters, no spaces). Unset means the PP webhook stays closed; the
+      # hourly read of Postmark's own lists still runs while PP_MARKETING_MODE
+      # is test or live. With PP_MARKETING_MODE off there is no PP handler at all.
+      - key: PP_POSTMARK_WEBHOOK_SECRET
+        sync: false
 
       # Mailgun EU INGRESS slots only. The public web service never receives the
       # outbound API key. Signed provider test events are permitted; they cause

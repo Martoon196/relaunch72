@@ -38,6 +38,7 @@ import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/ma
 import { createPostmarkBounceWebhook } from '../email-bounces/webhook.js';
 import { createPpPostmarkSender } from '../pp-followup/mail.js';
 import { startPpFollowupDispatcher } from '../pp-followup/dispatch.js';
+import { PP_FOLLOWUP_WORKSPACE_ID } from '../pp-followup/repository.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
@@ -1070,8 +1071,11 @@ async function main(): Promise<void> {
   // unsubscribe route but never claims or sends.
   const ppFollowup = postgresPortal?.ppFollowup;
   if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
+  // PP follow-ups use the same bounce handler: blocked addresses are refused before a proof and again at the sender.
+  const ppRecipients = emailBounces?.hasWorkspace(PP_FOLLOWUP_WORKSPACE_ID) ? { guard: emailBounces.registry, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } : undefined;
   const stopPpFollowup = ppFollowup?.config
-    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config,
+    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config, fetch, ppRecipients), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config,
+        recipients: ppRecipients,
         onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') }, {
         onResult: result => { if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} not sent (retried or failed by rule), ${result.unknown} held for an owner decision.`); },
         onError: () => console.warn('PP follow-up email dispatch is temporarily unavailable; runs wait.'),

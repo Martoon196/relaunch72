@@ -233,3 +233,36 @@ test('service: one sweep per source at a time, an owner check does not hammer Po
   assert.equal(broken.registry.isReady, true); assert.equal(broken.registry.snapshot(WS).incomplete, true);
   assert.equal(new EmailBounceService({ config: { sources: [], blockers: [] } }).registry.isReady, true, 'nothing to read means nothing to wait for');
 });
+
+test('paging never asks Postmark for more than it serves: 500 a page and 10,000 a query, and says when the log was longer', async () => {
+  const offsets: number[] = [];
+  const api: PostmarkBounceApi = { suppressions: async () => [], totals: async () => ({ sent: null, bounced: null, complaints: null }),
+    bounces: async (_stream, _from, _to, offset, count) => { assert.ok(count <= 500 && offset + count <= 10_000); offsets.push(offset);
+      return { total: 25_000, received: count, rows: [] }; } };
+  const result = await sweepPostmarkSource({ source: source({ streams: new Map([['broadcast', 'marketing']]) }), api, registry: new EmailBlockRegistry(() => NOW), now: NOW });
+  assert.deepEqual([offsets.length, offsets[0], offsets.at(-1)], [20, 0, 9_500]); assert.equal(result.truncated, 1); assert.equal(result.failed, 0);
+  const real = createPostmarkBounceApi('t', (async () => { throw new Error('must not be called'); }) as typeof fetch);
+  await assert.rejects(real.bounces('broadcast', 'a', 'b', 0, 501), PostmarkReadError);
+  await assert.rejects(real.bounces('broadcast', 'a', 'b', 9_600, 500), PostmarkReadError);
+  await assert.rejects(real.bounces('broadcast', 'a', 'b', -1, 500), PostmarkReadError);
+});
+
+test('a start-up read that fails is logged as a warning and retried on a timer until it succeeds; it never runs silently on an empty list', async () => {
+  let attempts = 0, finished!: () => void; const done = new Promise<void>(resolve => { finished = resolve; });
+  const logs: Record<string, unknown>[] = [];
+  const api: PostmarkBounceApi = { bounces: async () => ({ total: 0, received: 0, rows: [] }), totals: async () => ({ sent: 10, bounced: 0, complaints: 0 }),
+    suppressions: async () => { attempts++; if (attempts <= 2) throw new PostmarkReadError(503); return [{ email: 'gone@example.invalid', kind: 'hard_bounce', at: NOW - DAY }]; } };
+  const service = new EmailBounceService({ config: { sources: [source({ streams: new Map([['broadcast', 'marketing']]) })], blockers: [] }, now: () => NOW, apiFor: () => api,
+    log: line => { const entry = JSON.parse(line) as Record<string, unknown>; logs.push(entry); if (entry.event === 'email.bounces.sweep') finished(); } });
+  const keepAlive = setInterval(() => undefined, 5);
+  const stop = service.start(3_600_000, { retryMs: 5, maxRetryMs: 20 });
+  await done; stop(); clearInterval(keepAlive);
+  assert.equal(attempts, 3);
+  assert.deepEqual(logs.map(entry => [entry.event, entry.level]), [['email.bounces.sweep_incomplete', 'warn'], ['email.bounces.sweep_retry', 'warn'],
+    ['email.bounces.sweep_incomplete', 'warn'], ['email.bounces.sweep_retry', 'warn'], ['email.bounces.sweep', 'info']]);
+  assert.deepEqual(logs.filter(entry => entry.event === 'email.bounces.sweep_retry').map(entry => entry.attempt), [1, 2]);
+  assert.equal(service.registry.decide(WS, 'gone@example.invalid', 'marketing').blocked, true, 'the list arrives once Postmark answers');
+  assert.equal(service.registry.snapshot(WS).incomplete, false);
+  const webhookOnly = new EmailBounceService({ config: { sources: [source({ token: null })], blockers: [] }, now: () => NOW });
+  assert.deepEqual(await webhookOnly.sweepWorkspace(WS), { streams: 0, failed: 0, suppressions: 0, bounces: 0 }, 'a source with no token is not a failed read to retry');
+});
