@@ -97,3 +97,25 @@ test('exact same-host message reads return safe JSON and reject forged selectors
   assert.equal((await f.request('GET', `/message?item=${sequenceIds.item}&version=${sequenceIds.version}&channel=email&workspaceId=${ids.prospect}`)).status, 400);
   assert.deepEqual(f.state.calls, ['message']);
 });
+test('connected PP email delivery: Start, Stop and unknown-retry post exact fields to the owner command only', async () => {
+  const f = flowRouterFixture(), commands: Record<string, string>[] = [];
+  const point = '2b5d8a3c-4f1e-4c7a-9d2b-1a2b3c4d5e6f', runId = '3c6e9b4d-5a2f-4d8b-8e3c-2b3c4d5e6f70', proofId = '4d7fa05e-6b3a-4e9c-9f4d-3c4d5e6f7081';
+  Object.assign(f.deps.followupFlows!, { command: async (_identity: unknown, _request: string, input: Record<string, string>) => { commands.push(input);
+    return { action: input.action, contentItemId: input.itemId, contentVersionId: input.versionId, changed: 1, remaining: 0, blocked: 0, inFlight: 0, reason: null, replayed: false }; } });
+  Object.assign(f.snapshot, { executable: true, readiness: { ...readiness, email: true }, delivery: { mode: 'test', problems: [], database: { campaign: PP_FOLLOWUP_CAMPAIGN, permitted: 1, runCount: 1,
+    contacts: [{ contactId: runId, contactPointId: point, displayName: 'Ann <Example>', email: 'ann@example.invalid', inOpenRun: true }],
+    runs: [{ id: runId, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, contactId: runId, contactPointId: point, email: 'ann@example.invalid', displayName: 'Ann <Example>',
+      state: 'held', position: 0, dueAt: new Date(now).toISOString(), reason: 'outcome_unknown', createdAt: new Date(now).toISOString(), lastAcceptedAt: null, inFlight: false, unknownProofId: proofId, steps: [] }] } } });
+  f.detail.blockers.splice(0); f.state.published = true;
+  const page = await f.request('GET', `?item=${sequenceIds.item}&version=${sequenceIds.version}`);
+  assert.equal(page.status, 200); assert.match(page.body, /Email delivery is in test mode/u); assert.match(page.body, /Start this person/u);
+  assert.match(page.body, /Ann &lt;Example&gt; · ann@example\.invalid · already in a flow/u); assert.match(page.body, /Retry this unknown attempt/u);
+  const started = await f.request('POST', '/enrol', f.saved({ contactPointId: point }));
+  assert.equal(started.status, 200); assert.match(started.body, /1 run started\./u);
+  assert.equal((await f.request('POST', '/stop', f.saved({ runId, ackProofId: '' }))).status, 200);
+  assert.equal((await f.request('POST', '/resume', f.saved({ runId, ackProofId: proofId }))).status, 200);
+  assert.deepEqual(commands.map(input => [input.action, input.contactPointId, input.runId, input.ackProofId]), [['enrol', point, '', ''], ['stop', '', runId, ''], ['resume', '', runId, proofId]]);
+  for (const body of [f.saved(), f.saved({ contactPointId: point, recipient: 'forged@example.invalid' }), f.saved({ contactPointId: point, runId })]) assert.equal((await f.request('POST', '/enrol', body)).status, 400);
+  assert.equal((await f.request('POST', '/start', f.saved())).status, 409);
+  assert.equal(commands.length, 3, 'malformed forms never reach the command');
+});

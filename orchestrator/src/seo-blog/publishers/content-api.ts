@@ -33,10 +33,10 @@ export function contentApiSignature(secret: string, timestamp: string, method: s
 export function renderArticleFragment(input: PublishInput, canonicalUrl: string): string {
   const body = input.body;
   const cites = citationNumbers(body);
-  const md = (t: string, subHeadings = false) => renderMarkdown(t, cites.number, canonicalUrl, subHeadings);
+  const md = (t: string) => renderMarkdown(t, cites.number, canonicalUrl);
   return [
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}`),
+    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body)}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',

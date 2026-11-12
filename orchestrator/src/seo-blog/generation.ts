@@ -415,9 +415,9 @@ export interface WrittenArticle {
 }
 
 const LENGTH_HINT: Record<LengthPreference, string> = {
-  concise: 'concise — cover the question fully, about 700–1,100 words',
-  standard: 'standard — thorough but tight, about 1,100–1,800 words',
-  'in-depth': 'in-depth — comprehensive pillar treatment, about 1,800–2,800 words, only if every section earns its place',
+  concise: 'concise â€” cover the question fully, about 700â€“1,100 words',
+  standard: 'standard â€” thorough but tight, about 1,100â€“1,800 words',
+  'in-depth': 'in-depth â€” comprehensive pillar treatment, about 1,800â€“2,800 words, only if every section earns its place',
 };
 
 export function sourceMarkers(text: string): string[] {
