@@ -18,6 +18,9 @@ import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
+import { handleApprovalQueue } from './approval-queue-router.js';
+import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
+import { CAMPAIGN_JOURNEY_ROUTE, CampaignJourneyService } from './campaign-journey-service.js';
 import { handleWebinars } from './webinar-router.js';
 import type { SetupStatus as WebinarSetupStatus } from './webinar-view.js';
 import type { PgWebinarService } from '../webinars/service.js';
@@ -1994,6 +1997,25 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       ...(deps.sessionCookieName === '__Host-r72_content' ? { applicationName: 'Relaunch72 Content' } : {}) });
     return;
   }
+  if (deps.kind === 'postgres' && (p === APPROVAL_QUEUE_ROUTE || p.startsWith(`${APPROVAL_QUEUE_ROUTE}/`) || p === CAMPAIGN_JOURNEY_ROUTE)) {
+    if (!deps.seoBlog && !deps.followupFlows && !deps.companyContent) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Approvals are not available on this deployment.'); return; }
+    if (!resolvedRequestContext) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Approvals are temporarily unavailable.'); return; }
+    const clock = () => deps.now?.() ?? Date.now();
+    const handled = await handleApprovalQueue(req, res, url, {
+      queue: new ApprovalQueueService({ sessionSecret: deps.sessionSecret, seoBlog: deps.seoBlog, flows: deps.followupFlows, companyContent: deps.companyContent,
+        flowsAvailable: deps.productProfile?.id === 'property_predator_growth', now: clock }),
+      journey: new CampaignJourneyService({ seoBlog: deps.seoBlog }),
+      identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, portalBaseUrl: deps.portalBaseUrl,
+      actionCentre: Boolean(deps.operatorActions), now: clock,
+      shell: (title, body, csrfToken) => appShell({
+        title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${title}`, tenantName: deps.productProfile?.productName ?? 'Relaunch72', active: 'actions',
+        productProfile: deps.productProfile,
+        capabilities: new Set<PlatformCapability>(['workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', ...optionalPortalCapabilities(deps)]),
+        billingAvailable: false, crmAvailable: true, mode: 'crm', csrfToken, body,
+      }),
+    });
+    if (handled) return;
+  }
   if (p === '/portal/webinars' || p.startsWith('/portal/webinars/')) {
     const webinarShell = (title: string, workspaceName: string, body: string, csrfToken: string): string => appShell({
       title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${title} — ${workspaceName}`,
@@ -2757,6 +2779,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           actionCentreAvailable: Boolean(deps.operatorActions),
           dailyOutreachAvailable: profile.id === 'property_predator_growth',
           followupFlowsAvailable: Boolean(deps.followupFlows),
+          approvalsAvailable: Boolean(deps.seoBlog || deps.followupFlows || deps.companyContent),
         }),
       }));
     } catch {
@@ -2814,6 +2837,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         snapshot.workspaceName,
         renderOperatorActionCentreBody(view, {
           security,
+          ...(deps.seoBlog || deps.followupFlows || deps.companyContent ? { approvalsHref: APPROVAL_QUEUE_ROUTE } : {}),
           notice: operatorActionNoticeFromQuery(
             url.searchParams,
             deps.sessionSecret,
