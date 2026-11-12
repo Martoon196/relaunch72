@@ -163,3 +163,14 @@ test('the writer\'s length instructions carry real dashes, not corrupted charact
   assert.ok(!src.includes('â€'), 'no double-encoded dash sequences');
   assert.match(src, /about 700–1,100 words/);
 });
+
+test('the writer is allowed the sub-headings the renderer keeps, and nothing deeper or higher', async () => {
+  const { readFile } = await import('node:fs/promises');
+  for (const file of ['seo-blog-article.md', 'seo-blog-section.md']) {
+    const prompt = await readFile(new URL(`../../prompts/${file}`, import.meta.url), 'utf8');
+    assert.match(prompt, /"### " sub-heading/, `${file} allows a sub-heading inside a section`);
+    assert.ok(!prompt.includes('no headings inside bodies'), `${file} no longer forbids them`);
+    assert.match(prompt, /never "#" or "##"|never use "#" or "##"/, `${file} keeps the page to one H1 and section H2s`);
+  }
+  assert.equal(renderMarkdown('First point.\n\n### Second point\nMore.', () => null, 'https://x.example', true), '<p>First point.</p>\n<h3>Second point</h3>\n<p>More.</p>');
+});
