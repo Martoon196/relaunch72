@@ -19,6 +19,7 @@ import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
+import { layout as seoBlogLayout } from './seo-blog-view.js';
 import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
 import { CAMPAIGN_JOURNEY_ROUTE, CampaignJourneyService } from './campaign-journey-service.js';
 import { handleWebinars } from './webinar-router.js';
@@ -2001,13 +2002,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (!deps.seoBlog && !deps.followupFlows && !deps.companyContent) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Approvals are not available on this deployment.'); return; }
     if (!resolvedRequestContext) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Approvals are temporarily unavailable.'); return; }
     const clock = () => deps.now?.() ?? Date.now();
+    // The central content address serves the content pages only: "Your content", follow-up flows, the Action Centre
+    // and the CRM live on a brand's own portal, so the queue there lists SEO items and links nowhere else.
+    const central = deps.sessionCookieName === '__Host-r72_content';
     const handled = await handleApprovalQueue(req, res, url, {
-      queue: new ApprovalQueueService({ sessionSecret: deps.sessionSecret, seoBlog: deps.seoBlog, flows: deps.followupFlows, companyContent: deps.companyContent,
-        flowsAvailable: deps.productProfile?.id === 'property_predator_growth', now: clock }),
+      queue: new ApprovalQueueService({ sessionSecret: deps.sessionSecret, seoBlog: deps.seoBlog, flows: central ? undefined : deps.followupFlows,
+        companyContent: central ? undefined : deps.companyContent,
+        flowsAvailable: !central && deps.productProfile?.id === 'property_predator_growth', now: clock }),
       journey: new CampaignJourneyService({ seoBlog: deps.seoBlog }),
       identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, portalBaseUrl: deps.portalBaseUrl,
-      actionCentre: Boolean(deps.operatorActions), now: clock,
-      shell: (title, body, csrfToken) => appShell({
+      actionCentre: !central && Boolean(deps.operatorActions), central, now: clock,
+      shell: central ? (title, body, csrfToken) => seoBlogLayout({ brands: [], brand: null, tab: null, csrf: csrfToken, applicationName: 'Relaunch72 Content' }, title, body)
+        : (title, body, csrfToken) => appShell({
         title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${title}`, tenantName: deps.productProfile?.productName ?? 'Relaunch72', active: 'actions',
         productProfile: deps.productProfile,
         capabilities: new Set<PlatformCapability>(['workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', ...optionalPortalCapabilities(deps)]),

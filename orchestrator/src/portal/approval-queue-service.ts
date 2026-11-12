@@ -1,5 +1,5 @@
 /**
- * One approval queue for a workspace. This is an aggregator, not a new approval system:
+ * One approval queue for every business the owner manages. This is an aggregator, not a new approval system:
  * every Approve or Refuse calls the same function the item's own page calls, with the same
  * arguments, so the same checks, audit records and idempotency apply. The queue adds only
  * a signed reference that binds what the owner saw (ids, exact hash/version, row version and
@@ -7,6 +7,12 @@
  *
  * Approving content never gives permission to contact a person and never spends money:
  * no enrol, start, send, schedule or paid-generation function is reachable from here.
+ *
+ * Which business: the browser may ask for one with ?brand=<id>, but the answer always comes from the
+ * list of brand workspaces the signed-in user manages (the same PostgreSQL membership check the SEO
+ * engine uses). The chosen brand is part of every signed item reference, and each decision re-checks
+ * membership of that brand, so an item can never be approved under a different business.
+ * Follow-up flows and "Your content" stay with the workspace the session is signed in to.
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { PortalSessionIdentity } from './auth-service.js';
@@ -18,7 +24,7 @@ import { exactReviewApprovalToken, verifyExactReviewApprovalToken } from './cont
 import { SEO_BLOG_BASE } from './seo-blog-view.js';
 import type { SeoBlogEngine } from '../seo-blog/engine.js';
 import { sha256 } from '../seo-blog/engine.js';
-import { SeoBlogError, type Article, type ArticleBrief, type ArticleVersion } from '../seo-blog/types.js';
+import { SeoBlogError, type Article, type ArticleBrief, type ArticleVersion, type Brand } from '../seo-blog/types.js';
 import { campaignParentHold, currentCampaignRevision } from '../seo-blog/campaign.js';
 import { linkedPromotionFor, SEO_BLOG_SOURCE_SYSTEM } from '../seo-blog/promotions.js';
 import type { CreatorRecord } from '../seo-blog/campaign-creator.js';
@@ -42,6 +48,8 @@ const PER_KIND_LIMIT = 30;
 const ARTICLE_READ_LIMIT = 30;
 const CREATIVE_SET_LIMIT = 15;
 const CONTENT_REVIEW_LIMIT = 20;
+/** "All businesses" counts each business by reading its queue, so only this many are counted; the rest are still listed. */
+export const APPROVAL_ALL_COUNT_MAX = 8;
 
 export type ApprovalKind = 'article' | 'plan' | 'campaign_post' | 'promotion' | 'creator' | 'creative' | 'flow' | 'content';
 export const APPROVAL_KIND_LABELS: Readonly<Record<ApprovalKind, string>> = Object.freeze({
@@ -63,10 +71,74 @@ export class ApprovalQueueError extends Error {
 const CHANGED = 'This item changed since you looked at it. Review it again.';
 function changed(): never { throw new ApprovalQueueError(409, CHANGED); }
 
+// ─── Which business ────────────────────────────────────────────────────────
+
+/** ?brand=all: the list of businesses with what is waiting in each. */
+export const BRAND_ALL = 'all' as const;
+/** ?brand=account: only the signed-in workspace's own items, when that workspace is not itself a brand. */
+export const BRAND_ACCOUNT = 'account' as const;
+const BRAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const NO_BUSINESS = 'That business was not found. Nothing was changed.';
+
+export interface QueueBrand { readonly id: string; readonly name: string }
+export interface BrandSelection {
+  /** Every brand workspace the signed-in user manages, in the order the SEO engine lists them. */
+  readonly brands: readonly QueueBrand[];
+  /** The business this page is for. Null for "All businesses", for the signed-in account's own items, and when there is no brand. */
+  readonly selected: QueueBrand | null;
+  readonly view: 'brand' | 'all' | 'account';
+  /** The workspace this session is signed in to. Follow-up flows and "Your content" belong to it. */
+  readonly sessionWorkspaceId: string;
+  /** Whether a new business can be added here (the SEO area is mounted). */
+  readonly canAdd: boolean;
+  /**
+   * True when this address serves items that belong to the signed-in account itself (follow-up flows, "Your content")
+   * and that account is not one of the businesses, so those items need their own entry and are shown first.
+   */
+  readonly account: boolean;
+}
+
+/**
+ * Resolves the business a page is for. The requested id is only a selector: it must be one of the brand
+ * workspaces this user manages, otherwise the request is refused (the same answer for a malformed id, an
+ * unknown id and somebody else's brand). With nothing requested: the signed-in workspace when it is a
+ * brand; otherwise the signed-in account's own items where this address serves any (`accountItems`), so a page
+ * that showed them before still does; otherwise the first brand the user manages.
+ */
+export async function selectApprovalBrand(seoBlog: PortalSeoBlogService | undefined, identity: PortalSessionIdentity, requestId: string,
+  requested: string | null | undefined, accountItems = false): Promise<BrandSelection> {
+  let managed: Brand[] = [];
+  if (seoBlog) {
+    try { managed = await seoBlog.engineFor(identity, requestId).listBrands({ userId: identity.userId }); }
+    catch (error) { if (!(error instanceof SeoBlogError && [403, 404, 409].includes(error.status))) throw error; }
+  }
+  const brands = managed.map((b) => ({ id: b.id.toLowerCase(), name: b.name }));
+  const own = brands.find((b) => b.id === identity.workspaceId.toLowerCase()) ?? null;
+  const account = accountItems && !own;
+  const base = { brands, sessionWorkspaceId: identity.workspaceId, canAdd: Boolean(seoBlog), account };
+  const wanted = (requested ?? '').trim();
+  if (!wanted) {
+    const selected = own ?? (account ? null : brands[0] ?? null);
+    return { ...base, selected, view: selected ? 'brand' : 'account' };
+  }
+  if (wanted === BRAND_ACCOUNT || (wanted === BRAND_ALL && !brands.length)) return { ...base, selected: null, view: 'account' };
+  if (wanted === BRAND_ALL) return { ...base, selected: null, view: 'all' };
+  const selected = wanted.length === 36 && BRAND_ID.test(wanted.toLowerCase()) ? brands.find((b) => b.id === wanted.toLowerCase()) : undefined;
+  if (!selected) throw new ApprovalQueueError(404, NO_BUSINESS);
+  return { ...base, selected, view: 'brand' };
+}
+
+/** The brand query string for a link back to the same view. */
+export function brandQuery(selection: Pick<BrandSelection, 'selected' | 'view'>): string {
+  return selection.view === 'all' ? `?brand=${BRAND_ALL}` : selection.selected ? `?brand=${selection.selected.id}` : `?brand=${BRAND_ACCOUNT}`;
+}
+
 // ─── Signed per-item reference ─────────────────────────────────────────────
 
 export interface ApprovalRef {
   readonly k: ApprovalKind;
+  /** The business (brand workspace) this item belongs to. Signed with the rest; a decision is only ever made inside it. */
+  readonly b: string;
   readonly ids: Readonly<Record<string, string>>;
   /** Expected exact state when the owner looked: hashes, version ids, row versions. */
   readonly x: Readonly<Record<string, string>>;
@@ -78,7 +150,8 @@ export interface ApprovalRef {
   /** Display title for per-item batch results (signed, never trusted from the form). */
   readonly n: string;
 }
-const REF_CONTEXT = 'relaunch72:approval-queue-ref:v1\0';
+// v2: the business is part of what is signed. A page minted before that must be refreshed.
+const REF_CONTEXT = 'relaunch72:approval-queue-ref:v2\0';
 const mac = (secret: string, sessionToken: string, payload: string) => createHmac('sha256', secret).update(REF_CONTEXT).update(sessionToken).update('\0').update(payload).digest('base64url');
 
 export function signApprovalRef(secret: string, sessionToken: string, ref: ApprovalRef): string {
@@ -95,7 +168,7 @@ export function verifyApprovalRef(secret: string, sessionToken: string, token: s
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
   try {
     const ref = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as ApprovalRef;
-    if (!KIND_ORDER.includes(ref.k) || typeof ref.c !== 'string' || typeof ref.d !== 'string' || !Number.isSafeInteger(ref.t)
+    if (!KIND_ORDER.includes(ref.k) || typeof ref.b !== 'string' || !BRAND_ID.test(ref.b) || typeof ref.c !== 'string' || typeof ref.d !== 'string' || !Number.isSafeInteger(ref.t)
       || ref.t > now + 60_000 || now - ref.t > APPROVAL_REF_TTL_MS || typeof ref.ids !== 'object' || typeof ref.x !== 'object' || typeof ref.n !== 'string') return null;
     return ref;
   } catch { return null; }
@@ -124,7 +197,20 @@ export interface ApprovalItem {
   readonly batchable: boolean;
 }
 export interface ApprovalSection { readonly kind: ApprovalKind; readonly label: string; readonly items: readonly ApprovalItem[]; readonly error?: string }
-export interface ApprovalQueueSnapshot { readonly sections: readonly ApprovalSection[]; readonly total: number; readonly ready: number }
+export interface ApprovalQueueSnapshot {
+  readonly sections: readonly ApprovalSection[]; readonly total: number; readonly ready: number;
+  readonly selection: BrandSelection;
+  /** The business every item on this page is signed for: the form sends it back and it must match each item. */
+  readonly brandKey: string;
+  /** True when the signed-in workspace's own sections (flows, Your content) are part of this page. */
+  readonly sessionSections: boolean;
+}
+export interface ApprovalBrandCount { readonly brand: QueueBrand; readonly total: number | null; readonly ready: number | null; readonly counted: boolean }
+export interface ApprovalOverview {
+  readonly selection: BrandSelection; readonly rows: readonly ApprovalBrandCount[];
+  /** The signed-in account's own items (follow-ups, "Your content") when they are not inside one of the businesses. Null numbers mean unknown, not zero. */
+  readonly account?: { readonly total: number | null; readonly ready: number | null } | null;
+}
 export interface ApprovalDecisionResult { readonly ok: boolean; readonly title: string; readonly message: string }
 
 export interface ApprovalQueueDependencies {
@@ -143,6 +229,7 @@ const angleLabel = (angle: string) => angle.replace(/_/gu, ' ');
 const networkLabel = (network: string) => network === 'instagram' ? 'Instagram' : network === 'linkedin' ? 'LinkedIn' : network;
 
 interface Ctx { identity: PortalSessionIdentity; requestId: string; now: number }
+const SESSION_KINDS: ReadonlySet<ApprovalKind> = new Set(['flow', 'content']);
 interface Seo { engine: SeoBlogEngine; actor: { userId: string }; brandId: string }
 
 export class ApprovalQueueService {
@@ -150,20 +237,59 @@ export class ApprovalQueueService {
   private now(): number { return this.deps.now?.() ?? Date.now(); }
   private newId(): string { return this.deps.newId?.() ?? randomUUID(); }
 
-  private seo(ctx: Ctx): Seo | null {
+  private seo(ctx: Ctx, brandId: string): Seo | null {
     if (!this.deps.seoBlog) return null;
-    return { engine: this.deps.seoBlog.engineFor(ctx.identity, ctx.requestId), actor: { userId: ctx.identity.userId }, brandId: ctx.identity.workspaceId };
+    return { engine: this.deps.seoBlog.engineFor(ctx.identity, ctx.requestId), actor: { userId: ctx.identity.userId }, brandId };
   }
   private studio(ctx: Ctx, seo: Seo): CreativeStudioService | null {
     return this.deps.seoBlog?.creativeFor?.(ctx.identity, ctx.requestId, seo.engine) ?? null;
   }
-  private sign(ctx: Ctx, k: ApprovalKind, title: string, ids: Record<string, string>, x: Record<string, string>): string {
-    return signApprovalRef(this.deps.sessionSecret, ctx.identity.sessionToken, { k, ids, x, c: this.newId(), d: this.newId(), t: ctx.now, n: clip(title, 120) });
+  /** Signs an item for its business: the SEO brand it was read from, or the signed-in workspace for flows and Your content. */
+  private sign(ctx: Ctx, brandId: string, k: ApprovalKind, title: string, ids: Record<string, string>, x: Record<string, string>): string {
+    return signApprovalRef(this.deps.sessionSecret, ctx.identity.sessionToken, { k, b: brandId.toLowerCase(), ids, x, c: this.newId(), d: this.newId(), t: ctx.now, n: clip(title, 120) });
   }
 
-  async list(identity: PortalSessionIdentity, requestId: string): Promise<ApprovalQueueSnapshot> {
+  /** The businesses this user manages and the one a request is for. Refuses an id the user does not manage. */
+  select(identity: PortalSessionIdentity, requestId: string, requested?: string | null): Promise<BrandSelection> {
+    const accountItems = Boolean((this.deps.flows && this.deps.flowsAvailable) || this.deps.companyContent);
+    return selectApprovalBrand(this.deps.seoBlog, identity, requestId, requested, accountItems);
+  }
+
+  /** One business's queue. `requested` is the untrusted ?brand value; it is resolved against the managed brand list here. */
+  async list(identity: PortalSessionIdentity, requestId: string, requested?: string | null): Promise<ApprovalQueueSnapshot> {
+    const selection = await this.select(identity, requestId, requested);
+    if (selection.view === 'all') throw new ApprovalQueueError(400, 'Choose one business to see its items.');
+    return this.listFor({ identity, requestId, now: this.now() }, selection);
+  }
+
+  /** "All businesses": each business with what is waiting in it. A business that cannot be counted says so; it is never shown as zero. */
+  async overview(identity: PortalSessionIdentity, requestId: string): Promise<ApprovalOverview> {
+    const selection = await this.select(identity, requestId, BRAND_ALL);
     const ctx: Ctx = { identity, requestId, now: this.now() };
-    const seo = this.seo(ctx);
+    const count = async (target: Pick<BrandSelection, 'selected' | 'view'>): Promise<{ total: number | null; ready: number | null }> => {
+      try {
+        const snapshot = await this.listFor(ctx, { ...selection, ...target });
+        // A section that could not be read makes the number a guess, so no number is shown.
+        if (snapshot.sections.some((s) => s.error)) return { total: null, ready: null };
+        return { total: snapshot.total, ready: snapshot.ready };
+      } catch { return { total: null, ready: null }; }
+    };
+    // One business at a time: each queue already reads its sections in parallel, and counting every business at once
+    // would hold the whole database pool for one page and make other requests wait.
+    const rows: ApprovalBrandCount[] = [];
+    for (const [index, brand] of selection.brands.entries()) {
+      rows.push(index >= APPROVAL_ALL_COUNT_MAX ? { brand, total: null, ready: null, counted: false }
+        : { brand, ...(await count({ selected: brand, view: 'brand' })), counted: true });
+    }
+    const account = selection.account ? await count({ selected: null, view: 'account' }) : null;
+    return { selection, rows, account };
+  }
+
+  private async listFor(ctx: Ctx, selection: BrandSelection): Promise<ApprovalQueueSnapshot> {
+    const { identity } = ctx;
+    const seo = selection.selected ? this.seo(ctx, selection.selected.id) : null;
+    // Flows and Your content are read through the session, so they only ever belong to the signed-in workspace.
+    const sessionSections = !selection.selected || selection.selected.id === identity.workspaceId.toLowerCase();
     const loaders: [ApprovalKind, () => Promise<ApprovalItem[] | null>][] = [];
     if (seo) {
       // Shared by three sections; a failure is reported by each section that needs it, never thrown from here.
@@ -177,8 +303,8 @@ export class ApprovalQueueService {
       loaders.push(['creator', async () => this.listCreators(ctx, seo)]);
       loaders.push(['creative', async () => this.listCreative(ctx, seo)]);
     }
-    if (this.deps.flows && this.deps.flowsAvailable) loaders.push(['flow', async () => this.listFlows(ctx)]);
-    if (this.deps.companyContent) loaders.push(['content', async () => this.listContent(ctx)]);
+    if (sessionSections && this.deps.flows && this.deps.flowsAvailable) loaders.push(['flow', async () => this.listFlows(ctx)]);
+    if (sessionSections && this.deps.companyContent) loaders.push(['content', async () => this.listContent(ctx)]);
     const settled = await Promise.all(loaders.map(async ([kind, load]) => {
       try {
         const items = await load();
@@ -192,7 +318,8 @@ export class ApprovalQueueService {
     const sections = settled.filter((s): s is ApprovalSection => s !== null && (s.items.length > 0 || Boolean(s.error)))
       .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
     const all = sections.flatMap((s) => s.items);
-    return { sections, total: all.length, ready: all.filter((i) => i.state === 'ready').length };
+    return { sections, total: all.length, ready: all.filter((i) => i.state === 'ready').length, selection,
+      brandKey: (selection.selected?.id ?? identity.workspaceId).toLowerCase(), sessionSections };
   }
 
   // ── A–D: SEO articles and their posts ──
@@ -216,7 +343,7 @@ export class ApprovalQueueService {
       const critical = article.checks?.status === 'critical';
       return {
         kind: 'article', label: 'Blog article', title, since: version.createdAt,
-        ref: this.sign(ctx, 'article', title, { articleId: article.id, versionId: version.id }, { rowVersion: String(article.rowVersion), contentSha: version.contentSha }),
+        ref: this.sign(ctx, seo.brandId, 'article', title, { articleId: article.id, versionId: version.id }, { rowVersion: String(article.rowVersion), contentSha: version.contentSha }),
         preview: clip(`${version.body.excerpt} ${version.body.intro}`), why: brief ? clip(`${brief.whyFit}${brief.targetQuery ? ` Search: “${brief.targetQuery}”.` : ''}`, 400) : 'Written from your accepted topic plan.',
         state: critical ? 'blocked' : 'ready', ...(critical ? { blockedReason: 'Checks found a serious problem. Fix it in the editor first; approval cannot override it.' } : {}),
         refuseLabel: 'Not now — keep off the website', editHref: this.articleHref(seo, article.id), editLabel: 'Read the full article', batchable: !critical,
@@ -241,7 +368,7 @@ export class ApprovalQueueService {
         const blocked = hold ?? media;
         out.push({
           kind: 'campaign_post', label: `${networkLabel(variant.network)} post`, title: revision.title || `${networkLabel(variant.network)} · ${angleLabel(variant.angle)}`, since: revision.createdAt,
-          ref: this.sign(ctx, 'campaign_post', revision.title || `${networkLabel(variant.network)} post`, { articleId: article.id, versionId: version.id, variantId: variant.id, revisionId: revision.id }, { revisionSha: revision.sha256 }),
+          ref: this.sign(ctx, seo.brandId, 'campaign_post', revision.title || `${networkLabel(variant.network)} post`, { articleId: article.id, versionId: version.id, variantId: variant.id, revisionId: revision.id }, { revisionSha: revision.sha256 }),
           preview: clip(`${revision.copy}${revision.canonicalUrl ? ` ${revision.canonicalUrl}` : ''}`), why: `Planned ${angleLabel(variant.angle)} post for your article “${title}”.${revision.media ? ' Includes an image.' : ''}`,
           state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}), refuseLabel: 'Leave this post out',
           editHref: this.articleHref(seo, article.id, '/campaign'), editLabel: 'Edit on the campaign page', batchable: !blocked,
@@ -262,7 +389,7 @@ export class ApprovalQueueService {
         const blocked = pack.canonicalUrl ? null : 'Connect the blog website, then create a new promotion version with its final address.';
         out.push({
           kind: 'promotion', label: `${networkLabel(post.network)} post`, title: post.title, since: version.createdAt,
-          ref: this.sign(ctx, 'promotion', post.title, { articleId: article.id, versionId: version.id, network: post.network }, { packSha }),
+          ref: this.sign(ctx, seo.brandId, 'promotion', post.title, { articleId: article.id, versionId: version.id, network: post.network }, { packSha }),
           preview: clip(`${post.copy}${pack.canonicalUrl ? ` ${pack.canonicalUrl}` : ''}`), why: `Goes out with your article “${title}” once it is live.`,
           state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}), editHref: this.articleHref(seo, article.id), editLabel: 'Read the full article', batchable: !blocked,
         });
@@ -277,7 +404,7 @@ export class ApprovalQueueService {
       const planned = briefs.filter((b) => b.status === 'planned');
       return {
         kind: 'plan', label: 'Topic plan', title: plan.topic, since: plan.createdAt,
-        ref: this.sign(ctx, 'plan', plan.topic, { planId: plan.id }, { planned: planned.map((b) => b.id).sort().join(',') }),
+        ref: this.sign(ctx, seo.brandId, 'plan', plan.topic, { planId: plan.id }, { planned: planned.map((b) => b.id).sort().join(',') }),
         preview: clip(planned.map((b) => `• ${b.workingTitle}`).join(' '), 700), why: clip(planned[0]?.whyFit ?? 'Suggested from your brand profile and research.', 400),
         state: 'ready', refuseLabel: 'Not now — drop these ideas', editHref: `${SEO_BLOG_BASE}/b/${seo.brandId}/topics`, editLabel: 'Open topics',
         batchable: true,
@@ -290,7 +417,7 @@ export class ApprovalQueueService {
     const records = await seo.engine.creators().list(seo.actor.userId, seo.brandId);
     return records.filter((r): r is CreatorRecord & { version: NonNullable<CreatorRecord['version']> } => r.state === 'draft' && r.version !== null).map((r) => ({
       kind: 'creator', label: r.brief.kind === 'acquisition' ? 'Campaign proposal' : r.brief.kind === 'email' ? 'Email campaign' : 'Campaign draft', title: r.version.content.title || r.brief.name, since: r.version.createdAt,
-      ref: this.sign(ctx, 'creator', r.version.content.title || r.brief.name, { campaignId: r.id }, { rowVersion: String(r.rowVersion), contentSha: r.version.contentSha }),
+      ref: this.sign(ctx, seo.brandId, 'creator', r.version.content.title || r.brief.name, { campaignId: r.id }, { rowVersion: String(r.rowVersion), contentSha: r.version.contentSha }),
       preview: clip(r.version.content.summary), why: clip(`Goal: ${r.brief.goal}`, 300), state: 'ready',
       confirmation: r.brief.kind === 'acquisition' ? 'I reviewed the evidence, wording and commercial claims of this exact proposal.' : 'I reviewed the wording, facts and permission process for this exact draft.',
       editHref: `${SEO_BLOG_BASE}/b/${seo.brandId}/campaigns/${r.id}`, editLabel: 'Open the full draft', batchable: false,
@@ -317,7 +444,7 @@ export class ApprovalQueueService {
           const figures = v.issues.some((i) => i.code === 'unsupported_figure');
           out.push({
             kind: 'creative', label: video ? 'Video' : 'Image', title: clip(`${v.concept.headline || v.concept.hook || 'Artwork'}`, 120), since: v.createdAt,
-            ref: this.sign(ctx, 'creative', v.concept.headline || 'Artwork', { setId: record.set.id, versionId: v.id }, { renderSha: v.render.sha256 }),
+            ref: this.sign(ctx, seo.brandId, 'creative', v.concept.headline || 'Artwork', { setId: record.set.id, versionId: v.id }, { renderSha: v.render.sha256 }),
             preview: clip([v.concept.hook, v.concept.body, v.concept.cta].filter(Boolean).join(' · ')), why: clip(`${PURPOSE_LABELS[record.set.request.purpose] ?? 'Creative'} made in Creative Studio. ${v.change}`, 300),
             ...(video ? { videoHref: art(v) } : { imageHref: art(v) }),
             state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}),
@@ -337,7 +464,7 @@ export class ApprovalQueueService {
     for (const item of snapshot.catalog.items) { const seen = latest.get(item.contentItemId); if (!seen || seen.versionNumber < item.versionNumber) latest.set(item.contentItemId, item); }
     return [...latest.values()].filter((i) => !(i.approvalStatus === 'approved' && !i.approvalStale)).map((item) => ({
       kind: 'flow', label: 'Follow-up flow', title: item.title, since: item.createdAt,
-      ref: this.sign(ctx, 'flow', item.title, { itemId: item.contentItemId, versionId: item.contentVersionId }, { contentSha: item.contentSha256 }),
+      ref: this.sign(ctx, ctx.identity.workspaceId, 'flow', item.title, { itemId: item.contentItemId, versionId: item.contentVersionId }, { contentSha: item.contentSha256 }),
       preview: `Version ${item.versionNumber}. Approving publishes this flow and the messages in it. It does not start the flow, add anyone or send anything.`,
       why: 'A follow-up flow you saved and have not published yet.', state: 'ready',
       editHref: `/portal/follow-ups?item=${encodeURIComponent(item.contentItemId)}&version=${encodeURIComponent(item.contentVersionId)}`, editLabel: 'Open the flow and its messages', batchable: true,
@@ -364,7 +491,7 @@ export class ApprovalQueueService {
       const blocked = !ready ? 'Open it in Your content to see the exact version before deciding.' : pictureMissing ? 'Add the picture first: this post only has image instructions.' : null;
       out.push({
         kind: 'content', label: exact?.social ? `${exact.social.platform} post` : exact?.email ? 'Email' : 'Content', title: item.title, since: item.createdAt,
-        ref: this.sign(ctx, 'content', item.title, ids, { contentSha: item.contentSha256, exact: token }), preview: clip(preview || 'Exact content is shown on its own page.'),
+        ref: this.sign(ctx, ctx.identity.workspaceId, 'content', item.title, ids, { contentSha: item.contentSha256, exact: token }), preview: clip(preview || 'Exact content is shown on its own page.'),
         why: 'A draft in Your content that is waiting for your decision.', state: blocked ? 'blocked' : 'ready', ...(blocked ? { blockedReason: blocked } : {}),
         refuseLabel: 'Refuse', ...edit, batchable: false,
       });
@@ -378,11 +505,20 @@ export class ApprovalQueueService {
   async decide(identity: PortalSessionIdentity, requestId: string, ref: ApprovalRef, action: 'approve' | 'refuse', confirmed: boolean): Promise<string> {
     const ctx: Ctx = { identity, requestId, now: this.now() };
     const { ids, x } = ref;
-    const need = (): Seo => this.seo(ctx) ?? (() => { throw new ApprovalQueueError(404, 'This area is not available here.'); })();
+    // The business comes from the signed reference only. Flows and Your content act through the session, so their
+    // reference must name the signed-in workspace; everything else must name a brand this user still manages.
+    if (SESSION_KINDS.has(ref.k) ? ref.b !== identity.workspaceId.toLowerCase() : !BRAND_ID.test(ref.b)) changed();
+    const need = async (): Promise<Seo> => {
+      const seo = this.seo(ctx, ref.b);
+      if (!seo) throw new ApprovalQueueError(404, 'This area is not available here.');
+      try { await seo.engine.getBrand(seo.actor, ref.b); }
+      catch (error) { if (error instanceof SeoBlogError && [403, 404].includes(error.status)) throw new ApprovalQueueError(404, NO_BUSINESS); throw error; }
+      return seo;
+    };
     const noRefuse = () => { throw new ApprovalQueueError(400, 'Refusing is not available for this item. Leave it, or edit it on its own page.'); };
     switch (ref.k) {
       case 'article': {
-        const seo = need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
+        const seo = await need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
         if (!d.version || d.version.id !== ids.versionId || d.version.contentSha !== x.contentSha) changed();
         if (action === 'refuse') {
           if (String(d.article.rowVersion) !== x.rowVersion) changed();
@@ -394,7 +530,7 @@ export class ApprovalQueueService {
         return 'Approved. Publishing still follows its own schedule and checks.';
       }
       case 'plan': {
-        const seo = need(), found = (await seo.engine.listPlans(seo.actor, seo.brandId)).find((p) => p.plan.id === ids.planId);
+        const seo = await need(), found = (await seo.engine.listPlans(seo.actor, seo.brandId)).find((p) => p.plan.id === ids.planId);
         if (!found) changed();
         const planned = found!.briefs.filter((b) => b.status === 'planned');
         if (action === 'approve' && found!.plan.status === 'accepted') return 'Already accepted. Nothing changed.';
@@ -407,7 +543,7 @@ export class ApprovalQueueService {
         return 'Plan accepted. No articles are written until you ask for them.';
       }
       case 'campaign_post': {
-        const seo = need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
+        const seo = await need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
         const variant = d.article.campaign?.variants.find((v) => v.id === ids.variantId);
         if (!d.version || d.version.id !== ids.versionId || !variant || variant.currentRevisionId !== ids.revisionId) changed();
         const revision = currentCampaignRevision(variant!);
@@ -422,7 +558,7 @@ export class ApprovalQueueService {
       }
       case 'promotion': {
         if (action === 'refuse') noRefuse();
-        const seo = need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
+        const seo = await need(), d = await seo.engine.getArticle(seo.actor, seo.brandId, ids.articleId!);
         const network = ids.network === 'instagram' || ids.network === 'linkedin' ? ids.network : changed();
         if (!d.version || d.version.id !== ids.versionId || !d.version.promotionPack || sha256(d.version.promotionPack) !== x.packSha) changed();
         if (linkedPromotionFor(d.article, d.version!, network)) return 'Already approved. Nothing changed.';
@@ -431,7 +567,7 @@ export class ApprovalQueueService {
       }
       case 'creator': {
         if (action === 'refuse') noRefuse();
-        const seo = need(), creator = seo.engine.creators(), r = await creator.get(seo.actor.userId, seo.brandId, ids.campaignId!);
+        const seo = await need(), creator = seo.engine.creators(), r = await creator.get(seo.actor.userId, seo.brandId, ids.campaignId!);
         if (!r.version || r.version.contentSha !== x.contentSha) changed();
         if (r.state === 'approved' && r.approval?.contentSha === x.contentSha) return 'Already approved. Nothing changed.';
         if (String(r.rowVersion) !== x.rowVersion) changed();
@@ -440,7 +576,7 @@ export class ApprovalQueueService {
       }
       case 'creative': {
         if (action === 'refuse') noRefuse();
-        const seo = need(), studio = this.studio(ctx, seo);
+        const seo = await need(), studio = this.studio(ctx, seo);
         if (!studio) throw new ApprovalQueueError(404, 'Creative Studio is not available here.');
         const { record, context } = await studio.getSet(seo.actor.userId, seo.brandId, ids.setId!);
         const entry = setView(record, context).concepts.flatMap((c) => [...c.variants, ...c.videos]).find((e) => e.version.id === ids.versionId);

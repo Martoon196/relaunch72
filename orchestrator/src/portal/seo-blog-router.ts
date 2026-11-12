@@ -14,7 +14,7 @@ import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
   activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, overviewPage, publishingPage,
-  SEO_BLOG_BASE, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
+  SEO_BLOG_BASE, SEO_BLOG_SWITCH_TARGETS, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
@@ -229,8 +229,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
 
     if (path === `${SEO_BLOG_BASE}/switch`) {
       const target = url.searchParams.get('brand') ?? '';
-      if (!new RegExp(`^${UUID}$`, 'i').test(target)) throw new SeoBlogError(400, 'Choose a brand.');
-      return redirect(res, `${SEO_BLOG_BASE}/b/${target.toLowerCase()}/overview`);
+      if (!new RegExp(`^${UUID}$`, 'i').test(target)) throw new SeoBlogError(400, 'Choose a business.');
+      // The page to stay on is one of a fixed list; the brand itself is checked for membership by the page it lands on.
+      const to = url.searchParams.get('to') ?? '';
+      return redirect(res, `${SEO_BLOG_BASE}/b/${target.toLowerCase()}/${(SEO_BLOG_SWITCH_TARGETS as readonly string[]).includes(to) ? to : 'overview'}`);
     }
     const brands = await engine.listBrands(actor);
     const messages = readMessage(input.sessionSecret, url);
@@ -382,7 +384,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const data = await loadAuthorityProgrammePage(engine, actor, brandId);
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
-    if (rest === 'dna') return send(res, 200, brandDnaPage(shell('setup'), await engine.brandDna(actor, brandId), randomUUID()));
+    if (rest === 'dna') return send(res, 200, brandDnaPage({ ...shell('setup'), switchTo: 'dna' }, await engine.brandDna(actor, brandId), randomUUID()));
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -458,7 +460,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
-    return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to brands</a></p></main></body></html>`);
+    return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to your businesses</a></p></main></body></html>`);
   }
 }
 
@@ -467,8 +469,21 @@ async function handlePost(
   f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void, input: SeoBlogRouteInput,
 ): Promise<void> {
   if (path === `${SEO_BLOG_BASE}/brands`) {
-    const { brand, created } = await engine.createBrand(actor, { commandId: f('commandId') ?? '', name: f('name') ?? '', website: f('website') });
-    return ok(`${SEO_BLOG_BASE}/b/${brand.id}/setup`, created ? `${brand.name} created. Add its website and guidance next.` : `${brand.name} already exists.`);
+    // A new business lands on the Brand DNA door ("Start with your website"), not on the long setup page.
+    let made: Awaited<ReturnType<SeoBlogEngine['createBrand']>>;
+    try { made = await engine.createBrand(actor, { commandId: f('commandId') ?? '', name: f('name') ?? '', website: f('website') }); }
+    catch (error) {
+      // Stay on the form with the reason (a name that is too short, a duplicate, or an account that may not add one).
+      if (error instanceof SeoBlogError && error.status < 500 && error.status !== 404) {
+        // The engine says "brand"; every page says "business".
+        const text = error.status === 403 ? 'Only the account owner can add a business. Ask them to add it.'
+          : error.message.replace(/^Enter a brand name/u, 'Enter a business name');
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', text)}#add-business`);
+      }
+      throw error;
+    }
+    const { brand, created } = made;
+    return ok(`${SEO_BLOG_BASE}/b/${brand.id}/dna`, created ? `${brand.name} is added. Start with its website.` : `${brand.name} is already here.`);
   }
   if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
   const parts = rest.split('/');
