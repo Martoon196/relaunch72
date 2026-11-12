@@ -288,9 +288,14 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     const previous = this.jobs.get(decision.job.id);
     if (previous && previous.rowVersion !== decision.job.rowVersion) throw new StaleWriteError('job');
     if (decision.profile && (this.profiles.get(input.brandId) ?? []).some((p) => p.version === decision.profile!.version)) throw new StaleWriteError('profile');
+    for (const doc of decision.knowledge ?? []) {
+      if (doc.brandId !== input.brandId) throw new SeoBlogError(409, 'Profile task scope changed.');
+      if (this.knowledge.has(`${doc.brandId}:${doc.id}:${doc.version}`)) throw new StaleWriteError('knowledge');
+    }
     // No awaits between validation and these mutations: the memory boundary is atomic too.
     const next = { ...clone(decision.job), rowVersion: previous ? previous.rowVersion + 1 : 1 };
     if (decision.profile) this.profiles.set(input.brandId, [...(this.profiles.get(input.brandId) ?? []), clone(decision.profile)]);
+    for (const doc of decision.knowledge ?? []) this.knowledge.set(`${doc.brandId}:${doc.id}:${doc.version}`, clone(doc));
     if (decision.usage) this.usage.push(clone(decision.usage));
     if (decision.event) this.activity.push(clone(decision.event));
     this.jobs.set(next.id, next);

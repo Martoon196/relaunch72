@@ -553,6 +553,11 @@ export class PgSeoBlogStore implements SeoBlogStore {
       const next = decision.job;
       if (!isProfileJob(next) || next.brandId !== input.brandId) throw new SeoBlogError(409, 'Profile task scope changed.');
       if (decision.profile) await t.query("INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, 'profile', $2, $3)", [input.brandId, String(decision.profile.version).padStart(8, '0'), JSON.stringify(decision.profile)]);
+      // Same row shape and key as saveKnowledge; the brand row is already locked above, as putRecord locks it.
+      for (const doc of decision.knowledge ?? []) {
+        if (doc.brandId !== input.brandId) throw new SeoBlogError(409, 'Profile task scope changed.');
+        await t.query("INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, 'knowledge', $2, $3)", [input.brandId, `${doc.id}:${doc.version}`, JSON.stringify(doc)]);
+      }
       if (decision.usage) await t.query('INSERT INTO app.seo_blog_usage (workspace_id, kind, amount, at, reference) VALUES ($1, $2, $3, $4, $5)', [input.brandId, decision.usage.kind, decision.usage.amount, decision.usage.at, decision.usage.reference]);
       if (decision.event) await t.query('INSERT INTO app.seo_blog_activity (workspace_id, at, actor, kind, message, subject_id) VALUES ($1,$2,$3,$4,$5,$6)', [input.brandId, decision.event.at, decision.event.actor, decision.event.kind, decision.event.message, decision.event.subjectId]);
       const { rowVersion, ...data } = next;

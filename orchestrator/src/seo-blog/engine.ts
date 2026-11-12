@@ -31,7 +31,7 @@ import { observeWebsiteDelivery } from './website-delivery.js';
 import { WORDPRESS_URL_CONTRACT } from './website-target.js';
 import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
 import { researchQueries, researchQuerySeeds, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
-import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
+import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
@@ -108,6 +108,15 @@ export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000,
   profileFromSite: 40_000, plan: 40_000, article: 32_000, promotion: 6_000, section: 8_000, searchPerPlan: 8 });
 
 const JOB_MAX_ATTEMPTS = 3;
+/** Setup's documents-only extraction. Unchanged by Brand DNA. */
+const PROFILE_PROMPT = 'seo-blog-profile.md';
+/** The website door: the same extraction with word-for-word sources required. */
+const PROFILE_SITE_PROMPT = 'seo-blog-profile-site.md';
+/** How long a website logo proposal is reused, so viewing the kit page again does not fetch the files again. */
+const WEBSITE_LOOK_CACHE_MS = 10 * 60 * 1000;
+const WEBSITE_LOOK_CACHE_SIZE = 8;
+/** Kept for the life of the process, not of one engine: the portal builds a new engine for every request. At most eight logos of 1 MB. */
+const WEBSITE_LOOKS = new Map<string, { at: number; found: ProposedWebsiteLook }>();
 const LEASE_MS = 10 * 60 * 1000;
 const PREPARED_STALE_MS = 5 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 30;
@@ -422,17 +431,24 @@ export class SeoBlogEngine {
     return profile;
   }
 
-  private profileGenerationContext(): ProfileJobPayload['source']['prompt'] {
-    const p = loadPrompt('seo-blog-profile.md');
+  /** The website door has its own prompt, so Setup's documents-only extraction keeps exactly the prompt it always had. */
+  private profileGenerationContext(strict = false): ProfileJobPayload['source']['prompt'] {
+    const p = loadPrompt(strict ? PROFILE_SITE_PROMPT : PROFILE_PROMPT);
     return { version: p.header.version, sha256: p.sha256, model: stageModel(p.header.stage, p.header.model) };
   }
 
-  private profileInputs(s: ProfileJobSnapshot, prompt: ProfileJobPayload['source']['prompt'], strict = false): { documents: KnowledgeDocument[]; sha: string; source: ProfileJobPayload['source'] } {
+  /**
+   * What a profile task reads. `staged` are website pages held with a Brand DNA card task: they count for that
+   * task only, and only while each is still newer than the saved document it would replace.
+   */
+  private profileInputs(s: ProfileJobSnapshot, prompt: ProfileJobPayload['source']['prompt'], strict = false, staged: readonly KnowledgeDocument[] = []): { documents: KnowledgeDocument[]; sha: string; source: ProfileJobPayload['source']; unsaved: KnowledgeDocument[] } {
     const latest = new Map<string, KnowledgeDocument>();
     for (const d of s.knowledge) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
+    const unsaved = staged.filter((d) => d.brandId === s.brand.id && (latest.get(d.id)?.version ?? 0) < d.version);
+    for (const d of unsaved) latest.set(d.id, d);
     const documents = [...latest.values()].filter((d) => d.active);
     const source: ProfileJobPayload['source'] = { brandName: s.brand.name, website: s.brand.website, knowledge: this.knowledgeRefs(documents), prompt, ...(strict ? { strict: true as const } : {}) };
-    return { documents, sha: sha256(source), source };
+    return { documents, sha: sha256(source), source, unsaved };
   }
 
   async requestProfileExtraction(actor: Actor, brandId: string, input: { commandId: string; baseVersion: number; acknowledgePriorUsage?: boolean }): Promise<Job> {
@@ -467,13 +483,16 @@ export class SeoBlogEngine {
   }
 
   private profileHold(job: Job, reason: string, message: string, now: string): Job {
-    return { ...job, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, payload: { ...profilePayload(job), reason }, error: message, progress: message, updatedAt: now };
+    // Website pages held with a Brand DNA card task are dropped unless the task can still be queued again as it stands.
+    const { staged, ...rest } = profilePayload(job);
+    const payload = staged && ['budget', 'unavailable'].includes(reason) ? { ...rest, staged } : rest;
+    return { ...job, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, payload: { ...payload, reason }, error: message, progress: message, updatedAt: now };
   }
 
   /** A receipt may account late usage, but only a currently owned lease may apply a profile. */
   private async completeProfileJob(job: Job, receipt: ProfileJobReceipt): Promise<Job> {
     const now = this.now(); const requesterId = profilePayload(job).requestedBy;
-    const context = this.profileGenerationContext();
+    const context = this.profileGenerationContext(profilePayload(job).source.strict === true);
     return this.store.profileJobBoundary({ brandId: job.brandId, jobId: job.id, requesterId, now, decide: (s) => {
       const current = s.job;
       if (!current) throw new SeoBlogError(404, 'Profile task not found.');
@@ -490,18 +509,22 @@ export class SeoBlogEngine {
         return { job: late, write: true, usage };
       }
       const strict = p.source.strict === true;
-      const sameInputs = this.profileInputs(s, context, strict).sha === p.inputSha && (s.profile?.version ?? 0) === p.baseVersion && sha256(s.profile) === p.baseProfileSha;
+      const inputs = this.profileInputs(s, context, strict, p.staged);
+      const sameInputs = inputs.sha === p.inputSha && (s.profile?.version ?? 0) === p.baseVersion && sha256(s.profile) === p.baseProfileSha;
       if (!s.requesterAllowed || !sameInputs) return { job: this.profileHold(updated, !s.requesterAllowed ? 'requester_changed' : 'inputs_changed', !s.requesterAllowed ? 'The requesting owner no longer manages this brand. Result retained; no profile was replaced.' : 'Guidance or profile changed during extraction. Result retained; current edits were not replaced.', now), write: true, usage };
-      const profile: BrandProfile = { ...actual.value, brandId: job.brandId, version: p.baseVersion + 1, knowledge: this.knowledgeRefs(this.profileInputs(s, context, strict).documents),
-        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation };
-      return { job: { ...updated, state: 'done', leaseOwner: null, leaseExpiresAt: null, payload: { ...p, receipt: actual, resultVersion: profile.version }, error: null, progress: `Profile version ${profile.version} is ready. Review and confirm it.`, updatedAt: now }, write: true, profile, usage,
+      const profile: BrandProfile = { ...actual.value, brandId: job.brandId, version: p.baseVersion + 1, knowledge: this.knowledgeRefs(inputs.documents),
+        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation, ...(strict ? { strict: true as const } : {}) };
+      // The website pages this card was built from become brand documents here, in the same write as the card, and not before.
+      const { staged: _held, ...settled } = p;
+      return { job: { ...updated, state: 'done', leaseOwner: null, leaseExpiresAt: null, payload: { ...settled, receipt: actual, resultVersion: profile.version }, error: null, progress: `Profile version ${profile.version} is ready. Review and confirm it.`, updatedAt: now }, write: true, profile, usage,
+        ...(inputs.unsaved.length ? { knowledge: inputs.unsaved } : {}),
         event: { brandId: job.brandId, at: now, actor: 'system', kind: 'profile.extracted', message: `Profile version ${profile.version} extracted in the background. Review and confirm it.`, subjectId: job.id } };
     } });
   }
 
   private async runProfileJob(job: Job): Promise<Job> {
     const now = this.now(); let startedHere = false;
-    const context = this.profileGenerationContext();
+    const context = this.profileGenerationContext(profilePayload(job).source.strict === true);
     let modelInput: { brandName: string; website: string | null; documents: KnowledgeDocument[]; strict: boolean } | null = null;
     const started = await this.store.profileJobBoundary({ brandId: job.brandId, jobId: job.id, requesterId: profilePayload(job).requestedBy, now, decide: (s) => {
       const current = s.job;
@@ -511,7 +534,7 @@ export class SeoBlogEngine {
       if (p.receipt) return { job: current, write: false };
       if (p.start) return { job: this.profileHold(current, 'outcome_unknown', 'Extraction was interrupted after the model call started. Its outcome and token usage are uncertain. Review the current profile before explicitly starting another extraction.', now), write: true };
       const strict = p.source.strict === true, estimate = strict ? USAGE_ESTIMATES.profileFromSite : USAGE_ESTIMATES.profile;
-      const inputs = this.profileInputs(s, context, strict);
+      const inputs = this.profileInputs(s, context, strict, p.staged);
       if (!s.requesterAllowed || inputs.sha !== p.inputSha || (s.profile?.version ?? 0) !== p.baseVersion || sha256(s.profile) !== p.baseProfileSha) return { job: this.profileHold(current, 'inputs_changed', 'The requesting owner, guidance or profile changed. Refresh and queue a new extraction.', now), write: true };
       if (!this.deps.llm) return { job: this.profileHold(current, 'unavailable', 'Profile generation is not configured.', now), write: true };
       if (s.brand.settings.budgets.modelTokensPerMonth <= 0 || s.modelTokensUsed + estimate > s.brand.settings.budgets.modelTokensPerMonth) return { job: this.profileHold(current, 'budget', new BudgetExceededError('model_tokens', s.modelTokensUsed, s.brand.settings.budgets.modelTokensPerMonth, estimate).message, now), write: true };
@@ -538,7 +561,11 @@ export class SeoBlogEngine {
         if (p.receipt || s.job.state === 'cancelled' || p.start?.nonce !== payload.start!.nonce) return { job: s.job, write: false };
         if (rejected) {
           const at = this.now();
-          return { job: this.profileHold(s.job, 'rejected', 'We stopped before making your card. It would have included a price or a fact we could not find word for word in your website pages or documents, and we do not guess. Nothing was saved.', at), write: true,
+          // Nothing read from the website was kept: the pages held with this task are dropped with it.
+          const message = rejected.reason === 'content'
+            ? 'We stopped before making your card. It would have included a price or a fact we could not find word for word in your website pages or documents, and we do not guess. Nothing was saved or changed.'
+            : 'We could not put your card together this time. Nothing was saved or changed. Please try again.';
+          return { job: this.profileHold(s.job, 'rejected', message, at), write: true,
             usage: { brandId: job.brandId, kind: 'model_tokens' as const, amount: rejected.record.tokensIn + rejected.record.tokensOut, at, reference: `profile:${s.job.id}:${payload.start!.nonce}:rejected` },
             event: { brandId: job.brandId, at, actor: 'system', kind: 'profile.rejected', message: `Brand DNA card not made: ${rejected.message}`.slice(0, 400), subjectId: s.job.id } };
         }
@@ -564,6 +591,12 @@ export class SeoBlogEngine {
     const current = await this.store.latestProfile(brandId);
     if (!current || current.version !== version) throw new StaleWriteError('brand profile');
     if (current.confirmedAt) return current;
+    // A card made by the website door keeps its own rules whichever page confirms it: every question settled, and still
+    // matching today's pages and documents. A profile made the older way confirms exactly as it always has.
+    if (current.strict) {
+      if (current.conflicts.length > 0) throw new SeoBlogError(409, 'Choose the right answer for each question on your Brand DNA card first. Then you can confirm it.', 'brand_dna_open_conflicts');
+      if (this.profileStale(current, await this.activeKnowledge(brandId))) throw new SeoBlogError(409, 'Your website pages or documents changed after this card was made, so it is out of date. Read your website again, then confirm the new card.', 'brand_dna_out_of_date');
+    }
     // Confirmation is a new immutable profile version so history keeps what was confirmed and when.
     const confirmed: BrandProfile = { ...current, version: current.version + 1, confirmedAt: this.now(), confirmedBy: actor.userId, createdAt: this.now() };
     await this.store.saveProfile(confirmed);
@@ -660,14 +693,9 @@ export class SeoBlogEngine {
     if (replay) return replay;
     const active = jobs.find((j) => (isBrandDnaJob(j) || isProfileJob(j)) && ['queued', 'running'].includes(j.state));
     if (active) return active;
-    if (input.website?.trim()) {
-      const website = normaliseWebsite(input.website);
-      if (website !== brand.website) {
-        brand = await this.store.updateBrand({ ...brand, website });
-        await this.log(brandId, actor.userId, 'brand.updated', `Website address set to ${website} from the Brand DNA page.`);
-      }
-    }
-    if (!brand.website) throw new SeoBlogError(400, 'Type your website address first, for example www.example.co.uk.');
+    // Checked first and saved last: a request that is refused changes nothing, not even the address.
+    const website = input.website?.trim() ? ownerWebsite(input.website) : brand.website;
+    if (!website) throw new SeoBlogError(400, 'Type your website address first, for example www.example.co.uk.');
     const [profile, documents] = await Promise.all([this.store.latestProfile(brandId), this.activeKnowledge(brandId)]);
     if (this.brandDnaStatusOf(profile, documents) === 'confirmed' && !input.readAgain) {
       throw new SeoBlogError(409, 'Your Brand DNA is already confirmed. Reading your website again makes a new card, and your content pauses until you confirm it. Press “Read my website again” only if you want that.', 'brand_dna_confirmed');
@@ -677,14 +705,21 @@ export class SeoBlogEngine {
     }
     if (!this.deps.llm) throw new SeoBlogError(409, 'The writing service is not switched on for this account yet, so a card cannot be made. Nothing was read.', 'generation_unavailable');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.profileFromSite).catch((error) => {
-      if (error instanceof BudgetExceededError) throw new SeoBlogError(409, 'Set a monthly allowance first. Reading your website needs room for about 40,000 tokens this month. Nothing was read and nothing was spent.', 'brand_dna_allowance');
+      if (error instanceof BudgetExceededError) throw new SeoBlogError(409, 'Set a monthly allowance first. Reading your website uses a little of your monthly writing allowance. Nothing was read and nothing was spent.', 'brand_dna_allowance');
       throw error;
     });
+    if (website !== brand.website) {
+      brand = await this.store.updateBrand({ ...brand, website });
+      await this.log(brandId, actor.userId, 'brand.updated', `Website address set to ${website} from the Brand DNA page.`);
+    }
     const now = this.now();
     const payload: BrandDnaJobPayload = { stage: BRAND_DNA_STAGE, requestedBy: actor.userId, commandId: input.commandId, profileJobId: randomUUID(),
       replaceConfirmed: input.readAgain === true, acknowledgePriorUsage: input.acknowledgePriorUsage === true };
+    // One read at a time, decided by the store and not by the check above: every request made after the same earlier
+    // reads shares one key, so two tabs pressed together get the same task and only one read (and one card) is queued.
+    const earlier = sha256(jobs.filter(isBrandDnaJob).map((j) => j.id).sort());
     const { job, created } = await this.store.enqueueJob({
-      id: randomUUID(), brandId, kind: 'inventory', idempotencyKey: `brand-dna:${input.commandId}`, payload: { ...payload }, state: 'queued', attempts: 0, maxAttempts: JOB_MAX_ATTEMPTS,
+      id: randomUUID(), brandId, kind: 'inventory', idempotencyKey: `brand-dna:after:${earlier}`, payload: { ...payload }, state: 'queued', attempts: 0, maxAttempts: JOB_MAX_ATTEMPTS,
       leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Waiting to read your website. You can leave this page.', error: null, createdAt: now, updatedAt: now, rowVersion: 1,
     });
     if (created) await this.log(brandId, actor.userId, 'brand_dna.requested', `Website read for the Brand DNA card requested (${brand.website}).`, job.id);
@@ -728,18 +763,21 @@ export class SeoBlogEngine {
         ? 'We could not read enough words from your website. Some websites only show their words inside a browser. Paste your details instead and we will use those.'
         : `We could not open ${brand.website}. Check the address is right. You can also paste your details instead and we will use those.`);
     }
+    // Nothing is saved here. New and changed pages travel with the card task and become brand documents only in the
+    // same write as the card built from them, so a refused or failed card leaves the brand exactly as it was.
     // A site that gave almost no words adds nothing: the card is then made from the owner's documents alone.
+    const staged: KnowledgeDocument[] = [];
     if (websiteReadable) {
-      // Pages kept from an earlier website address stop being sources once the new address has been read.
+      // Pages kept from an earlier website address stop being sources once a card from the new address is saved.
       for (const old of before.filter((d) => d.origin?.kind === 'website' && !sameSite(d.origin.url, brand.website!))) {
-        await this.store.saveKnowledge({ ...old, version: old.version + 1, active: false, createdAt: this.now(), statusDetail: 'From an earlier website address. No longer used.' });
+        staged.push({ ...old, version: old.version + 1, active: false, createdAt: this.now(), statusDetail: 'From an earlier website address. No longer used.' });
       }
-      for (const document of plan.documents) await this.store.saveKnowledge(document);
+      staged.push(...plan.documents);
     }
     await this.log(job.brandId, 'system', 'brand_dna.read', websiteReadable
       ? `Website read for Brand DNA: ${plan.pagesRead} page(s), ${plan.documents.length} new or changed.`
       : 'Website read for Brand DNA gave almost no words; the card uses the documents already added.', job.id);
-    await this.queueBrandDnaCard(job.brandId, payload);
+    await this.queueBrandDnaCard(job.brandId, payload, staged);
     const fresh = await this.store.getJob(job.brandId, job.id);
     if (fresh && fresh.state === 'running' && fresh.leaseOwner === job.leaseOwner) {
       const { reason: _earlierHold, ...rest } = fresh.payload;
@@ -748,9 +786,9 @@ export class SeoBlogEngine {
   }
 
   /** Queue the strict (word-for-word) card task on behalf of the owner who asked. Replays its own receipt. */
-  private queueBrandDnaCard(brandId: string, payload: BrandDnaJobPayload): Promise<Job> {
+  private queueBrandDnaCard(brandId: string, payload: BrandDnaJobPayload, staged: readonly KnowledgeDocument[]): Promise<Job> {
     const now = this.now();
-    const context = this.profileGenerationContext();
+    const context = this.profileGenerationContext(true);
     return this.store.profileJobBoundary({ brandId, jobId: payload.profileJobId, requesterId: payload.requestedBy, now, decide: (s) => {
       const replay = s.jobs.find((j) => profilePayload(j).requestIds.includes(payload.profileJobId));
       if (replay) return { job: replay, write: false };
@@ -758,11 +796,12 @@ export class SeoBlogEngine {
       if (s.jobs.some((j) => ['queued', 'running'].includes(j.state))) throw new SeoBlogError(409, 'Another card is already being prepared. Wait for it to finish, then read your website again.');
       const pendingUsage = unacknowledgedProfileCalls(s.jobs);
       if (pendingUsage.length && !payload.acknowledgePriorUsage) throw new SeoBlogError(409, 'An earlier attempt did not report back and may already have used some of your monthly allowance. Tick the box to say you understand, then try again.');
-      const inputs = this.profileInputs(s, context, true);
+      const inputs = this.profileInputs(s, context, true, staged);
       if (!inputs.documents.some((d) => d.text)) throw new SeoBlogError(409, 'There are no readable website pages or documents to make a card from.');
       if (s.brand.settings.budgets.modelTokensPerMonth <= 0 || s.modelTokensUsed + USAGE_ESTIMATES.profileFromSite > s.brand.settings.budgets.modelTokensPerMonth) throw new SeoBlogError(409, 'Set a monthly allowance first. Nothing was spent.');
       const p: ProfileJobPayload = { stage: 'profile', requestedBy: payload.requestedBy, requestIds: [payload.profileJobId], inputSha: inputs.sha, source: inputs.source,
-        baseVersion: s.profile?.version ?? 0, baseProfileSha: sha256(s.profile), acknowledgedPriorUsage: pendingUsage.map((j) => j.id) };
+        baseVersion: s.profile?.version ?? 0, baseProfileSha: sha256(s.profile), acknowledgedPriorUsage: pendingUsage.map((j) => j.id),
+        ...(inputs.unsaved.length ? { staged: inputs.unsaved } : {}) };
       const job: Job = { id: payload.profileJobId, brandId, kind: 'write', idempotencyKey: `profile:${payload.profileJobId}`, payload: { ...p }, state: 'queued', attempts: 0, maxAttempts: 1,
         leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Preparing your Brand DNA card. You can leave this page.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 };
       return { job, write: true, event: { brandId, at: now, actor: payload.requestedBy, kind: 'profile.queued', message: 'Brand DNA card queued from the website read.', subjectId: job.id } };
@@ -819,6 +858,19 @@ export class SeoBlogEngine {
     await this.brandFor(actor, brandId);
     const look = (await this.store.getInventory(brandId))?.look;
     if (!look || (!look.logoCandidates.length && !look.themeColour)) return null;
+    // Looked up once and reused for a few minutes: opening the kit page again, or pressing "Yes, use these" on what
+    // was just shown, does not fetch the files from the website again.
+    const key = sha256({ brandId, look }), at = Date.parse(this.now());
+    const cached = WEBSITE_LOOKS.get(key);
+    if (cached && at >= cached.at && at - cached.at < WEBSITE_LOOK_CACHE_MS) return cached.found;
+    const found = await this.fetchWebsiteLook(look);
+    WEBSITE_LOOKS.delete(key);
+    WEBSITE_LOOKS.set(key, { at, found });
+    for (const oldest of WEBSITE_LOOKS.keys()) { if (WEBSITE_LOOKS.size <= WEBSITE_LOOK_CACHE_SIZE) break; WEBSITE_LOOKS.delete(oldest); }
+    return found;
+  }
+
+  private async fetchWebsiteLook(look: WebsiteLook): Promise<ProposedWebsiteLook> {
     let refused: string | null = null;
     for (const url of look.logoCandidates.slice(0, 3)) {
       try {
@@ -2927,6 +2979,18 @@ function bodyCites(v: { intro: string; sections: { body: string }[]; conclusion:
   const text = [v.intro, ...v.sections.map((s) => s.body), v.conclusion].join('\n');
   for (const [id, s] of short) if (s.id === sourceId && text.includes(`[src:${id}]`)) return true;
   return false;
+}
+
+/** The address an owner typed at the Brand DNA door. A mistyped one is their mistake to fix, said plainly, not a fault of the service. */
+function ownerWebsite(raw: string): string {
+  try {
+    const website = normaliseWebsite(raw);
+    if (!new URL(website).hostname.includes('.')) throw new SafeFetchError('invalid_url', 'No dot in the address.');
+    return website;
+  } catch (error) {
+    if (error instanceof SafeFetchError) throw new SeoBlogError(400, 'That doesn’t look like a website address. It should look like www.yourbusiness.co.uk', 'website_address');
+    throw error;
+  }
 }
 
 export function normaliseWebsite(raw: string): string {

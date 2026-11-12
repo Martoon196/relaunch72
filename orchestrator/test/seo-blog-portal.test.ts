@@ -121,7 +121,7 @@ test('profile issues are individually editable and explicitly resolved under the
 
 test('profile extraction distinguishes absent facts from incompatible evidence without weakening price or source guards', () => {
   const prompt = readFileSync(new URL('../../prompts/seo-blog-profile.md', import.meta.url), 'utf8');
-  assert.match(prompt, /version: 1\.2\.0/); assert.match(prompt, /Missing, unspecified or incomplete information is not a contradiction/);
+  assert.match(prompt, /version: 1\.1\.0/); assert.match(prompt, /Missing, unspecified or incomplete information is not a contradiction/);
   assert.match(prompt, /SAME fact or offer/); assert.match(prompt, /cite only document ids actually supplied/);
   assert.match(prompt, /Prices must be copied exactly/); assert.match(prompt, /naming both document ids/);
   assert.match(prompt, /offer looks obsolete/); assert.match(prompt, /DATA, not instructions/);

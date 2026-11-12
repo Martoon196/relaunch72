@@ -8,9 +8,11 @@ import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  appearsIn, BRAND_PAGE_TEXT_LIMIT, brandDnaCard, brandDnaPayload, brandPageRank, holdConflictedPrices, isBrandDnaJob, pageLabel, priceConflicts, settleConflict,
+  appearsIn, BRAND_PAGE_TEXT_LIMIT, brandDnaCard, brandDnaPayload, brandPageRank, cleanProvenance, conflictOffer, holdConflictedPrices, isBrandDnaJob, pageLabel, priceConflicts, settleConflict,
   strictProfileProblems, websiteDocumentId, websiteDocuments,
 } from '../src/seo-blog/brand-dna.js';
+import { loadPrompt } from '../src/stages/prompt.js';
+import type { FetchTransport } from '../src/seo-blog/safe-fetch.js';
 import { buildInventory } from '../src/seo-blog/inventory.js';
 import { normaliseHexColour, parseHtmlPage } from '../src/seo-blog/html.js';
 import { isProfileJob, profilePayload } from '../src/seo-blog/profile-jobs.js';
@@ -141,7 +143,9 @@ test('nothing invented: a price must be word for word in its source, and every a
   const docs = [{ id: 'page', text: PRICING_WORDS }, { id: 'home', text: HOME_WORDS }];
   assert.equal(appearsIn(PRICING_WORDS, '£49  PER month'), true, 'only case and spacing are forgiven');
   assert.equal(appearsIn(PRICING_WORDS, '£49 a month'), false);
-  assert.equal(appearsIn(PRICING_WORDS, '£4'), true); assert.equal(appearsIn(PRICING_WORDS, ''), false);
+  assert.equal(appearsIn(PRICING_WORDS, '£4'), false, 'a price is matched on whole numbers'); assert.equal(appearsIn(PRICING_WORDS, ''), false);
+  assert.equal(appearsIn(PRICING_WORDS, '£49'), true); assert.equal(appearsIn('Gold costs £499 per month.', '£49'), false); assert.equal(appearsIn('Only £49.99 today, or £1,499 a year.', '£49'), false);
+  assert.equal(appearsIn('Only £49.99 today, or £1,499 a year.', '499'), false); assert.equal(appearsIn('Homes from £49k.', '£49'), false); assert.equal(appearsIn('It costs £49.', '£49'), true);
   const base = { conflicts: [], missingFacts: [] };
   const good = { ...base, offers: [{ name: 'Quay Compliance Plan', description: '', price: '£49 per month', url: null, sourceDocumentId: 'page' }], audiences: ['Private landlords in Kent'], approvedClaims: [],
     sources: [{ field: 'audience' as const, value: 'Private landlords in Kent', documentId: 'home', quote: 'private landlords in Kent' }] };
@@ -256,6 +260,7 @@ test('an invented price is rejected: one correction pass, then the card is refus
   const cardJob = (await h.engine.listJobs(OWNER, brand.id)).find(isProfileJob)!;
   assert.equal(cardJob.state, 'blocked'); assert.equal(profilePayload(cardJob).reason, 'rejected'); assert.match(cardJob.error!, /could not find word for word/);
   assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, 3600, 'both calls are accounted');
+  assert.equal((await h.engine.listKnowledge(OWNER, brand.id)).length, 0, 'no page read for a refused card is kept'); assert.equal(profilePayload(cardJob).staged, undefined);
   await work(h); assert.equal(h.llm.calls.length, 2, 'a refused card is never retried on its own');
   const state = await h.engine.brandDna(OWNER, brand.id);
   assert.equal(state.status, 'none'); assert.equal(state.uncertainEarlierAttempt, false, 'a known rejection is not an uncertain charge');
@@ -293,9 +298,11 @@ test('a page and a document disagree: shown as a question, confirm is refused un
   const confirmed = await h.engine.confirmBrandDna(OWNER, brand.id, settled.version);
   assert.ok(confirmed.confirmedAt); assert.equal(h.llm.calls.length, 1, 'settling and confirming never call the model');
 
-  // The stricter confirm is the door's own: Setup's confirm keeps its existing behaviour.
+  // A card made by the website door keeps its rules whichever page confirms it: Setup's confirm cannot skip the question.
   const other = await proposedCard({ document: 'Quay Compliance Plan costs £59 per month. Private landlords in Kent.' });
-  assert.ok((await other.h.engine.confirmProfile(OWNER, other.brand.id, other.profile.version)).confirmedAt);
+  assert.equal(other.profile.strict, true);
+  await assert.rejects(other.h.engine.confirmProfile(OWNER, other.brand.id, other.profile.version), (error: Error & { code?: string }) => error.code === 'brand_dna_open_conflicts');
+  assert.equal((await other.h.engine.getProfile(OWNER, other.brand.id))!.confirmedAt, null);
 });
 
 test('no allowance: nothing is read, nothing is spent and the owner is told to set one', async () => {
@@ -577,6 +584,8 @@ test('logo and colours are proposed from the website and saved only when the own
   const shown = await call(service, owner, 'GET', `${kitUrl}?website=1`);
   assert.deepEqual(h.web.requests.slice(fetchedBefore), [`${SITE}/touch.png`]);
   assert.match(shown.body, /<h2>Is this your logo and colours\?<\/h2>/); assert.match(shown.body, /<button type="submit">Yes, use these<\/button>/);
+  const viewedOnce = h.web.requests.length;
+  assert.match((await call(service, owner, 'GET', `${kitUrl}?website=1`)).body, /Is this your logo and colours/); assert.equal(h.web.requests.length, viewedOnce, 'opening the page again does not fetch the logo again');
   assert.match(shown.body, new RegExp(`src="data:image/png;base64,${logo.toString('base64').slice(0, 40)}`)); assert.match(shown.body, /Main colour #0f766e/);
   assert.match(shown.body, /<summary><strong>Choose my own logo and colours<\/strong><\/summary>/);
   assert.equal(await library.latestKit(brand.id), null, 'looking saves nothing');
@@ -626,8 +635,304 @@ test('an oversized or wrong-type website logo is refused through the guarded fet
 
   // A valid file of the right type is offered; a private address is refused before any request.
   h.web.set(`${SITE}/icon.png`, { contentType: 'image/png', body: '', bytes: png });
+  const settledRequests = h.web.requests.length;
+  assert.equal((await h.engine.proposedWebsiteLook(OWNER, brand.id))!.logo, null); assert.equal(h.web.requests.length, settledRequests, 'looking again straight away fetches nothing');
+  assert.equal((await h.makeEngine().proposedWebsiteLook(OWNER, brand.id))!.logo, null); assert.equal(h.web.requests.length, settledRequests, 'nor does another request, which gets its own engine');
+  h.clock.advance(11 * 60_000);
   const ok = (await h.engine.proposedWebsiteLook(OWNER, brand.id))!;
   assert.equal(ok.logo!.url, `${SITE}/icon.png`); assert.equal(ok.logo!.mime, 'image/png'); assert.equal(ok.refused, null);
   const page0 = await buildInventory(brand.id, SITE, h.web, { now: h.clock.now() });
   assert.ok(page0.look!.logoCandidates.every((u) => u.startsWith('https://')));
+});
+
+// ─── Fixes from the independent review ───────────────────────────────────────
+
+const DETAILS = `${HOME_WORDS} ${ABOUT_WORDS} ${PRICING_WORDS}`;
+/** A brand whose profile was made and confirmed the older way: pasted details in Brand setup, then "Extract profile". */
+async function setupConfirmedBrand(h: Harness) {
+  const brand = await newBrand(h);
+  await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'product_facts', title: 'About my business', pastedText: DETAILS });
+  await h.engine.requestProfileExtraction(OWNER, brand.id, { commandId: randomUUID(), baseVersion: 0 });
+  await work(h);
+  const extracted = (await h.engine.getProfile(OWNER, brand.id))!;
+  return { brand, profile: await h.engine.confirmProfile(OWNER, brand.id, extracted.version) };
+}
+
+test('a refused or failed card leaves a confirmed brand exactly as it was; pages become sources only in the same write as the card built from them', async () => {
+  const h = harness(); seedSite(h);
+  let answer: CardScript = honestCard;
+  useModel(h, (docs, attempt) => answer(docs, attempt));
+  const { brand } = await setupConfirmedBrand(h);
+  // Everything content is written and planned from. (The list of site pages is refreshed by any read, as the daily read does.)
+  const snapshot = async () => ({ documents: await h.engine.listKnowledge(OWNER, brand.id), profile: await h.engine.getProfile(OWNER, brand.id),
+    readiness: { ...await h.engine.readiness(OWNER, brand.id), inventory: null }, status: (await h.engine.brandDna(OWNER, brand.id)).status });
+  const before = await snapshot();
+  assert.equal(before.status, 'confirmed'); assert.equal(before.readiness.profile, 'confirmed'); assert.equal(before.documents.length, 1); assert.equal(before.profile!.strict, undefined);
+
+  // Refused: the model keeps an audience it cannot quote, twice.
+  answer = (docs, attempt) => ({ ...honestCard(docs, attempt), audiences: ['Private landlords in Kent', 'Landlords everywhere'] });
+  await read(h, brand.id, { readAgain: true });
+  await h.engine.tick('reader');
+  const waiting = (await h.engine.listJobs(OWNER, brand.id)).find((j) => isProfileJob(j) && j.state === 'queued')!;
+  assert.deepEqual(profilePayload(waiting).staged!.map((d) => d.title).sort(), ['About page', 'Home page', 'Pricing page'], 'the pages wait with the card task');
+  assert.deepEqual(await snapshot(), before, 'reading the website on its own changes nothing: the confirmed card is still current while the new one is made');
+  await work(h);
+  const refused = (await h.engine.listJobs(OWNER, brand.id)).find((j) => isProfileJob(j) && profilePayload(j).reason === 'rejected')!;
+  assert.match(refused.error!, /could not find word for word.*Nothing was saved or changed\./); assert.equal(profilePayload(refused).staged, undefined);
+  assert.deepEqual(await snapshot(), before, 'refused: same documents, same confirmed card, still ready to plan');
+  const spent = (await h.engine.usage(OWNER, brand.id)).model_tokens;
+
+  // Failed: the call to the writing service breaks. Still nothing changes, and nothing is left to tidy up in Brand setup.
+  h.llm.complete = async () => { throw new Error('socket hang up'); };
+  await read(h, brand.id, { readAgain: true }); await work(h);
+  assert.deepEqual(await snapshot(), before, 'failed: same documents, same confirmed card');
+  assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, spent);
+  const page1 = door((await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
+  assert.match(page1, /<span class="pill ok">Confirmed<\/span>/); assert.doesNotMatch(page1, /out of date/i);
+
+  // Made: the pages and the card arrive together, and only then does the brand wait for the owner's confirmation.
+  useModel(h, honestCard);
+  await h.engine.requestBrandDna(OWNER, brand.id, { commandId: randomUUID(), readAgain: true, acknowledgePriorUsage: true }); await work(h);
+  const after = await snapshot();
+  assert.equal(after.status, 'proposed'); assert.equal(after.profile!.strict, true); assert.equal(after.profile!.knowledge.length, 4);
+  assert.deepEqual(after.documents.map((d) => `${d.title} v${d.version} ${d.active}`).sort(), ['About my business v1 true', 'About page v1 true', 'Home page v1 true', 'Pricing page v1 true']);
+  assert.ok((await h.engine.listJobs(OWNER, brand.id)).filter(isProfileJob).every((j) => profilePayload(j).staged === undefined), 'no finished task still carries page words');
+  assert.ok((await h.engine.confirmBrandDna(OWNER, brand.id, after.profile!.version)).confirmedAt);
+  assert.equal((await h.engine.readiness(OWNER, brand.id)).profile, 'confirmed');
+});
+
+test('strict mode: a short or unrelated quote, a figure outside its quote, a price cut out of a longer number and a loose question are all refused', () => {
+  const docs = [
+    { id: 'd1', text: 'Gold Membership costs £499 per month and includes weekly deal alerts. We help property investors find deals. Trusted by investors across the UK.' },
+    { id: 'd2', text: 'Price list: Gold Membership £599 per month. Refunds: a money-back guarantee is available for thirty days.' },
+  ];
+  const gold = { name: 'Gold Membership', description: 'Weekly deal alerts', price: null as string | null, url: null, sourceDocumentId: 'd1' };
+  const base = { summary: 'We help investors.', positioning: '', voice: { tone: [] as string[], do: [] as string[], dont: [] as string[], examples: [] as string[] }, missingFacts: [], offers: [gold], audiences: [] as string[], approvedClaims: [] as string[], conflicts: [] };
+  const claim = (value: string, quote: string) => strictProfileProblems({ ...base, approvedClaims: [value], sources: [{ field: 'claim', value, documentId: 'd1', quote }] }, docs);
+  assert.deepEqual(claim('We help property investors find deals', 'We help property investors find deals'), []);
+  assert.match(claim('We help property investors find deals', 'in')[0]!, /too short/);
+  assert.match(claim('Over 10,000 investors trust us, with 27% average returns guaranteed', 'Trusted by investors across the UK')[0]!, /states "10,000", which the quote does not contain/);
+  assert.match(claim('Rated the best sourcing company in Britain', 'We help property investors find deals')[0]!, /does not use the same key words/);
+  const audience = (value: string, quote: string) => strictProfileProblems({ ...base, audiences: [value], sources: [{ field: 'audience', value, documentId: 'd1', quote }] }, docs);
+  assert.deepEqual(audience('Property investors', 'We help property investors find deals'), []); assert.match(audience('First-time buyers in Leeds', 'We help property investors find deals')[0]!, /key words/);
+
+  // Prices on whole numbers; figures in names, descriptions and voice lines must be in a source.
+  for (const price of ['£4', '£49', '£499 per year']) assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, price }] }, docs)[0]!, /does not appear character for character/, price);
+  assert.deepEqual(strictProfileProblems({ ...base, offers: [{ ...gold, price: '£499 per month' }] }, docs), []);
+  assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, name: 'Guaranteed 30% ROI plan' }] }, docs)[0]!, /name of offer "Guaranteed 30% ROI plan" states "30%"/);
+  assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, description: 'Only £599 per month.' }] }, docs)[0]!, /description of "Gold Membership" states "£599", which is not in document d1/);
+  assert.match(strictProfileProblems({ ...base, voice: { ...base.voice, tone: ['Trusted by 9,999 clients'] } }, docs)[0]!, /voice "tone" line states "9,999"/);
+  assert.match(strictProfileProblems({ ...base, voice: { ...base.voice, do: ['Say we have 5,000 five-star reviews'] } }, docs)[0]!, /voice "do" line states "5,000"/);
+
+  // A question must say what kind it is, which offer a price belongs to, and offer only answers written in the document.
+  const about = { field: 'Gold Membership price', detail: 'The page says £499 and the price list says £599.', documentIds: ['d1', 'd2'] };
+  const conflict = (c: Record<string, unknown>) => strictProfileProblems({ ...base, conflicts: [{ ...about, ...c }] } as never, docs).join('\n');
+  assert.match(conflict({}), /must give kind/);
+  assert.match(conflict({ kind: 'price' }), /must give offer: the exact name/); assert.match(conflict({ kind: 'price', offer: 'Gold' }), /must give offer: the exact name/);
+  assert.match(conflict({ kind: 'other', offer: 'Platinum' }), /names the offer "Platinum", which is not in offers/);
+  const fair = [{ value: '£499 per month', documentId: 'd1', quote: 'Gold Membership costs £499 per month' }, { value: '£599 per month', documentId: 'd2', quote: 'Gold Membership £599 per month' }];
+  assert.equal(conflict({ kind: 'price', offer: 'Gold Membership', options: fair }), '');
+  assert.match(conflict({ kind: 'price', offer: 'Gold Membership', options: [{ ...fair[1]!, quote: '£599' }] }), /too short/);
+  assert.match(conflict({ kind: 'price', offer: 'Gold Membership', options: [{ ...fair[1]!, quote: 'Price list: Gold Membership' }] }), /must contain "£599"/);
+  assert.match(conflict({ kind: 'other', offer: null, options: [{ value: 'free forever', documentId: 'd2', quote: 'a money-back guarantee is available' }] }), /the answer "free forever" does not appear character for character in document d2/);
+  assert.equal(conflict({ kind: 'other', offer: null, field: 'Refund period', detail: 'x', options: [{ value: 'thirty days', documentId: 'd2', quote: 'a money-back guarantee is available for thirty days' }] }), '');
+
+  // What is kept to show the owner is only what can be shown truthfully, on either path.
+  const cleaned = cleanProvenance({ ...base, approvedClaims: ['Over 10,000 investors trust us'], sources: [{ field: 'claim' as const, value: 'Over 10,000 investors trust us', documentId: 'd1', quote: 'Trusted by investors across the UK' }],
+    conflicts: [{ ...about, kind: 'other' as const, options: [{ value: 'free forever', documentId: 'd2', quote: 'a money-back guarantee is available' }, { value: 'thirty days', documentId: 'd2', quote: 'a money-back guarantee is available for thirty days' }] }] }, docs);
+  assert.equal(cleaned.sources, undefined, 'a quote that does not carry the fact is never shown as its source');
+  assert.deepEqual(cleaned.conflicts[0]!.options!.map((o) => o.value), ['thirty days'], 'an answer not written in its document is never offered as a choice');
+});
+
+test('a question about a price always holds and then sets that offer’s price, including old questions that carry no kind; a losing price does not live on in the description', () => {
+  const docs = [{ id: 'd1', text: 'Gold Membership costs £499 per month and includes weekly deal alerts.' }, { id: 'd2', text: 'Price list: Gold Membership £599 per month.' }];
+  const priced = { name: 'Gold Membership', description: 'Weekly deal alerts. Only £499 per month.', price: '£499 per month', url: null, sourceDocumentId: 'd1' };
+  const old = { field: 'Gold Membership price', detail: 'The page says £499 and the price list says £599.', documentIds: ['d1', 'd2'] };
+  const held = holdConflictedPrices({ offers: [priced], conflicts: [old], audiences: [], approvedClaims: [], missingFacts: [] }, docs);
+  assert.equal(held.offers[0]!.price, null, 'a disputed price is never shown as settled'); assert.equal(held.offers[0]!.description, 'Weekly deal alerts.'); assert.equal(held.conflicts.length, 1);
+
+  // A profile confirmed before Brand DNA: the question has no kind and the disputed price still sits on the offer.
+  const profile = { brandId: 'b', version: 4, knowledge: [], summary: 'Summary of the business.', audiences: [], positioning: '', conversionPages: [], voice: { tone: [], do: [], dont: [], examples: [] }, exclusions: [], missingFacts: [],
+    offers: [priced], approvedClaims: ['We help investors'], conflicts: [old], factsSha: 'f', source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: 'x', generation: null } as unknown as BrandProfile;
+  const card = brandDnaCard(profile, []);
+  assert.equal(card.offers[0]!.priceOpen, true, 'the card asks, it does not show £499 as the price'); assert.equal(card.checked, false);
+  const typed = settleConflict(profile, 0, { kind: 'typed', text: '£599 per month' });
+  assert.equal(typed.offers[0]!.price, '£599 per month'); assert.equal(typed.offers[0]!.priceSourceDocumentId, null); assert.equal(typed.conflicts.length, 0);
+  assert.deepEqual(typed.approvedClaims, ['We help investors'], 'the answer is the offer’s price, not a second claim beside a different price');
+  assert.equal(typed.offers[0]!.description, 'Weekly deal alerts.', 'the price the owner did not choose is gone from the description');
+  const settledCard = brandDnaCard({ ...profile, ...typed }, []);
+  assert.equal(settledCard.offers[0]!.priceOpen, false); assert.equal(settledCard.offers[0]!.price, '£599 per month'); assert.equal(settledCard.offers[0]!.priceSource!.label, 'You told us');
+
+  // Choosing the price the description already states keeps that sentence.
+  const withChoices = { ...profile, conflicts: [{ ...old, kind: 'price', offer: 'Gold Membership', options: [{ value: '£499 per month', documentId: 'd1', quote: 'Gold Membership costs £499 per month' }, { value: '£599 per month', documentId: 'd2', quote: 'Gold Membership £599 per month' }] }] } as unknown as BrandProfile;
+  assert.equal(settleConflict(withChoices, 0, { kind: 'option', index: 0 }).offers[0]!.description, 'Weekly deal alerts. Only £499 per month.');
+  assert.equal(settleConflict(withChoices, 0, { kind: 'option', index: 1 }).offers[0]!.description, 'Weekly deal alerts.');
+  // A price question whose offer is no longer on the card changes nothing rather than becoming a loose claim.
+  assert.throws(() => settleConflict({ ...withChoices, offers: [] } as unknown as BrandProfile, 0, { kind: 'option', index: 0 }), { status: 409 });
+});
+
+test('offer names: the exact name first, then whole words only, so a question about "Pro Plus" never touches "Pro" and "Pro" is never read out of "property"', () => {
+  const offer = (name: string, price: string | null) => ({ name, description: '', price, url: null, sourceDocumentId: 'page' });
+  const offers = [offer('Starter', '£29 per month'), offer('Pro', '£49 per month'), offer('Pro Plus', '£499 per month')];
+  const docs = [
+    { id: 'page', text: 'Starter costs £29 per month. Pro costs £49 per month. Pro Plus costs £499 per month.' },
+    { id: 'home', text: 'We source property worth £250,000 for investors every month. Professional help, properly explained.' },
+    { id: 'list', text: 'Price list: Pro Plus £599 per month.' },
+  ];
+  const facts = { offers, conflicts: [] as BrandProfile['conflicts'][number][], audiences: [], approvedClaims: [], missingFacts: [] };
+  const held = holdConflictedPrices(facts, docs);
+  assert.deepEqual(held.conflicts.map((c) => c.offer), ['Pro Plus'], 'only the offer whose sources disagree becomes a question');
+  assert.deepEqual(held.conflicts[0]!.options!.map((o) => [o.value, o.documentId]), [['£499 per month', 'page'], ['£599 per month', 'list']], 'no price is borrowed from a neighbouring offer or from the word "property"');
+  assert.deepEqual(held.offers.map((o) => o.price), ['£29 per month', '£49 per month', null]);
+
+  const named = holdConflictedPrices({ ...facts, conflicts: [{ field: 'Pro Plus: price', detail: 'Pro Plus is £499 on the page and £599 on the list', documentIds: ['page', 'list'], kind: 'price' as const, offer: 'Pro Plus' }] }, docs);
+  assert.deepEqual(named.offers.map((o) => o.price), ['£29 per month', '£49 per month', null], 'a question for one offer never wipes another offer’s price');
+  const bare = (field: string, detail = 'two answers') => conflictOffer({ field, detail, documentIds: [] }, offers)?.name ?? null;
+  assert.equal(bare('Pro Plus price'), 'Pro Plus'); assert.equal(bare('Pro price'), 'Pro'); assert.equal(bare('Property management price'), null); assert.equal(bare('Professional price'), null);
+  assert.equal(bare('Price', 'Starter is listed at two prices, unlike Pro'), 'Starter');
+  assert.equal(conflictOffer({ field: 'Pro Plus and Pro', detail: '', documentIds: [], offer: 'pro' }, offers)!.name, 'Pro', 'the exact name wins over a longer one mentioned beside it');
+  const settled = settleConflict({ offers: named.offers, approvedClaims: [], conflicts: named.conflicts.map((c) => ({ ...c, options: [{ value: '£599 per month', documentId: 'list', quote: 'Pro Plus £599 per month' }] })), sources: [] }, 0, { kind: 'option', index: 0 });
+  assert.deepEqual(settled.offers.map((o) => o.price), ['£29 per month', '£49 per month', '£599 per month']);
+});
+
+test('a mistyped website address is the owner’s to fix, said plainly, and a refused request changes nothing', async () => {
+  const h = harness(); seedSite(h); useModel(h, honestCard);
+  const brand = await newBrand(h); const service = serviceFor(h), owner = identity(OWNER.userId), csrf = portalCsrfToken(SECRET, owner.sessionToken), base = `/portal/seo-blog/b/${brand.id}/dna`;
+  for (const website of ['my website', 'quay lettings.co.uk', 'http://localhost', 'me@quay.example', 'quay.example:8080', 'quaylettings']) {
+    await assert.rejects(h.engine.requestBrandDna(OWNER, brand.id, { commandId: randomUUID(), website }),
+      (error: Error & { status?: number }) => error.status === 400 && /^That doesn’t look like a website address\. It should look like www\.yourbusiness\.co\.uk$/.test(error.message), website);
+  }
+  const typo = await call(service, owner, 'POST', `${base}/read`, { _csrf: csrf, commandId: randomUUID(), website: 'my website' });
+  assert.ok(failed(typo), 'sent back to the page with the reason, not to an error page'); assert.match(typo.headers.location!, new RegExp(`^${base}\\?e=`));
+  const shown = await call(service, owner, 'GET', typo.headers.location!);
+  assert.equal(shown.status, 200); assert.match(shown.body, /role="alert">That doesn’t look like a website address\. It should look like www\.yourbusiness\.co\.uk/); assert.match(door(shown.body), /Read my website<\/button>/);
+  assert.equal((await h.engine.listJobs(OWNER, brand.id)).length, 0); assert.equal((await h.engine.getBrand(OWNER, brand.id)).website, SITE);
+
+  // A request that is refused for another reason does not change the saved address either.
+  const { h: g, brand: confirmed, profile } = await proposedCard();
+  await g.engine.confirmBrandDna(OWNER, confirmed.id, profile.version);
+  await assert.rejects(g.engine.requestBrandDna(OWNER, confirmed.id, { commandId: randomUUID(), website: 'quayside.example' }), { status: 409 });
+  assert.equal((await g.engine.getBrand(OWNER, confirmed.id)).website, SITE);
+  const noAllowance = await newBrand(h, 0, 'Quay Two');
+  await assert.rejects(h.engine.requestBrandDna(OWNER, noAllowance.id, { commandId: randomUUID(), website: 'quayside.example' }),
+    (error: Error) => /uses a little of your monthly writing allowance/.test(error.message) && !/token/i.test(error.message));
+  assert.equal((await h.engine.getBrand(OWNER, noAllowance.id)).website, SITE);
+});
+
+test('a page that forwards to another site is not a source, customer-review pages are not read, and "Where we looked" lists only pages kept', async () => {
+  for (const path of ['/testimonials', '/reviews', '/case-studies', '/results']) assert.equal(brandPageRank(SITE + path), null, path);
+  const h = harness(); seedSite(h); useModel(h, honestCard);
+  h.web.set(`${SITE}/`, page('Quay Lettings', HOME_WORDS, '', '<a href="/pricing">Pricing</a><a href="/about">About</a><a href="/join">Join</a><a href="/reviews">Reviews</a>'));
+  h.web.set(`${SITE}/join`, page('Join', 'Pay securely with Checkout Corp. Checkout Corp plans start at £5 per month for every merchant on the platform today.'));
+  h.web.set(`${SITE}/reviews`, page('Reviews', 'Quay saved me £9,000 in fines last year and I would recommend them to every landlord I know. Five stars from me.'));
+  const real = h.web.fetch.bind(h.web);
+  h.web.fetch = async (url, options) => { const got = await real(url, options); return /\/join$/.test(url) ? { ...got, finalUrl: 'https://pay.checkout.example/quay' } : got; };
+  const transport: FetchTransport = h.web;
+  const scan = await buildInventory('b', SITE, transport, { now: h.clock.now(), captureText: true });
+  const kept = scan.pages.filter((p) => p.text).map((p) => p.url).sort();
+  assert.deepEqual(kept, [`${SITE}/`, `${SITE}/about`, `${SITE}/pricing`]);
+  assert.equal(scan.pages.find((p) => p.url === `${SITE}/join`)!.fetchStatus, 'ok', 'the page is still listed as read; only its words are not kept');
+
+  const brand = await newBrand(h); await read(h, brand.id); await work(h);
+  const state = await h.engine.brandDna(OWNER, brand.id);
+  assert.deepEqual(state.card!.readFrom.map((r) => r.label).sort(), ['About page', 'Home page', 'Pricing page']);
+  assert.ok(!(await h.engine.listKnowledge(OWNER, brand.id)).some((d) => /Checkout Corp|saved me £9,000/.test(d.text ?? '')));
+  const shown = door((await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
+  assert.doesNotMatch(shown, /Join page|Reviews page/);
+});
+
+test('Brand setup’s confirm cannot confirm a website-door card that is out of date, and confirms an older-style profile exactly as before', async () => {
+  const { h, brand, profile } = await proposedCard();
+  const service = serviceFor(h), owner = identity(OWNER.userId), csrf = portalCsrfToken(SECRET, owner.sessionToken);
+  await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'product_facts', title: 'New price list', pastedText: 'Quay Compliance Plan costs £49 per month from January.' });
+  assert.equal((await h.engine.brandDna(OWNER, brand.id)).status, 'out_of_date');
+  await assert.rejects(h.engine.confirmProfile(OWNER, brand.id, profile.version), (error: Error & { code?: string }) => error.code === 'brand_dna_out_of_date');
+  const viaSetup = await call(service, owner, 'POST', `/portal/seo-blog/b/${brand.id}/profile/confirm`, { _csrf: csrf, version: String(profile.version) });
+  assert.ok(failed(viaSetup)); assert.equal((await h.engine.getProfile(OWNER, brand.id))!.confirmedAt, null);
+
+  // A profile made the older way, with a question still open: Setup confirms it as it always did, and the door still will not.
+  const g = harness();
+  useModel(g, (docs, attempt) => ({ ...honestCard(docs, attempt), conflicts: [{ field: 'Service area', detail: 'Kent in one place, Medway in another', documentIds: [docs[0]!.id] }] }));
+  const older = await newBrand(g);
+  await g.engine.uploadKnowledge(OWNER, older.id, { category: 'product_facts', title: 'About my business', pastedText: DETAILS });
+  await g.engine.requestProfileExtraction(OWNER, older.id, { commandId: randomUUID(), baseVersion: 0 }); await work(g);
+  const extracted = (await g.engine.getProfile(OWNER, older.id))!;
+  assert.equal(extracted.strict, undefined); assert.equal(extracted.conflicts.length, 1);
+  await assert.rejects(g.engine.confirmBrandDna(OWNER, older.id, extracted.version), /Choose the right answer/);
+  assert.ok((await g.engine.confirmProfile(OWNER, older.id, extracted.version)).confirmedAt);
+});
+
+test('Brand setup’s "Extract profile" is sent the prompt it always was and returns what it always did; only the website door asks for quoted sources', async () => {
+  const setupPrompt = loadPrompt('seo-blog-profile.md'), doorPrompt = loadPrompt('seo-blog-profile-site.md');
+  assert.equal(setupPrompt.header.version, '1.1.0'); assert.equal(setupPrompt.sha256, 'f17838886613cc298a85d4d0422729606c64a94d1c72867c0cfb2c2bda18f94d', 'byte for byte the prompt in use before Brand DNA');
+  assert.doesNotMatch(setupPrompt.body, /`sources`|`quote`|`kind`/); assert.equal(doorPrompt.header.stage, setupPrompt.header.stage);
+  assert.match(doorPrompt.body, /reviews, testimonials[^.]*\) are NOT the brand's own claims/); assert.match(doorPrompt.body, /Every conflict must give `kind`/);
+
+  const h = harness(); seedSite(h);
+  const sent: { system: string; maxTokens: number }[] = [];
+  const plainAnswer = (docs: ModelDoc[]) => {
+    const { sources: _none, ...card } = honestCard(docs, 1) as Record<string, unknown>;
+    return { ...card, audiences: ['Private landlords in Kent', 'Landlords the documents never mention'], approvedClaims: ['We help landlords in Kent', 'A claim with no quote at all'] } as Record<string, unknown>;
+  };
+  let script: (docs: ModelDoc[]) => Record<string, unknown> = plainAnswer;
+  h.llm.complete = async (req) => {
+    sent.push({ system: req.system ?? '', maxTokens: req.maxTokens });
+    const docs = JSON.parse(/<knowledge_documents>\n([\s\S]*?)\n<\/knowledge_documents>/.exec(req.messages[0]!.content)![1]!) as ModelDoc[];
+    return { text: JSON.stringify(script(docs)), tokensIn: 1000, tokensOut: 800, stopReason: 'end_turn', model: 'scripted' };
+  };
+  const brand = await newBrand(h);
+  await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'product_facts', title: 'About my business', pastedText: DETAILS });
+  const document = (await h.engine.listKnowledge(OWNER, brand.id))[0]!;
+  await h.engine.requestProfileExtraction(OWNER, brand.id, { commandId: randomUUID(), baseVersion: 0 }); await work(h);
+  const made = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.equal(sent.length, 1, 'no correction pass: nothing new is rejected on this path'); assert.equal(sent[0]!.system, setupPrompt.body); assert.equal(sent[0]!.maxTokens, 8000);
+  const expected = plainAnswer([{ id: document.id, title: document.title, text: document.text! }]);
+  for (const key of ['summary', 'audiences', 'positioning', 'offers', 'conversionPages', 'voice', 'approvedClaims', 'exclusions', 'conflicts', 'missingFacts'] as const) assert.deepEqual(made[key], expected[key], key);
+  assert.equal(made.strict, undefined); assert.equal('sources' in made, false);
+  assert.equal(profilePayload((await h.engine.listJobs(OWNER, brand.id)).find(isProfileJob)!).source.prompt.version, '1.1.0');
+
+  script = (docs) => honestCard(docs, 1);
+  await read(h, brand.id); await work(h);
+  assert.equal(sent.length, 2); assert.equal(sent[1]!.system, doorPrompt.body); assert.equal(sent[1]!.maxTokens, 16000, 'room for a quoted source per fact');
+  const card = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.equal(card.strict, true); assert.equal(card.version, made.version + 1);
+  const cardJob = (await h.engine.listJobs(OWNER, brand.id)).filter(isProfileJob).find((j) => profilePayload(j).source.strict)!;
+  assert.equal(profilePayload(cardJob).source.prompt.sha256, doorPrompt.sha256);
+});
+
+test('two tabs pressed together queue one read and one card', async () => {
+  const h = harness(); seedSite(h); useModel(h, honestCard);
+  const brand = await newBrand(h);
+  const [a, b, c] = await Promise.all([1, 2, 3].map(() => h.engine.requestBrandDna(OWNER, brand.id, { commandId: randomUUID() })));
+  assert.equal(a!.id, b!.id); assert.equal(a!.id, c!.id);
+  assert.equal((await h.engine.listJobs(OWNER, brand.id)).length, 1);
+  await work(h);
+  assert.equal(h.llm.calls.length, 1); assert.equal((await h.engine.listJobs(OWNER, brand.id)).filter(isProfileJob).length, 1);
+  // Once that read has finished, the next press starts a new one.
+  const next = await read(h, brand.id);
+  assert.notEqual(next.id, a!.id); assert.equal((await h.engine.listJobs(OWNER, brand.id)).filter(isBrandDnaJob).length, 2);
+});
+
+test('wording: verbatim prices are promised only on a website-door card, no dead-end nudge, and an update in progress is not shown as an error', async () => {
+  const h = harness(); seedSite(h); useModel(h, (docs, attempt) => { const { sources: _none, ...card } = honestCard(docs, attempt) as Record<string, unknown>; return card; });
+  const { brand } = await setupConfirmedBrand(h);
+  const service = serviceFor(h), owner = identity(OWNER.userId);
+  const older = door((await call(service, owner, 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
+  assert.doesNotMatch(older, /Prices are shown exactly as written/); assert.match(older, /Check each price against your own price list before you confirm\./);
+  assert.match(older, /2 lines on this card have no recorded source\. Check them yourself before you rely on them\./); assert.doesNotMatch(older, /Read your website again to get a card/);
+  assert.match(older, /The card above carries on being used until the new one is ready\. If a new card cannot be made, nothing changes\./);
+
+  const made = await proposedCard();
+  const fresh = door((await call(serviceFor(made.h), owner, 'GET', `/portal/seo-blog/b/${made.brand.id}/dna`)).body);
+  assert.match(fresh, /Prices are shown exactly as written\. We never work one out\./); assert.match(fresh, /Check each line\. Every one says where we found it\./);
+
+  // The web side updated first and an older reader picked the task up: it holds it, and the page says to come back shortly.
+  const g = harness(); seedSite(g); useModel(g, honestCard);
+  const waiting = await newBrand(g); const job = await read(g, waiting.id);
+  const stored = (await g.store.getJob(waiting.id, job.id))!;
+  g.clock.advance(1000);
+  await g.store.updateJob({ ...stored, state: 'blocked', error: 'This worker does not support that task stage.', progress: 'Paused until the issue is fixed.', updatedAt: g.clock.now() });
+  const updating = door((await call(serviceFor(g), owner, 'GET', `/portal/seo-blog/b/${waiting.id}/dna`)).body);
+  assert.match(updating, /This will be ready in a few minutes\. Nothing was changed\./); assert.doesNotMatch(updating, /does not support|worker|task stage/);
+  assert.match(updating, /Read my website<\/button>/);
 });

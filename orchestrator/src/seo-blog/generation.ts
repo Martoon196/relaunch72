@@ -249,12 +249,15 @@ export async function extractProfile(llm: LlmClient, input: {
   const readable = input.documents.filter((d) => d.active && d.text);
   if (readable.length === 0) throw new SeoBlogError(409, 'Upload at least one readable guidance document or paste brand text first.', 'no_knowledge');
   const docs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: (d.text ?? '').slice(0, 60_000) }));
-  const prompt = loadPrompt('seo-blog-profile.md');
+  // The website door has its own prompt (it asks for a quoted source for every fact), so Setup's documents-only
+  // extraction is sent exactly the prompt it always was and returns what it always did.
+  const prompt = loadPrompt(input.strict ? 'seo-blog-profile-site.md' : 'seo-blog-profile.md');
   const ids = new Set(readable.map((d) => d.id));
   const result = await callJson<ExtractedProfile>(llm, {
     prompt,
     schema: PROFILE_SCHEMA,
-    maxTokens: 8000,
+    // A quoted source per fact roughly doubles the answer; the larger ceiling keeps a full card from being cut short.
+    maxTokens: input.strict ? 16000 : 8000,
     user: [`Brand name: ${input.brandName}`, `Website: ${input.website ?? '(not supplied)'}`, dataBlock('knowledge_documents', docs)].join('\n\n'),
     validate: (v) => [
       ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),

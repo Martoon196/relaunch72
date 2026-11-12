@@ -19,6 +19,12 @@ export interface ProfileJobPayload {
   readonly baseVersion: number;
   readonly baseProfileSha: string;
   readonly acknowledgedPriorUsage: readonly string[];
+  /**
+   * Brand DNA only: the website pages read for this card (and pages of an earlier address to retire). They are
+   * NOT brand documents yet. They are saved, together with the card, only when the card is made; a refused or
+   * failed task leaves the brand's documents exactly as they were. Cleared once the task has ended either way.
+   */
+  readonly staged?: readonly KnowledgeDocument[];
   readonly start?: { readonly nonce: string; readonly at: string };
   /** Receipt and actual usage are committed together, exactly once per start nonce. */
   readonly receipt?: ProfileJobReceipt;
@@ -47,6 +53,8 @@ export interface ProfileJobDecision {
   /** False returns an existing receipt without mutating it. */
   readonly write: boolean;
   readonly profile?: BrandProfile;
+  /** New document versions saved in the same transaction as the profile built from them. */
+  readonly knowledge?: readonly KnowledgeDocument[];
   readonly usage?: UsageRecord;
   readonly event?: ActivityEvent;
 }

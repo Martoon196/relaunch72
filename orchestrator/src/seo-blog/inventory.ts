@@ -116,7 +116,9 @@ export async function buildInventory(brandId: string, website: string, transport
           .filter((u, i, all) => /^https:\/\//i.test(u) && !UNUSABLE_LOGO.test(u) && all.indexOf(u) === i).slice(0, 6);
         if (logoCandidates.length || parsed.themeColour) look = { logoCandidates, themeColour: parsed.themeColour };
       }
-      const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated;
+      // Words are kept only from a page that is still on the brand's own site after any redirect: a "join" page that
+      // forwards to a checkout or sign-in elsewhere is somebody else's words, not the brand's.
+      const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated && sameSite(res.finalUrl, origin);
       const text = keepText ? parsed.text.replace(/\s+/g, ' ').trim().slice(0, BRAND_PAGE_TEXT_LIMIT) : '';
       if (text) withText++;
       pages.push({

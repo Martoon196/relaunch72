@@ -25,6 +25,8 @@ const STYLE = `<style>
 .dna .quiet{margin-top:18px}.dna .quiet button,.dna .quiet .button{width:100%;text-align:center}.dna .pill{vertical-align:middle}
 </style>`;
 
+/** What a worker from before Brand DNA says when it meets a website read. */
+const OLDER_WORKER = 'This worker does not support that task stage.';
 const link = (shell: Shell, tab: string) => `${SEO_BLOG_BASE}/b/${shell.brand!.id}/${tab}`;
 const number = (value: number) => Number.isFinite(value) ? value.toLocaleString('en-GB') : 'no limit';
 
@@ -61,7 +63,7 @@ function cardSections(card: BrandDnaCard): string {
 <span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
   return `<section class="card"><h2>In a sentence</h2><p>${e(card.summary)}</p>${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
-<section class="card"><h2>What you sell</h2><p class="muted">Prices are shown exactly as written. We never work one out.</p>${offers}</section>
+<section class="card"><h2>What you sell</h2><p class="muted">${card.checked ? 'Prices are shown exactly as written. We never work one out.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
 <section class="card"><h2>Who it is for</h2>${facts(card.audiences, 'We did not find who you sell to written down. Nothing was added.')}</section>
 <section class="card"><h2>What you can say</h2>${facts(card.claims, 'We did not find any claims you make written down. Nothing was added.')}</section>
 <section class="card"><h2>How you sound</h2>${card.voice.tone.length ? `<p>${e(card.voice.tone.join(', '))}</p>` : '<p class="muted">Not enough of your own words to tell yet.</p>'}
@@ -70,7 +72,7 @@ ${card.voice.do.length ? `<p><strong>Do</strong></p>${plainList(card.voice.do)}`
 ${card.never.length ? `<section class="card"><h2>Never say</h2>${plainList(card.never)}</section>` : ''}
 ${card.missing.length ? `<section class="card"><h2>What we could not find</h2><p class="muted">We left these out rather than guess. Add them to your website or your documents if they matter.</p>${plainList(card.missing)}</section>` : ''}
 <section class="card"><h2>Where we looked</h2>${card.readFrom.length ? `<ul>${card.readFrom.map((r) => `<li>${r.url ? `<a href="${e(r.url)}" target="_blank" rel="noopener noreferrer">${e(r.label)}</a>` : e(r.label)}</li>`).join('')}</ul>` : '<p class="muted">The pages and documents this card was made from are no longer on record.</p>'}
-${card.unsourced ? `<p class="notice">${card.unsourced} line${card.unsourced === 1 ? '' : 's'} on this card ${card.unsourced === 1 ? 'has' : 'have'} no recorded source. Read your website again to get a card where every line shows where it came from.</p>` : ''}</section>`;
+${card.unsourced ? `<p class="notice">${card.unsourced} line${card.unsourced === 1 ? '' : 's'} on this card ${card.unsourced === 1 ? 'has' : 'have'} no recorded source. Check ${card.unsourced === 1 ? 'it' : 'them'} yourself before you rely on ${card.unsourced === 1 ? 'it' : 'them'}.</p>` : ''}</section>`;
 }
 
 function correctionForm(shell: Shell, state: BrandDnaState): string {
@@ -100,6 +102,8 @@ function lastAttempt(state: BrandDnaState): { text: string; pasteInstead: boolea
   if (read && ['blocked', 'failed'].includes(read.state) && newerThanCard(read.updatedAt)) {
     const reason = brandDnaPayload(read).reason;
     if (reason === 'allowance') return null; // The allowance notice below already says what to do.
+    // Seen only while the service is part-way through an update: the reader that picked this up was the older one.
+    if (read.error === OLDER_WORKER) return { text: 'We are updating the part of the service that reads websites. This will be ready in a few minutes. Nothing was changed. Press “Read my website” again then.', pasteInstead: false };
     return { text: read.state === 'failed' ? 'We could not finish reading your website. Nothing was changed. Please try again.' : read.error ?? 'Reading your website stopped. Nothing was changed.', pasteInstead: reason === 'no_words' };
   }
   if (made && ['blocked', 'failed'].includes(made.state) && newerThanCard(made.updatedAt)) {
@@ -107,7 +111,7 @@ function lastAttempt(state: BrandDnaState): { text: string; pasteInstead: boolea
     if (reason === 'rejected') return { text: made.error ?? 'We stopped before making your card rather than guess. Nothing was saved.', pasteInstead: false };
     if (reason === 'budget') return null;
     if (reason === 'outcome_unknown') return { text: 'The last attempt to make your card did not report back. It may have used some of your monthly allowance. Nothing was saved.', pasteInstead: false };
-    return { text: 'Making your card stopped before it finished. Nothing was saved. Please read your website again.', pasteInstead: false };
+    return { text: 'Making your card stopped before it finished. Nothing was saved or changed. Please read your website again.', pasteInstead: false };
   }
   return null;
 }
@@ -163,7 +167,7 @@ ${state.documents ? `<p class="muted">You have already added ${state.documents} 
 ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: true, again: true, commandId })}</section>`;
   } else if (confirmed) {
     action = `<p><a class="button main" href="${link(shell, 'topics')}">Plan my content</a></p>
-<details class="card quiet"><summary>Has your website changed?</summary><p><strong>Your content pauses until you confirm the new card.</strong> Reading your website again makes a new card from today’s pages and documents. The card above stops being used as soon as a changed page is read.</p>
+<details class="card quiet"><summary>Has your website changed?</summary><p><strong>Your content pauses until you confirm the new card.</strong> Reading your website again makes a new card from today’s pages and documents. The card above carries on being used until the new one is ready. If a new card cannot be made, nothing changes.</p>
 ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: false, again: true, commandId })}</details>`;
   } else {
     action = `<form method="post" action="${link(shell, 'dna/confirm')}">${csrfField(shell.csrf)}<input type="hidden" name="version" value="${version}">
@@ -174,7 +178,7 @@ ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: 
   }
 
   return body('Your Brand DNA', `<h1>Your Brand DNA ${pill}</h1>
-<p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : 'Check each line. Every one says where we found it.'}</p>
+<p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : card.checked ? 'Check each line. Every one says where we found it.' : 'Check each line before you confirm it.'}</p>
 ${stoppedNotice}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${cardSections(card)}
 ${outOfDate ? '' : correctionForm(shell, state)}${look}${outOfDate ? '' : action}`);
 }

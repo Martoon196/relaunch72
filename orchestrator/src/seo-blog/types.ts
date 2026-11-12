@@ -224,6 +224,11 @@ export interface BrandProfile {
   readonly missingFacts: readonly string[];
   /** Where each audience, claim and settled fact was read. Absent on profiles made before Brand DNA. */
   readonly sources?: readonly ProfileFactSource[];
+  /**
+   * Set only on a card made by the website door: every price, audience and claim was checked word for word
+   * against its source. Such a card cannot be confirmed with an open question or once it is out of date.
+   */
+  readonly strict?: true;
   /** Hash over product facts and approved claims only — the factual invalidation key. */
   readonly factsSha: string;
   readonly source: 'extracted' | 'owner_edited';
