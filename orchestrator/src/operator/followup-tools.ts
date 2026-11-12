@@ -45,9 +45,11 @@ export function createFollowupTools(deps: FollowupToolDependencies): OperatorToo
       inputSchema: { type: 'object', properties: { brand: BRAND_SCHEMA }, required: ['brand'] },
       run: async (a) => {
         const b = brand(a); const snapshot = await service(b).snapshot(await deps.sessions.identity(b), requestId()) as Record<string, unknown>;
-        // PP: the permitted-contact picker stays in the portal; Claude sees the count, runs and email mode only.
-        const delivery = snapshot.delivery as { database?: { contacts?: unknown[] } | null } | undefined;
-        if (delivery?.database) snapshot.delivery = { ...delivery, database: { ...delivery.database, contacts: undefined } };
+        // PP: people stay in the portal. Claude sees the counts, the email mode and each run's progress, never a
+        // recipient's name or address: the contact picker is dropped and every run is stripped of both.
+        const delivery = snapshot.delivery as { database?: { contacts?: unknown[]; runs?: unknown[] } | null } | undefined;
+        if (delivery?.database) snapshot.delivery = { ...delivery, database: { ...delivery.database, contacts: undefined,
+          runs: (delivery.database.runs ?? []).map(run => { const { email: _email, displayName: _displayName, ...rest } = run as Record<string, unknown>; return rest; }) } };
         return { ...snapshot, portal: portal(b) };
       } },
     { name: 'followup_sequence_get', write: false,

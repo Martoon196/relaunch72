@@ -1059,8 +1059,9 @@ async function main(): Promise<void> {
   const ppFollowup = postgresPortal?.ppFollowup;
   if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
   const stopPpFollowup = ppFollowup?.config
-    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config }, {
-        onResult: result => { if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} will retry, ${result.unknown} held for an owner decision.`); },
+    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config,
+        onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') }, {
+        onResult: result => { if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} not sent (retried or failed by rule), ${result.unknown} held for an owner decision.`); },
         onError: () => console.warn('PP follow-up email dispatch is temporarily unavailable; runs wait.'),
       })
     : () => {};

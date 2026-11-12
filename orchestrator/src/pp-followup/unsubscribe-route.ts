@@ -13,7 +13,8 @@ function page(res: ServerResponse, status: number, title: string, body: string):
 
 /**
  * Public signed unsubscribe for PP follow-up emails. GET only shows a confirmation (link scanners must not
- * unsubscribe people); POST, including RFC 8058 one-click from the mailbox provider, records the suppression.
+ * unsubscribe people); POST, including RFC 8058 one-click from the mailbox provider, records the suppression
+ * for both Property Predator marketing purposes, so every other PP marketing email to this address stops too.
  */
 export async function handlePpFollowupUnsubscribe(req: IncomingMessage, res: ServerResponse, url: URL,
   deps: { secret: string; unsubscriber: PpFollowupUnsubscriber }): Promise<boolean> {
@@ -25,13 +26,13 @@ export async function handlePpFollowupUnsubscribe(req: IncomingMessage, res: Ser
     page(res, 400, 'This link is not valid', '<p>Reply to any of our emails and we will remove you by hand.</p>'); return true;
   }
   if (method === 'GET') {
-    page(res, 200, 'Unsubscribe from Property Predator emails', `<p>Stop receiving follow-up emails from Property Predator at this address?</p><form method="post" action="${escape(`${PP_FOLLOWUP_UNSUBSCRIBE_ROUTE}?p=${encodeURIComponent(point)}&t=${encodeURIComponent(token)}`)}"><button>Unsubscribe</button></form>`);
+    page(res, 200, 'Unsubscribe from Property Predator emails', `<p>Stop receiving marketing emails from Property Predator at this address?</p><form method="post" action="${escape(`${PP_FOLLOWUP_UNSUBSCRIBE_ROUTE}?p=${encodeURIComponent(point)}&t=${encodeURIComponent(token)}`)}"><button>Unsubscribe</button></form>`);
     return true;
   }
   let size = 0;
   for await (const chunk of req) { size += (chunk as Buffer).length; if (size > 1024) { page(res, 413, 'Request too large', '<p>Open the unsubscribe link from your email.</p>'); return true; } }
   try { await deps.unsubscriber.unsubscribe(point); }
   catch { page(res, 503, 'Please try again', '<p>We could not record this just now. Try again shortly, or reply to any email and we will remove you by hand.</p>'); return true; }
-  page(res, 200, 'You’re unsubscribed', '<p>You won’t receive any more Property Predator follow-up emails at this address.</p>');
+  page(res, 200, 'You’re unsubscribed', '<p>You won’t receive any more Property Predator marketing emails at this address.</p>');
   return true;
 }

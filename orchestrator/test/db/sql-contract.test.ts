@@ -944,13 +944,30 @@ test('0152 keeps PP follow-up email runs pinned, additive and behind definer fun
   assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
   assert.match(sql, /CREATE ROLE r72_pp_followup_definer NOLOGIN NOINHERIT/u);
   assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_pp_followup_definer/u);
-  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_snapshot\(bytea\) TO r72_web;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_snapshot\(bytea,uuid,text\) TO r72_web;/u);
   assert.match(sql, /app_private\.pp_followup_hold_runs\(\) TO r72_identity_command;/u);
   assert.doesNotMatch(sql, /GRANT [^;]*pp_followup_(?:runs|sends|dispatch_proofs|commands)[^;]* TO r72_(?:web|identity_command)/u);
-  // The only write outside this feature: a marketing-email unsubscribe suppression by the system actor.
+  // The only write outside this feature: an unsubscribe suppression by the system actor, for the two Property
+  // Predator marketing purposes and nothing wider (never purpose-free, never another purpose).
   assert.match(sql, /GRANT INSERT ON app\.communication_suppression_events TO r72_pp_followup_definer/u);
-  assert.match(sql, /purpose='marketing' AND state='suppressed' AND reason='recipient_unsubscribe' AND source='pp\.followup\.unsubscribe'/u);
+  assert.match(sql, /purpose IN\('marketing','property_predator_marketing'\) AND state='suppressed' AND reason='recipient_unsubscribe' AND source='pp\.followup\.unsubscribe'/u);
+  assert.equal((sql.match(/GRANT INSERT ON app\./g) ?? []).length, 1);
+  assert.doesNotMatch(sql, /GRANT (?:UPDATE|DELETE|ALL)[^;]* ON app\.communication_/u);
+  // Permission reads the product purpose as well as the owner-recorded one, at every point, and never the mutable column.
+  const allowed = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_endpoint_allowed('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_next('));
+  assert.equal((allowed.match(/IN\('marketing','property_predator_marketing'\)/g) ?? []).length, 2, 'suppressions and consents both read both purposes');
+  assert.match(allowed, /bool_and\(latest\.state='granted'\)/u);
+  assert.doesNotMatch(sql, /purpose='marketing'/u, 'no path reads or writes the owner purpose alone');
+  assert.ok((sql.match(/pp_followup_endpoint_allowed\(/g) ?? []).length >= 9, 'enrolment, resume, claim (twice), prepare and the owner lists all go through the one rule');
   assert.doesNotMatch(sql, /consent_status/u);
+  // Attempts are spent when the hand-off proof is written, never at claim; resume restarts an unclaimed step's clock.
+  const claim = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_claim('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_prepare('));
+  const prepare = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_prepare('), sql.indexOf('CREATE FUNCTION app_private.pp_followup_settle('));
+  assert.doesNotMatch(claim, /attempts=attempts\+1/u); assert.match(prepare, /SET attempts=attempts\+1/u);
+  assert.match(sql, /due_at=CASE WHEN current_send_id IS NULL THEN greatest\(due_at,clock_timestamp\(\)\) ELSE due_at END/u);
+  assert.match(sql, /CREATE INDEX pp_followup_runs_contact_point ON app_private\.pp_followup_runs\(contact_point_id\);/u);
+  assert.match(sql, /app_private\.pp_followup_settle\(uuid,uuid,text,text\)/u);
+  assert.match(sql, /app_private\.pp_followup_command\(bytea,text,uuid,uuid,uuid,uuid,uuid,text,text\[\]\)/u);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {

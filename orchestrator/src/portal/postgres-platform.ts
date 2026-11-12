@@ -1317,7 +1317,7 @@ export async function buildPgPortalPlatform(
     if (ppFlowWorkspace === PP_FOLLOWUP_WORKSPACE_ID) {
       try {
         const probe = await webPool.query<{ ready: boolean }>(`/* portal.pp-followup-schema-readiness */
-          SELECT to_regprocedure('app_private.pp_followup_snapshot(bytea)') IS NOT NULL AND to_regprocedure('app_private.pp_followup_claim(integer,integer,text[])') IS NOT NULL AS ready`);
+          SELECT to_regprocedure('app_private.pp_followup_snapshot(bytea,uuid,text)') IS NOT NULL AND to_regprocedure('app_private.pp_followup_claim(integer,integer,text[])') IS NOT NULL AS ready`);
         if (probe.rows[0]?.ready === true) {
           const { status, config } = ppMarketingConfig(env);
           ppFollowup = { queue: new PgPpFollowupQueue(identityPool), unsubscriber: new PgPpFollowupRepository(webPool, identityPool), config, status };
@@ -1326,7 +1326,7 @@ export async function buildPgPortalPlatform(
     }
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace,
-        ...(ppFollowup ? { delivery: { identityPool, status: ppFollowup.status } } : {}) }) : undefined;
+        ...(ppFollowup ? { delivery: { identityPool, status: ppFollowup.status, testRecipients: ppFollowup.config?.testRecipients ?? null } } : {}) }) : undefined;
     const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
       ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined, commandPool)
       : undefined;
