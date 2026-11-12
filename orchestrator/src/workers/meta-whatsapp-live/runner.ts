@@ -16,6 +16,7 @@ import {
   type MetaWhatsAppLiveRuntimeConfig,
 } from '../../whatsapp-live/index.js';
 import { MHP_EVENT_WHATSAPP_WORKSPACE_ID, PgMhpEventWhatsAppRepository, runMhpEventWhatsAppOnce } from '../../whatsapp-live-pg/event-repository.js';
+import { PgMhpOwnerWhatsAppRepository, runMhpOwnerWhatsAppOnce } from '../../whatsapp-live-pg/owner-repository.js';
 
 export const META_WHATSAPP_LIVE_WORKER_SERVICE =
   'property-predator-meta-whatsapp-live-worker' as const;
@@ -48,6 +49,8 @@ type ActiveConfig = Readonly<{
   runtime: MetaWhatsAppLiveRuntimeConfig;
   /** MHP009C: exact MHP binding for the scheduled webinar follow-up (opt-in). */
   mhpEventBindingId?: string;
+  /** MHP-WA-121 (0151): owner one-to-one template sends on the same MHP binding (opt-in). */
+  mhpOwnerSends?: true;
 }>;
 type DisabledConfig = Readonly<{
   mode: 'disabled';
@@ -121,6 +124,7 @@ export interface MetaWhatsAppLiveWorkerDependencies {
   readonly createTransport?: MetaWhatsAppLiveTransportFactory;
   readonly runCycle?: typeof runMetaWhatsAppLiveOnce;
   readonly runEventCycle?: typeof runMhpEventWhatsAppOnce;
+  readonly runOwnerCycle?: typeof runMhpOwnerWhatsAppOnce;
   readonly randomToken?: () => Uint8Array;
   readonly writeReadiness?: (line: string) => void;
   readonly writeErrorTelemetry?: (line: string) => void;
@@ -185,6 +189,9 @@ export function loadMetaWhatsAppLiveWorkerConfig(
     env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID,
     'PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID',
   );
+  if (!['enabled', 'disabled'].includes(env.MHP_WHATSAPP_OWNER_SENDS?.trim() ?? 'disabled')) {
+    throw new Error('MHP owner WhatsApp sends require MHP_WHATSAPP_OWNER_SENDS=enabled or disabled');
+  }
   const interval = pollInterval(env.PROPERTY_PREDATOR_WHATSAPP_LIVE_POLL_MS);
   const runtime = loadMetaWhatsAppLiveRuntimeConfig(env);
   if (runtime.mode === 'disabled') {
@@ -220,13 +227,18 @@ export function loadMetaWhatsAppLiveWorkerConfig(
   });
 }
 
-function mhpEventBinding(env: NodeJS.ProcessEnv): { mhpEventBindingId?: string } {
+function mhpEventBinding(env: NodeJS.ProcessEnv): { mhpEventBindingId?: string; mhpOwnerSends?: true } {
   const mode = env.PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE?.trim() ?? 'disabled';
+  const owner = env.MHP_WHATSAPP_OWNER_SENDS?.trim() ?? 'disabled';
+  if (owner !== 'disabled' && (owner !== 'enabled' || mode !== 'enabled')) {
+    throw new Error('MHP owner WhatsApp sends require MHP_WHATSAPP_OWNER_SENDS=enabled on the MHP worker (PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE=enabled)');
+  }
   if (mode === 'disabled') return {};
   if (mode !== 'enabled' || env.PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID?.trim() !== MHP_EVENT_WHATSAPP_WORKSPACE_ID) {
     throw new Error('MHP event WhatsApp requires PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE=enabled on the MHP workspace');
   }
-  return { mhpEventBindingId: requiredUuid(env.PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID, 'PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID') };
+  return { mhpEventBindingId: requiredUuid(env.PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID, 'PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID'),
+    ...(owner === 'enabled' ? { mhpOwnerSends: true as const } : {}) };
 }
 
 function safeErrorClass(error: unknown): string {
@@ -322,7 +334,10 @@ export async function startMetaWhatsAppLiveWorker(
 
   const eventRepository = config.mode === 'owned_template_live' && config.mhpEventBindingId
     ? new PgMhpEventWhatsAppRepository(pool, { workspaceId: config.workspaceId, connectionId: config.connectionId, bindingId: config.mhpEventBindingId }) : null;
+  const ownerRepository = eventRepository && config.mode === 'owned_template_live' && config.mhpOwnerSends && config.mhpEventBindingId
+    ? new PgMhpOwnerWhatsAppRepository(pool, { workspaceId: config.workspaceId, connectionId: config.connectionId, bindingId: config.mhpEventBindingId }) : null;
   let lastObservation = 0;
+  let lastCatalogue = 0;
   const executeCycle = (): Promise<MetaWhatsAppLiveWorkerCycleResult> => {
     if (stopping) return Promise.reject(new Error('Meta WhatsApp live worker is stopping'));
     if (inFlight) return inFlight;
@@ -345,7 +360,13 @@ export async function startMetaWhatsAppLiveWorker(
           encryptionKeyVersion: config.encryptionKeyVersion, leaseToken: Buffer.from(token), fetch: globalThis.fetch, createTransport, observeNow,
           manualReplies:env.MHP_WHATSAPP_MANUAL_REPLIES==='enabled' });
         if (observeNow) lastObservation = Date.now();
-        return event;
+        // Owner one-to-one sends run only when this cycle sent nothing else (at most one send per cycle).
+        if (event !== 'idle' || !ownerRepository) return event;
+        const catalogueNow = Date.now() - lastCatalogue >= 300_000;
+        const owner = await (dependencies.runOwnerCycle ?? runMhpOwnerWhatsAppOnce)({ repository: ownerRepository, encryptionKey: config.encryptionKey,
+          encryptionKeyVersion: config.encryptionKeyVersion, leaseToken: Buffer.from(token), fetch: globalThis.fetch, createTransport, observeNow: catalogueNow });
+        if (catalogueNow) lastCatalogue = Date.now();
+        return owner;
       }
       return legacy();
     })().finally(() => { inFlight = undefined; });

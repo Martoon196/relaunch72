@@ -41,7 +41,9 @@ const CASES: { name: string; edits: [string, string][] }[] = [
 ];
 for (const { name, edits } of CASES) {
   test(`0141 ${name} is the exact prior body plus only its named change`, async () => {
-    const all = await definitions(name), replacement = all.at(-1)!, prior = all.at(-2)!;
+    // Later additive migrations (0151) may replace a definition again; 0141 is checked against its own predecessor.
+    const all = await definitions(name), at = all.findIndex(d => d.file === '0141_mhp_event_whatsapp_programme.sql');
+    const replacement = all[at]!, prior = all[at - 1]!;
     assert.equal(replacement.file, '0141_mhp_event_whatsapp_programme.sql');
     let expected = prior.text;
     for (const [from, to] of edits) { assert.equal(expected.split(from).length - 1, 1, `${name}: one anchor`); expected = expected.split(from).join(to); }
@@ -55,4 +57,24 @@ test('0141 leaves the 0055 projection, 0053 load/begin/settle and every 0131 SMS
     assert.doesNotMatch(source, new RegExp(`FUNCTION app_private\\.${name}\\(`, 'u'), name);
   }
   assert.doesNotMatch(source, /sms_phone_verification_receipts/u, 'an SMS verification is never WhatsApp possession');
+});
+
+// 0151 (MHP owner one-to-one) replaces exactly one 0053/0141 definition: the job identity guard also freezes owner_send_id.
+test('0151 whatsapp_live_job_identity_guard is the exact 0141 body plus only owner_send_id', async () => {
+  const all = await definitions('whatsapp_live_job_identity_guard'), replacement = all.at(-1)!, prior = all.at(-2)!;
+  assert.equal(replacement.file, '0151_mhp_whatsapp_owner_one_to_one.sql');
+  assert.equal(prior.file, '0141_mhp_event_whatsapp_programme.sql');
+  const anchor = '     OR NEW.event_send_id IS DISTINCT FROM OLD.event_send_id\n';
+  assert.equal(prior.text.split(anchor).length - 1, 1);
+  assert.equal(replacement.text, prior.text.split(anchor).join(anchor + '     OR NEW.owner_send_id IS DISTINCT FROM OLD.owner_send_id\n'));
+});
+test('0151 leaves every 0053/0141/0143 send, settle, status and enqueue function untouched', async () => {
+  const source = await readFile(new URL('0151_mhp_whatsapp_owner_one_to_one.sql', DIR), 'utf8');
+  for (const name of ['authorize_and_enqueue_whatsapp_live_job', 'claim_whatsapp_live_job', 'load_whatsapp_live_job', 'begin_whatsapp_live_call',
+    'settle_whatsapp_live_call', 'record_whatsapp_live_status', 'record_whatsapp_live_template', 'record_whatsapp_live_inbound_projection',
+    'claim_event_whatsapp_job', 'begin_event_whatsapp_call', 'mhp_wa_direct_queue', 'mhp_wa_direct_begin', 'mhp_wa_direct_finish',
+    'record_contact_permission_decision']) {
+    assert.doesNotMatch(source, new RegExp(`CREATE (?:OR REPLACE )?FUNCTION app_private\\.${name}\\(`, 'u'), name);
+  }
+  assert.doesNotMatch(source, /SET is_verified|is_verified\s*=\s*true/u, 'an owner attestation never verifies a contact point');
 });

@@ -52,6 +52,8 @@ export interface PgMetaWhatsAppLiveWebhookCommandServiceDependencies {
   readonly bindingId: string;
   /** MHP009C: route the MHP binding's inbound through the signed JOIN/STOP wrapper (off by default). */
   readonly mhpEventWhatsApp?: boolean;
+  /** MHP-WA-121 (0151): record Meta's error code from a signed failed status on an owner send (off by default). */
+  readonly mhpOwnerWhatsApp?: boolean;
 }
 
 export class PgMetaWhatsAppLiveWebhookCommandService
@@ -61,6 +63,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
   readonly #bindingId: string;
   readonly #commandPool: Pick<Pool, 'connect'>;
   readonly mhpEventWhatsApp: boolean;
+  readonly mhpOwnerWhatsApp: boolean;
 
   constructor(dependencies: PgMetaWhatsAppLiveWebhookCommandServiceDependencies) {
     this.workspaceId = uuid(dependencies.workspaceId, 'workspace binding');
@@ -68,6 +71,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
     this.#bindingId = uuid(dependencies.bindingId, 'credential binding');
     this.#commandPool = dependencies.commandPool;
     this.mhpEventWhatsApp = dependencies.mhpEventWhatsApp === true && this.workspaceId === '2789228d-55a6-4688-b1e8-2f70abca990b';
+    this.mhpOwnerWhatsApp = dependencies.mhpOwnerWhatsApp === true && this.workspaceId === '2789228d-55a6-4688-b1e8-2f70abca990b';
   }
 
   async recordStatus(input: Readonly<{
@@ -78,7 +82,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
     this.#assertBound(event);
     const payloadSha256 = digest(input.payloadSha256, 'payload digest');
     const recipientSha256 = digest(event.recipientSha256, 'recipient digest');
-    return withTransaction(this.#commandPool, {
+    const recorded = await withTransaction(this.#commandPool, {
       actorKind: 'webhook', workspaceId: this.workspaceId,
       requestId: this.#requestId(event.externalEventId),
     }, async (transaction) => outcome(await transaction.query<OutcomeRow>(
@@ -91,6 +95,14 @@ implements MetaWhatsAppLiveWebhookCommandService {
         event.providerMessageId, recipientSha256, event.status,
         payloadSha256, event.occurredAt],
     )), { isolation: 'serializable' });
+    if (recorded === 'applied' && this.mhpOwnerWhatsApp && event.status === 'failed' && event.errorCode !== undefined) {
+      // Owner one-to-one sends keep Meta's own error code (and any restriction hold); other jobs are untouched.
+      await withTransaction(this.#commandPool, { actorKind: 'webhook', workspaceId: this.workspaceId,
+        requestId: this.#requestId(`${event.externalEventId}:error`) }, async (transaction) => transaction.query(
+        `/* mhp-wa-owner.status-error */ SELECT app_private.mhp_wa_owner_status_error($1::uuid,$2::uuid,$3::text,$4::bytea,$5::integer) AS outcome`,
+        [this.workspaceId, this.#bindingId, event.providerMessageId, recipientSha256, event.errorCode]), { isolation: 'read committed' });
+    }
+    return recorded;
   }
 
   async recordInbound(input: Readonly<{
