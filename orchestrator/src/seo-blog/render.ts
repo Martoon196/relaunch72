@@ -40,7 +40,9 @@ export function versionMarker(articleId: string, versionId: string, contentSha: 
 function inline(text: string, citeNumber: (id: string) => number | null, canonical: string): string {
   // Escape first, then re-introduce the small set of allowed constructs.
   let out = escapeHtml(text);
-  out = out.replace(/\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
+  // The marker takes the spaces before it, so a hidden source leaves no gap before punctuation
+  // ("5% [src:x]." renders "5%." rather than "5% .") and a shown one sits against its word.
+  out = out.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
     const n = citeNumber(id);
     return n ? `<sup><a href="#source-${n}">[${n}]</a></sup>` : '';
   });
@@ -54,7 +56,14 @@ function inline(text: string, citeNumber: (id: string) => number | null, canonic
   return out;
 }
 
-export function renderMarkdown(markdown: string, citeNumber: (id: string) => number | null, canonical: string): string {
+/**
+ * Markdown body text to escaped HTML. Headings inside a body become <h3> sub-headings only where
+ * the caller says the body sits under a section heading (`subHeadings`); one level only, because
+ * sites that sanitise the fragment (Property Predator keeps p, h2, h3, lists, links) strip anything
+ * deeper to plain text. Elsewhere (intro, conclusion, answers) they stay bold paragraphs, so the page keeps
+ * one <h1> and a heading never appears above the first section.
+ */
+export function renderMarkdown(markdown: string, citeNumber: (id: string) => number | null, canonical: string, subHeadings = false): string {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
   const html: string[] = [];
   let list: 'ul' | 'ol' | null = null;
@@ -76,9 +85,15 @@ export function renderMarkdown(markdown: string, citeNumber: (id: string) => num
       continue;
     }
     if (!line) { flushPara(); closeList(); continue; }
-    // Headings inside bodies are flattened to bold paragraphs: one H1 per page, H2s come from sections.
-    const heading = /^#{1,6}\s+(.+)$/.exec(line);
-    if (heading) { flushPara(); closeList(); html.push(`<p><strong>${inline(heading[1]!, citeNumber, canonical)}</strong></p>`); continue; }
+    // One H1 per page and H2s come from sections, so a body heading is at most an H3.
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushPara(); closeList();
+      const text = inline(heading[2]!.replace(/\s+#+\s*$/, ''), citeNumber, canonical);
+      if (!subHeadings) html.push(`<p><strong>${text}</strong></p>`);
+      else html.push(`<h3>${text}</h3>`);
+      continue;
+    }
     closeList();
     para.push(line);
   }
@@ -126,7 +141,7 @@ const DEFAULT_TEMPLATE = `<!DOCTYPE html>
 <style>
 body{margin:0;font:18px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#1b1f24;background:#fff}
 main{max-width:720px;margin:0 auto;padding:32px 20px 64px}
-h1{font-size:2rem;line-height:1.2;margin:.2em 0 .4em}h2{font-size:1.4rem;margin:1.8em 0 .5em}
+h1{font-size:2rem;line-height:1.2;margin:.2em 0 .4em}h2{font-size:1.4rem;margin:1.8em 0 .5em}h3{font-size:1.15rem;margin:1.4em 0 .4em}
 a{color:#0b5cad}img{max-width:100%;height:auto;border-radius:8px}.meta{color:#5b6570;font-size:.9rem}
 .cta{display:inline-block;margin:1em 0;padding:.7em 1.1em;background:#0b5cad;color:#fff;border-radius:6px;text-decoration:none}
 .sources{font-size:.9rem;color:#3d4650}nav.crumbs{font-size:.9rem}
@@ -142,7 +157,7 @@ a{color:#0b5cad}img{max-width:100%;height:auto;border-radius:8px}.meta{color:#5b
 
 export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string {
   const cites = citationNumbers(body);
-  const md = (text: string) => renderMarkdown(text, cites.number, ctx.canonicalUrl);
+  const md = (text: string, subHeadings = false) => renderMarkdown(text, cites.number, ctx.canonicalUrl, subHeadings);
   const dateLabel = new Intl.DateTimeFormat(ctx.locale || 'en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(ctx.publishedAt));
   const head = [
     `<title>${escapeHtml(body.seoTitle)}</title>`,
@@ -169,7 +184,7 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     `<p class="meta">${body.author ? `By ${escapeHtml(body.author.name)} · ` : ''}<time datetime="${escapeHtml(ctx.publishedAt)}">${escapeHtml(dateLabel)}</time></p>`,
     body.image.url ? `<figure><img src="${escapeHtml(body.image.url)}" alt="${escapeHtml(body.image.alt)}"${body.image.width ? ` width="${body.image.width}"` : ''}${body.image.height ? ` height="${body.image.height}"` : ''} loading="eager"></figure>` : '',
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body)}`),
+    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',
@@ -254,7 +269,7 @@ export function mergeSitemap(existing: string, urls: readonly { loc: string; las
 
 export function exportMarkdown(body: ArticleBody, meta: { canonicalUrl: string | null; versionId: string; articleId: string }): string {
   const cites = citationNumbers(body);
-  const strip = (t: string) => t.replace(/\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
+  const strip = (t: string) => t.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
   const front = [
     '---',
     `title: ${JSON.stringify(body.title)}`,
