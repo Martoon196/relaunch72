@@ -10,6 +10,7 @@ import { MHP_KITS_MIGRATION, MHP_KITS_CHECKSUM, MHP_KIT_CREDIT_MIGRATION, MHP_KI
 import { MHP_WA_OWNER_MIGRATION, MHP_WA_OWNER_CHECKSUM } from './mhp-wa-owner-schema.js';
 import { PP_FOLLOWUP_MIGRATION, PP_FOLLOWUP_CHECKSUM } from './pp-followup-schema.js';
 import { EMAIL_BLOCK_MIGRATION, EMAIL_BLOCK_CHECKSUM } from './email-block-schema.js';
+import { SEO_BLOG_ATTACH_MIGRATION, SEO_BLOG_ATTACH_CHECKSUM } from './seo-blog-attach-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -294,6 +295,13 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[151]?.checksum===PP_FOLLOWUP_CHECKSUM
       && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM) applied.delete(EMAIL_BLOCK_MIGRATION);
+  // Successor bridge, the same shape 0151, 0152 and 0153 each added for their predecessor: a build whose bundled
+  // migrations end exactly at 153 stays ready after the exact additive 154. It helps only a 153-file build that
+  // contains this code (a rebuild or test fixture); the released 153 build (34143f8) does not have it and will not boot on 154.
+  if (migrations.length===153 && migrations[152]?.filename===EMAIL_BLOCK_MIGRATION
+      && migrations[152]?.checksum===EMAIL_BLOCK_CHECKSUM
+      && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM
+      && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM) applied.delete(SEO_BLOG_ATTACH_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -357,6 +365,14 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===EMAIL_BLOCK_MIGRATION && pending[0]?.checksum===EMAIL_BLOCK_CHECKSUM
       && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM
       && applied.get(MHP_WA_OWNER_MIGRATION)===MHP_WA_OWNER_CHECKSUM) return;
+  // The MHP content workspace attach 154 is capable only after the exact email block ledger 153 is applied. While 154
+  // is pending the "Use Martin Howard Property here" card is not shown (its offer function is missing) and nothing else
+  // changes; the ordinary "Add a business" form still refuses a second Martin Howard Property.
+  if (migrations.length===154 && migrations[153]?.filename===SEO_BLOG_ATTACH_MIGRATION
+      && migrations[152]?.filename===EMAIL_BLOCK_MIGRATION && pending.length===1
+      && pending[0]?.filename===SEO_BLOG_ATTACH_MIGRATION && pending[0]?.checksum===SEO_BLOG_ATTACH_CHECKSUM
+      && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM
+      && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

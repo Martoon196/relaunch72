@@ -19,6 +19,7 @@ import { addDays, utcToLocal } from '../seo-blog/schedule.js';
 import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type SocialDispatch, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
 import type { WebsitePublisher } from '../seo-blog/publishers/types.js';
 import { escapeHtml as e } from './ui.js';
+import { EXISTING_WORKSPACE } from '../seo-blog/existing-workspace.js';
 import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action-feedback.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls } from '../seo-blog/profile-jobs.js';
 import { editorialRecommendations, legacyPlanningHold, programmeRun, programmeSummary, suggestedKnowledgeCategory } from '../seo-blog/programme.js';
@@ -119,7 +120,17 @@ export function brandDnaDoor(brand: Brand, status: BrandDnaDoorStatus | undefine
   return `<a class="button${status === 'confirmed' ? ' secondary' : ''}" href="${url(brand, 'dna')}">${label}</a>`;
 }
 
-export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>): string {
+/** Where the "Use Martin Howard Property here" card sits on the businesses page. */
+export const EXISTING_WORKSPACE_ANCHOR = 'use-existing';
+
+/** One plain card: Martin Howard Property's own workspace, offered only to its eligible owner and only until used. */
+function existingWorkspaceCard(shell: Shell, commandId: string): string {
+  return `<section class="card" id="${EXISTING_WORKSPACE_ANCHOR}" aria-labelledby="${EXISTING_WORKSPACE_ANCHOR}-title"><h2 id="${EXISTING_WORKSPACE_ANCHOR}-title">${e(EXISTING_WORKSPACE.name)}</h2>
+<p>Use your existing ${e(EXISTING_WORKSPACE.name)} account for blog and content. Your contacts, webinars and emails stay exactly as they are. Nothing is spent until you set a monthly allowance.</p>
+<form method="post" action="${SEO_BLOG_BASE}/brands/existing">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}"><button type="submit">Use ${e(EXISTING_WORKSPACE.name)} here</button></form></section>`;
+}
+
+export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>, existingCommandId: string | null = null): string {
   const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p>${dna ? `<p>${brandDnaDoor(b, dna.get(b.id))}</p>` : ''}
 <p><a href="${APPROVALS_HREF}?brand=${e(b.id)}">Approvals</a> · <a href="${CAMPAIGN_RESULTS_HREF}?brand=${e(b.id)}">Campaign results</a></p>
 <p class="muted">Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p></article>`).join('');
@@ -128,7 +139,7 @@ export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<st
 <p>Each business has its own content, its own approvals and its own results. ${shell.brands.length ? 'Open one to carry on, or add another.' : 'Add your first business to start.'}</p>
 <p class="row" style="align-items:center"><a class="button" href="#add-business" style="flex:0 1 auto">Add a business</a>${shell.brands.length ? `<a class="button secondary" href="${APPROVALS_HREF}${many ? '?brand=all' : `?brand=${e(shell.brands[0]!.id)}`}" style="flex:0 1 auto">${many ? 'See what is waiting in every business' : 'See what is waiting for approval'}</a>` : ''}</p>
 <div class="grid">${cards || '<p class="muted">No businesses yet.</p>'}</div>
-<section class="card" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title">Add a business</h2>
+${existingCommandId ? existingWorkspaceCard(shell, existingCommandId) : ''}<section class="card" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title">Add a business</h2>
 <p>Type the name of the business. On the next screen you paste its website address and we read it for you.</p>
 <form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}">
 <div class="row"><div><label for="name">Business name</label><input id="name" name="name" type="text" required minlength="2" maxlength="120" autocomplete="organization"></div><div><label for="website">Website address (you can add it on the next screen)</label><input id="website" name="website" type="text" inputmode="url" placeholder="www.example.co.uk"></div></div>
@@ -261,7 +272,9 @@ ${pub.fields.map((f) => `<label for="df-${pub.type}-${f.key}">${e(f.label)}</lab
 <section class="card" id="brand-dna-door"><h2>${p ? 'Your Brand DNA' : 'The quick way: start with your website'}</h2><p>${p ? 'See your card with where each fact came from, or read your website again.' : 'Paste your website address and we read your pages for you. You get a card showing what you sell, who it is for and how you sound, with where each line came from. Nothing is made up.'}</p><p>${brandDnaDoor(b, dnaStatus)}</p></section>
 <nav class="tabs" aria-label="Setup steps"><a href="#website-inventory">1 Website</a><a href="#brand-guidance">2 Guidance</a><a href="#brand-profile">3 Profile</a><a href="#website-connection">4 Connect</a><a href="#editorial-structure">5 Editorial</a></nav>
 <section class="card" id="website-inventory"><h2 class="step-heading"><span class="step-number">1</span>Website and language</h2><form method="post" action="${url(b, 'basics')}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${b.rowVersion}">
-<div><label for="bw">Website</label><input id="bw" name="website" type="text" value="${e(b.website ?? '')}"></div><p class="section-note">${e(languageLabel)} · ${e(timezoneLabel)}</p><details><summary>Advanced language and time zone</summary><div class="row"><div><label for="bl">Language and region</label><input id="bl" name="locale" type="text" value="${e(b.locale)}"></div><div><label for="bt">Time zone</label><input id="bt" name="timezone" type="text" value="${e(b.timezone)}"></div></div></details><button type="submit">Save</button></form>
+<div><label for="bw">Website</label><input id="bw" name="website" type="text" value="${e(b.website ?? '')}"></div><p class="section-note">${e(languageLabel)} · ${e(timezoneLabel)}</p>${b.id.toLowerCase() === EXISTING_WORKSPACE.id
+  ? `<p class="muted" id="account-language">Language and region: <strong>${e(b.locale)}</strong> · Time zone: <strong>${e(b.timezone)}</strong>. These follow your Martin Howard Property account.</p>`
+  : `<details><summary>Advanced language and time zone</summary><div class="row"><div><label for="bl">Language and region</label><input id="bl" name="locale" type="text" value="${e(b.locale)}"></div><div><label for="bt">Time zone</label><input id="bt" name="timezone" type="text" value="${e(b.timezone)}"></div></div></details>`}<button type="submit">Save</button></form>
 <form method="post" action="${url(b, 'inventory')}" style="margin-top:8px">${csrfField(shell.csrf)}<button class="secondary" type="submit"${b.website ? '' : ' disabled'}>Read website pages</button>
 ${data.inventory ? ` <span class="muted">Last read ${e(data.inventory.fetchedAt.slice(0, 16).replace('T', ' '))} UTC: ${data.inventory.pages.filter((x) => x.fetchStatus === 'ok').length} pages, ${data.inventory.pages.filter((x) => x.editorial).length} editorial, ${data.inventory.pages.filter((x) => x.fetchStatus !== 'ok').length} unreadable.</span>` : ''}</form></section>
 <section class="card" id="brand-guidance"><h2 class="step-heading"><span class="step-number">2</span>Brand guidance</h2>
