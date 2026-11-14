@@ -18,7 +18,7 @@ import {
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import {
-  BRAND_DNA_MIN_WORDS, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
+  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
   type BrandDnaCard, type BrandDnaJobPayload, type BrandDnaResult, type ConflictChoice,
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
@@ -131,6 +131,15 @@ export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+}
+
+/** After an owner edit, keep only the left-out lines still true of the card (an item put back by hand is no longer "left out"). */
+function withLeftOutAfterEdit(profile: BrandProfile): BrandProfile {
+  const kept = leftOutAfterEdit(profile.leftOut, profile);
+  if (kept === undefined) return profile;
+  if (kept.length) return { ...profile, leftOut: kept };
+  const { leftOut: _none, ...rest } = profile;
+  return rest;
 }
 
 export function profileFactsSha(p: Pick<BrandProfile, 'offers' | 'approvedClaims' | 'conflicts'>): string {
@@ -591,10 +600,12 @@ export class SeoBlogEngine {
         if (p.receipt || s.job.state === 'cancelled' || p.start?.nonce !== payload.start!.nonce) return { job: s.job, write: false };
         if (rejected) {
           const at = this.now();
-          // Nothing read from the website was kept: the pages held with this task are dropped with it.
-          const message = rejected.reason === 'content'
-            ? 'We stopped before making your card. It would have included a price or a fact we could not find word for word in your website pages or documents, and we do not guess. Nothing was saved or changed.'
-            : 'We could not put your card together this time. Nothing was saved or changed. Please try again.';
+          // Nothing read from the website was kept: the pages held with this task are dropped with it. A content refusal
+          // now means nothing verifiable survived the repair (one unverifiable line is taken off the card, never the card).
+          // Only a refusal for want of clear facts sends the owner to paste; a shape failure or an answer we could not make
+          // true is ours, and says so. Whether the website was used decides which "nothing clear" sentence is true.
+          const fromSite = modelInput!.documents.some((d) => d.origin?.kind === 'website');
+          const message = rejected.outcome === 'nothing_clear' ? (fromSite ? BRAND_DNA_MESSAGES.nothingClear : BRAND_DNA_MESSAGES.nothingClearDocuments) : BRAND_DNA_MESSAGES.ourSideCard;
           return { job: this.profileHold(s.job, 'rejected', message, at), write: true,
             usage: { brandId: job.brandId, kind: 'model_tokens' as const, amount: rejected.record.tokensIn + rejected.record.tokensOut, at, reference: `profile:${s.job.id}:${payload.start!.nonce}:rejected` },
             event: { brandId: job.brandId, at, actor: 'system', kind: 'profile.rejected', message: `Brand DNA card not made: ${rejected.message}`.slice(0, 400), subjectId: s.job.id } };
@@ -609,7 +620,7 @@ export class SeoBlogEngine {
     const current = await this.store.latestProfile(brandId);
     if (!current || current.version !== expectedVersion) throw new StaleWriteError('brand profile');
     for (const page of edits.conversionPages ?? []) if (!/^https:\/\//.test(page.url)) throw new SeoBlogError(400, 'Conversion pages must be full https:// addresses.');
-    const merged = { ...current, ...edits };
+    const merged = withLeftOutAfterEdit({ ...current, ...edits });
     const profile: BrandProfile = { ...merged, version: current.version + 1, factsSha: profileFactsSha(merged), source: 'owner_edited', confirmedAt: null, confirmedBy: null, createdAt: this.now(), generation: null };
     await this.store.saveProfile(profile);
     await this.log(brandId, actor.userId, 'profile.edited', `Brand profile edited (version ${profile.version}). Confirm it to use it.`);
@@ -624,6 +635,8 @@ export class SeoBlogEngine {
     // A card made by the website door keeps its own rules whichever page confirms it: every question settled, and still
     // matching today's pages and documents. A profile made the older way confirms exactly as it always has.
     if (current.strict) {
+      // A summary the repair had to take off must be written by the owner first: content is never written from no summary.
+      if (!current.summary.trim()) throw new SeoBlogError(409, 'Add a one-line summary before you confirm. Use “Something not right? Change it” on your Brand DNA card.', 'brand_dna_no_summary');
       if (current.conflicts.length > 0) throw new SeoBlogError(409, 'Choose the right answer for each question on your Brand DNA card first. Then you can confirm it.', 'brand_dna_open_conflicts');
       if (this.profileStale(current, await this.activeKnowledge(brandId))) throw new SeoBlogError(409, 'Your website pages or documents changed after this card was made, so it is out of date. Read your website again, then confirm the new card.', 'brand_dna_out_of_date');
     }
@@ -788,10 +801,7 @@ export class SeoBlogEngine {
     const result: BrandDnaResult = { pagesRead: plan.pagesRead, pagesChanged: websiteReadable ? plan.documents.length : 0, words: plan.words, websiteReadable };
     if (!websiteReadable && !before.some((d) => d.text)) {
       await this.holdBrandDna(job, 'no_words', result);
-      const opened = pages.some((p) => p.fetchStatus === 'ok');
-      throw new SeoBlogError(409, opened
-        ? 'We could not read enough words from your website. Some websites only show their words inside a browser. Paste your details instead and we will use those.'
-        : `We could not open ${brand.website}. Check the address is right. You can also paste your details instead and we will use those.`);
+      throw new SeoBlogError(409, BRAND_DNA_MESSAGES.noWords);
     }
     // Nothing is saved here. New and changed pages travel with the card task and become brand documents only in the
     // same write as the card built from them, so a refused or failed card leaves the brand exactly as it was.
@@ -839,7 +849,7 @@ export class SeoBlogEngine {
   }
 
   private async saveOwnerCard(actor: Actor, brandId: string, current: BrandProfile, changes: Partial<BrandProfile>, kind: string, message: string): Promise<BrandProfile> {
-    const merged = { ...current, ...changes };
+    const merged = withLeftOutAfterEdit({ ...current, ...changes });
     const profile: BrandProfile = { ...merged, version: current.version + 1, factsSha: profileFactsSha(merged), source: 'owner_edited', confirmedAt: null, confirmedBy: null, createdAt: this.now(), generation: null };
     await this.store.saveProfile(profile);
     await this.log(brandId, actor.userId, kind, message);
