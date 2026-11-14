@@ -155,9 +155,16 @@ test('0154 attach on real roles: only the eligible MHP owner, only the MHP works
     const listed = (await engineFor(founder).listBrands({ userId: founder.user })).find((b) => b.id === MHP)!;
     assert.deepEqual({ id: listed.id, organizationId: listed.organizationId, createdBy: listed.createdBy, website: listed.website, budgets: listed.settings.budgets },
       { id: MHP, organizationId: ORG, createdBy: row.created_by_user_id, website: null, budgets: row.settings.budgets });
-    assert.equal(listed.name, 'Martin Howard Property · Marketing', 'the existing workspace keeps its own name');
+    assert.equal(listed.name, 'Martin Howard Property', 'shown by its business name');
+    assert.equal(replay.brand.name, 'Martin Howard Property');
+    assert.equal((await ownerQuery<{ name: string }>(admin, 'SELECT name FROM app.workspaces WHERE id=$1', [MHP]))[0]!.name, 'Martin Howard Property · Marketing', 'the workspace row is not renamed');
     assert.equal(replay.brand.rowVersion, listed.rowVersion);
     for (const p of [admin2, viewer, stranger]) assert.equal((await engineFor(p).listBrands({ userId: p.user })).some((b) => b.id === MHP), false);
+    // Content setup never changes the live workspace's language or time zone (CRM, webinars and social scheduling read them).
+    const zone = (await ownerQuery<{ locale: string; timezone: string; row_version: string }>(admin, 'SELECT locale,timezone,row_version FROM app.workspaces WHERE id=$1', [MHP]))[0]!;
+    const saved = await engineFor(founder).updateBrandBasics({ userId: founder.user }, MHP, { rowVersion: listed.rowVersion, website: 'martinhowardproperty.co.uk', locale: 'fr-FR', timezone: 'America/New_York' });
+    assert.equal(saved.website, 'https://martinhowardproperty.co.uk');
+    assert.deepEqual(await ownerQuery(admin, 'SELECT locale,timezone,row_version FROM app.workspaces WHERE id=$1', [MHP]), [zone], 'not even its row version moved');
     // Brand DNA opens for it like any business, and the activity says what happened, once.
     assert.equal((await engineFor(founder).getBrand({ userId: founder.user }, MHP)).id, MHP);
     assert.equal((await ownerQuery<{ n: number }>(admin, "SELECT count(*)::int AS n FROM app.seo_blog_activity WHERE workspace_id=$1 AND kind='brand.attached'", [MHP]))[0]!.n, 1);

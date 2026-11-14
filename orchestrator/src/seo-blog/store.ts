@@ -15,6 +15,7 @@ import type {
   KnowledgeDocument, Publication, TopicPlan, UsageKind, UsageRecord, WebsiteInventory,
 } from './types.js';
 import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
+import { businessName } from './existing-workspace.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
@@ -176,6 +177,9 @@ export interface SocialAttestationOutcome {
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+/** Mirrors the PostgreSQL store's read: the existing MHP workspace reads as its business name. */
+function named(b: Brand): Brand { return { ...b, name: businessName(b.id, b.name) }; }
 
 export class MemorySeoBlogStore implements SeoBlogStore {
   private brands = new Map<string, Brand>();
@@ -349,7 +353,7 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     const existing = this.brandCommands.get(key);
     if (existing) {
       if (existing !== input.workspaceId) throw new SeoBlogError(400, 'Refresh the page and try again.');
-      return { brand: clone(this.brands.get(existing)!), attached: false };
+      return { brand: named(clone(this.brands.get(existing)!)), attached: false };
     }
     const x = this.existingWorkspace;
     if (!x || x.id !== input.workspaceId || !x.owners.has(input.actorId)) throw new SeoBlogError(403, 'Only the Martin Howard Property owner can do this.');
@@ -361,20 +365,22 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     }
     for (const owner of x.owners) this.grant(owner, x.id);
     this.brandCommands.set(key, x.id);
-    return { brand: clone(this.brands.get(x.id)!), attached };
+    return { brand: named(clone(this.brands.get(x.id)!)), attached };
   }
 
   async listBrands(actorId: string): Promise<Brand[]> {
-    return [...this.brands.values()].filter((b) => this.members.get(b.id)?.has(actorId)).map(clone).sort((a, b) => a.name.localeCompare(b.name));
+    return [...this.brands.values()].filter((b) => this.members.get(b.id)?.has(actorId)).map((b) => named(clone(b))).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async canManage(actorId: string, brandId: string): Promise<boolean> {
-    return Boolean(this.members.get(brandId)?.has(actorId));
+    // The existing workspace is managed by its owners before it is a business, as in the database.
+    const x = this.existingWorkspace;
+    return Boolean(this.members.get(brandId)?.has(actorId)) || Boolean(x && x.id === brandId && x.owners.has(actorId));
   }
 
   async getBrand(brandId: string): Promise<Brand | null> {
     const b = this.brands.get(brandId);
-    return b ? clone(b) : null;
+    return b ? named(clone(b)) : null;
   }
 
   async updateBrand(brand: Brand): Promise<Brand> {

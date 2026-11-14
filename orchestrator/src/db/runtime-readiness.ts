@@ -295,7 +295,9 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[151]?.checksum===PP_FOLLOWUP_CHECKSUM
       && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM) applied.delete(EMAIL_BLOCK_MIGRATION);
-  // The released email block ledger 153 stays ready after the exact additive MHP content workspace attach 154.
+  // Successor bridge, the same shape 0151, 0152 and 0153 each added for their predecessor: a build whose bundled
+  // migrations end exactly at 153 stays ready after the exact additive 154. It helps only a 153-file build that
+  // contains this code (a rebuild or test fixture); the released 153 build (34143f8) does not have it and will not boot on 154.
   if (migrations.length===153 && migrations[152]?.filename===EMAIL_BLOCK_MIGRATION
       && migrations[152]?.checksum===EMAIL_BLOCK_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM

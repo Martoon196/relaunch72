@@ -70,7 +70,7 @@ test('the card: shown once for the eligible owner, plain, with CSRF and a fresh 
   assert.equal(home.status, 200);
   assert.equal((home.body.match(CARD) ?? []).length, 1, 'one card');
   assert.match(home.body, /<h2 id="use-existing-title">Martin Howard Property<\/h2>/);
-  assert.match(home.body, /<p>This uses the Martin Howard Property workspace you already have\. Nothing is spent until an allowance is set\.<\/p>/);
+  assert.match(home.body, /<p>Use your existing Martin Howard Property account for blog and content\. Your contacts, webinars and emails stay exactly as they are\. Nothing is spent until you set a monthly allowance\.<\/p>/);
   assert.match(home.body, /<button type="submit">Use Martin Howard Property here<\/button>/);
   assert.match(home.body, new RegExp(`<input type="hidden" name="_csrf" value="${portalCsrfToken(SECRET, owner.sessionToken)}">`));
   assert.ok(commandOf(home.body));
@@ -93,7 +93,8 @@ test('the card: shown once for the eligible owner, plain, with CSRF and a fresh 
   await h.engine.attachExistingWorkspace(OWNER, { commandId: randomUUID() });
   const after = await call(service, owner, 'GET', '/portal/seo-blog');
   assert.doesNotMatch(after.body, CARD);
-  assert.match(after.body, /Martin Howard Property · Marketing/);
+  assert.match(after.body, /<h3><a href="[^"]+">Martin Howard Property<\/a><\/h3>/, 'shown by its business name');
+  assert.doesNotMatch(after.body, /· Marketing/, 'never the internal workspace name');
 });
 
 test('the card escapes what it prints', () => {
@@ -152,12 +153,16 @@ test('typing Martin Howard Property into "Add a business" never makes a duplicat
   assert.equal((page.match(CARD) ?? []).length, 1);
   assert.ok((await add(owner, 'MHP website', 'www.martinhowardproperty.co.uk')).headers.location!.endsWith('#use-existing'), 'the website counts too');
   assert.equal((await h.engine.listBrands(OWNER)).length, 0, 'nothing was created');
-  // Not usable here (someone else): a plain reason, nothing created.
+  // Another customer with a similar name or site is not steered or refused and never sees MHP wording.
   const stranger = identity(STRANGER.userId);
-  const reason = await add(stranger, 'martin howard property ltd');
-  assert.ok(reason.headers.location!.endsWith('#add-business'));
-  assert.match((await follow(service, stranger, reason.headers.location!)).body, /Martin Howard Property already has its own workspace, so it is not added again as a new business\./);
-  assert.equal((await h.engine.listBrands(STRANGER)).length, 0);
+  const similar = await add(stranger, 'Martin Howard Property Lettings', 'www.martinhowardproperty.example');
+  assert.match(similar.headers.location!, /^\/portal\/seo-blog\/b\/[0-9a-f-]{36}\/dna\?/, similar.headers.location);
+  const strangerPage = (await follow(service, stranger, similar.headers.location!)).body;
+  assert.match(strangerPage, /Martin Howard Property Lettings is added\. Start with its website\./);
+  assert.doesNotMatch(strangerPage, /already has|use-existing|open Marketing/);
+  const [own] = await h.engine.listBrands(STRANGER);
+  assert.equal(own!.name, 'Martin Howard Property Lettings');
+  assert.notEqual(own!.id, MHP);
   // Used: straight to its Brand DNA door.
   await call(service, owner, 'POST', '/portal/seo-blog/brands/existing', { commandId: randomUUID(), _csrf: csrf });
   const toDoor = await add(owner, 'Martin Howard Property');
@@ -220,5 +225,66 @@ test('the attach sends the same default settings a new business gets, and the pi
   const out = await store.attachExistingWorkspace({ commandId: command, actorId: OWNER.userId, workspaceId: MHP, website: null, now: '2026-11-14T00:00:00Z' });
   assert.equal(out.attached, true);
   assert.deepEqual(seen, [[command, MHP, null, JSON.stringify(DEFAULT_BRAND_SETTINGS)]]);
+  // The app path never sends anything but the server constant: nothing runs on its own, whatever a form says.
+  const sent = JSON.parse(seen[0]![3] as string);
+  assert.deepEqual([sent.ongoingProduction, sent.autoPublish, sent.autoAcceptPlans, sent.pauseAll], [false, false, false, false]);
+  assert.deepEqual(sent.budgets, { modelTokensPerMonth: 0, searchCallsPerMonth: 0, imagesPerMonth: 0 });
+  assert.equal(out.brand.name, 'Martin Howard Property', 'the read choke point names the business, not the workspace');
   await assert.rejects(store.attachExistingWorkspace({ commandId: command, actorId: STRANGER.userId, workspaceId: MHP, website: null, now: '2026-11-14T00:00:00Z' }), { status: 403 });
+});
+
+test('the founder typing Martin Howard Property from an account that cannot manage its workspace gets the sign-in step, and nothing is created', async () => {
+  const h = harness();
+  h.store.existingWorkspace = { id: MHP, organizationId: EXISTING_WORKSPACE.organizationId, name: 'Martin Howard Property · Marketing', owners: new Set() };
+  let operator = true;
+  const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null,
+    limitsFor: () => ({ allowed: async () => operator, list: async () => { throw new Error('unused'); }, save: async () => undefined, policy: async () => undefined }) };
+  const founder = identity(OWNER.userId);
+  const add = (name: string, website = '') => call(service, founder, 'POST', '/portal/seo-blog/brands', { commandId: randomUUID(), name, website, _csrf: portalCsrfToken(SECRET, founder.sessionToken) });
+  for (const [name, site] of [['Martin Howard Property', ''], ['Our blog', 'martinhowardproperty.co.uk']] as const) {
+    const out = await add(name, site);
+    assert.ok(out.headers.location!.startsWith('/portal/seo-blog?') && out.headers.location!.endsWith('#add-business'), out.headers.location);
+    assert.match((await follow(service, founder, out.headers.location!)).body,
+      /Martin Howard Property already has a workspace\. To use it here, sign in to the Martin Howard Property portal with this account, open Marketing once, then come back to this page\./);
+  }
+  assert.equal((await h.engine.listBrands(OWNER)).length, 0);
+  // Not the founder: the ordinary form.
+  operator = false;
+  assert.match((await add('Martin Howard Property')).headers.location!, /^\/portal\/seo-blog\/b\/[0-9a-f-]{36}\/dna\?/);
+});
+
+test('setup for the existing workspace keeps its account language and time zone: shown read-only and never changed', async () => {
+  const { h, service } = mhpHarness();
+  const owner = identity(OWNER.userId);
+  const { brand } = await h.engine.attachExistingWorkspace(OWNER, { commandId: randomUUID() });
+  await h.engine.updateBrandBasics(OWNER, MHP, { rowVersion: brand.rowVersion, website: 'martinhowardproperty.co.uk', locale: 'fr-FR', timezone: 'America/New_York' });
+  const after = await h.engine.getBrand(OWNER, MHP);
+  assert.deepEqual([after.locale, after.timezone, after.website], [brand.locale, brand.timezone, 'https://martinhowardproperty.co.uk']);
+  // Even a malformed value cannot fail or change it.
+  await h.engine.updateBrandBasics(OWNER, MHP, { rowVersion: after.rowVersion, website: null, locale: 'nonsense', timezone: 'Not/AZone' });
+  assert.deepEqual([(await h.engine.getBrand(OWNER, MHP)).locale, (await h.engine.getBrand(OWNER, MHP)).timezone], [brand.locale, brand.timezone]);
+  const setup = (await call(service, owner, 'GET', `/portal/seo-blog/b/${MHP}/setup`)).body;
+  assert.match(setup, /These follow your Martin Howard Property account\./);
+  assert.doesNotMatch(setup, /name="locale"|name="timezone"/);
+  // An ordinary business still edits both.
+  const other = await h.engine.createBrand(OWNER, { commandId: randomUUID(), name: 'Harbour Lettings' });
+  const page = (await call(service, owner, 'GET', `/portal/seo-blog/b/${other.brand.id}/setup`)).body;
+  assert.match(page, /name="locale"/); assert.match(page, /name="timezone"/); assert.doesNotMatch(page, /These follow your Martin Howard Property account/);
+  const changed = await h.engine.updateBrandBasics(OWNER, other.brand.id, { rowVersion: other.brand.rowVersion, website: null, locale: 'en-US', timezone: 'America/New_York' });
+  assert.deepEqual([changed.locale, changed.timezone], ['en-US', 'America/New_York']);
+});
+
+test('the public enquiry form names the existing workspace as its business, and leaves every other brand as it is', async () => {
+  const { PgEnquiryCapture } = await import('../src/creative-studio/enquiry-capture.js');
+  const other = '44444444-4444-4444-8444-444444444444';
+  const client = {
+    async query(text: string, values?: unknown[]) {
+      if (/creative_studio_capture_target/.test(text)) return { rows: [{ v: { brandName: values![0] === MHP ? 'Martin Howard Property · Marketing' : 'Harbour Lettings', privacyUrl: 'https://x.example/privacy', ownerUserId: OWNER.userId, pipelineId: other, stageId: other, frameOrigins: [] } }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const capture = new PgEnquiryCapture({ contentPool: { connect: async () => client } as unknown as Pick<Pool, 'connect'>, crm: { createLead: async () => { throw new Error('unused'); } } as never });
+  assert.equal((await capture.target(MHP, 'a'.repeat(24), 'r'))!.brandName, 'Martin Howard Property');
+  assert.equal((await capture.target(other, 'a'.repeat(24), 'r'))!.brandName, 'Harbour Lettings');
 });

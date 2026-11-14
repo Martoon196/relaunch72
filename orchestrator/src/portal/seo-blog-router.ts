@@ -20,7 +20,10 @@ import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/eng
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
-import { EXISTING_WORKSPACE } from '../seo-blog/existing-workspace.js';
+import { EXISTING_WORKSPACE, namesExistingWorkspace } from '../seo-blog/existing-workspace.js';
+
+/** The founder's own account cannot manage the MHP workspace until it has opened Marketing in the MHP portal (0124). */
+export const FOUNDER_WITHOUT_WORKSPACE = 'Martin Howard Property already has a workspace. To use it here, sign in to the Martin Howard Property portal with this account, open Marketing once, then come back to this page.';
 import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
 import { PROFILE_STATUS_SCRIPT } from './profile-status.js';
 import { KNOWLEDGE_CATEGORY_SCRIPT } from './knowledge-category.js';
@@ -485,6 +488,14 @@ async function handlePost(
     return ok(`${SEO_BLOG_BASE}/b/${used.brand.id}/dna`, used.attached ? `${EXISTING_WORKSPACE.name} is ready. Start with its website.` : `${EXISTING_WORKSPACE.name} is already here.`);
   }
   if (path === `${SEO_BLOG_BASE}/brands`) {
+    // The platform founder (the limits operator) typing Martin Howard Property from an account that cannot manage its
+    // workspace yet: never a new business; say how to make the existing one usable here.
+    if (namesExistingWorkspace(f('name') ?? '', f('website')) && !(await engine.managesExistingWorkspace(actor))) {
+      const limits = input.service.limitsFor?.(input.identity!, input.requestId);
+      if (limits && await limits.allowed().catch(() => false)) {
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', FOUNDER_WITHOUT_WORKSPACE)}#add-business`);
+      }
+    }
     // A new business lands on the Brand DNA door ("Start with your website"), not on the long setup page.
     let made: Awaited<ReturnType<SeoBlogEngine['createBrand']>>;
     try { made = await engine.createBrand(actor, { commandId: f('commandId') ?? '', name: f('name') ?? '', website: f('website') }); }

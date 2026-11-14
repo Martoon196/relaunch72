@@ -12,6 +12,15 @@ export const EXISTING_WORKSPACE = Object.freeze({
 const NAME_KEY = 'martinhowardproperty';
 
 /**
+ * The name every content surface shows for a business. The existing MHP workspace is called
+ * "Martin Howard Property · Marketing" internally (0124); as a business it is "Martin Howard Property". The workspace
+ * row itself is never renamed.
+ */
+export function businessName(workspaceId: string, workspaceName: string): string {
+  return workspaceId.toLowerCase() === EXISTING_WORKSPACE.id ? EXISTING_WORKSPACE.name : workspaceName;
+}
+
+/**
  * Whether an "Add a business" entry is Martin Howard Property, so the ordinary form must not make a second, empty
  * workspace for it. The rule, kept deliberately simple: ignoring case, spaces and punctuation the name starts with
  * "Martin Howard Property" (so "Martin Howard Property Ltd" counts too), or the website's address has

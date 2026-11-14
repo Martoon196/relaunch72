@@ -23,6 +23,7 @@ import { publicationMediaPin, publicationMediaEffectBoundary } from './media-pub
 import type { SeoMediaReleaseInput } from './media-types.js';
 import { persistCampaignQueueWake } from './campaign-queue.js';
 import { preservePublicationVerificationAnchor } from './publication-verification.js';
+import { businessName } from './existing-workspace.js';
 import { assertCampaignCopyScope, pendingCampaignTokens, type CampaignGeneration, type CampaignCopyBoundaryInput } from './campaign-generation.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
@@ -737,6 +738,8 @@ function withVersion<T extends { rowVersion: number }>(row: { data: Omit<T, 'row
 function normaliseBrand(raw: Brand): Brand {
   return {
     ...raw,
+    // The one read choke point for a brand's name: the existing MHP workspace reads as "Martin Howard Property".
+    name: businessName(raw.id, raw.name),
     createdAt: new Date(raw.createdAt).toISOString(),
     rowVersion: Number(raw.rowVersion),
     settings: { ...DEFAULT_BRAND_SETTINGS, ...(raw.settings ?? {}) },

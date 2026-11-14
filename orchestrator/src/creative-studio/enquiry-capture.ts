@@ -12,6 +12,7 @@ import type { CrmCommandService } from '../crm-pg/commands.js';
 import { requestDatabaseContext } from '../db/rls.js';
 import { withTransaction } from '../db/transaction.js';
 import { escapeHtml as e } from '../portal/ui.js';
+import { businessName } from '../seo-blog/existing-workspace.js';
 
 export const ENQUIRY_ROUTE = '/enquire';
 export const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'] as const;
@@ -65,8 +66,10 @@ export class PgEnquiryCapture {
 
   async target(ws: string, key: string, requestId: string): Promise<EnquiryTarget | null> {
     if (!UUID.test(ws) || !KEY.test(key)) return null;
-    return withTransaction(this.deps.contentPool, { actorKind: 'webhook', workspaceId: ws, requestId }, async (t) =>
+    const target = await withTransaction(this.deps.contentPool, { actorKind: 'webhook', workspaceId: ws, requestId }, async (t) =>
       (await t.query<{ v: EnquiryTarget | null }>('SELECT app_private.creative_studio_capture_target($1,$2) AS v', [ws, key])).rows[0]?.v ?? null, { readOnly: true });
+    // The SQL reads the workspace name; the existing MHP workspace is shown to visitors as the business name.
+    return target ? { ...target, brandName: businessName(ws, target.brandName) } : null;
   }
 
   async capture(ws: string, key: string, nonce: string, input: EnquiryInput, utm: Utm, requestId: string): Promise<EnquiryOutcome> {
