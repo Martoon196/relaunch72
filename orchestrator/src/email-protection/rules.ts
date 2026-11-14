@@ -14,21 +14,24 @@
  *   Recovery from SLOWED only, by itself: at least 7 days slowed, then 7 days with bounces under 1% (none at all when
  *           fewer than 100 emails were sent in those 7 days) and fewer than 2 spam complaints in 30 days. Entering at
  *           2% and leaving under 1% after a full week is the hysteresis: a business does not flap.
- *   Bounces are hard plus soft, the way Postmark counts them. Every window starts no earlier than the moment the
- *   founder last lifted or reinstated the business, so bounces that were already acted on never trip it twice.
+ *   Bounces are hard plus soft (see email-bounces/postmark-events.ts postmarkCounterKind for exactly which Postmark
+ *   types). Denominators are LIVE sends only: tests never dilute a rate. After a founder lift or reinstatement nothing
+ *   counts until the business's first live send after it, so bounces for emails sent before it never trip it twice.
  *
  *   WARM-UP  a business's first go-live starts at 50 marketing emails a day: 50 for 3 days, 100 for 4 days, 250, 500
  *           and 1,000 for 7 days each, then 2,000 (day 29 at the earliest). A step is earned only when its whole period
- *           had at least one email, no spam complaint and bounces under 2%; otherwise that step's period starts again.
- *           The hourly cap is a quarter of the daily cap, rounded up. No step is earned while slowed.
- *   SAMPLE   a first go-live (and every lift, reinstatement or release) sends its first 50 marketing emails, then waits
- *           2 hours after the 50th; 2 or more bounces or any spam complaint among them holds the rest (at once, without
- *           waiting); otherwise the rest goes by itself.
- *   ACCOUNT  across every business with a connection: with at least 1,000 emails in the window, bounces of 3% over 7
- *           days or complaints of 0.05% (1 in 2,000) over 30 days among the businesses still sending pause the worst
- *           offender first (most bounces, or most complaints), then the next, until the rest is back under the line;
- *           bounces of 5% or complaints of 0.08% (1 in 1,250) across the whole account hold every business's marketing
- *           until the founder lifts it. The founder is told either way.
+ *           had live sends of at least half that step's daily cap on at least 2 days (UK days), no spam complaint and
+ *           bounces under 2%; a period with a complaint or 2% bounces starts again. The hourly cap is a quarter of the
+ *           daily cap, rounded up. No step is earned while slowed. A new domain starts the ramp again at its first step.
+ *   SAMPLE   a go-live (and every lift, reinstatement, release or new verification) sends its first 50 marketing
+ *           emails, then waits 2 hours after the 50th; 2 or more bounces or any spam complaint among them (counted from
+ *           its first live send) holds the rest at once; otherwise the rest goes by itself.
+ *   ACCOUNT  across every business with a connection, live sends only, with at least 1,000 in the window: among the
+ *           businesses still sending, bounces of 3% over 7 days, or 3 or more complaints that are also 0.05% (1 in 2,000)
+ *           over 30 days, pause the worst offender first: only a business itself at 3% bounces (at least 100 sent) or at
+ *           1 in 2,000 complaints is a candidate, highest rate first, then the next, until the rest is back under the
+ *           line. Bounces of 5%, or 5 or more complaints that are also 0.08% (1 in 1,250), across the whole account hold
+ *           every business's marketing until the founder lifts it. The founder is told either way.
  * All comparisons are done in whole numbers, so an exact threshold always trips and one below never does.
  */
 
@@ -64,10 +67,12 @@ export const SAMPLE = Object.freeze({ size: 50, waitHours: 2, holdAtBounces: 2, 
 export const ACCOUNT = Object.freeze({
   minSends: 1_000,
   /** Worst offenders paused first. */
-  watchBouncePercent: 3, watchComplaintsPerTenThousand: 5,
+  watchBouncePercent: 3, watchComplaintsPerTenThousand: 5, watchMinComplaints: 3,
   /** Every business's marketing held. */
-  holdBouncePercent: 5, holdComplaintsPerTenThousand: 8,
+  holdBouncePercent: 5, holdComplaintsPerTenThousand: 8, holdMinComplaints: 5,
 });
+/** A step is earned only with at least this many UK days of live sends at half its daily cap or more. */
+export const RAMP_STEP_BUSY_DAYS = 2;
 
 const DAY = 86_400_000;
 
@@ -98,6 +103,9 @@ export interface ProtectionCounts {
   readonly liveDay: number; readonly liveHour: number;
   readonly sampleSends: number; readonly sampleBounces: number; readonly sampleComplaints: number;
   readonly stepSends: number; readonly stepBounces: number; readonly stepComplaints: number;
+  /** UK days since the step began with live sends of at least half the step's daily cap. */
+  readonly stepBusyDays: number;
+  readonly domain?: string | null;
 }
 
 export type TripLine = 'bounce_rate' | 'hard_last50' | 'complaints' | 'sample' | 'account_bounce' | 'account_complaint' | 'restarted';
@@ -156,7 +164,7 @@ export function caps(step: number, state: ProtectionState): { readonly daily: nu
 }
 
 /** The next warm-up step (see the header): unchanged, earned (step + 1), or the same step started again. */
-export function nextWarmupStep(c: Pick<ProtectionCounts, 'warmupStep' | 'warmupStepAt' | 'stepSends' | 'stepBounces' | 'stepComplaints' | 'state' | 'goLiveApprovedAt'>,
+export function nextWarmupStep(c: Pick<ProtectionCounts, 'warmupStep' | 'warmupStepAt' | 'stepSends' | 'stepBounces' | 'stepComplaints' | 'stepBusyDays' | 'state' | 'goLiveApprovedAt'>,
   now: number): { readonly step: number; readonly stepAt: string | null; readonly changed: boolean } {
   const step = Math.max(0, Math.min(RAMP.length - 1, c.warmupStep));
   const unchanged = { step, stepAt: c.warmupStepAt, changed: false };
@@ -166,7 +174,7 @@ export function nextWarmupStep(c: Pick<ProtectionCounts, 'warmupStep' | 'warmupS
   if (now - at < RAMP[step]!.days! * DAY) return unchanged;
   const dirty = c.stepComplaints > 0 || atLeastPercent(c.stepBounces, c.stepSends, RAMP_STEP_BOUNCE_PERCENT);
   if (dirty) return { step, stepAt: new Date(now).toISOString(), changed: true };
-  if (c.stepSends < 1) return unchanged;
+  if (c.stepBusyDays < RAMP_STEP_BUSY_DAYS) return unchanged;
   return { step: step + 1, stepAt: new Date(now).toISOString(), changed: true };
 }
 
@@ -175,6 +183,8 @@ export function sampleVerdict(c: Pick<ProtectionCounts, 'sampleState' | 'sampleF
   { readonly verdict: 'held' | 'passed' | null; readonly trip: Trip | null } {
   if (c.sampleState !== 'sending' && c.sampleState !== 'waiting') return { verdict: null, trip: null };
   const sent = Math.min(c.sampleSends, SAMPLE.size);
+  // Nothing of this sample has gone yet: nothing it could be judged on (late bounces belong to emails before it).
+  if (sent === 0) return { verdict: null, trip: null };
   if (c.sampleBounces >= SAMPLE.holdAtBounces || c.sampleComplaints >= SAMPLE.holdAtComplaints) {
     return { verdict: 'held', trip: { line: 'sample', level: 'held', count: c.sampleBounces, total: sent, limit: SAMPLE.holdAtBounces - 1, own: { count: c.sampleComplaints, total: sent } } };
   }
@@ -188,6 +198,8 @@ export interface ProtectionDecision {
   readonly from: ProtectionState; readonly to: ProtectionState;
   readonly kind: 'slowed' | 'paused' | 'recovered' | 'sample_held' | 'sample_passed' | 'warmup_step' | null;
   readonly trip: Trip | null;
+  /** The ladder line that set the stored reason (differs from trip when a held sample is the stronger news). */
+  readonly reasonTrip: Trip | null;
   readonly daily: number; readonly hourly: number;
   readonly step: number | null; readonly stepAt: string | null;
   readonly sample: 'held' | 'passed' | null;
@@ -198,7 +210,7 @@ export function decide(c: ProtectionCounts, now: number): ProtectionDecision | n
   const from = c.state;
   if (from === 'off' || from === 'paused') {
     const zero = caps(0, from);
-    return c.dailyCap !== zero.daily || c.hourlyCap !== zero.hourly ? { from, to: from, kind: null, trip: null, ...zero, step: null, stepAt: null, sample: null } : null;
+    return c.dailyCap !== zero.daily || c.hourlyCap !== zero.hourly ? { from, to: from, kind: null, trip: null, reasonTrip: null, ...zero, step: null, stepAt: null, sample: null } : null;
   }
   const judged = judge(c);
   let to: ProtectionState = from, kind: ProtectionDecision['kind'] = null, trip: Trip | null = null;
@@ -207,27 +219,34 @@ export function decide(c: ProtectionCounts, now: number): ProtectionDecision | n
   else if (from === 'slowed' && judged.level === 'ok' && recovered(c, now)) { to = 'ok'; kind = 'recovered'; }
   // The sample is judged only while the business stays sending.
   let sample: 'held' | 'passed' | null = null;
+  const reasonTrip = trip;
   if (to === 'ok' || to === 'slowed') {
     const verdict = sampleVerdict(c, now);
-    if (verdict.verdict) { sample = verdict.verdict; if (!kind) { kind = verdict.verdict === 'held' ? 'sample_held' : 'sample_passed'; trip = verdict.trip; } }
+    if (verdict.verdict) {
+      sample = verdict.verdict;
+      // A held sample stops sending; slowing only reduces it: the held sample is the stronger news to tell.
+      if (verdict.verdict === 'held' && kind !== 'recovered') { kind = 'sample_held'; trip = verdict.trip; }
+      else if (!kind) { kind = verdict.verdict === 'held' ? 'sample_held' : 'sample_passed'; trip = verdict.trip; }
+    }
   }
   const warm = to === 'ok' && from === 'ok' ? nextWarmupStep(c, now) : { step: c.warmupStep, stepAt: c.warmupStepAt, changed: false };
   if (warm.changed && !kind && warm.step !== c.warmupStep) kind = 'warmup_step';
   const capped = caps(warm.step, to);
   if (!kind && !warm.changed && !sample && capped.daily === c.dailyCap && capped.hourly === c.hourlyCap) return null;
-  return { from, to, kind, trip, daily: capped.daily, hourly: capped.hourly, step: warm.changed ? warm.step : null, stepAt: warm.changed ? warm.stepAt : null, sample };
+  return { from, to, kind, trip, reasonTrip, daily: capped.daily, hourly: capped.hourly, step: warm.changed ? warm.step : null, stepAt: warm.changed ? warm.stepAt : null, sample };
 }
 
 export interface AccountCounts { readonly state: 'ok' | 'held'; readonly sends7: number; readonly bounces7: number; readonly sends30: number; readonly complaints30: number }
 
-/** The account trip-wire's decision: whether to hold every business, and which businesses to pause, worst first. */
+/** The account trip-wire's decision: whether to hold every business, and which businesses to pause, worst rate first. */
 export function accountDecision(account: AccountCounts, businesses: readonly ProtectionCounts[]): {
   readonly hold: Trip | null; readonly pause: readonly { readonly workspaceId: string; readonly trip: Trip }[] } {
   let hold: Trip | null = null;
   if (account.state === 'ok') {
     if (account.sends7 >= ACCOUNT.minSends && atLeastPercent(account.bounces7, account.sends7, ACCOUNT.holdBouncePercent))
       hold = { line: 'account_bounce', level: 'held', count: account.bounces7, total: account.sends7, limit: ACCOUNT.holdBouncePercent, days: 7 };
-    else if (account.sends30 >= ACCOUNT.minSends && atLeastPerTenThousand(account.complaints30, account.sends30, ACCOUNT.holdComplaintsPerTenThousand))
+    else if (account.sends30 >= ACCOUNT.minSends && account.complaints30 >= ACCOUNT.holdMinComplaints
+        && atLeastPerTenThousand(account.complaints30, account.sends30, ACCOUNT.holdComplaintsPerTenThousand))
       hold = { line: 'account_complaint', level: 'held', count: account.complaints30, total: account.sends30, limit: ACCOUNT.holdComplaintsPerTenThousand, days: 30 };
   }
   const sending = businesses.filter(b => b.state === 'ok' || b.state === 'slowed');
@@ -236,11 +255,16 @@ export function accountDecision(account: AccountCounts, businesses: readonly Pro
     const s7 = sending.reduce((n, b) => n + b.sends7, 0), b7 = sending.reduce((n, b) => n + bounces7(b), 0);
     const s30 = sending.reduce((n, b) => n + b.sends30, 0), c30 = sending.reduce((n, b) => n + b.complaints30, 0);
     const bounceLine = s7 >= ACCOUNT.minSends && atLeastPercent(b7, s7, ACCOUNT.watchBouncePercent);
-    const complaintLine = !bounceLine && s30 >= ACCOUNT.minSends && atLeastPerTenThousand(c30, s30, ACCOUNT.watchComplaintsPerTenThousand);
+    const complaintLine = !bounceLine && s30 >= ACCOUNT.minSends && c30 >= ACCOUNT.watchMinComplaints && atLeastPerTenThousand(c30, s30, ACCOUNT.watchComplaintsPerTenThousand);
     if (!bounceLine && !complaintLine) break;
-    const worst = [...sending].sort((x, y) => bounceLine
-      ? bounces7(y) - bounces7(x) || bounces7(y) * x.sends7 - bounces7(x) * y.sends7 || x.workspaceId.localeCompare(y.workspaceId)
-      : y.complaints30 - x.complaints30 || x.workspaceId.localeCompare(y.workspaceId))[0]!;
+    // Only a business itself over the line is a candidate; the highest rate goes first (cross-multiplied, no floats).
+    const candidates = sending.filter(b => bounceLine
+      ? b.sends7 >= LADDER.minSendsForRate && atLeastPercent(bounces7(b), b.sends7, ACCOUNT.watchBouncePercent)
+      : b.complaints30 >= 1 && atLeastPerTenThousand(b.complaints30, b.sends30, ACCOUNT.watchComplaintsPerTenThousand));
+    if (!candidates.length) break;
+    const worst = [...candidates].sort((x, y) => bounceLine
+      ? bounces7(y) * x.sends7 - bounces7(x) * y.sends7 || bounces7(y) - bounces7(x) || x.workspaceId.localeCompare(y.workspaceId)
+      : y.complaints30 * x.sends30 - x.complaints30 * y.sends30 || y.complaints30 - x.complaints30 || x.workspaceId.localeCompare(y.workspaceId))[0]!;
     pause.push({ workspaceId: worst.workspaceId, trip: bounceLine
       ? { line: 'account_bounce', level: 'paused', count: b7, total: s7, limit: ACCOUNT.watchBouncePercent, days: 7, own: { count: bounces7(worst), total: worst.sends7 } }
       : { line: 'account_complaint', level: 'paused', count: c30, total: s30, limit: ACCOUNT.watchComplaintsPerTenThousand, days: 30, own: { count: worst.complaints30, total: worst.sends30 } } });

@@ -29,16 +29,19 @@ export function sendingConfig(over: Partial<SendingConfig> = {}): SendingConfig 
   return { workspaceId: PP, status: 'verified', mode: 'live', serverId: 5151, stream: 'broadcast', sealedServerToken: vault.seal(PP, 'server_token', TOKEN),
     fromName: 'Property Predator, Leeds', fromAddress: 'hello@mail.pp-send-proof.co.uk', replyTo: 'team@pp-send-proof.co.uk', businessName: 'Property Predator Ltd',
     postalAddress: '1 High Street, Leeds LS1 1AA', testRecipients: ['owner@pp-send-proof.co.uk'], protectionState: 'ok', ownerPaused: false, sampleState: 'passed',
-    dailyCap: 50, hourlyCap: 13, accountHeld: false, liveDay: 0, liveHour: 0, goLiveRequestedAt: null, goLiveApprovedAt: '2026-11-01T00:00:00.000Z', lastStep: null, ...over };
+    dailyCap: 50, hourlyCap: 13, accountHeld: false, liveDay: 0, liveHour: 0, goLiveRequestedAt: null, goLiveApprovedAt: '2026-11-01T00:00:00.000Z', lastStep: null,
+    protectionReason: null, approvedCurrent: true, testCurrent: true, ...over };
 }
 
-test('which sender: the environment unless the stored connection is connected and in test or live; a pause is never bypassed', () => {
+test('which sender: the environment ONLY while the connection was never in charge; every other state holds or uses the connection', () => {
   assert.deepEqual(sendingPlan(null, vault), { kind: 'env' }, 'no connection row, or the database ends at 0155');
-  assert.deepEqual(sendingPlan(sendingConfig({ mode: 'off' }), vault), { kind: 'env' }, 'mode off: today\'s sender');
-  assert.deepEqual(sendingPlan(sendingConfig({ status: 'dns_pending' }), vault), { kind: 'env' });
-  assert.deepEqual(sendingPlan(sendingConfig({ status: 'disconnected', mode: 'live' }), vault), { kind: 'env' });
-  for (const state of ['paused', 'off'] as const) {
-    assert.deepEqual(sendingPlan(sendingConfig({ mode: 'off', protectionState: state }), vault), { kind: 'hold', reason: state, workspaceId: PP }, `${state}: never the environment sender`);
+  const fresh = (over: Partial<SendingConfig> = {}) => sendingConfig({ mode: 'off', goLiveApprovedAt: null, approvedCurrent: false, sampleState: 'none', ...over });
+  assert.deepEqual(sendingPlan(fresh(), vault), { kind: 'env' }, 'never in charge: today\'s sender');
+  for (const status of ['dns_pending', 'needs_attention', 'disconnected', 'creating', 'not_connected']) assert.deepEqual(sendingPlan(fresh({ status }), vault), { kind: 'env' }, status);
+  // Any sign of having been in charge, or any hold, and the environment sender never takes over again by itself.
+  for (const [over, reason] of [[{ protectionState: 'paused' }, 'paused'], [{ protectionState: 'off' }, 'off'], [{ ownerPaused: true }, 'not_live'],
+    [{ sampleState: 'held' }, 'not_live'], [{ goLiveApprovedAt: 'x' }, 'not_live'], [{ protectionState: 'slowed' }, 'not_live']] as [Partial<SendingConfig>, string][]) {
+    assert.deepEqual(sendingPlan(fresh(over), vault), { kind: 'hold', reason, workspaceId: PP }, JSON.stringify(over));
   }
   const live = sendingPlan(sendingConfig(), vault);
   assert.equal(live.kind, 'connection');
@@ -53,11 +56,42 @@ test('which sender: the environment unless the stored connection is connected an
   const holds: [Partial<SendingConfig>, string][] = [[{ protectionState: 'off' }, 'off'], [{ protectionState: 'paused' }, 'paused'], [{ ownerPaused: true }, 'owner_paused'],
     [{ businessName: null }, 'needs_footer'], [{ postalAddress: null }, 'needs_footer'], [{ accountHeld: true }, 'account_held'], [{ sampleState: 'held' }, 'sample_held'],
     [{ sampleState: 'waiting' }, 'sample_wait'], [{ liveDay: 50 }, 'cap'], [{ liveHour: 13 }, 'cap'], [{ sealedServerToken: null }, 'unreadable'],
+    [{ approvedCurrent: false }, 'not_approved'], [{ testCurrent: false }, 'needs_test'],
     [{ sealedServerToken: new EmailConnectionVault(Buffer.alloc(32, 4)).seal(PP, 'server_token', TOKEN) }, 'unreadable'], [{ fromAddress: 'not an address' }, 'unreadable']];
   for (const [over, reason] of holds) assert.deepEqual(sendingPlan(sendingConfig(over), vault), { kind: 'hold', reason, workspaceId: PP }, reason);
   assert.deepEqual(sendingPlan(sendingConfig(), null), { kind: 'hold', reason: 'unreadable', workspaceId: PP }, 'no key: held, never sent unsealed or from the environment');
-  // Test mode still goes while paused by protection (tests go only to the business's own addresses).
+  // The deployment's own switches (EMAIL_CONNECT off, or bounce handling off) hold a connection in charge.
+  assert.deepEqual(sendingPlan(sendingConfig(), vault, { allowed: false }), { kind: 'hold', reason: 'switched_off_here', workspaceId: PP });
+  assert.deepEqual(sendingPlan(fresh(), vault, { allowed: false }), { kind: 'env' }, 'never in charge: still the environment sender');
+  // Test mode still goes to the business's own list while paused by protection, but not while switched off.
   assert.equal(sendingPlan(sendingConfig({ mode: 'test', protectionState: 'paused' }), vault).kind, 'connection');
+  assert.equal(sendingPlan(sendingConfig({ mode: 'test', protectionState: 'off' }), vault).kind, 'hold');
+});
+
+test('the reviewer\'s full state table: 6 statuses x 3 modes x every hold, never the environment once in charge, never the connection unless connected', () => {
+  const statuses = ['verified', 'dns_pending', 'needs_attention', 'disconnected', 'creating', 'not_connected'];
+  const variants: Partial<SendingConfig>[] = [{}, { protectionState: 'slowed' }, { protectionState: 'paused' }, { protectionState: 'off' }, { ownerPaused: true }, { accountHeld: true },
+    { sampleState: 'held' }, { sampleState: 'waiting' }, { liveDay: 50 }, { businessName: null }, { sealedServerToken: null }, { approvedCurrent: false }];
+  let rows = 0;
+  for (const approved of [true, false]) for (const status of statuses) for (const mode of ['off', 'test', 'live'] as const) for (const variant of variants) {
+    const config = sendingConfig({ status, mode, goLiveApprovedAt: approved ? 'x' : null, approvedCurrent: approved, sampleState: approved ? 'passed' : 'none', ...variant });
+    const plan = sendingPlan(config, vault);
+    const neverInCharge = mode === 'off' && !approved && (config.protectionState === 'ok') && !config.ownerPaused && config.sampleState === 'none';
+    rows++;
+    if (neverInCharge) { assert.equal(plan.kind, 'env', `${status} ${mode} ${JSON.stringify(variant)}`); continue; }
+    assert.notEqual(plan.kind, 'env', `once in charge never env: ${status} ${mode} ${approved} ${JSON.stringify(variant)}`);
+    if (status !== 'verified') assert.deepEqual(plan, { kind: 'hold', reason: config.protectionState === 'off' ? 'off' : 'not_connected', workspaceId: PP }, `${status} ${mode}`);
+    if (plan.kind === 'connection') {
+      assert.equal(status, 'verified');
+      assert.notEqual(config.protectionState, 'off');
+      assert.equal(config.ownerPaused, false);
+      if (plan.mode === 'live') assert.ok(!config.accountHeld && config.protectionState !== 'paused' && config.sampleState !== 'held' && config.sampleState !== 'waiting' && config.approvedCurrent);
+    }
+  }
+  assert.equal(rows, 2 * 6 * 3 * 12);
+  // The two probed failures: a held sample then Disconnect; a test-mode connection dropping to dns_pending.
+  assert.deepEqual(sendingPlan(sendingConfig({ sampleState: 'held', status: 'disconnected' }), vault), { kind: 'hold', reason: 'not_connected', workspaceId: PP });
+  assert.deepEqual(sendingPlan(sendingConfig({ mode: 'test', status: 'dns_pending' }), vault), { kind: 'hold', reason: 'not_connected', workspaceId: PP });
 });
 
 test('the plan is read fresh every sweep; at 0155 it is the environment; a database fault holds', async () => {
@@ -102,7 +136,7 @@ test('reserved before the proof: a hold hands the lease back with no attempt spe
   const allowance = (limit: number) => ({ limit, reserve: async (lease: typeof LEASE) => { reserved.push(lease.email); const now = answer; answer = 'daily_cap'; return now; },
     settle: async (lease: typeof LEASE, accepted: boolean) => { settled.push(`${lease.email}:${accepted}`); }, onHold: (reason: string) => holds.push(reason) });
   const result = await dispatchPpFollowupEmails({ queue: q, sender, unsubscribeSecret: SECRET, config: dispatchConfig, allowance: allowance(10) });
-  assert.deepEqual(result, { sent: 1, failed: 1, unknown: 0 });
+  assert.deepEqual(result, { sent: 1, failed: 0, unknown: 0 }, 'a hold is not counted as "not sent"');
   assert.deepEqual(calls, ['claim', 'prepare:ann@pp-send-proof.co.uk', 'settle:ann@pp-send-proof.co.uk:accepted:pm-1', 'settle:bob@pp-send-proof.co.uk:deferred:null']);
   assert.ok(!calls.includes('prepare:bob@pp-send-proof.co.uk'), 'no proof, so no attempt is spent for the held one');
   assert.ok(!calls.some(call => call.includes('undeliverable')), 'nobody is stopped');
@@ -213,4 +247,33 @@ test('the follow-ups page: the stored connection in charge replaces the environm
   const html = renderPortalFlowPage({ snapshot: { brand: { productName: 'Property Predator' }, catalog: { items: [] }, messageChoices: [], readiness: service.readiness, executable: true,
     delivery: { mode: 'live', problems: [], search: '', database: null, banner: now.banner } }, csrf: 'c', commandId: 'x' } as never);
   assert.match(html, /<section class="card notice" role="alert"><h2>Your marketing emails are paused<\/h2><p>In the last 7 days, 6 of your 120 emails bounced \(5%\)\. Our limit is 4%\.<\/p><p><a href="\/portal\/email">Open your email page<\/a><\/p><\/section>/u);
+});
+
+test('while held, the retry windows of held people are restarted every sweep (a hold, or a refused reservation); a replayed reservation is the same one', async () => {
+  let waited = 0;
+  const store = { reserve: async () => 'replayed' as const, settle: async () => undefined, holdWait: async () => { waited++; return 0; } };
+  const hold = queue([LEASE]);
+  const held = await runPpFollowupDelivery({ queue: hold.q, unsubscribeSecret: SECRET, connection: { plan: async () => ({ kind: 'hold', reason: 'sample_wait', workspaceId: PP }), store,
+    link: 'https://propertypredator.com/', unsubscribeOrigin: ORIGIN } });
+  assert.deepEqual([held.sender, held.hold, waited, hold.calls], ['hold', 'sample_wait', 1, []]);
+  const fetcher = (async () => new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-r' }), { status: 200 })) as unknown as typeof fetch;
+  const plan = sendingPlan(sendingConfig(), vault);
+  const replay = queue([LEASE]);
+  const sent = await runPpFollowupDelivery({ queue: replay.q, unsubscribeSecret: SECRET, connection: { plan: async () => plan, store, fetcher, link: 'https://propertypredator.com/', unsubscribeOrigin: ORIGIN } });
+  assert.deepEqual([sent.sent, waited], [1, 1], 'replayed counts as reserved; nothing held, no wait');
+  const capped = queue([LEASE, LEASE2]);
+  let n = 0;
+  const capStore = { ...store, reserve: async () => (n++ === 0 ? 'ok' as const : 'daily_cap' as const) };
+  const result = await runPpFollowupDelivery({ queue: capped.q, unsubscribeSecret: SECRET, connection: { plan: async () => plan, store: capStore, fetcher, link: 'https://propertypredator.com/', unsubscribeOrigin: ORIGIN } });
+  assert.deepEqual([result.sent, result.failed, result.hold, waited], [1, 0, 'daily_cap', 2], 'a refused reservation: the rest wait, and their windows are restarted');
+});
+
+test('the follow-ups page never says "Email sending is on." while held', async () => {
+  const { renderPortalFlowPage } = await import('../src/portal/followup-flow-view.js');
+  const page = (held: boolean) => renderPortalFlowPage({ snapshot: { brand: { productName: 'Property Predator' }, catalog: { items: [] }, messageChoices: [],
+    readiness: { email: true, sms: false, whatsapp: false, reply: false, booked: false, purchased: false }, executable: true,
+    delivery: { mode: 'live', problems: [], search: '', database: null, held, banner: null } }, csrf: 'c', commandId: 'x' } as never);
+  assert.match(page(true), /Email sending is on hold right now: people you start wait until it goes again\./u);
+  assert.doesNotMatch(page(true), /Email sending is on\./u);
+  assert.match(page(false), /Email sending is on\. Publish a flow/u);
 });

@@ -199,6 +199,7 @@ function providerSentence(provider: ProviderReactivation): string {
   return provider === 'deleted' ? 'Postmark has reactivated it too.'
     : provider === 'failed' ? 'Postmark kept it on its own list, so Postmark still refuses it.'
     : provider === 'unavailable' ? 'Postmark could not be reached to reactivate it; press the button again in a minute.'
+    : provider === 'not_bounced' ? 'Postmark did not list it as bounced, so nothing needed changing there.'
     : 'Postmark was not asked: no Postmark server is set up for this brand here.';
 }
 

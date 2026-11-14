@@ -32,7 +32,7 @@ export class MemoryProtectionStore implements EmailProtectionStore {
   constructor(counts: ProtectionCounts, private readonly now: () => number = Date.now) {
     this.counts = counts;
     this.config = null;
-    this.sending = { ownEmail: 'owner@pp-send-proof.co.uk', businessName: 'Property Predator Ltd', postalAddress: '1 High Street, Leeds LS1 1AA', testRecipients: [],
+    this.sending = { defaultTestEmail: 'owner@pp-send-proof.co.uk', ownerEmailCount: 1, testCurrent: true, approvedCurrent: false, lastOwnerAlert: null, businessName: 'Property Predator Ltd', postalAddress: '1 High Street, Leeds LS1 1AA', testRecipients: [],
       testPassedAt: null, ownerPausedAt: null, goLiveRequestedAt: null, goLiveApprovedAt: null, sampleState: counts.sampleState, warmupStep: counts.warmupStep, accountHeld: false,
       lastStep: null, counts, days: [] };
   }
@@ -121,6 +121,9 @@ export class MemoryProtectionStore implements EmailProtectionStore {
   async status(): Promise<ProtectionStatus | null> { return this.absent ? null : this.status_(); }
   async claimAlerts(limit: number): Promise<readonly ClaimedAlert[]> { return this.alerts.filter(a => a.done === undefined).slice(0, limit).map(a => { a.done = false; return a; }); }
   readonly done: { id: string; sent: boolean }[] = [];
+  pruned = 0; waited = 0;
+  async prune(): Promise<number> { this.pruned++; return 0; }
+  async holdWait(): Promise<number> { this.waited++; return 0; }
   async alertDone(id: string, sent: boolean): Promise<void> { this.done.push({ id, sent }); const a = this.alerts.find(x => x.id === id); if (a) a.done = sent ? true : undefined; }
 }
 
@@ -129,6 +132,6 @@ export function counts(over: Partial<ProtectionCounts> = {}): ProtectionCounts {
   return { workspaceId: PP_WS, status: 'verified', mode: 'live', state: 'ok', reason: null, since: null, dailyCap: 50, hourlyCap: 13, warmupStartedAt: '2026-11-01T00:00:00.000Z',
     goLiveApprovedAt: '2026-11-01T00:00:00.000Z', warmupStep: 0, warmupStepAt: new Date(Date.parse('2026-11-19T12:00:00.000Z')).toISOString(), countedSince: null, sampleState: 'passed', sampleStartedAt: null,
     sampleFullAt: null, ownerPausedAt: null, ownPauses90: 0, sends7: 0, hard7: 0, soft7: 0, sends30: 0, complaints30: 0, unsubscribes30: 0, last50Sends: 0, hardLast50: 0,
-    liveDay: 0, liveHour: 0, sampleSends: 0, sampleBounces: 0, sampleComplaints: 0, stepSends: 0, stepBounces: 0, stepComplaints: 0, ...over };
+    liveDay: 0, liveHour: 0, sampleSends: 0, sampleBounces: 0, sampleComplaints: 0, stepSends: 0, stepBounces: 0, stepComplaints: 0, stepBusyDays: 0, ...over };
 }
 

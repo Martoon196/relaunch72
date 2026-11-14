@@ -78,10 +78,11 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
       let reserved = false;
       if (allowance) {
         let outcome: string;
+        // A hold is not a failure: nothing is counted as "not sent" for it.
         try { outcome = await allowance.reserve(lease); }
-        catch { failed++; held = true; break; }
+        catch { held = true; break; }
         if (outcome !== 'ok') {
-          held = true; failed++;
+          held = true;
           try { await input.queue.settle(lease, 'deferred', null); } catch { /* the lease runs out and the step is claimed again later */ }
           try { allowance.onHold?.(outcome); } catch { /* telemetry only */ }
           break;

@@ -11,10 +11,10 @@ import type { EmailBounceConfig, EmailBounceSource } from './config.js';
 import type { EmailBlockLedger, OwnerLiftResult } from './ledger.js';
 import type { EmailPurpose, EmailSendDecision, EmailSendGuard, LastingBlockReason } from './policy.js';
 import { EMAIL_HEALTH_WINDOW_DAYS, EmailGuardUnavailableError, strongestReason } from './policy.js';
-import { createPostmarkBounceApi, type PostmarkBounceApi } from './postmark-api.js';
+import { createPostmarkBounceApi, type PostmarkBounceApi, type PostmarkBouncePage } from './postmark-api.js';
 import type { PostmarkBounceRow } from './postmark-events.js';
 import { EmailBlockRegistry } from './registry.js';
-import { deletePostmarkSuppressions } from './postmark-suppressions.js';
+import { deletePostmarkSuppressions, readPostmarkSuppression } from './postmark-suppressions.js';
 
 /**
  * Where a stored connection's bounces, complaints and unsubscribes are counted (sender protection, 0156). Called once
@@ -23,8 +23,13 @@ import { deletePostmarkSuppressions } from './postmark-suppressions.js';
  */
 export type EmailCounterSink = (input: { readonly workspaceId: string; readonly kind: 'hard_bounce' | 'soft_bounce' | 'complaint' | 'unsubscribe';
   readonly key: string; readonly at: number }) => Promise<unknown>;
-/** What Postmark's side of "This address works now" did: reactivated on every stream, kept by Postmark, not reachable, or no server to ask. */
-export type ProviderReactivation = 'deleted' | 'failed' | 'unavailable' | 'none';
+/**
+ * What Postmark's side of "This address works now" did: 'deleted' (a hard-bounce suppression was deleted, and every
+ * stream that suppressed the address was cleared), 'failed' (Postmark kept it somewhere: not a hard bounce there, or
+ * the delete failed), 'unavailable' (Postmark could not be reached), 'not_bounced' (no stream suppressed it at all),
+ * 'none' (no server to ask).
+ */
+export type ProviderReactivation = 'deleted' | 'failed' | 'unavailable' | 'not_bounced' | 'none';
 
 const DAY = 86_400_000;
 const PAGE_SIZE = 500;
@@ -67,10 +72,12 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
     try {
       const suppressions = await api.suppressions(stream);
       const bounces: PostmarkBounceRow[] = [];
+      const counted: NonNullable<PostmarkBouncePage['counted']>[number][] = [];
       // Postmark's limits: count <= 500 and count + offset <= 10,000.
       for (let offset = 0, more = true; more; offset += PAGE_SIZE) {
         const page = await api.bounces(stream, from, to, offset, PAGE_SIZE);
         bounces.push(...page.rows);
+        counted.push(...(page.counted ?? []));
         more = page.received === PAGE_SIZE && offset + page.received < page.total;
         if (more && offset + 2 * PAGE_SIZE > MAX_OFFSET) { truncated++; more = false; }
       }
@@ -80,11 +87,10 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
       suppressionCount += suppressions.length; bounceCount += bounces.length;
       // The read itself succeeded; a failed durable write is reported on its own and written again next time.
       if (input.persist) { try { ledgerSkipped += await input.persist(stream, suppressions); } catch { ledgerFailed++; } }
-      // A stored connection's counters: every bounce row once (keyed by Postmark's bounce id, the same key the webhook uses).
+      // A stored connection's counters: every counted row once, under the same key the webhook uses.
       if (input.counter && source.connection) {
-        for (const row of bounces) {
-          const kind = row.kind === 'hard_bounce' ? 'hard_bounce' : row.kind === 'soft_bounce' ? 'soft_bounce' : row.kind === 'spam_complaint' ? 'complaint' : null;
-          if (kind) { try { await input.counter({ workspaceId: source.workspaceId, kind, key: `bounce:${row.id}`, at: row.at }); } catch { ledgerFailed++; break; } }
+        for (const row of counted) {
+          try { await input.counter({ workspaceId: source.workspaceId, kind: row.kind, key: row.key, at: row.at }); } catch { ledgerFailed++; break; }
         }
       }
     } catch {
@@ -213,13 +219,19 @@ export class EmailBounceService {
     const targets = this.sources.filter(source => source.workspaceId === workspaceId.toLowerCase() && source.token)
       .flatMap(source => [...source.streams.keys()].map(stream => ({ token: source.token!, stream })));
     if (!targets.length) return 'none';
-    let failed = false, unreachable = false;
+    let failed = false, unreachable = false, deleted = 0;
     for (const target of targets) {
-      try { if ((await deletePostmarkSuppressions({ token: target.token, stream: target.stream, emails: [address], fetcher: this.suppressionFetch })).get(address) !== 'deleted') failed = true; }
-      catch { unreachable = true; }
+      try {
+        // Read first: only a HARD BOUNCE suppression is deleted. An unsubscribe or a spam report is never touched.
+        const reason = await readPostmarkSuppression({ token: target.token, stream: target.stream, email: address, fetcher: this.suppressionFetch });
+        if (reason === null) continue;
+        if (reason !== 'HardBounce') { failed = true; continue; }
+        if ((await deletePostmarkSuppressions({ token: target.token, stream: target.stream, emails: [address], fetcher: this.suppressionFetch })).get(address) === 'deleted') deleted++;
+        else failed = true;
+      } catch { unreachable = true; }
     }
-    this.log(JSON.stringify({ event: 'email.bounces.provider_reactivation', level: failed || unreachable ? 'warn' : 'info', streams: targets.length, failed, unreachable }));
-    return failed ? 'failed' : unreachable ? 'unavailable' : 'deleted';
+    this.log(JSON.stringify({ event: 'email.bounces.provider_reactivation', level: failed || unreachable ? 'warn' : 'info', streams: targets.length, deleted, failed, unreachable }));
+    return failed ? 'failed' : unreachable ? 'unavailable' : deleted > 0 ? 'deleted' : 'not_bounced';
   }
   get sourceLoader(): EmailBounceSourceLoader | null { return this.loader; }
 

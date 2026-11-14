@@ -81,7 +81,7 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
       ['verified', 'off', 'ok', 50, 13, ['owner-send@pp-send-proof.co.uk'], null]);
     assert.equal(vault.open(PP, 'server_token', config.sealedServerToken!), 'srv-token-send-proof-0123456789');
     const page = await store.state(ownerToken, PP);
-    assert.equal(page.ownEmail, 'owner-send@pp-send-proof.co.uk');
+    assert.equal(page.defaultTestEmail, 'owner-send@pp-send-proof.co.uk');
     assert.equal(JSON.stringify(page).includes(config.sealedServerToken!), false, 'the page read never carries a sealed value');
 
     // Go live, in order: the webhook, the footer, a test, then the founder.
@@ -129,7 +129,7 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     // Reservations: the hourly cap at its exact number; a replay of a key adds nothing; a release frees the slot.
     for (let i = 0; i < 13; i++) assert.equal(await store.reserve(PP, `lease:h${i}`, 'live'), 'ok');
     assert.equal(await store.reserve(PP, 'lease:h13', 'live'), 'hourly_cap');
-    assert.equal(await store.reserve(PP, 'lease:h0', 'live'), 'ok', 'a replay is ok and adds nothing');
+    assert.equal(await store.reserve(PP, 'lease:h0', 'live'), 'replayed', 'a replay adds nothing');
     await store.settle(PP, 'lease:h0', true); await store.settle(PP, 'lease:h1', false); await store.settle(PP, 'lease:h1', true);
     const sends = await ownerQuery<{ state: string; n: string }>(admin, `SELECT state,count(*) AS n FROM app_private.email_send_events WHERE workspace_id=$1 AND kind='send' AND purpose='live' GROUP BY state ORDER BY state`, [PP]);
     assert.deepEqual(sends.map(r => [r.state, Number(r.n)]), [['accepted', 1], ['released', 1], ['reserved', 11]], 'a released send cannot be accepted later');
@@ -151,8 +151,8 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     await expectPostgresError(identity.query('SELECT app_private.email_counter_record($1,$2,$3,now())', [PP, 'delivery', 'x']), '22023');
 
     // The ladder's direction is enforced in SQL, whatever the application asks; and the second own pause becomes off.
-    const apply = (from: string, to: string, kind: string | null, cause: 'own' | 'account' | null = 'own') => store.apply(PP, { from: from as never, to: to as never, kind, cause, reason: 'Proof.',
-      numbers: { line: 'bounce_rate', count: 6, total: 120, limit: 4 }, daily: 0, hourly: 0, step: null, stepAt: null, sample: null });
+    const apply = (from: string, to: string, kind: string | null, cause: 'own' | 'account' | null = 'own', daily = 0, hourly = 0) => store.apply(PP, { from: from as never, to: to as never, kind, cause, reason: 'Proof.',
+      numbers: { line: 'bounce_rate', count: 6, total: 120, limit: 4 }, daily, hourly, step: null, stepAt: null, sample: null });
     assert.equal(await apply('slowed', 'paused', 'paused'), 'stale', 'compare-and-set on the state read');
     assert.equal(await apply('ok', 'paused', 'paused'), 'paused');
     assert.equal(await store.reserve(PP, 'lease:paused', 'live'), 'paused');
@@ -185,7 +185,8 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     assert.equal(await apply('slowed', 'paused', 'paused', 'account'), 'paused');
     status = await store.founderView(founderToken);
     assert.equal(await store.founderAct(founderToken, PP, 'lift', pp().rowVersion), 'done');
-    assert.equal(await apply('slowed', 'ok', 'recovered'), 'ok', 'slowed recovers by itself');
+    assert.equal(await apply('slowed', 'ok', 'recovered', 'own', 2000, 500), 'refused', 'caps must be the ramp\'s for the step');
+    assert.equal(await apply('slowed', 'ok', 'recovered', 'own', 50, 13), 'ok', 'slowed recovers by itself');
 
     // The account hold: every business's marketing, until the founder lifts it.
     assert.equal(await store.accountHold('Proof hold.', { line: 'account_bounce', count: 60, total: 1000, limit: 5 }), 'held');
@@ -231,8 +232,8 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
       GROUP BY c.relname ORDER BY 1`);
     assert.deepEqual(privileges, [{ t: 'email_account_events', p: 'INSERT,SELECT' }, { t: 'email_account_protection', p: 'SELECT' },
       { t: 'email_connection_events', p: 'INSERT,SELECT' }, { t: 'email_connections', p: 'INSERT,SELECT' }, { t: 'email_protection_alerts', p: 'INSERT,SELECT' },
-      { t: 'email_protection_events', p: 'INSERT,SELECT' }, { t: 'email_send_events', p: 'INSERT,SELECT' }, { t: 'email_sending_controls', p: 'INSERT,SELECT' }],
-      'append-only: no UPDATE of whole rows and no DELETE anywhere');
+      { t: 'email_protection_events', p: 'INSERT,SELECT' }, { t: 'email_send_events', p: 'DELETE,INSERT,SELECT' }, { t: 'email_sending_controls', p: 'INSERT,SELECT' }],
+      'append-only evidence: no UPDATE of whole rows; only counter rows can be pruned');
     const sendColumns = await ownerQuery<{ c: string }>(admin, `SELECT column_name AS c FROM information_schema.column_privileges WHERE grantee='r72_email_connection_definer'
       AND table_name='email_send_events' AND privilege_type='UPDATE' ORDER BY 1`);
     assert.deepEqual(sendColumns.map(r => r.c), ['settled_at', 'state']);

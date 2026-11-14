@@ -22,7 +22,7 @@ export interface PpFollowupDeliveryInput {
   /** The stored connection (0156), read every sweep. Absent: the environment sender only. */
   readonly connection?: {
     readonly plan: () => Promise<SendingPlan>;
-    readonly store: Pick<EmailProtectionStore, 'reserve' | 'settle'>;
+    readonly store: Pick<EmailProtectionStore, 'reserve' | 'settle'> & Partial<Pick<EmailProtectionStore, 'holdWait'>>;
     readonly link: string;
     readonly unsubscribeOrigin: string;
     readonly recipients?: PpRecipientGuard;
@@ -46,20 +46,25 @@ export async function runPpFollowupDelivery(input: PpFollowupDeliveryInput, stop
       ...(env.recipients ? { recipients: env.recipients } : {}), ...(env.onSenderRefused ? { onSenderRefused: env.onSenderRefused } : {}), ...(input.now ? { now: input.now } : {}) });
     return { ...result, sender: 'env' };
   }
-  if (plan.kind === 'hold') return { ...none, sender: 'hold', hold: plan.reason };
+  // A hold claims nothing; held people wait: their retry window is restarted so none fails while held.
+  const wait = async () => { try { await input.connection?.store.holdWait?.(); } catch { /* tried again next sweep */ } };
+  if (plan.kind === 'hold') { await wait(); return { ...none, sender: 'hold', hold: plan.reason }; }
   const connection = input.connection!;
   const config: PpMarketingConfig = Object.freeze({ mode: plan.mode, token: plan.token, from: plan.from, fromName: plan.fromName, replyTo: plan.replyTo, stream: plan.stream,
     testRecipients: plan.testRecipients, link: connection.link, unsubscribeOrigin: connection.unsubscribeOrigin });
   const sender = createPpPostmarkSender(config, connection.fetcher ?? fetch, connection.recipients, { quotedName: true });
   const purpose = plan.mode === 'live' ? 'live' : 'test';
+  let refused: string | null = null;
   const result = await dispatchPpFollowupEmails({ queue: input.queue, sender, unsubscribeSecret: input.unsubscribeSecret, config, stopped, footer: plan.footer,
     ...(connection.recipients ? { recipients: connection.recipients } : {}), ...(input.now ? { now: input.now } : {}),
     allowance: { limit: plan.remaining,
-      reserve: lease => connection.store.reserve(plan.workspaceId, leaseSendKey(lease.leaseId, lease.id), purpose),
+      // A replay of this lease's own reservation is the same reservation.
+      reserve: async lease => { const outcome = await connection.store.reserve(plan.workspaceId, leaseSendKey(lease.leaseId, lease.id), purpose); return outcome === 'replayed' ? 'ok' : outcome; },
       settle: (lease, accepted) => connection.store.settle(plan.workspaceId, leaseSendKey(lease.leaseId, lease.id), accepted),
-      ...(connection.onHold ? { onHold: connection.onHold } : {}) } });
+      onHold: reason => { refused = reason; try { connection.onHold?.(reason); } catch { /* telemetry only */ } } } });
+  if (refused) await wait();
   if (result.sent > 0) { try { connection.afterSend?.(plan.workspaceId); } catch { /* telemetry only */ } }
-  return { ...result, sender: 'connection' };
+  return { ...result, sender: 'connection', ...(refused ? { hold: refused } : {}) };
 }
 
 /** One-minute sweeps on the web process. Counts and holds only reach the logs. */

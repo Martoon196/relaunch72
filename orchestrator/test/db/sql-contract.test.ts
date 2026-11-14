@@ -1134,7 +1134,11 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   const sql = normalise(await readFile(migration156Url, 'utf8'));
   assert.match(sql, /SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s';/u);
   // Additive: nothing deleted, dropped, replaced or triggered; ALTER only on its own new tables; no role created.
-  assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b|CREATE TRIGGER|CREATE OR REPLACE|ALTER POLICY|ALTER FUNCTION|CREATE ROLE|BEGIN;|COMMIT/u);
+  assert.doesNotMatch(sql, /\bTRUNCATE\b|\bDROP\b|CREATE TRIGGER|CREATE OR REPLACE|ALTER POLICY|ALTER FUNCTION|CREATE ROLE|BEGIN;|COMMIT/u);
+  // The one DELETE: counter rows no decision can read any more, inside the prune function, at most 10,000 a call.
+  assert.deepEqual([...sql.matchAll(/DELETE FROM ([a-z_.]+)/g)].map(m => m[1]), ['app_private.email_send_events']);
+  const prune = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_send_events_prune('), sql.indexOf('CREATE FUNCTION app_private.email_sending_config('));
+  assert.match(prune, /ORDER BY e\.occurred_at DESC OFFSET 49 LIMIT 1; IF v_keep IS NULL THEN RETURN 0; END IF; DELETE FROM app_private\.email_send_events WHERE id IN\(SELECT e\.id FROM app_private\.email_send_events e WHERE e\.workspace_id=p_workspace AND e\.occurred_at<least\(v_now-interval '180 days',v_keep\) LIMIT 10000\);/u);
   const tables = ['app_private.email_sending_controls', 'app_private.email_send_events', 'app_private.email_protection_alerts', 'app_private.email_account_protection', 'app_private.email_account_events'];
   assert.deepEqual([...sql.matchAll(/CREATE TABLE ([a-z_.]+)/g)].map(m => m[1]), tables);
   for (const altered of sql.matchAll(/ALTER TABLE ([a-z_.]+)/g)) assert.ok(tables.includes(altered[1]!), `${altered[1]} is not one of 0156's own tables`);
@@ -1146,21 +1150,22 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   // The 0155 groundwork columns become writable through the definer, nothing else of that table.
   assert.match(sql, /GRANT UPDATE\(mode,test_recipients,protection_state,protection_reason,protection_since,daily_cap,hourly_cap,warmup_started_at,go_live_approved_by,go_live_approved_at\) ON app_private\.email_connections TO r72_email_connection_definer;/u);
   // Append-only evidence: no DELETE anywhere; a counter row can only be settled; the account log only inserted.
-  assert.doesNotMatch(sql, /GRANT [^;]*DELETE/u);
-  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_send_events TO r72_email_connection_definer; GRANT UPDATE\(state,settled_at\) ON app_private\.email_send_events TO r72_email_connection_definer;/u);
+  assert.deepEqual([...sql.matchAll(/GRANT ([A-Z,]*DELETE[A-Z,]*) ON ([a-z_.]+)/g)].map(m => [m[1], m[2]]), [['SELECT,INSERT,DELETE', 'app_private.email_send_events']]);
+  assert.match(sql, /GRANT SELECT,INSERT,DELETE ON app_private\.email_send_events TO r72_email_connection_definer; GRANT UPDATE\(state,settled_at\) ON app_private\.email_send_events TO r72_email_connection_definer;/u);
+  assert.match(sql, /UNIQUE\(workspace_id,event_key\)/u, 'one key per event, whatever its kind');
+  assert.match(sql, /CREATE INDEX email_send_events_live ON app_private\.email_send_events\(workspace_id,occurred_at DESC\) WHERE kind='send' AND purpose='live' AND state IN\('reserved','accepted'\);/u);
   assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_account_events TO r72_email_connection_definer;/u);
   assert.doesNotMatch(sql, /GRANT [^;]*UPDATE[^;]* ON app_private\.email_(?:protection|account)_events/u);
   assert.match(sql, /event_key text NOT NULL CHECK\(event_key~'\^\[!-~\]\{1,200\}\$' AND event_key!~'@'\)/u, 'no address in a counter key');
-  assert.match(sql, /UNIQUE\(workspace_id,kind,event_key\)/u, 'replays are counted once');
   // Every definer function: search_path=pg_catalog and the identity-command check.
   const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
-  assert.equal(definers, 23);
+  assert.equal(definers, 25);
   assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
-  assert.equal((sql.match(/IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required'/g) ?? []).length, definers, 'every function checks its caller');
+  assert.equal((sql.match(/IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION '(?:Email connection|PP follow-up) boundary required'/g) ?? []).length, definers, 'every function checks its caller');
   const granted = /GRANT EXECUTE ON FUNCTION (app_private\.email_sending_state[^;]*) TO r72_identity_command;/u.exec(sql)![1]!;
   assert.deepEqual([...granted.matchAll(/app_private\.([a-z_]+)\(/g)].map(m => m[1]), ['email_sending_state', 'email_sending_details', 'email_send_reserve', 'email_send_settle',
-    'email_counter_record', 'email_sending_config', 'email_protection_numbers', 'email_protection_apply', 'email_account_apply', 'email_sending_command', 'email_sending_test_reserve',
-    'email_sending_test_result', 'email_protection_founder_view', 'email_protection_status', 'email_protection_founder_act', 'email_protection_alerts_claim', 'email_protection_alert_done']);
+    'email_counter_record', 'email_send_events_prune', 'email_sending_config', 'email_protection_numbers', 'email_protection_apply', 'email_account_apply', 'email_sending_command', 'email_sending_test_reserve',
+    'email_sending_test_result', 'email_protection_status', 'email_protection_founder_view', 'email_protection_founder_act', 'email_protection_alerts_claim', 'email_protection_alert_done']);
   for (const helper of ['email_protection_founder(bytea)', 'email_sending_user_email(uuid)', 'email_sending_owner_emails(uuid)']) {
     assert.match(sql, new RegExp(`GRANT EXECUTE ON FUNCTION app_private\\.${helper.replace(/[()]/g, '\\$&')} TO r72_email_connection_definer;`, 'u'), helper);
   }
@@ -1173,10 +1178,13 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   const apply = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_protection_apply('), sql.indexOf('CREATE FUNCTION app_private.email_account_apply('));
   assert.match(apply, /IF c\.protection_state<>p_from THEN RETURN 'stale'; END IF;/u);
   assert.match(apply, /IF NOT \(p_from=p_to OR \(p_from='ok' AND p_to IN\('slowed','paused','off'\)\) OR \(p_from='slowed' AND p_to IN\('ok','paused','off'\)\)\) THEN RETURN 'refused'; END IF;/u);
-  assert.match(apply, /p\.kind='paused' AND p\.numbers->>'cause'='own' AND p\.occurred_at>clock_timestamp\(\)-interval '90 days'; IF v_prior IS NOT NULL THEN v_to:='off'; v_kind:='switched_off';/u);
+  assert.match(apply, /p\.kind IN\('paused','switched_off'\) AND p\.numbers->>'cause'='own' AND p\.occurred_at>v_now-interval '90 days'; IF v_prior IS NOT NULL THEN v_to:='off'; v_kind:='switched_off';/u);
+  assert.match(apply, /IF v_to IN\('ok','slowed'\) AND \(p_daily<>v_daily OR p_hourly<>v_hourly\) THEN RETURN 'refused'; END IF;/u, 'caps from the ramp only');
+  assert.match(apply, /IF p_sample='passed' AND \(s\.sample_full_at IS NULL OR s\.sample_full_at>v_now-interval '2 hours'\) THEN RETURN 'refused'; END IF;/u);
   // Every send is reserved against the holds and caps before it is handed to Postmark.
   const reserve = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_send_reserve('), sql.indexOf('CREATE FUNCTION app_private.email_send_settle('));
-  for (const hold of ["RETURN 'off'", "RETURN 'owner_paused'", "RETURN 'account_held'", "RETURN 'paused'", "RETURN 'not_live'", "RETURN 'sample_held'", "RETURN 'sample_wait'", "RETURN 'daily_cap'", "RETURN 'hourly_cap'"]) {
+  for (const hold of ["RETURN 'off'", "RETURN 'owner_paused'", "RETURN 'account_held'", "RETURN 'paused'", "RETURN 'not_live'", "RETURN 'not_approved'", "RETURN 'needs_test'",
+    "RETURN 'sample_held'", "RETURN 'sample_wait'", "RETURN 'daily_cap'", "RETURN 'hourly_cap'", "RETURN 'replayed'"]) {
     assert.ok(reserve.includes(hold), hold);
   }
   assert.match(reserve, /IF sample_count>=50 THEN UPDATE app_private\.email_sending_controls SET sample_state='waiting'/u);
@@ -1186,7 +1194,19 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
     assert.doesNotMatch(sql.slice(start, sql.indexOf('END $f$;', start)), /sealed/u, name);
   }
   assert.match(sql, /'sealedServerToken',c\.sealed_server_token/u);
-  assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer; RESET ROLE;$/u);
+  // Every send-path query compares with one moment taken in the function, never with clock_timestamp() row by row.
+  for (const name of ['email_send_reserve', 'email_protection_counts', 'email_sending_config', 'email_protection_numbers']) {
+    const start = sql.indexOf(`CREATE FUNCTION app_private.${name}(`);
+    assert.doesNotMatch(sql.slice(start, sql.indexOf('END $f$;', start)), /occurred_at[<>=]+clock_timestamp\(\)/u, name);
+  }
+  // The held runs' windows: owned by 0152's PP follow-up definer, identity command only, bounded, never a handed-off step.
+  const wait = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_hold_wait('));
+  assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_pp_followup_definer; CREATE FUNCTION app_private\.pp_followup_hold_wait\(\)/u);
+  assert.match(wait, /IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'PP follow-up boundary required' USING ERRCODE='42501';/u);
+  assert.match(wait, /NOT EXISTS\(SELECT 1 FROM app_private\.pp_followup_dispatch_proofs p WHERE p\.send_id=q\.id AND p\.accepted IS NULL\)/u);
+  assert.match(wait, /ORDER BY r\.due_at,r\.id LIMIT 5000\)/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_hold_wait\(\) TO r72_identity_command;/u);
+  assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer,r72_pp_followup_definer; RESET ROLE;$/u);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {

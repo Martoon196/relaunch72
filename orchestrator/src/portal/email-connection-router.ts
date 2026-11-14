@@ -12,7 +12,8 @@
  *   POST /portal/email/details      csrf, commandId, businessName, postalAddress, testList
  *   POST /portal/email/test-send    csrf, commandId ("Send a test to me")
  *   POST /portal/email/go-live      csrf, commandId (the first time: asks the founder)
- *   POST /portal/email/back-to-test csrf, commandId
+ *   POST /portal/email/start-test   csrf, commandId (mode off -> test: the stored connection takes over this business's follow-up email)
+ *   POST /portal/email/back-to-test csrf, commandId (mode live -> test)
  *   POST /portal/email/pause        csrf, commandId (the owner's own pause; never lifts a protection pause)
  *   POST /portal/email/resume       csrf, commandId
  *   POST /portal/email/works-now    csrf, commandId, email ("This address works now" for a hard bounce)
@@ -30,10 +31,10 @@ import { EMAIL_CONNECT_BUSINESSES } from '../email-connections/config.js';
 import { EMAIL_CONNECTION_MESSAGES, EmailConnectionError, type EmailConnectionService } from '../email-connections/service.js';
 import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, renderFounderProtectionPage,
   type EmailConnectionPageInput } from './email-connection-view.js';
-import type { OwnerSendingService, SendingResult } from '../email-protection/owner.js';
+import { SENDING_MESSAGES, type OwnerSendingService, type SendingResult } from '../email-protection/owner.js';
 import type { FounderAction } from '../email-protection/store.js';
 
-const SENDING_ACTIONS = ['details', 'test-send', 'go-live', 'back-to-test', 'pause', 'resume', 'works-now'] as const;
+const SENDING_ACTIONS = ['details', 'test-send', 'go-live', 'start-test', 'back-to-test', 'pause', 'resume', 'works-now'] as const;
 const FOUNDER_ACTIONS: readonly FounderAction[] = ['approve', 'lift', 'reinstate', 'release_sample', 'lift_account'];
 
 const STALE = 'This page is out of date. Open Connect email again and try once more. Nothing was changed.';
@@ -88,7 +89,8 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     const csrf = portalCsrfToken(portal.sessionSecret, identity.sessionToken);
     const page = async (extra: Partial<EmailConnectionPageInput> = {}): Promise<string> => {
       const view = await service.view(identity);
-      const sending = input.sending && view.offered && view.state.status === 'verified' ? await input.sending.view(identity, view.state).catch(() => null) : null;
+      // The banner shows in every state (a connection in charge but not connected says so); the controls only once connected.
+      const sending = input.sending && view.offered ? await input.sending.view(identity, view.state).catch(() => null) : null;
       return renderEmailConnectionPage({ view, csrf, commandId: randomUUID(), ...(sending?.offered ? { sending } : {}), ...extra });
     };
     if (path === `${BASE}/founder`) {
@@ -133,10 +135,14 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       const state = view.state, sending = input.sending;
       const details = sendingAction === 'details' ? { businessName: (fields.get('businessName') ?? '').slice(0, 200), postalAddress: (fields.get('postalAddress') ?? '').slice(0, 400),
         testList: (fields.get('testList') ?? '').slice(0, 2700) } : undefined;
+      // Each mode button only from the mode it is shown in: "Start testing" from off, "Back to testing" from live.
+      if ((sendingAction === 'start-test' && state.mode !== 'off') || (sendingAction === 'back-to-test' && state.mode !== 'live')) {
+        send(res, 409, await page({ message: { text: SENDING_MESSAGES.notFromHere, ok: false } })); return true;
+      }
       const result: SendingResult = sendingAction === 'details' ? await sending.saveDetails(identity, details!)
-        : sendingAction === 'test-send' ? await sending.sendTest(identity, state)
+        : sendingAction === 'test-send' ? await sending.sendTest(identity, state, fields.get('commandId')!)
           : sendingAction === 'works-now' ? await sending.liftAddress(identity, (fields.get('email') ?? '').slice(0, 320))
-            : await sending.command(identity, state, sendingAction === 'go-live' ? 'live' : sendingAction === 'back-to-test' ? 'test' : sendingAction);
+            : await sending.command(identity, state, sendingAction === 'go-live' ? 'live' : sendingAction === 'back-to-test' || sendingAction === 'start-test' ? 'test' : sendingAction);
       send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && !result.ok ? { sendingForm: details } : {}) }));
       return true;
     }

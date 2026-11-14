@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PgSeoLimitsService } from './seo-blog-limits-service.js';
 import { EMAIL_CONNECT_BUSINESSES, EmailConnectionBounceSources, EmailConnectionService, EmailConnectionVault, emailConnectWebhookOrigin, loadEmailConnectConfig,
   PgEmailConnectionStore } from '../email-connections/index.js';
-import { bannerFromConfig, EmailProtectionService, OwnerSendingService, PgEmailProtectionStore, sendingPlan } from '../email-protection/index.js';
+import { bannerFromConfig, EmailProtectionService, OwnerSendingService, PgEmailProtectionStore, sendingDecision } from '../email-protection/index.js';
 import type { PortalFlowDelivery } from './followup-flow-service.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
@@ -236,6 +236,8 @@ export interface PgPortalPlatform {
   emailProtectionStore?: PgEmailProtectionStore;
   /** The key that opens a stored connection's server token for the sender (EMAIL_CONNECTION_KEY), or null. */
   emailSendingVault?: EmailConnectionVault | null;
+  /** EMAIL_CONNECT enabled and bounce handling on: only then may a stored connection send (otherwise it holds). */
+  storedSendingAllowed?: boolean;
   /** Release 2 of "Connect email": the owner's sending controls and the founder's page (only while Connect email is on). */
   emailSending?: OwnerSendingService;
   /** After-payment work for module kits: replay registration and CRM record (0149). */
@@ -1350,12 +1352,18 @@ export async function buildPgPortalPlatform(
     const emailProtectionLog = (line: string): void => (line.includes('"level":"warn"') ? console.warn : console.info)(line);
     const emailProtectionStore = new PgEmailProtectionStore(identityPool, { log: emailProtectionLog });
     const emailSendingVault = (() => { try { return EmailConnectionVault.fromEnv(env); } catch { return null; } })();
+    // Whether this deployment lets a stored connection send at all: Connect email on and bounce handling on. Otherwise a
+    // connection whose row says test or live HOLDS (never sends unguarded, never falls back to the environment sender).
+    const storedSendingAllowed = env.EMAIL_CONNECT === 'enabled' && !emailBounceHandlingDisabled(env);
+    let emailProtectionRef: EmailProtectionService | undefined;
+    // The follow-ups page's view of the sender: decided without opening the saved token.
     const ppDeliveryNow: NonNullable<PortalFlowDelivery['current']> = async () => {
       const config = await emailProtectionStore.sendingConfig(PP_FOLLOWUP_WORKSPACE_ID);
-      const plan = sendingPlan(config, emailSendingVault);
-      if (plan.kind === 'env' || !config) return null;
+      const decision = sendingDecision(config, { allowed: storedSendingAllowed });
+      if (decision.kind === 'env' || !config) return null;
       const mode = config.mode === 'test' ? 'test' as const : 'live' as const;
-      return { status: Object.freeze({ mode, ready: true, problems: Object.freeze([]) }), testRecipients: mode === 'test' ? config.testRecipients : null, banner: bannerFromConfig(config) };
+      return { status: Object.freeze({ mode, ready: true, problems: Object.freeze([]) }), testRecipients: mode === 'test' ? config.testRecipients : null,
+        held: decision.kind === 'hold', banner: bannerFromConfig(config, { mailer: emailProtectionRef?.mailerConfigured ?? false, allowed: storedSendingAllowed }) };
     };
     if (ppFlowWorkspace === PP_FOLLOWUP_WORKSPACE_ID) {
       try {
@@ -1416,9 +1424,17 @@ export async function buildPgPortalPlatform(
     // The evaluator counts only stored connections' own streams (the webhook and the hourly read feed it).
     const emailProtection = new EmailProtectionService({ store: emailProtectionStore, log: emailProtectionLog,
       founderEmail: env.EMAIL_PROTECTION_FOUNDER_EMAIL?.trim() || null, portalOrigin: emailConnectWebhookOrigin(env.PORTAL_BASE_URL?.trim()) });
+    emailProtectionRef = emailProtection;
+    if (env.EMAIL_CONNECT === 'enabled' && !env.EMAIL_PROTECTION_FOUNDER_EMAIL?.trim()) {
+      console.warn('⚠  EMAIL_PROTECTION_FOUNDER_EMAIL is not set: email protection alerts for the founder are not emailed; they show on the Group HQ Today line and the founder page.');
+    }
+    if (env.EMAIL_CONNECT === 'enabled' && !storedSendingAllowed) {
+      console.warn('⚠  EMAIL_BOUNCE_HANDLING is off: no stored email connection sends here; any set to test or live is held.');
+    }
     if (emailBounceHandling) emailBounces.setCounter(input => emailProtection.count(input));
     const emailSending = emailConnections?.enabled ? new OwnerSendingService({ protection: emailProtectionStore, connections: emailConnectionStore,
       vault: emailConnectConfig.vault, evaluator: emailProtection, bounces: emailBounces, log: emailProtectionLog, portalOrigin: emailConnectWebhookOrigin(env.PORTAL_BASE_URL?.trim()),
+      mailer: () => emailProtection.mailerConfigured, allowed: storedSendingAllowed,
       founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false }) : undefined;
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
@@ -1565,6 +1581,7 @@ export async function buildPgPortalPlatform(
       emailProtection,
       emailProtectionStore,
       emailSendingVault,
+      storedSendingAllowed,
       ...(emailSending ? { emailSending } : {}),
       auth,
       abuse,

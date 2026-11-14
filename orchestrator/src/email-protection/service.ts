@@ -49,6 +49,8 @@ export class EmailProtectionService {
   private mailer: ProtectionMailer | null = null;
   /** The platform's own transactional sender, set by the server once it is known (absent: alerts wait in the outbox). */
   setMailer(mailer: ProtectionMailer | null): void { this.mailer = mailer; }
+  /** Whether alert emails can be sent at all (a platform sender is set). */
+  get mailerConfigured(): boolean { return Boolean(this.mailer ?? this.input.mailer); }
 
   /**
    * One bounce, complaint or unsubscribe from a business's own stream (webhook or hourly read), counted once per
@@ -77,7 +79,7 @@ export class EmailProtectionService {
     const numbers = { ...tripNumbers(decision.trip, c), newDailyCap: decision.daily, newHourlyCap: decision.hourly,
       ...(decision.kind === 'warmup_step' && decision.step !== null ? { step: decision.step } : {}) };
     const result = await this.input.store.apply(c.workspaceId, { from: decision.from, to: decision.to, kind: decision.kind, cause: decision.kind ? 'own' : null,
-      reason: decision.trip ? ownerTripped(decision.trip) : null, numbers, daily: decision.daily, hourly: decision.hourly, step: decision.step, stepAt: decision.stepAt,
+      reason: decision.reasonTrip ? ownerTripped(decision.reasonTrip) : decision.trip && decision.kind !== 'sample_held' ? ownerTripped(decision.trip) : null, numbers, daily: decision.daily, hourly: decision.hourly, step: decision.step, stepAt: decision.stepAt,
       sample: decision.sample });
     if (decision.kind && decision.kind !== 'warmup_step') this.log(JSON.stringify({ event: 'email.protection.step', level: ['paused', 'sample_held'].includes(decision.kind) || result === 'off' ? 'warn' : 'info',
       kind: result === 'off' ? 'switched_off' : decision.kind, workspace: c.workspaceId.slice(0, 8), result }));
@@ -103,6 +105,8 @@ export class EmailProtectionService {
     for (const c of first.businesses) {
       try { await this.decideOne(c); }
       catch { this.log(JSON.stringify({ event: 'email.protection.evaluate_failed', level: 'warn', workspace: c.workspaceId.slice(0, 8) })); }
+      // Counter rows no window can read any more (older than 180 days and than the 50th latest live send).
+      try { await this.input.store.prune(c.workspaceId); } catch { this.log(JSON.stringify({ event: 'email.protection.prune_failed', level: 'warn' })); }
     }
     const numbers = await this.input.store.numbers();
     if (!numbers) return;

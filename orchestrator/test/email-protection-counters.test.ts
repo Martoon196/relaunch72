@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createPostmarkBounceWebhook, EmailBounceService, sweepPostmarkSource, EmailBlockRegistry, type EmailBounceSource } from '../src/email-bounces/index.js';
-import { deletePostmarkSuppressions } from '../src/email-bounces/postmark-suppressions.js';
+import { deletePostmarkSuppressions, readPostmarkSuppression } from '../src/email-bounces/postmark-suppressions.js';
+import { postmarkCounterKind, readPostmarkCounter, readPostmarkCounterRow, readPostmarkWebhook } from '../src/email-bounces/postmark-events.js';
 import { MhpEmailHealth, emailHealthPage } from '../src/mhp/email-health.js';
 import { GroupHqInboxCrmService, InboxCrmError } from '../src/integrations/group-hq-crm/inbox.js';
 import type { CrmTransactionRunner } from '../src/crm-pg/types.js';
@@ -41,36 +42,72 @@ function fixture() {
 const bounce = (over: Record<string, unknown> = {}) => ({ RecordType: 'Bounce', MessageStream: 'broadcast', ID: 42, Type: 'HardBounce', Email: 'gone@pp-send-proof.co.uk',
   BouncedAt: '2026-11-12T09:55:00Z', Inactive: true, ServerID: 5151, Metadata: {}, ...over });
 
-test('a stored connection\'s webhook counts each Postmark event once; a configured source is never counted; a failed write is retried by Postmark', async () => {
+test('a stored connection\'s webhook counts each Postmark event once (Transient and Blocked too); a configured source is never counted; a failed write is retried', async () => {
   const f = fixture();
   assert.equal((await f.post(CONN, CONN_SECRET, bounce())).status, 200);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce())).status, 200, 'a replay');
   await f.post(CONN, CONN_SECRET, bounce({ ID: 43, Type: 'SoftBounce', Inactive: false }));
   await f.post(CONN, CONN_SECRET, bounce({ ID: 44, Type: 'Transient', Inactive: false }));
+  await f.post(CONN, CONN_SECRET, bounce({ ID: 49, Type: 'Blocked', Inactive: false }));
+  await f.post(CONN, CONN_SECRET, bounce({ ID: 50, Type: 'AutoResponder', Inactive: false }));
   await f.post(CONN, CONN_SECRET, { RecordType: 'SpamComplaint', MessageStream: 'broadcast', ID: 45, Type: 'SpamComplaint', Email: 'cross@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:56:00Z', ServerID: 5151 });
-  // The subscription change that accompanies a hard bounce is not a second bounce; an unsubscribe is counted.
+  // The subscription change that accompanies a hard bounce is not a second bounce; an unsubscribe is counted once.
   await f.post(CONN, CONN_SECRET, { RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: 'gone@pp-send-proof.co.uk', ChangedAt: '2026-11-12T09:55:01Z', SuppressSending: true, SuppressionReason: 'HardBounce', ServerID: 5151 });
   await f.post(CONN, CONN_SECRET, { RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: 'leave@pp-send-proof.co.uk', ChangedAt: '2026-11-12T09:57:00Z', SuppressSending: true, SuppressionReason: 'ManualSuppression', ServerID: 5151 });
-  assert.deepEqual(f.counted.map(c => c.kind), ['hard_bounce', 'soft_bounce', 'complaint', 'unsubscribe'], 'Transient says nothing about the address');
-  assert.deepEqual(f.counted.slice(0, 3).map(c => c.key), ['bounce:42', 'bounce:43', 'bounce:45']);
+  assert.deepEqual(f.counted.map(c => c.kind), ['hard_bounce', 'soft_bounce', 'soft_bounce', 'soft_bounce', 'complaint', 'unsubscribe'],
+    'counted per the list in postmarkCounterKind; an AutoResponder is not; a replay this process saw is skipped (the database keeps any other once)');
+  assert.deepEqual(f.counted.slice(0, 5).map(c => c.key), ['bounce:42', 'bounce:43', 'bounce:44', 'bounce:49', 'bounce:45']);
+  assert.match(f.counted[5]!.key, /^unsub:[0-9a-f]{40}$/u);
   assert.ok(f.counted.every(c => !c.key.includes('@')), 'no address in any key');
   // Postmark's set-up sample (another ServerID) is answered 200 and counted nowhere.
+  const before = f.counted.length;
   await f.post(CONN, CONN_SECRET, bounce({ ID: 46, ServerID: 1 }));
   // The environment-configured source: exactly as before, nothing counted.
   assert.equal((await f.post('pp', ENV_SECRET, bounce({ ID: 47, ServerID: 777 }))).status, 200);
-  assert.equal(f.counted.length, 4);
+  assert.equal(f.counted.length, before);
   f.setFail(true);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 48 }))).status, 503, 'Postmark retries');
+  assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 51, Type: 'Transient', Inactive: false }))).status, 503, 'a counted-only bounce is retried too');
   f.setFail(false);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 48 }))).status, 200);
   assert.deepEqual(f.counted.at(-1), { kind: 'hard_bounce', key: 'bounce:48' });
 });
 
-test('the hourly read counts a stored connection\'s bounces under the same keys the webhook uses; a configured source is not counted', async () => {
+test('one classification and one key for the webhook and the hourly read: the same Postmark event is the same counter row', () => {
+  const b = { RecordType: 'Bounce', ID: '4323372036854775807', Type: 'HardBounce', Email: 'x@pp-send-proof.co.uk', BouncedAt: '2026-11-14T10:00:00Z', MessageStream: 'broadcast', ServerID: 5151, Inactive: false };
+  // The reviewer's probe: HardBounce with Inactive:false is a soft bounce for BLOCKING but a hard bounce for counting, in both readers.
+  assert.equal((readPostmarkWebhook(b) as { event: { kind: string } }).event.kind, 'soft_bounce');
+  const viaWebhook = readPostmarkCounter(b)!, viaRead = readPostmarkCounterRow(b, 'broadcast')!;
+  assert.deepEqual([viaWebhook.kind, viaWebhook.key], ['hard_bounce', 'bounce:4323372036854775807']);
+  assert.deepEqual([viaRead.kind, viaRead.key], [viaWebhook.kind, viaWebhook.key]);
+  const table: [string, string | null][] = [['Blocked', 'soft_bounce'], ['SpamNotification', 'soft_bounce'], ['Transient', 'soft_bounce'], ['DMARCPolicy', 'soft_bounce'],
+    ['SoftBounce', 'soft_bounce'], ['DnsError', 'soft_bounce'], ['Unknown', 'soft_bounce'], ['BadEmailAddress', 'hard_bounce'], ['ChallengeVerification', null], ['AutoResponder', null],
+    ['AddressChange', null], ['VirusNotification', null], ['SMTPApiError', null]];
+  for (const [Type, kind] of table) {
+    assert.equal(postmarkCounterKind(Type, false), kind, Type);
+    assert.equal(readPostmarkCounter({ ...b, Type })?.kind ?? null, kind, `webhook ${Type}`);
+    assert.equal(readPostmarkCounterRow({ ...b, Type }, 'broadcast')?.kind ?? null, kind, `hourly read ${Type}`);
+  }
+  assert.equal(postmarkCounterKind('AutoResponder', true), 'hard_bounce', 'anything Postmark switched off counts as hard');
+  // An unsubscribe as a Bounce record and as a SubscriptionChange: one key.
+  const u1 = readPostmarkCounter({ ...b, Type: 'Unsubscribe', Inactive: true })!;
+  const u2 = readPostmarkCounter({ RecordType: 'SubscriptionChange', Recipient: 'x@pp-send-proof.co.uk', ChangedAt: '2026-11-14T10:00:00Z', MessageStream: 'broadcast', ServerID: 5151,
+    SuppressSending: true, SuppressionReason: 'ManualSuppression' })!;
+  assert.deepEqual([u1.kind, u2.kind, u1.key === u2.key], ['unsubscribe', 'unsubscribe', true]);
+  assert.equal(readPostmarkCounterRow({ ...b, Type: 'Unsubscribe', Inactive: true }, 'broadcast')!.key, u1.key);
+  // Our own reactivation reads as a resubscribe with its Origin kept.
+  const re = readPostmarkWebhook({ RecordType: 'SubscriptionChange', Recipient: 'x@pp-send-proof.co.uk', ChangedAt: '2026-11-14T10:00:00Z', MessageStream: 'broadcast', ServerID: 5151,
+    SuppressSending: false, Origin: 'Customer' }) as { event: { kind: string; origin: string } };
+  assert.deepEqual([re.event.kind, re.event.origin], ['resubscribed', 'Customer']);
+});
+
+test('the hourly read counts a stored connection\'s rows under the same keys the webhook uses; a configured source is not counted', async () => {
   const counted: string[] = [];
+  const raw = [{ ID: 42, Type: 'HardBounce', Email: 'a@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:55:00Z', Inactive: false },
+    { ID: 43, Type: 'Transient', Email: 'b@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:56:00Z', Inactive: false },
+    { ID: 45, Type: 'SpamComplaint', Email: 'c@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:57:00Z', Inactive: true }];
   const api = { suppressions: async () => [], totals: async () => ({ sent: null, bounced: null, complaints: null }),
-    bounces: async () => ({ total: 3, received: 3, rows: [{ id: '42', kind: 'hard_bounce' as const, email: 'a@pp-send-proof.co.uk', at: 1 }, { id: '43', kind: 'soft_bounce' as const, email: 'b@pp-send-proof.co.uk', at: 2 },
-      { id: '45', kind: 'spam_complaint' as const, email: 'c@pp-send-proof.co.uk', at: 3 }] }) };
+    bounces: async () => ({ total: 3, received: 3, rows: [], counted: raw.map(row => readPostmarkCounterRow(row, 'broadcast')!) }) };
   const source = (connection: boolean): EmailBounceSource => ({ key: connection ? CONN : 'pp', workspaceId: PP, token: 't', webhookSecret: 's', serverId: '1', streams: new Map([['broadcast', 'marketing']]), connection });
   const counter = async (input: { kind: string; key: string }) => { counted.push(`${input.kind}:${input.key}`); };
   await sweepPostmarkSource({ source: source(true), api, registry: new EmailBlockRegistry(), now: Date.now(), counter });
@@ -78,37 +115,82 @@ test('the hourly read counts a stored connection\'s bounces under the same keys 
   assert.deepEqual(counted, ['hard_bounce:bounce:42', 'soft_bounce:bounce:43', 'complaint:bounce:45']);
 });
 
-test('Postmark\'s side of "This address works now": the suppression is deleted on every stream with each server\'s own token; spam is kept by Postmark', async () => {
-  const calls: { url: string; token: string; body: unknown }[] = [];
-  let answer = (email: string) => ({ EmailAddress: email, Status: 'Deleted', Message: null as string | null });
+test('Postmark\'s side of "This address works now": read first, delete only a HardBounce suppression, never an unsubscribe or a spam report', async () => {
+  const calls: { method: string; url: string; token: string }[] = [];
+  let reason: string | null = 'HardBounce', deleteStatus = 'Deleted';
   const fetcher = (async (url: string, init: RequestInit) => {
+    calls.push({ method: init.method!, url, token: (init.headers as Record<string, string>)['X-Postmark-Server-Token']! });
+    if (url.includes('/down/')) throw new TypeError('network');
+    if (init.method === 'GET') {
+      const email = new URL(url).searchParams.get('EmailAddress')!;
+      return new Response(JSON.stringify({ Suppressions: reason ? [{ EmailAddress: email, SuppressionReason: reason, Origin: 'Recipient', CreatedAt: '2026-11-01T00:00:00Z' }] : [] }), { status: 200 });
+    }
     const body = JSON.parse(String(init.body)) as { Suppressions: { EmailAddress: string }[] };
-    calls.push({ url, token: (init.headers as Record<string, string>)['X-Postmark-Server-Token']!, body });
-    if (url.includes('down')) throw new TypeError('network');
-    return new Response(JSON.stringify({ Suppressions: body.Suppressions.map(s => answer(s.EmailAddress)) }), { status: 200 });
+    return new Response(JSON.stringify({ Suppressions: body.Suppressions.map(s => ({ EmailAddress: s.EmailAddress, Status: deleteStatus, Message: null })) }), { status: 200 });
   }) as unknown as typeof fetch;
+  assert.equal(await readPostmarkSuppression({ token: 'srv', stream: 'broadcast', email: ' Gone@X.co.uk ', fetcher }), 'HardBounce');
+  assert.equal(calls[0]!.url, 'https://api.postmarkapp.com/message-streams/broadcast/suppressions/dump?EmailAddress=gone%40x.co.uk');
   const result = await deletePostmarkSuppressions({ token: 'srv', stream: 'broadcast', emails: [' Gone@X.co.uk '], fetcher });
   assert.deepEqual([...result], [['gone@x.co.uk', 'deleted']]);
-  assert.equal(calls[0]!.url, 'https://api.postmarkapp.com/message-streams/broadcast/suppressions/delete');
-  assert.deepEqual(calls[0]!.body, { Suppressions: [{ EmailAddress: 'gone@x.co.uk' }] });
   await assert.rejects(deletePostmarkSuppressions({ token: 'srv', stream: 'Bad Stream', emails: ['a@b.co'], fetcher }));
   // The environment-configured Martin Howard Property path (its marketing and service streams, its own token) ...
   const mhp = new EmailBounceService({ config: { sources: [{ key: 'mhp', workspaceId: MHP, token: 'mhp-server-token', webhookSecret: 's', serverId: null,
     streams: new Map([['broadcast', 'marketing'], ['outbound', 'service']]) }], blockers: [] }, suppressionFetch: fetcher });
   calls.length = 0;
   assert.equal(await mhp.reactivateAtProvider(MHP, 'gone@x.co.uk'), 'deleted');
-  assert.deepEqual(calls.map(c => [c.url.split('/')[4], c.token]), [['broadcast', 'mhp-server-token'], ['outbound', 'mhp-server-token']]);
+  assert.deepEqual(calls.map(c => [c.method, c.url.split('/')[4], c.token]), [['GET', 'broadcast', 'mhp-server-token'], ['POST', 'broadcast', 'mhp-server-token'],
+    ['GET', 'outbound', 'mhp-server-token'], ['POST', 'outbound', 'mhp-server-token']]);
+  // An unsubscribe or a spam report at Postmark is never deleted (it would re-subscribe the person).
+  for (const kept of ['ManualSuppression', 'SpamComplaint']) {
+    reason = kept; calls.length = 0;
+    assert.equal(await mhp.reactivateAtProvider(MHP, 'leave@x.co.uk'), 'failed', kept);
+    assert.ok(calls.every(c => c.method === 'GET'), `${kept}: nothing deleted`);
+  }
+  // Not suppressed anywhere: nothing to do, and nothing repeated.
+  reason = null; calls.length = 0;
+  assert.equal(await mhp.reactivateAtProvider(MHP, 'fine@x.co.uk'), 'not_bounced');
+  assert.ok(calls.every(c => c.method === 'GET'));
   // ... and a stored connection (its own server token), alongside PP's environment server.
+  reason = 'HardBounce';
   const pp = new EmailBounceService({ config: { sources: [{ key: 'pp', workspaceId: PP, token: 'pp-env-token', webhookSecret: 's', serverId: null, streams: new Map([['broadcast', 'marketing']]) }], blockers: [] }, suppressionFetch: fetcher });
   pp.upsertSource({ key: CONN, workspaceId: PP, token: 'conn-server-token', webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map([['broadcast', 'marketing']]), connection: true });
   calls.length = 0;
   assert.equal(await pp.reactivateAtProvider(PP, 'gone@x.co.uk'), 'deleted');
-  assert.deepEqual(calls.map(c => c.token).sort(), ['conn-server-token', 'pp-env-token']);
-  answer = email => ({ EmailAddress: email, Status: 'Failed', Message: 'You do not have the required authority to change this suppression.' });
-  assert.equal(await pp.reactivateAtProvider(PP, 'spam@x.co.uk'), 'failed', 'Postmark never deletes a spam complaint');
+  assert.deepEqual([...new Set(calls.map(c => c.token))].sort(), ['conn-server-token', 'pp-env-token']);
+  deleteStatus = 'Failed';
+  assert.equal(await pp.reactivateAtProvider(PP, 'gone@x.co.uk'), 'failed');
   assert.equal(await new EmailBounceService({ config: { sources: [], blockers: [] } }).reactivateAtProvider(PP, 'a@b.co'), 'none');
   const down = new EmailBounceService({ config: { sources: [{ key: 'mhp', workspaceId: MHP, token: 't', webhookSecret: 's', serverId: null, streams: new Map([['down', 'marketing']]) }], blockers: [] }, suppressionFetch: fetcher });
   assert.equal(await down.reactivateAtProvider(MHP, 'a@b.co'), 'unavailable');
+});
+
+test('the reactivation our own delete causes is not the person re-subscribing; one by the recipient is', async () => {
+  const lifts: string[] = [];
+  let cleared: number | undefined;
+  const ledger = { covers: () => true, status: () => 'available', record: async () => 'recorded', recordList: async () => null, rows: async () => null,
+    decide: async () => ({ blocked: false, reallowed: false, cleared: cleared === undefined ? {} : { hard_bounce: cleared } }),
+    lift: async (input: { email: string }) => { lifts.push(input.email); return 1; } } as never;
+  const service = new EmailBounceService({ config: { sources: [], blockers: [] }, ledger });
+  service.upsertSource({ key: CONN, workspaceId: PP, token: null, webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map([['broadcast', 'marketing']]), connection: true });
+  const webhook = createPostmarkBounceWebhook({ service });
+  const post = async (body: unknown) => {
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: `/api/provider-webhooks/postmark/${CONN}`,
+      headers: { 'content-type': 'application/json', authorization: basic(CONN, CONN_SECRET) }, socket: { remoteAddress: '10.0.0.2' } }) as unknown as IncomingMessage;
+    const res = { writeHead() {}, end() {} } as unknown as ServerResponse;
+    await webhook.handle(req, res, new URL(req.url!, 'https://app.example.test'));
+  };
+  const change = (origin: string, at: string, n: number) => ({ RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: `p${n}@pp-send-proof.co.uk`, ChangedAt: at,
+    SuppressSending: false, Origin: origin, ServerID: 5151 });
+  cleared = Date.parse('2026-11-14T10:00:00Z');
+  await post(change('Customer', '2026-11-14T10:00:05Z', 1));
+  assert.deepEqual(lifts, [], 'our own delete, seconds after the owner lifted the bounce: no unsubscribe is lifted');
+  await post(change('Recipient', '2026-11-14T10:00:06Z', 2));
+  assert.deepEqual(lifts, ['p2@pp-send-proof.co.uk'], 'the person themselves: counts');
+  await post(change('Customer', '2026-11-16T10:00:00Z', 3));
+  assert.deepEqual(lifts.length, 2, 'two days later is not ours');
+  cleared = undefined;
+  await post(change('Admin', '2026-11-14T10:00:05Z', 4));
+  assert.equal(lifts.length, 3, 'no owner lift recorded: as before');
 });
 
 test('Martin Howard Property\'s "This address works now" asks Postmark too and says truthfully what it answered', async () => {

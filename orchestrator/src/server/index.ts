@@ -1097,13 +1097,18 @@ async function main(): Promise<void> {
           ...(ppRecipients ? { recipients: ppRecipients } : {}),
           onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') } } : {}),
         ...(postgresPortal?.emailProtectionStore && ppConnectionLink && ppConnectionOrigin ? { connection: {
-          plan: () => resolveSendingPlan(postgresPortal.emailProtectionStore!, postgresPortal.emailSendingVault ?? null, PP_FOLLOWUP_WORKSPACE_ID),
+          plan: () => resolveSendingPlan(postgresPortal.emailProtectionStore!, postgresPortal.emailSendingVault ?? null, PP_FOLLOWUP_WORKSPACE_ID,
+            { allowed: postgresPortal.storedSendingAllowed === true }),
           store: postgresPortal.emailProtectionStore, link: ppConnectionLink, unsubscribeOrigin: ppConnectionOrigin,
           ...(emailBounces && postgresPortal.emailBounceHandling ? { recipients: { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } } : {}),
           afterSend: (workspaceId: string) => emailProtection?.soon(workspaceId) } } : {}) }, {
         onResult: result => {
           const hold = result.sender === 'hold' ? result.hold ?? 'hold' : null;
-          if (hold !== ppHold) { ppHold = hold; console.info(JSON.stringify({ event: 'pp.followup.sender', sender: result.sender, ...(hold ? { hold } : {}) })); }
+          if (hold !== ppHold) {
+            ppHold = hold;
+            console.info(JSON.stringify({ event: 'pp.followup.sender', sender: result.sender, ...(hold ? { hold } : {}) }));
+            if (hold === 'switched_off_here') console.warn('PP follow-up emails are held: the stored email connection is set to test or live, but EMAIL_CONNECT is not enabled or EMAIL_BOUNCE_HANDLING is off here.');
+          }
           if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} not sent (retried or failed by rule), ${result.unknown} held for an owner decision.`);
         },
         onError: () => console.warn('PP follow-up email dispatch is temporarily unavailable; runs wait.'),

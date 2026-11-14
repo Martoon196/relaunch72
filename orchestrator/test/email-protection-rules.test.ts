@@ -88,15 +88,19 @@ test('caps: the warm-up ramp, halved when slowed, the hourly cap a quarter round
   assert.deepEqual(caps(99, 'ok'), { daily: 2000, hourly: 500 });
 });
 
-test('warm-up: a step is earned only after its full period with an email, no complaint and bounces under 2%; otherwise its period restarts', () => {
+test('warm-up: a step is earned only after its full period with live sends of half its cap on 2 days, no complaint and bounces under 2%; otherwise its period restarts', () => {
   const at = (days: number) => new Date(NOW - days * DAY).toISOString();
-  const base = { state: 'ok' as const, goLiveApprovedAt: at(30), warmupStep: 0, stepComplaints: 0 };
+  const base = { state: 'ok' as const, goLiveApprovedAt: at(30), warmupStep: 0, stepComplaints: 0, stepBusyDays: 2 };
   assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(2.99), stepSends: 140, stepBounces: 0 }, NOW).changed, false, 'before 3 days');
   assert.deepEqual(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 150, stepBounces: 2 }, NOW), { step: 1, stepAt: new Date(NOW).toISOString(), changed: true }, '1.33%');
   const dirty = nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 150, stepBounces: 3 }, NOW);
   assert.deepEqual([dirty.step, dirty.changed, dirty.stepAt], [0, true, new Date(NOW).toISOString()], '2% exactly: not earned, the period starts again');
   assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 150, stepBounces: 0, stepComplaints: 1 }, NOW).step, 0, 'any complaint');
-  assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 0, stepBounces: 0 }, NOW).changed, false, 'nothing sent: nothing earned, nothing restarted');
+  // Volume: one email (or one busy day) never earns a step; 2 days at half the cap or more do.
+  assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(30), stepSends: 1, stepBounces: 0, stepBusyDays: 0 }, NOW).changed, false, '30 days idle then 1 send');
+  assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 60, stepBounces: 0, stepBusyDays: 1 }, NOW).changed, false, 'one busy day');
+  assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 50, stepBounces: 0, stepBusyDays: 2 }, NOW).step, 1, 'two busy days');
+  assert.equal(nextWarmupStep({ ...base, warmupStepAt: at(3), stepSends: 0, stepBounces: 3, stepBusyDays: 0 }, NOW).changed, false, 'bounces with no live sends restart nothing (0 of 0 is not 2%)');
   assert.equal(nextWarmupStep({ ...base, state: 'slowed', warmupStepAt: at(9), stepSends: 150, stepBounces: 0 }, NOW).changed, false, 'never while slowed');
   assert.equal(nextWarmupStep({ ...base, goLiveApprovedAt: null, warmupStepAt: at(9), stepSends: 150, stepBounces: 0 }, NOW).changed, false, 'never before go-live');
   assert.equal(nextWarmupStep({ ...base, warmupStep: 5, warmupStepAt: at(99), stepSends: 1, stepBounces: 0 }, NOW).changed, false, 'the top step stays');
@@ -104,7 +108,7 @@ test('warm-up: a step is earned only after its full period with an email, no com
     assert.equal(nextWarmupStep({ ...base, warmupStep: step, warmupStepAt: at(days - 0.01), stepSends: 10, stepBounces: 0 }, NOW).changed, false);
     assert.equal(nextWarmupStep({ ...base, warmupStep: step, warmupStepAt: at(days), stepSends: 10, stepBounces: 0 }, NOW).step, step + 1);
   }
-  const earned = decide(counts({ warmupStepAt: at(3), stepSends: 150 }), NOW)!;
+  const earned = decide(counts({ warmupStepAt: at(3), stepSends: 150, stepBusyDays: 2 }), NOW)!;
   assert.deepEqual([earned.kind, earned.step, earned.daily, earned.hourly], ['warmup_step', 1, 100, 25]);
 });
 
@@ -123,28 +127,40 @@ test('the sample: 2 bounces or any complaint among the first 50 holds the rest a
   assert.deepEqual([heldDecision.kind, heldDecision.sample, heldDecision.to], ['sample_held', 'held', 'ok'], 'a held sample is not a pause');
 });
 
-test('the account trip-wire: worst offender first at 3% (or 1 in 2,000 complaints), everyone held at 5% (or 1 in 1,250); never under 1,000 emails', () => {
-  const a = counts({ workspaceId: 'a0000000-0000-4000-8000-000000000001', sends7: 600, hard7: 20 });
-  const b = counts({ workspaceId: 'b0000000-0000-4000-8000-000000000002', sends7: 400, hard7: 10 });
+test('the account trip-wire: only a business itself over the line, highest rate first; complaints need a count as well as a rate; never under 1,000 emails', () => {
+  const a = counts({ workspaceId: 'a0000000-0000-4000-8000-000000000001', sends7: 600, hard7: 23 });
+  const b = counts({ workspaceId: 'b0000000-0000-4000-8000-000000000002', sends7: 400, hard7: 7 });
   const quiet = counts({ workspaceId: 'c0000000-0000-4000-8000-000000000003', sends7: 0 });
-  // 30 of 1,000 = 3%: the worst (20 bounces) is paused; the rest (10 of 400 = 2.5%) is under the line.
+  // 30 of 1,000 = 3%: A (3.8%) is over the line itself and paused; B (1.75%) is not a candidate.
   const watch = accountDecision({ state: 'ok', sends7: 1000, bounces7: 30, sends30: 1000, complaints30: 0 }, [a, b, quiet]);
   assert.equal(watch.hold, null);
-  assert.deepEqual(watch.pause.map(p => [p.workspaceId, p.trip.line, p.trip.count, p.trip.total, p.trip.own!.count]), [[a.workspaceId, 'account_bounce', 30, 1000, 20]]);
-  assert.deepEqual(accountDecision({ state: 'ok', sends7: 1000, bounces7: 29, sends30: 1000, complaints30: 0 }, [counts({ ...a, hard7: 19 }), b]).pause, [], '2.9%');
+  assert.deepEqual(watch.pause.map(p => [p.workspaceId, p.trip.line, p.trip.count, p.trip.total, p.trip.own!.count, p.trip.own!.total]), [[a.workspaceId, 'account_bounce', 30, 1000, 23, 600]]);
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 1000, bounces7: 29, sends30: 1000, complaints30: 0 }, [counts({ ...a, hard7: 22 }), b]).pause, [], '2.9%');
   assert.deepEqual(accountDecision({ state: 'ok', sends7: 999, bounces7: 300, sends30: 999, complaints30: 0 }, [counts({ ...a, sends7: 599, hard7: 290 }), b]).pause, [], 'under 1,000 emails');
-  // Paused businesses no longer count towards the watch line, so it stops; the hold looks at the whole account.
-  assert.deepEqual(accountDecision({ state: 'ok', sends7: 1000, bounces7: 30, sends30: 1000, complaints30: 0 }, [counts({ ...a, state: 'paused' }), b]).pause, []);
+  // The reviewer's case: A sends most at 2.9%, B sends less at 3.9%: B is the offender, A is never paused for it.
+  const big = counts({ workspaceId: 'a0000000-0000-4000-8000-0000000000aa', sends7: 10000, hard7: 290, sends30: 10000 });
+  const bad = counts({ workspaceId: 'b0000000-0000-4000-8000-0000000000bb', sends7: 3000, hard7: 117, sends30: 3000, state: 'slowed' });
+  const mixed = accountDecision({ state: 'ok', sends7: 13000, bounces7: 407, sends30: 13000, complaints30: 0 }, [big, bad]);
+  assert.deepEqual(mixed.pause.map(p => [p.workspaceId, p.trip.own]), [[bad.workspaceId, { count: 117, total: 3000 }]]);
+  // A business over the line but none of the senders over it themselves: nobody is singled out (the hold still guards).
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 2000, bounces7: 60, sends30: 0, complaints30: 0 },
+    [counts({ workspaceId: a.workspaceId, sends7: 1000, hard7: 29 }), counts({ workspaceId: b.workspaceId, sends7: 1000, hard7: 31 })]).pause.map(p => p.workspaceId), [b.workspaceId]);
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 1000, bounces7: 30, sends30: 1000, complaints30: 0 }, [counts({ ...a, state: 'paused' }), b]).pause, [], 'paused businesses drop out');
   const hold = accountDecision({ state: 'ok', sends7: 1000, bounces7: 50, sends30: 1000, complaints30: 0 }, [a, b]);
   assert.deepEqual([hold.hold!.line, hold.hold!.count, hold.hold!.limit], ['account_bounce', 50, 5]);
   assert.equal(accountDecision({ state: 'ok', sends7: 1000, bounces7: 49, sends30: 1000, complaints30: 0 }, [a, b]).hold, null, '4.9%');
   assert.equal(accountDecision({ state: 'held', sends7: 1000, bounces7: 90, sends30: 1000, complaints30: 0 }, [a, b]).hold, null, 'already held');
-  // Complaints: 1 in 2,000 pauses the business with most; 1 in 1,250 holds everyone.
-  const c1 = counts({ workspaceId: a.workspaceId, sends30: 1500, complaints30: 0 }), c2 = counts({ workspaceId: b.workspaceId, sends30: 500, complaints30: 1 });
-  assert.deepEqual(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 2000, complaints30: 1 }, [c1, c2]).pause.map(p => [p.workspaceId, p.trip.line]), [[b.workspaceId, 'account_complaint']]);
-  assert.deepEqual(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 2001, complaints30: 1 }, [counts({ ...c1, sends30: 1501 }), c2]).pause, [], 'just under 1 in 2,000');
-  assert.equal(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 2500, complaints30: 2 }, []).hold!.line, 'account_complaint');
-  assert.equal(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 2501, complaints30: 2 }, []).hold, null);
+  // Complaints: ONE complaint never trips anything, whatever the rate.
+  const one = counts({ workspaceId: 'pp', sends30: 1100, complaints30: 1, sends7: 300 });
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 300, bounces7: 0, sends30: 1100, complaints30: 1 }, [one]), { hold: null, pause: [] }, '1 in 1,100');
+  // 3 complaints that are also 1 in 2,000 pause the offender; 5 that are also 1 in 1,250 hold everyone.
+  const c1 = counts({ workspaceId: a.workspaceId, sends30: 4000, complaints30: 0 }), c2 = counts({ workspaceId: b.workspaceId, sends30: 2000, complaints30: 3 });
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 6000, complaints30: 3 }, [c1, c2]).pause.map(p => [p.workspaceId, p.trip.line]), [[b.workspaceId, 'account_complaint']]);
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 6001, complaints30: 3 }, [counts({ ...c1, sends30: 4001 }), c2]).pause, [], 'just under 1 in 2,000');
+  assert.deepEqual(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 4000, complaints30: 2 }, [counts({ ...c2, complaints30: 2 })]).pause, [], '2 complaints: under the count');
+  assert.equal(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 6250, complaints30: 5 }, []).hold!.line, 'account_complaint');
+  assert.equal(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 6251, complaints30: 5 }, []).hold, null);
+  assert.equal(accountDecision({ state: 'ok', sends7: 0, bounces7: 0, sends30: 1000, complaints30: 4 }, []).hold, null, '4 complaints: under the hold count');
 });
 
 test('percent rounds down to one decimal: it never shows more than the truth', () => {
@@ -160,4 +176,16 @@ test('logged numbers carry the trip and no address, and read back as the same tr
   assert.deepEqual(tripFromNumbers(numbers, 'paused'), trip);
   assert.equal(tripFromNumbers({ line: 'nonsense' }, 'paused'), null);
   assert.equal(tripFromNumbers(null, 'paused'), null);
+});
+
+test('slowed and a held sample at once: the held sample is the news told, the slowed line is the stored reason', () => {
+  const both = decide(counts({ sampleState: 'sending', sampleSends: 40, sampleComplaints: 2, complaints30: 2, sampleStartedAt: 'x' }), NOW)!;
+  assert.deepEqual([both.to, both.kind, both.sample, both.trip!.line, both.reasonTrip!.line, both.daily, both.hourly], ['slowed', 'sample_held', 'held', 'sample', 'complaints', 25, 7]);
+  const paused = decide(counts({ sampleState: 'sending', sampleSends: 40, sampleBounces: 5, hardLast50: 5, last50Sends: 40 }), NOW)!;
+  assert.deepEqual([paused.to, paused.kind, paused.sample], ['paused', 'paused', null], 'a pause is stronger still; the sample waits with it');
+});
+
+test('a sample with nothing sent yet is never judged, and the last-50 line needs a live send', () => {
+  assert.equal(sampleVerdict({ sampleState: 'sending', sampleFullAt: null, sampleSends: 0, sampleBounces: 2, sampleComplaints: 1 }, NOW).verdict, null);
+  assert.equal(judge(counts({ hardLast50: 0, last50Sends: 0, hard7: 5 })).level, 'ok', 'the database gives 0 for the last 50 with no live send');
 });

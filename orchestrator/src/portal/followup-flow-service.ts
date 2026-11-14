@@ -29,6 +29,8 @@ export interface PortalFlowDelivery { readonly repository: PpFollowupRepository;
    */
   readonly current?: () => Promise<PortalFlowDeliveryNow | null> }
 export interface PortalFlowDeliveryNow { readonly status: PpMarketingStatus; readonly testRecipients: readonly string[] | null;
+  /** Nothing is going right now (a hold of any kind); people started wait and go when it lifts. */
+  readonly held?: boolean;
   readonly banner: { readonly title: string; readonly text: string; readonly tone: 'alert' | 'notice' | 'ok' } | null }
 /**
  * Native PP flow authoring and, when delivery is composed, owner-controlled email runs. Email is ready only
@@ -69,7 +71,8 @@ export class PortalFollowupFlowService {
     const readiness = this.readiness, delivery = this.dependencies.delivery;
     return { brand, catalog, messageChoices, readiness, executable: readiness.email, workspaceId: context.workspaceId, campaign: PP_FOLLOWUP_CAMPAIGN,
       ...(delivery ? { delivery: { mode: this.status!.mode, problems: this.status!.problems, search: view.search?.trim() ?? '',
-        database: await delivery.repository.snapshot(identity, view).catch(() => null), ...(this.now?.banner ? { banner: this.now.banner } : {}) } } : {}) };
+        database: await delivery.repository.snapshot(identity, view).catch(() => null), ...(this.now?.banner ? { banner: this.now.banner } : {}),
+        ...(this.now?.held ? { held: true } : {}) } } : {}) };
   }
   async review(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string) {
     if (!FOLLOWUP_SEQUENCE_UUID.test(itemId) || !FOLLOWUP_SEQUENCE_UUID.test(versionId)) throw new FlowWorkspaceError(400, 'Choose an exact saved PP blueprint.');

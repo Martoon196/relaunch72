@@ -46,8 +46,9 @@ async function setup() {
     reactivateAtProvider: async (_ws: string, email: string) => { reactivations.push(email); return providerAnswer; },
   } as never;
   const soon: string[] = [];
+  let mailer = true;
   const sending = new OwnerSendingService({ protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher, bounces,
-    evaluator: { soon: ws => soon.push(ws) }, founder: async identity => identity.sessionToken === FOUNDER, portalOrigin: ORIGIN });
+    evaluator: { soon: ws => soon.push(ws) }, founder: async identity => identity.sessionToken === FOUNDER, portalOrigin: ORIGIN, mailer: () => mailer });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, identity = owner, headers: Record<string, string> = {}) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';
     const captured = { status: 0, body: '' };
@@ -65,7 +66,8 @@ async function setup() {
   assert.equal(store.row!.status, 'verified');
   const form = (extra: Record<string, string> = {}) => ({ csrf, commandId, ...extra });
   return { postmark, store, protection, call, form, emails, setEmailAnswer: (f: () => Response) => { emailAnswer = f; }, lifts, reactivations, soon,
-    setLift: (a: typeof liftAnswer) => { liftAnswer = a; }, setProvider: (a: typeof providerAnswer) => { providerAnswer = a; }, csrf, commandId };
+    setLift: (a: typeof liftAnswer) => { liftAnswer = a; }, setProvider: (a: typeof providerAnswer) => { providerAnswer = a; }, csrf, commandId,
+    setMailer: (value: boolean) => { mailer = value; } };
 }
 
 const clean = (html: string, h: Awaited<ReturnType<typeof setup>>) => {
@@ -147,16 +149,30 @@ test('"Go live": Postmark is asked whether the webhook is verified; the first ti
   page = await h.call('POST', '/portal/email/go-live', h.form());
   assert.equal(h.protection.commands.at(-1)!.webhookOk, false);
   assert.match(page.body, /We couldn&#39;t confirm the email service will tell us about bounces\./u);
-  for (const [answer, text] of [['needs_footer', 'Add your business&#39;s real name and postal address first.'], ['needs_test', 'Send a test to yourself first, and check it arrived.'],
+  for (const [answer, text] of [['needs_footer', 'Add your business&#39;s real name and postal address first.'], ['needs_test', 'Send a test to yourself first. It must be accepted for sending since your email was last connected.'],
     ['needs_terms', 'Tick the latest email rules first.'], ['switched_off', 'Email sending is switched off for this business.'], ['live', 'You are live. Your marketing emails will now go out.']] as const) {
     h.protection.commandAnswer = answer;
     assert.ok((await h.call('POST', '/portal/email/go-live', h.form())).body.includes(text), answer);
   }
-  h.protection.commandAnswer = null;
+  // Without a working alert sender we never promise an email.
+  h.protection.commandAnswer = 'requested'; h.setMailer(false);
+  assert.match((await h.call('POST', '/portal/email/go-live', h.form())).body, /Waiting for approval\. Check this page for the answer\./u);
+  h.setMailer(true); h.protection.commandAnswer = null;
+  // Each mode button only from its own mode: "Back to testing" from live, "Start testing" from off.
+  assert.match((await h.call('POST', '/portal/email/back-to-test', h.form())).body, /That isn&#39;t available from here\./u, 'mode is off: not from here');
+  assert.match((await h.call('POST', '/portal/email/start-test', h.form())).body, /You are testing\. Only your test addresses get emails\./u);
+  h.store.row!.mode = 'live';
+  assert.match((await h.call('POST', '/portal/email/start-test', h.form())).body, /That isn&#39;t available from here\./u);
   assert.match((await h.call('POST', '/portal/email/back-to-test', h.form())).body, /You are testing\. Only your test addresses get emails\./u);
   assert.match((await h.call('POST', '/portal/email/pause', h.form())).body, /Paused\. No marketing emails will go until you press Resume\./u);
+  // Resumed: only "can go again" when nothing else holds them; otherwise what still does.
+  h.protection.config = null;
   assert.match((await h.call('POST', '/portal/email/resume', h.form())).body, /Resumed\. Your marketing emails can go again\./u);
-  assert.deepEqual(h.protection.commands.slice(-3).map(c => c.action), ['test', 'pause', 'resume']);
+  h.protection.config = { workspaceId: PP_WS, status: 'verified', mode: 'live', serverId: 1, stream: 'broadcast', sealedServerToken: 'x', fromName: 'P', fromAddress: 'hello@pp-send-proof.co.uk',
+    replyTo: null, businessName: 'B Ltd', postalAddress: '1 High Street, Leeds', testRecipients: [], protectionState: 'paused', protectionReason: null, ownerPaused: false, sampleState: 'passed',
+    dailyCap: 0, hourlyCap: 0, accountHeld: false, liveDay: 0, liveHour: 0, goLiveRequestedAt: null, goLiveApprovedAt: 'x', approvedCurrent: true, testCurrent: true, lastStep: null };
+  assert.match((await h.call('POST', '/portal/email/resume', h.form())).body, /Resumed\. Your marketing emails are still paused by our protection; only we can restart them\./u);
+  assert.deepEqual(h.protection.commands.slice(-4).map(c => c.action), ['test', 'pause', 'resume', 'resume']);
 });
 
 test('the banner in each protection state, on the email page, with what tripped and what to do', async () => {
@@ -171,7 +187,7 @@ test('the banner in each protection state, on the email page, with what tripped 
   h.store.row!.protection = { ...h.store.row!.protection, state: 'slowed', dailyCap: 25, hourlyCap: 7 };
   h.protection.sending = { ...h.protection.sending, lastStep: { kind: 'slowed', at: 'x', line: 'complaints', count: 2, total: 300, limit: 2, days: 30 } };
   page = await h.call('GET', '/portal/email');
-  assert.match(page.body, /<h2>We have slowed your marketing emails<\/h2><p>2 people marked your emails as spam in the last 30 days\. Our limit is 2\. They still go, at up to 25 emails a day\./u);
+  assert.match(page.body, /<h2>We have slowed your marketing emails<\/h2><p>2 people marked your emails as spam in the last 30 days\. Our limit is 2\. They still go, at up to 25 emails a day; the rest wait their turn\./u);
   h.store.row!.protection = { ...h.store.row!.protection, state: 'off' };
   h.protection.sending = { ...h.protection.sending, lastStep: { kind: 'switched_off', at: 'x', line: 'hard_last50', count: 5, total: 50, limit: 5 } };
   page = await h.call('GET', '/portal/email');
@@ -248,4 +264,33 @@ test('at 0155 (no sender protection in the database) the page is exactly release
   assert.equal(h.protection.commands.length, 0);
   assert.equal(h.emails.length, 0, 'nothing was sent');
   assert.equal((await h.call('GET', '/portal/email/founder', undefined, founderIdentity)).status, 403, 'no founder page either');
+});
+
+test('review fixes on the page: a double submit sends one test; our own key failure is ours; a connection in charge but not connected says so; given-up alerts stay visible', async () => {
+  const h = await setup();
+  // The same commandId twice: one email.
+  const form = { csrf: h.csrf, commandId: '7a0d8f2a-3b1c-4d5e-8f90-123456789abc' };
+  assert.match((await h.call('POST', '/portal/email/test-send', form)).body, /Sent\. Check your inbox and spam folder\./u);
+  h.protection.reserveAnswer = 'replayed';
+  assert.match((await h.call('POST', '/portal/email/test-send', form)).body, /That test was already sent once\. Check your inbox and spam folder\./u);
+  assert.equal(h.emails.length, 1);
+  assert.deepEqual(h.protection.reserved.map(r => r.key), ['test:7a0d8f2a-3b1c-4d5e-8f90-123456789abc:0', 'test:7a0d8f2a-3b1c-4d5e-8f90-123456789abc:0']);
+  h.protection.reserveAnswer = 'ok';
+  // The saved token cannot be opened with our key: never blamed on the email service.
+  h.store.row!.sealedServerToken = new EmailConnectionVault(Buffer.alloc(32, 1)).seal(PP_WS, 'server_token', 'srv-other-key-0123456789abcdef');
+  const unreadable = await h.call('POST', '/portal/email/test-send', h.form());
+  assert.match(unreadable.body, /We couldn&#39;t open your saved connection on our side\./u);
+  assert.equal(h.emails.length, 1);
+  // A business that went live, now back to waiting for its records: the banner says nothing is sent.
+  h.store.row!.mode = 'live';
+  h.store.row!.status = 'dns_pending';
+  h.protection.sending = { ...h.protection.sending, goLiveApprovedAt: '2026-11-01T00:00:00Z', approvedCurrent: true };
+  const page = await h.call('GET', '/portal/email');
+  assert.match(page.body, /<h2>Email is not connected right now<\/h2><p>Email is not connected right now, so nothing is being sent\. Reconnect it to carry on\./u);
+  assert.doesNotMatch(page.body, /<h2>Sending<\/h2>/u, 'no sending controls until connected again');
+  // The founder sees alert emails that could not be sent.
+  const status = h.protection.status_();
+  h.protection.status_ = () => ({ ...status, undelivered: [{ workspaceId: PP_WS, audience: 'owner', kind: 'paused', at: '2026-11-20T10:00:00Z' }] });
+  const founderPage = await h.call('GET', '/portal/email/founder', undefined, founderIdentity);
+  assert.match(founderPage.body, /<strong>1 alert email could not be sent in the last 30 days<\/strong>, so it is shown here instead:<\/p><ul><li>A pause \(to the business owner\), 20 November<\/li>/u);
 });

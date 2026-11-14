@@ -1,27 +1,35 @@
 -- 0156: "Connect email" release 2 - sending through the stored connection, and sender protection.
 --
--- Additive only, on the exact 0155. Nothing older than 0155 is touched. On app_private.email_connections (0155, this
--- feature's own table) nothing is altered: the definer is GRANTED UPDATE on the groundwork columns 0155 left unwritable
--- (mode, test_recipients, protection_state/reason/since, daily_cap, hourly_cap, warmup_started_at,
--- go_live_approved_by/at). Six new private tables, all forced RLS, pinned like 0155 (workspace tables to the Property
--- Predator workspace), written only through r72_email_connection_definer functions with search_path=pg_catalog that
--- refuse any session user but r72_identity_command:
+-- Additive only, on the exact 0155. Nothing older than 0155 is altered. On app_private.email_connections (0155, this
+-- feature's own table) nothing is altered either: the definer is GRANTED UPDATE on the groundwork columns 0155 left
+-- unwritable (mode, test_recipients, protection_state/reason/since, daily_cap, hourly_cap, warmup_started_at,
+-- go_live_approved_by/at). Five new private tables, all forced RLS, pinned like 0155 (workspace tables to the Property
+-- Predator workspace), written only through definer functions with search_path=pg_catalog that refuse any session user
+-- but r72_identity_command:
 --   email_sending_controls   one row per business: footer details (real business name and postal address), the
---                            owner's own pause, the last successful test, the go-live request, the warm-up step, the
---                            new-list sample and the floor below which old events no longer count after a founder lift.
+--                            owner's own pause, the last test accepted for sending, the go-live request, the domain the
+--                            founder approved, the warm-up step, the sample and the floor below which old events no
+--                            longer count after a founder lift.
 --   email_send_events        the durable counters: one row per send (keyed by our own lease/test key: reserved, then
 --                            accepted or released) and per hard bounce, soft bounce, spam complaint and unsubscribe
---                            (keyed by Postmark's event id), so replays change nothing. Never an address.
+--                            (keyed by one Postmark key per event, whatever the event's kind), so replays change
+--                            nothing. Never an address. Rows that can no longer change any decision are pruned.
 --   email_protection_alerts  the outbox for the plain emails to the business owner and the founder (one row per audience
 --                            per protection step, written in the same transaction as the step).
 --   email_account_protection and email_account_events   the account-wide trip-wire (one row) and its append-only log.
 -- email_protection_events (0155) receives every protection step with the numbers at that moment.
 --
+-- Plus one function owned by 0152's r72_pp_followup_definer: pp_followup_hold_wait, which restarts the retry window of
+-- Property Predator follow-up runs that are due but held by protection or a cap, so a held person waits instead of
+-- failing as delivery_expired.
+--
 -- Enforcement in SQL, whatever the application decides: a system step can only move a business UP the ladder
--- (ok -> slowed -> paused -> off) or recover slowed -> ok; a SECOND own pause within 90 days becomes 'off' here; only a
--- session the founder check accepts can approve a first go-live, lift a pause, reinstate a business that was switched
--- off, release a held sample or lift the account hold; every send is reserved here against the stored caps, the mode,
--- the owner's pause, the protection state, the sample and the account hold before anything is handed to Postmark.
+-- (ok -> slowed -> paused -> off) or recover slowed -> ok, with caps that match the ramp; a SECOND own pause (or
+-- switch-off) within 90 days becomes 'off' here; a sample passes only after its wait; only a session the founder check
+-- accepts can approve a go-live, lift a pause, reinstate a business that was switched off, release a held sample or
+-- lift the account hold; every send is reserved here against the stored caps, the mode, the approval for the domain in
+-- use, a test since the last verification, the owner's pause, the protection state, the sample and the account hold
+-- before anything is handed to Postmark.
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='60s';
 
@@ -42,7 +50,7 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.email_protection_founder(bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.email_protection_founder(bytea) TO r72_email_connection_definer;
 
--- One person's sign-in address (the default test list is the owner's own), or NULL.
+-- One person's sign-in address (the default test list is the address of the owner who agreed to the email rules), or NULL.
 CREATE FUNCTION app_private.email_sending_user_email(p_user uuid) RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
@@ -76,6 +84,7 @@ CREATE TABLE app_private.email_sending_controls(
  owner_paused_by uuid,
  go_live_requested_at timestamptz,
  go_live_requested_by uuid,
+ approved_domain text CHECK(approved_domain IS NULL OR (length(approved_domain) BETWEEN 4 AND 253 AND approved_domain=lower(approved_domain))),
  warmup_step smallint NOT NULL DEFAULT 0 CHECK(warmup_step BETWEEN 0 AND 5),
  warmup_step_at timestamptz,
  counted_since timestamptz,
@@ -99,13 +108,13 @@ CREATE POLICY email_sending_controls_definer ON app_private.email_sending_contro
  WITH CHECK(session_user='r72_identity_command' AND workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97');
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app_private','email_sending_controls','workspace_id');
 GRANT SELECT,INSERT ON app_private.email_sending_controls TO r72_email_connection_definer;
-GRANT UPDATE(business_name,postal_address,test_passed_at,owner_paused_at,owner_paused_by,go_live_requested_at,go_live_requested_by,warmup_step,warmup_step_at,
+GRANT UPDATE(business_name,postal_address,test_passed_at,owner_paused_at,owner_paused_by,go_live_requested_at,go_live_requested_by,approved_domain,warmup_step,warmup_step_at,
  counted_since,sample_state,sample_started_at,sample_full_at,row_version,updated_at) ON app_private.email_sending_controls TO r72_email_connection_definer;
 
 -- The durable counters. A send is reserved under our own key BEFORE it is handed to Postmark (so caps hold across
 -- every instance), then accepted (Postmark took it) or released (it certainly did not go). An unknown outcome stays
--- reserved and counts. Bounces, complaints and unsubscribes are keyed by Postmark's own event id: a replayed webhook
--- or a second hourly read of the same bounce changes nothing.
+-- reserved and counts. Bounces, complaints and unsubscribes carry one key per Postmark event (whatever kind it is read
+-- as): a replayed webhook or the hourly read of the same bounce changes nothing.
 CREATE TABLE app_private.email_send_events(
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  workspace_id uuid NOT NULL CHECK(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'),
@@ -116,12 +125,15 @@ CREATE TABLE app_private.email_send_events(
  occurred_at timestamptz NOT NULL,
  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  settled_at timestamptz,
- UNIQUE(workspace_id,kind,event_key),
+ UNIQUE(workspace_id,event_key),
  CHECK((kind='send')=(state<>'fact')),
  CHECK((kind='send')=(purpose IS NOT NULL)),
  CHECK((state IN('accepted','released'))=(settled_at IS NOT NULL))
 );
+-- The send path reads live sends in a time window, and bounces of a kind in a time window: both by index.
+CREATE INDEX email_send_events_live ON app_private.email_send_events(workspace_id,occurred_at DESC) WHERE kind='send' AND purpose='live' AND state IN('reserved','accepted');
 CREATE INDEX email_send_events_recent ON app_private.email_send_events(workspace_id,kind,occurred_at DESC);
+CREATE INDEX email_send_events_time ON app_private.email_send_events(workspace_id,occurred_at);
 ALTER TABLE app_private.email_send_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_private.email_send_events FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON app_private.email_send_events FROM PUBLIC;
@@ -130,8 +142,9 @@ CREATE POLICY email_send_events_definer ON app_private.email_send_events TO r72_
  USING(session_user='r72_identity_command' AND workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97')
  WITH CHECK(session_user='r72_identity_command' AND workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97');
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app_private','email_send_events','workspace_id');
--- Only a reserved send may be settled; nothing else in a counter row can change and nothing is ever deleted.
-GRANT SELECT,INSERT ON app_private.email_send_events TO r72_email_connection_definer;
+-- A reserved send may be settled; nothing else in a counter row can change. Rows are removed only by
+-- email_send_events_prune, and only once they can no longer change any decision.
+GRANT SELECT,INSERT,DELETE ON app_private.email_send_events TO r72_email_connection_definer;
 GRANT UPDATE(state,settled_at) ON app_private.email_send_events TO r72_email_connection_definer;
 
 -- The alert outbox: what the business owner and the founder are emailed. kind and numbers only, never an address
@@ -201,8 +214,15 @@ GRANT SELECT,INSERT ON app_private.email_account_events TO r72_email_connection_
 GRANT UPDATE(mode,test_recipients,protection_state,protection_reason,protection_since,daily_cap,hourly_cap,warmup_started_at,go_live_approved_by,go_live_approved_at)
  ON app_private.email_connections TO r72_email_connection_definer;
 
-GRANT CREATE ON SCHEMA app_private TO r72_email_connection_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_email_connection_definer,r72_pp_followup_definer;
 SET LOCAL ROLE r72_email_connection_definer;
+
+-- The warm-up ramp: the daily cap of each step, and how many days each step lasts (the last step has none). The
+-- application's rules.ts holds the same table; apply refuses any cap that does not match it.
+CREATE FUNCTION app_private.email_protection_ramp(p_step integer) RETURNS integer
+LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $f$ SELECT (ARRAY[50,100,250,500,1000,2000])[least(greatest(coalesce(p_step,0),0),5)+1] $f$;
+CREATE FUNCTION app_private.email_protection_step_days(p_step integer) RETURNS integer
+LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $f$ SELECT (ARRAY[3,4,7,7,7])[p_step+1] $f$;
 
 -- Inner: the business's controls row, created on first use. Not granted to anyone.
 CREATE FUNCTION app_private.email_sending_controls_row(p_workspace uuid) RETURNS app_private.email_sending_controls
@@ -227,55 +247,73 @@ BEGIN
 END $f$;
 
 -- Inner: the counts the ladder, the ramp and the sample are judged on, for one business, from the durable counters.
--- Every window starts no earlier than counted_since (set when the founder lifts a pause or reinstates a business), so
--- old bounces that were already acted on never trip the ladder again. Sends are reserved or accepted (an unknown
--- outcome counts as sent); bounces are hard plus soft, the way Postmark counts them.
+-- Denominators are LIVE sends only (reserved or accepted: an unknown outcome counts as sent); tests never dilute a
+-- rate. Bounces are hard plus soft. After a founder lift (counted_since) nothing counts until the first live send
+-- after it, so bounces for emails sent before the lift never trip the ladder again. Every query compares with one
+-- moment taken here, so each one is an index range scan.
 CREATE FUNCTION app_private.email_protection_counts(p_workspace uuid) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; floor_at timestamptz; now_at timestamptz:=clock_timestamp();
- w7 timestamptz; w30 timestamptz; last50 timestamptz; v_out jsonb;
+DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; v_now timestamptz:=clock_timestamp();
+ v_floor timestamptz:='-infinity'; w7 timestamptz; w30 timestamptz; v_start50 timestamptz; v_last50 integer; v_sample_from timestamptz; v_step_from timestamptz;
+ v_half integer; v_out jsonb;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  SELECT * INTO c FROM app_private.email_connections x WHERE x.workspace_id=p_workspace;
  IF NOT FOUND THEN RETURN NULL; END IF;
  SELECT * INTO s FROM app_private.email_sending_controls x WHERE x.workspace_id=p_workspace;
- floor_at:=coalesce(s.counted_since,'-infinity'::timestamptz);
- w7:=greatest(now_at-interval '7 days',floor_at); w30:=greatest(now_at-interval '30 days',floor_at);
- SELECT e.occurred_at INTO last50 FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.state IN('reserved','accepted')
-  AND e.occurred_at>=floor_at ORDER BY e.occurred_at DESC,e.id DESC OFFSET 49 LIMIT 1;
- SELECT jsonb_build_object(
-  'sends7',count(*) FILTER (WHERE e.kind='send' AND e.state IN('reserved','accepted') AND e.occurred_at>=w7),
-  'hard7',count(*) FILTER (WHERE e.kind='hard_bounce' AND e.occurred_at>=w7),
-  'soft7',count(*) FILTER (WHERE e.kind='soft_bounce' AND e.occurred_at>=w7),
-  'sends30',count(*) FILTER (WHERE e.kind='send' AND e.state IN('reserved','accepted') AND e.occurred_at>=w30),
-  'complaints30',count(*) FILTER (WHERE e.kind='complaint' AND e.occurred_at>=w30),
-  'unsubscribes30',count(*) FILTER (WHERE e.kind='unsubscribe' AND e.occurred_at>=w30),
-  'last50Sends',least(50,count(*) FILTER (WHERE e.kind='send' AND e.state IN('reserved','accepted') AND e.occurred_at>=floor_at)),
-  'hardLast50',count(*) FILTER (WHERE e.kind='hard_bounce' AND e.occurred_at>=coalesce(last50,floor_at)),
-  'liveDay',count(*) FILTER (WHERE e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>now_at-interval '24 hours'),
-  'liveHour',count(*) FILTER (WHERE e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>now_at-interval '60 minutes'),
-  'sampleSends',count(*) FILTER (WHERE s.sample_started_at IS NOT NULL AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=s.sample_started_at),
-  'sampleBounces',count(*) FILTER (WHERE s.sample_started_at IS NOT NULL AND e.kind IN('hard_bounce','soft_bounce') AND e.occurred_at>=s.sample_started_at),
-  'sampleComplaints',count(*) FILTER (WHERE s.sample_started_at IS NOT NULL AND e.kind='complaint' AND e.occurred_at>=s.sample_started_at),
-  'stepSends',count(*) FILTER (WHERE s.warmup_step_at IS NOT NULL AND e.kind='send' AND e.state IN('reserved','accepted') AND e.occurred_at>=s.warmup_step_at),
-  'stepBounces',count(*) FILTER (WHERE s.warmup_step_at IS NOT NULL AND e.kind IN('hard_bounce','soft_bounce') AND e.occurred_at>=s.warmup_step_at),
-  'stepComplaints',count(*) FILTER (WHERE s.warmup_step_at IS NOT NULL AND e.kind='complaint' AND e.occurred_at>=s.warmup_step_at))
- INTO v_out FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.occurred_at>=least(now_at-interval '30 days',coalesce(s.sample_started_at,now_at),coalesce(s.warmup_step_at,now_at),coalesce(last50,now_at));
- RETURN v_out||jsonb_build_object('workspaceId',c.workspace_id,'status',c.status,'mode',c.mode,'state',c.protection_state,'reason',c.protection_reason,'since',c.protection_since,
+ IF s.counted_since IS NOT NULL THEN
+  SELECT min(e.occurred_at) INTO v_floor FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
+   AND e.state IN('reserved','accepted') AND e.occurred_at>=s.counted_since;
+  v_floor:=coalesce(v_floor,'infinity'::timestamptz);
+ END IF;
+ w7:=greatest(v_now-interval '7 days',v_floor); w30:=greatest(v_now-interval '30 days',v_floor);
+ -- The last 50 live sends (fewer when fewer were sent), and the oldest of them.
+ SELECT count(*),min(x.occurred_at) INTO v_last50,v_start50 FROM (SELECT e.occurred_at FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace
+  AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=v_floor ORDER BY e.occurred_at DESC LIMIT 50) x;
+ IF s.sample_state IN('sending','waiting') THEN
+  SELECT min(e.occurred_at) INTO v_sample_from FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
+   AND e.state IN('reserved','accepted') AND e.occurred_at>=s.sample_started_at;
+ END IF;
+ IF coalesce(s.warmup_step,0)<5 AND s.warmup_step_at IS NOT NULL THEN
+  v_step_from:=greatest(s.warmup_step_at,v_now-interval '30 days'); v_half:=ceil(app_private.email_protection_ramp(s.warmup_step)/2.0);
+ END IF;
+ v_out:=jsonb_build_object(
+  'sends7',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=w7),
+  'sends30',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=w30),
+  'hard7',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='hard_bounce' AND e.occurred_at>=w7),
+  'soft7',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='soft_bounce' AND e.occurred_at>=w7),
+  'complaints30',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='complaint' AND e.occurred_at>=w30),
+  'unsubscribes30',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='unsubscribe' AND e.occurred_at>=w30),
+  'last50Sends',v_last50,
+  'hardLast50',CASE WHEN v_last50=0 THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='hard_bounce' AND e.occurred_at>=v_start50) END,
+  'liveDay',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>v_now-interval '24 hours'),
+  'liveHour',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>v_now-interval '60 minutes'),
+  'sampleSends',CASE WHEN s.sample_state IN('sending','waiting') THEN (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
+   AND e.state IN('reserved','accepted') AND e.occurred_at>=s.sample_started_at) ELSE 0 END,
+  'sampleBounces',CASE WHEN v_sample_from IS NULL THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind IN('hard_bounce','soft_bounce') AND e.occurred_at>=v_sample_from) END,
+  'sampleComplaints',CASE WHEN v_sample_from IS NULL THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='complaint' AND e.occurred_at>=v_sample_from) END,
+  'stepSends',CASE WHEN v_step_from IS NULL THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
+   AND e.state IN('reserved','accepted') AND e.occurred_at>=v_step_from) END,
+  'stepBounces',CASE WHEN v_step_from IS NULL THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind IN('hard_bounce','soft_bounce') AND e.occurred_at>=v_step_from) END,
+  'stepComplaints',CASE WHEN v_step_from IS NULL THEN 0 ELSE (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='complaint' AND e.occurred_at>=v_step_from) END,
+  'stepBusyDays',CASE WHEN v_step_from IS NULL THEN 0 ELSE (SELECT count(*) FROM (SELECT 1 FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send'
+   AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=v_step_from GROUP BY (e.occurred_at AT TIME ZONE 'Europe/London')::date HAVING count(*)>=v_half) d) END);
+ RETURN v_out||jsonb_build_object('workspaceId',c.workspace_id,'status',c.status,'mode',c.mode,'domain',c.domain,'state',c.protection_state,'reason',c.protection_reason,'since',c.protection_since,
   'dailyCap',c.daily_cap,'hourlyCap',c.hourly_cap,'warmupStartedAt',c.warmup_started_at,'goLiveApprovedAt',c.go_live_approved_at,
   'warmupStep',coalesce(s.warmup_step,0),'warmupStepAt',s.warmup_step_at,'countedSince',s.counted_since,'sampleState',coalesce(s.sample_state,'none'),
   'sampleStartedAt',s.sample_started_at,'sampleFullAt',s.sample_full_at,'ownerPausedAt',s.owner_paused_at,
-  'ownPauses90',(SELECT count(*) FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind='paused'
-   AND p.numbers->>'cause'='own' AND p.occurred_at>now_at-interval '90 days'),
-  'now',now_at);
+  'ownPauses90',(SELECT count(*) FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind IN('paused','switched_off')
+   AND p.numbers->>'cause'='own' AND p.occurred_at>v_now-interval '90 days'),
+  'now',v_now);
 END $f$;
 
--- What the owner's page shows beyond 0155's state: footer details, test list, the owner's pause, the go-live request,
--- the counts and the last protection step's numbers, and the last 7 UK days. Never a sealed value, never an address
--- other than the test list and the owner's own sign-in address.
+-- What the owner's page shows beyond 0155's state: footer details, test list and its default, the owner's pause, the
+-- go-live request and approval (for the domain in use), the counts, the last protection step's numbers and whether
+-- its alert email went, and the last 7 UK days. Never a sealed value.
 CREATE FUNCTION app_private.email_sending_state(p_session bytea,p_workspace uuid) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; a app_private.email_account_protection%ROWTYPE; v_last jsonb;
+ v_alert text; v_now timestamptz:=clock_timestamp();
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  actor:=app_private.email_connection_owner(p_session,p_workspace);
@@ -284,20 +322,26 @@ BEGIN
  SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
  SELECT p.numbers||jsonb_build_object('kind',p.kind,'at',p.occurred_at) INTO v_last FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace
   AND p.kind IN('slowed','paused','switched_off','sample_held','recovered','lifted','reinstated','sample_released','sample_passed') ORDER BY p.occurred_at DESC,p.id DESC LIMIT 1;
- RETURN jsonb_build_object('ownEmail',app_private.email_sending_user_email(actor),'businessName',s.business_name,'postalAddress',s.postal_address,
-  'testRecipients',to_jsonb(coalesce(c.test_recipients,'{}'::text[])),'testPassedAt',s.test_passed_at,'ownerPausedAt',s.owner_paused_at,
-  'goLiveRequestedAt',s.go_live_requested_at,'goLiveApprovedAt',c.go_live_approved_at,'sampleState',coalesce(s.sample_state,'none'),
-  'sampleStartedAt',s.sample_started_at,'sampleFullAt',s.sample_full_at,'warmupStep',coalesce(s.warmup_step,0),'accountHeld',coalesce(a.state,'ok')='held',
-  'lastStep',v_last,'counts',CASE WHEN c.workspace_id IS NULL THEN NULL ELSE app_private.email_protection_counts(p_workspace) END,
+ SELECT CASE WHEN x.sent_at IS NOT NULL THEN 'sent' WHEN x.given_up_at IS NOT NULL THEN 'given_up' ELSE 'pending' END INTO v_alert
+  FROM app_private.email_protection_alerts x WHERE x.workspace_id=p_workspace AND x.audience='owner' ORDER BY x.created_at DESC,x.id DESC LIMIT 1;
+ RETURN jsonb_build_object('defaultTestEmail',app_private.email_sending_user_email(c.terms_accepted_by),'ownerEmailCount',cardinality(app_private.email_sending_owner_emails(p_workspace)),
+  'businessName',s.business_name,'postalAddress',s.postal_address,
+  'testRecipients',to_jsonb(coalesce(c.test_recipients,'{}'::text[])),'testPassedAt',s.test_passed_at,
+  'testCurrent',s.test_passed_at IS NOT NULL AND c.verified_at IS NOT NULL AND s.test_passed_at>=c.verified_at,'ownerPausedAt',s.owner_paused_at,
+  'goLiveRequestedAt',CASE WHEN s.go_live_requested_at>coalesce(c.go_live_approved_at,'-infinity'::timestamptz) THEN s.go_live_requested_at END,
+  'goLiveApprovedAt',c.go_live_approved_at,'approvedCurrent',c.go_live_approved_at IS NOT NULL AND s.approved_domain IS NOT DISTINCT FROM c.domain,
+  'sampleState',coalesce(s.sample_state,'none'),'sampleStartedAt',s.sample_started_at,'sampleFullAt',s.sample_full_at,'warmupStep',coalesce(s.warmup_step,0),
+  'accountHeld',coalesce(a.state,'ok')='held','lastStep',v_last,'lastOwnerAlert',v_alert,
+  'counts',CASE WHEN c.workspace_id IS NULL THEN NULL ELSE app_private.email_protection_counts(p_workspace) END,
   'days',coalesce((SELECT jsonb_agg(jsonb_build_object('day',d.day,'sends',d.sends,'hardBounces',d.hard,'softBounces',d.soft,'complaints',d.complaints,'unsubscribes',d.unsubs) ORDER BY d.day DESC)
    FROM (SELECT (e.occurred_at AT TIME ZONE 'Europe/London')::date AS day,
-     count(*) FILTER (WHERE e.kind='send' AND e.state IN('reserved','accepted')) AS sends,count(*) FILTER (WHERE e.kind='hard_bounce') AS hard,
+     count(*) FILTER (WHERE e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted')) AS sends,count(*) FILTER (WHERE e.kind='hard_bounce') AS hard,
      count(*) FILTER (WHERE e.kind='soft_bounce') AS soft,count(*) FILTER (WHERE e.kind='complaint') AS complaints,count(*) FILTER (WHERE e.kind='unsubscribe') AS unsubs
-    FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.occurred_at>clock_timestamp()-interval '7 days' GROUP BY 1) d),'[]'::jsonb));
+    FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.occurred_at>v_now-interval '7 days' GROUP BY 1) d),'[]'::jsonb));
 END $f$;
 
 -- The owner saves the footer details (the business's real name and postal address, printed in every marketing email)
--- and the test list (0 to 10 addresses; empty means the owner's own sign-in address).
+-- and the test list (0 to 10 addresses; empty means the sign-in address of the owner who agreed to the email rules).
 CREATE FUNCTION app_private.email_sending_details(p_session bytea,p_workspace uuid,p_business_name text,p_postal_address text,p_test_recipients text[]) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; v_list text[];
@@ -321,49 +365,57 @@ END $f$;
 
 -- One send, reserved BEFORE it is handed to Postmark, under the business's lock, against everything that can hold it.
 -- p_purpose 'live': a marketing email; 'test': an email to the business's own test list (the test-mode follow-ups and
--- "Send a test to me"). Answers 'ok' (reserved; also for a replay of the same key) or why it is held: 'account_held',
--- 'off', 'paused', 'owner_paused', 'not_live', 'not_connected', 'sample_wait', 'sample_held', 'daily_cap', 'hourly_cap',
--- 'test_limit'. Nothing is written for a hold.
+-- "Send a test to me"; allowed while paused by the owner or by protection, never while switched off, at most 20 an
+-- hour). Answers 'ok' (reserved), 'replayed' (this key was reserved before: nothing new) or why it is held:
+-- 'not_connected', 'off', 'owner_paused', 'account_held', 'paused', 'not_live', 'not_approved' (no founder approval
+-- for the domain in use), 'needs_test' (no test since the last verification), 'sample_held', 'sample_wait',
+-- 'daily_cap', 'hourly_cap', 'test_limit'. Nothing is written for a hold. A live send after a new verification
+-- restarts the sample first.
 CREATE FUNCTION app_private.email_send_reserve(p_workspace uuid,p_key text,p_purpose text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; a app_private.email_account_protection%ROWTYPE;
- day_count integer; hour_count integer; sample_count integer;
+ v_now timestamptz; day_count integer; hour_count integer; sample_count integer;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  IF p_key IS NULL OR p_key!~'^[!-~]{1,200}$' OR p_key~'@' OR p_purpose IS NULL OR p_purpose NOT IN('live','test') THEN RAISE EXCEPTION 'Invalid email send' USING ERRCODE='22023'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('email-sending:'||p_workspace::text,156));
- IF EXISTS(SELECT 1 FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.event_key=p_key) THEN RETURN 'ok'; END IF;
+ v_now:=clock_timestamp();
+ IF EXISTS(SELECT 1 FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.event_key=p_key) THEN RETURN 'replayed'; END IF;
  SELECT * INTO c FROM app_private.email_connections x WHERE x.workspace_id=p_workspace;
  IF NOT FOUND OR c.status<>'verified' THEN RETURN 'not_connected'; END IF;
  s:=app_private.email_sending_controls_row(p_workspace);
  SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
  IF c.protection_state='off' THEN RETURN 'off'; END IF;
- IF s.owner_paused_at IS NOT NULL THEN RETURN 'owner_paused'; END IF;
  IF p_purpose='test' THEN
-  -- At most 20 emails an hour to the business's own test list, whatever the mode; never while switched off.
   SELECT count(*) INTO hour_count FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='test'
-   AND e.state IN('reserved','accepted') AND e.occurred_at>clock_timestamp()-interval '60 minutes';
+   AND e.state IN('reserved','accepted') AND e.occurred_at>v_now-interval '60 minutes';
   IF hour_count>=20 THEN RETURN 'test_limit'; END IF;
  ELSE
+  IF s.owner_paused_at IS NOT NULL THEN RETURN 'owner_paused'; END IF;
   IF a.state='held' THEN RETURN 'account_held'; END IF;
   IF c.protection_state='paused' THEN RETURN 'paused'; END IF;
   IF c.mode<>'live' THEN RETURN 'not_live'; END IF;
+  IF c.go_live_approved_at IS NULL OR s.approved_domain IS DISTINCT FROM c.domain THEN RETURN 'not_approved'; END IF;
+  IF s.test_passed_at IS NULL OR c.verified_at IS NULL OR s.test_passed_at<c.verified_at THEN RETURN 'needs_test'; END IF;
   IF s.sample_state='held' THEN RETURN 'sample_held'; END IF;
+  -- Verified again since the sample began (a reconnect): the first 50 go first again.
+  IF s.sample_started_at IS NULL OR s.sample_started_at<c.verified_at THEN
+   UPDATE app_private.email_sending_controls SET sample_state='sending',sample_started_at=v_now,sample_full_at=NULL,row_version=s.row_version+1,updated_at=v_now
+   WHERE workspace_id=p_workspace RETURNING * INTO s;
+  END IF;
   IF s.sample_state='waiting' THEN RETURN 'sample_wait'; END IF;
-  SELECT count(*) FILTER (WHERE e.occurred_at>clock_timestamp()-interval '24 hours'),count(*) FILTER (WHERE e.occurred_at>clock_timestamp()-interval '60 minutes')
-   INTO day_count,hour_count FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
-   AND e.state IN('reserved','accepted') AND e.occurred_at>clock_timestamp()-interval '24 hours';
+  SELECT count(*),count(*) FILTER (WHERE e.occurred_at>v_now-interval '60 minutes') INTO day_count,hour_count FROM app_private.email_send_events e
+   WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>v_now-interval '24 hours';
   IF day_count>=c.daily_cap THEN RETURN 'daily_cap'; END IF;
   IF hour_count>=c.hourly_cap THEN RETURN 'hourly_cap'; END IF;
  END IF;
- INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at) VALUES(p_workspace,'send',p_key,p_purpose,'reserved',clock_timestamp());
+ INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at) VALUES(p_workspace,'send',p_key,p_purpose,'reserved',v_now);
  -- The sample: once its 50th live email is reserved, the rest waits for the automatic verdict (two hours later).
  IF p_purpose='live' AND s.sample_state='sending' THEN
   SELECT count(*) INTO sample_count FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
    AND e.state IN('reserved','accepted') AND e.occurred_at>=s.sample_started_at;
   IF sample_count>=50 THEN
-   UPDATE app_private.email_sending_controls SET sample_state='waiting',sample_full_at=clock_timestamp(),row_version=s.row_version+1,updated_at=clock_timestamp()
-   WHERE workspace_id=p_workspace;
+   UPDATE app_private.email_sending_controls SET sample_state='waiting',sample_full_at=v_now,row_version=s.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
   END IF;
  END IF;
  RETURN 'ok';
@@ -383,63 +435,84 @@ BEGIN
  RETURN CASE WHEN n=0 THEN 'unchanged' WHEN p_accepted THEN 'accepted' ELSE 'released' END;
 END $f$;
 
--- One bounce, spam complaint or unsubscribe for a business's own stream, keyed by Postmark's event id: 'recorded' the
--- first time, 'exists' on every replay. Only a business with a connection row is counted.
+-- One bounce, spam complaint or unsubscribe for a business's own stream, under one key per Postmark event: 'recorded'
+-- the first time, 'exists' on every replay (whatever kind the replay is read as). Only a business with a connection row
+-- is counted ('ignored' otherwise).
 CREATE FUNCTION app_private.email_counter_record(p_workspace uuid,p_kind text,p_key text,p_at timestamptz) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  IF p_kind IS NULL OR p_kind NOT IN('hard_bounce','soft_bounce','complaint','unsubscribe') OR p_key IS NULL OR p_key!~'^[!-~]{1,200}$' OR p_key~'@'
-  OR p_at IS NULL OR p_at>statement_timestamp()+interval '1 day' THEN RAISE EXCEPTION 'Invalid email counter' USING ERRCODE='22023'; END IF;
+  OR p_key ~ '^(lease|test):' OR p_at IS NULL OR p_at>statement_timestamp()+interval '1 day' THEN RAISE EXCEPTION 'Invalid email counter' USING ERRCODE='22023'; END IF;
  IF NOT EXISTS(SELECT 1 FROM app_private.email_connections x WHERE x.workspace_id=p_workspace) THEN RETURN 'ignored'; END IF;
  INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,state,occurred_at) VALUES(p_workspace,p_kind,p_key,'fact',least(p_at,clock_timestamp()))
- ON CONFLICT(workspace_id,kind,event_key) DO NOTHING;
+ ON CONFLICT(workspace_id,event_key) DO NOTHING;
  RETURN CASE WHEN FOUND THEN 'recorded' ELSE 'exists' END;
 END $f$;
 
--- What the sender reads at the start of every sweep (no portal session): the connection in charge of this business's
--- marketing email, its sealed server token (opened in the application), the footer, the test list and the holds.
+-- Removes counter rows that can no longer change any decision: older than 180 days AND older than the business's 50th
+-- most recent live send. The longest window any line reads is 30 days (the step and the sample are bounded to it too),
+-- and the "last 50" line reads back to the 50th live send, so nothing a line reads is ever removed. At most 10,000 rows a
+-- call. Answers how many were removed.
+CREATE FUNCTION app_private.email_send_events_prune(p_workspace uuid) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE v_now timestamptz:=clock_timestamp(); v_keep timestamptz; n integer;
+BEGIN
+ IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
+ SELECT e.occurred_at INTO v_keep FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
+  AND e.state IN('reserved','accepted') ORDER BY e.occurred_at DESC OFFSET 49 LIMIT 1;
+ IF v_keep IS NULL THEN RETURN 0; END IF;
+ DELETE FROM app_private.email_send_events WHERE id IN(SELECT e.id FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace
+  AND e.occurred_at<least(v_now-interval '180 days',v_keep) LIMIT 10000);
+ GET DIAGNOSTICS n=ROW_COUNT;
+ RETURN n;
+END $f$;
+
+-- What the sender reads at the start of every sweep (no portal session): the connection, its sealed server token
+-- (opened in the application), the footer, the test list (or its default), whether the founder approved the domain in
+-- use and a test was accepted since the last verification, and the holds.
 CREATE FUNCTION app_private.email_sending_config(p_workspace uuid) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; a app_private.email_account_protection%ROWTYPE;
+DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; a app_private.email_account_protection%ROWTYPE; v_now timestamptz:=clock_timestamp();
+ v_day integer; v_hour integer;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  SELECT * INTO c FROM app_private.email_connections x WHERE x.workspace_id=p_workspace;
  IF NOT FOUND THEN RETURN NULL; END IF;
  SELECT * INTO s FROM app_private.email_sending_controls x WHERE x.workspace_id=p_workspace;
  SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
+ SELECT count(*),count(*) FILTER (WHERE e.occurred_at>v_now-interval '60 minutes') INTO v_day,v_hour FROM app_private.email_send_events e
+  WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>v_now-interval '24 hours';
  RETURN jsonb_build_object('workspaceId',c.workspace_id,'status',c.status,'mode',c.mode,'serverId',c.postmark_server_id,'stream',coalesce(c.broadcast_stream,'broadcast'),
   'sealedServerToken',c.sealed_server_token,'fromName',c.from_name,'fromAddress',c.from_address,'replyTo',c.reply_to,
   'businessName',s.business_name,'postalAddress',s.postal_address,
   'testRecipients',to_jsonb(CASE WHEN cardinality(c.test_recipients)>0 THEN c.test_recipients
    ELSE array_remove(ARRAY[app_private.email_sending_user_email(c.terms_accepted_by)],NULL) END),
-  'protectionState',c.protection_state,'ownerPaused',s.owner_paused_at IS NOT NULL,'sampleState',coalesce(s.sample_state,'none'),
+  'protectionState',c.protection_state,'protectionReason',c.protection_reason,'ownerPaused',s.owner_paused_at IS NOT NULL,'sampleState',coalesce(s.sample_state,'none'),
   'dailyCap',c.daily_cap,'hourlyCap',c.hourly_cap,'accountHeld',coalesce(a.state,'ok')='held',
-  'goLiveRequestedAt',s.go_live_requested_at,'goLiveApprovedAt',c.go_live_approved_at,
+  'goLiveRequestedAt',CASE WHEN s.go_live_requested_at>coalesce(c.go_live_approved_at,'-infinity'::timestamptz) THEN s.go_live_requested_at END,
+  'goLiveApprovedAt',c.go_live_approved_at,'approvedCurrent',c.go_live_approved_at IS NOT NULL AND s.approved_domain IS NOT DISTINCT FROM c.domain,
+  'testCurrent',s.test_passed_at IS NOT NULL AND c.verified_at IS NOT NULL AND s.test_passed_at>=c.verified_at,
   'lastStep',(SELECT p.numbers||jsonb_build_object('kind',p.kind,'at',p.occurred_at) FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace
    AND p.kind IN('slowed','paused','switched_off','sample_held','recovered','lifted','reinstated','sample_released','sample_passed') ORDER BY p.occurred_at DESC,p.id DESC LIMIT 1),
-  'liveDay',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
-   AND e.state IN('reserved','accepted') AND e.occurred_at>clock_timestamp()-interval '24 hours'),
-  'liveHour',(SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
-   AND e.state IN('reserved','accepted') AND e.occurred_at>clock_timestamp()-interval '60 minutes'));
+  'liveDay',v_day,'liveHour',v_hour);
 END $f$;
 
--- The counts of every business, and the account row, for the evaluator and the account trip-wire.
+-- The counts of every business, and the account row with its live totals, for the evaluator and the trip-wire.
 CREATE FUNCTION app_private.email_protection_numbers() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE a app_private.email_account_protection%ROWTYPE;
+DECLARE a app_private.email_account_protection%ROWTYPE; v_now timestamptz:=clock_timestamp(); w7 timestamptz; w30 timestamptz;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
- RETURN jsonb_build_object('account',jsonb_build_object('state',a.state,'reason',a.reason,'since',a.since,'countedSince',a.counted_since,'rowVersion',a.row_version,
-   'sends7',(SELECT count(*) FROM app_private.email_send_events e WHERE e.kind='send' AND e.state IN('reserved','accepted')
-     AND e.occurred_at>=greatest(clock_timestamp()-interval '7 days',coalesce(a.counted_since,'-infinity'))),
-   'bounces7',(SELECT count(*) FROM app_private.email_send_events e WHERE e.kind IN('hard_bounce','soft_bounce')
-     AND e.occurred_at>=greatest(clock_timestamp()-interval '7 days',coalesce(a.counted_since,'-infinity'))),
-   'sends30',(SELECT count(*) FROM app_private.email_send_events e WHERE e.kind='send' AND e.state IN('reserved','accepted')
-     AND e.occurred_at>=greatest(clock_timestamp()-interval '30 days',coalesce(a.counted_since,'-infinity'))),
-   'complaints30',(SELECT count(*) FROM app_private.email_send_events e WHERE e.kind='complaint'
-     AND e.occurred_at>=greatest(clock_timestamp()-interval '30 days',coalesce(a.counted_since,'-infinity')))),
+ w7:=greatest(v_now-interval '7 days',coalesce(a.counted_since,'-infinity')); w30:=greatest(v_now-interval '30 days',coalesce(a.counted_since,'-infinity'));
+ RETURN jsonb_build_object('account',(SELECT jsonb_build_object('state',a.state,'reason',a.reason,'since',a.since,'countedSince',a.counted_since,'rowVersion',a.row_version,
+   'sends7',coalesce(sum(t.sends7),0),'bounces7',coalesce(sum(t.bounces7),0),'sends30',coalesce(sum(t.sends30),0),'complaints30',coalesce(sum(t.complaints30),0))
+   FROM app_private.email_connections c CROSS JOIN LATERAL (SELECT
+    (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=c.workspace_id AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=w7) AS sends7,
+    (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=c.workspace_id AND e.kind IN('hard_bounce','soft_bounce') AND e.occurred_at>=w7) AS bounces7,
+    (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=c.workspace_id AND e.kind='send' AND e.purpose='live' AND e.state IN('reserved','accepted') AND e.occurred_at>=w30) AS sends30,
+    (SELECT count(*) FROM app_private.email_send_events e WHERE e.workspace_id=c.workspace_id AND e.kind='complaint' AND e.occurred_at>=w30) AS complaints30) t),
   'businesses',coalesce((SELECT jsonb_agg(app_private.email_protection_counts(c.workspace_id)||jsonb_build_object('businessName',s.business_name) ORDER BY c.workspace_id)
    FROM app_private.email_connections c LEFT JOIN app_private.email_sending_controls s ON s.workspace_id=c.workspace_id),'[]'::jsonb));
 END $f$;
@@ -447,21 +520,22 @@ END $f$;
 -- One automatic protection step (the evaluator, on every relevant event and on a timer). Compare-and-set on the state
 -- the evaluator read (p_from): another instance that got there first makes this 'stale'. A system step may only move
 -- UP the ladder or recover slowed -> ok; p_cause 'own' (the business's own numbers) or 'account' (the trip-wire). A
--- second OWN pause within 90 days becomes 'off' here. Also stores the caps, the warm-up step and the sample verdict.
+-- second OWN pause (or switch-off) within 90 days becomes 'off' here. The caps must be the ramp's for the step and the
+-- state; a step may only move up one, once its days are over; a sample passes only 2 hours after its 50th email.
 -- Answers the state now in force, 'unchanged', 'stale' or 'refused'.
 CREATE FUNCTION app_private.email_protection_apply(p_workspace uuid,p_from text,p_to text,p_kind text,p_cause text,p_reason text,p_numbers jsonb,
  p_daily integer,p_hourly integer,p_step integer,p_step_at timestamptz,p_sample text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; v_to text:=p_to; v_kind text:=p_kind; v_prior timestamptz;
- v_numbers jsonb:=coalesce(p_numbers,'{}'::jsonb);
+ v_numbers jsonb:=coalesce(p_numbers,'{}'::jsonb); v_now timestamptz; v_step integer; v_due boolean; v_daily integer; v_hourly integer;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  IF p_from IS NULL OR p_to IS NULL OR p_from NOT IN('ok','slowed','paused','off') OR p_to NOT IN('ok','slowed','paused','off')
   OR (p_cause IS NOT NULL AND p_cause NOT IN('own','account')) OR (p_kind IS NOT NULL AND p_kind!~'^[a-z][a-z0-9_]{0,39}$')
-  OR p_daily IS NULL OR p_hourly IS NULL OR p_daily<0 OR p_hourly<0 OR p_daily>100000 OR p_hourly>p_daily+1
-  OR (p_step IS NOT NULL AND p_step NOT BETWEEN 0 AND 5) OR (p_sample IS NOT NULL AND p_sample NOT IN('passed','held'))
+  OR p_daily IS NULL OR p_hourly IS NULL OR (p_step IS NOT NULL AND p_step NOT BETWEEN 0 AND 5) OR (p_sample IS NOT NULL AND p_sample NOT IN('passed','held'))
   OR jsonb_typeof(v_numbers)<>'object' THEN RAISE EXCEPTION 'Invalid protection step' USING ERRCODE='22023'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('email-sending:'||p_workspace::text,156));
+ v_now:=clock_timestamp();
  SELECT * INTO c FROM app_private.email_connections x WHERE x.workspace_id=p_workspace FOR UPDATE;
  IF NOT FOUND THEN RETURN 'refused'; END IF;
  IF c.protection_state<>p_from THEN RETURN 'stale'; END IF;
@@ -470,22 +544,30 @@ BEGIN
  s:=app_private.email_sending_controls_row(p_workspace);
  IF p_sample='held' AND s.sample_state NOT IN('sending','waiting') THEN RETURN 'stale'; END IF;
  IF p_sample='passed' AND s.sample_state<>'waiting' THEN RETURN 'stale'; END IF;
+ IF p_sample='passed' AND (s.sample_full_at IS NULL OR s.sample_full_at>v_now-interval '2 hours') THEN RETURN 'refused'; END IF;
+ -- The warm-up: the same step (restarted once its days are over), or one up once its days are over.
+ v_due:=s.warmup_step_at IS NULL OR (s.warmup_step<5 AND s.warmup_step_at+make_interval(days=>app_private.email_protection_step_days(s.warmup_step))<=v_now);
+ IF p_step IS NOT NULL AND NOT ((p_step=s.warmup_step OR p_step=s.warmup_step+1) AND v_due) THEN RETURN 'refused'; END IF;
+ v_step:=coalesce(p_step,s.warmup_step);
+ v_daily:=CASE WHEN v_to='slowed' THEN greatest(1,app_private.email_protection_ramp(v_step)/2) ELSE app_private.email_protection_ramp(v_step) END;
+ v_hourly:=ceil(v_daily/4.0);
+ IF v_to IN('ok','slowed') AND (p_daily<>v_daily OR p_hourly<>v_hourly) THEN RETURN 'refused'; END IF;
  IF v_to='paused' AND p_from<>'paused' AND coalesce(p_cause,'own')='own' THEN
-  SELECT max(p.occurred_at) INTO v_prior FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind='paused'
-   AND p.numbers->>'cause'='own' AND p.occurred_at>clock_timestamp()-interval '90 days';
+  SELECT max(p.occurred_at) INTO v_prior FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind IN('paused','switched_off')
+   AND p.numbers->>'cause'='own' AND p.occurred_at>v_now-interval '90 days';
   IF v_prior IS NOT NULL THEN v_to:='off'; v_kind:='switched_off'; v_numbers:=v_numbers||jsonb_build_object('previousPauseAt',v_prior); END IF;
  END IF;
  UPDATE app_private.email_connections SET protection_state=v_to,
   protection_reason=CASE WHEN v_to=p_from THEN c.protection_reason WHEN v_to='ok' THEN NULL ELSE left(coalesce(nullif(p_reason,''),c.protection_reason),300) END,
-  protection_since=CASE WHEN v_to=p_from THEN c.protection_since WHEN v_to='ok' THEN NULL ELSE clock_timestamp() END,
-  daily_cap=CASE WHEN v_to IN('paused','off') THEN 0 ELSE p_daily END,hourly_cap=CASE WHEN v_to IN('paused','off') THEN 0 ELSE p_hourly END,
-  row_version=c.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
- UPDATE app_private.email_sending_controls SET warmup_step=coalesce(p_step,s.warmup_step),warmup_step_at=coalesce(p_step_at,s.warmup_step_at),
-  sample_state=coalesce(p_sample,s.sample_state),row_version=s.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
+  protection_since=CASE WHEN v_to=p_from THEN c.protection_since WHEN v_to='ok' THEN NULL ELSE v_now END,
+  daily_cap=CASE WHEN v_to IN('paused','off') THEN 0 ELSE v_daily END,hourly_cap=CASE WHEN v_to IN('paused','off') THEN 0 ELSE v_hourly END,
+  row_version=c.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
+ UPDATE app_private.email_sending_controls SET warmup_step=v_step,warmup_step_at=CASE WHEN p_step IS NOT NULL THEN v_now ELSE s.warmup_step_at END,
+  sample_state=coalesce(p_sample,s.sample_state),row_version=s.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
  IF v_kind IS NOT NULL THEN
   v_numbers:=v_numbers||jsonb_build_object('cause',coalesce(p_cause,'own'),'from',p_from,'to',v_to);
   PERFORM app_private.email_protection_note(p_workspace,v_kind,v_numbers,NULL,
-   v_kind IN('slowed','paused','switched_off','sample_held'),v_kind IN('paused','switched_off'));
+   v_kind IN('slowed','paused','switched_off','sample_held'),v_kind IN('paused','switched_off','sample_held'));
  END IF;
  RETURN CASE WHEN v_to=p_from AND v_kind IS NULL THEN 'unchanged' ELSE v_to END;
 END $f$;
@@ -505,14 +587,16 @@ BEGIN
  RETURN 'held';
 END $f$;
 
--- The owner's own commands. p_action: 'test' or 'live' (the mode), 'pause' or 'resume' (the owner's own pause, which
--- never lifts a protection pause). For 'live' the first time, every condition is checked and the founder is asked:
--- answers 'requested' (or 'already_requested'); once the founder has approved, 'live'. Other answers say what is
--- missing: 'not_connected', 'switched_off', 'paused', 'needs_webhook', 'needs_terms', 'needs_footer', 'needs_test'.
--- p_webhook_ok is the application's own fresh check with Postmark that the bounce webhook is there and verified.
+-- The owner's own commands. p_action: 'test' (start testing, or back to testing: only the test list gets emails; the
+-- stored connection is then in charge of this business's follow-up email), 'live', 'pause' or 'resume' (the owner's own
+-- pause, which never lifts a protection pause). 'live' needs a founder approval for the domain in use: the first time,
+-- and again after a change of domain, every condition is checked and the founder is asked ('requested', or
+-- 'already_requested'). Other answers say what is missing: 'not_connected', 'switched_off', 'paused', 'needs_webhook',
+-- 'needs_terms', 'needs_footer', 'needs_test'. p_webhook_ok is the application's own fresh check with Postmark that the
+-- bounce webhook is there and verified.
 CREATE FUNCTION app_private.email_sending_command(p_session bytea,p_workspace uuid,p_action text,p_terms text,p_webhook_ok boolean) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE actor uuid; c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE;
+DECLARE actor uuid; c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; v_approved boolean;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  actor:=app_private.email_connection_owner(p_session,p_workspace);
@@ -539,17 +623,18 @@ BEGIN
   PERFORM app_private.email_protection_note(p_workspace,'mode_test','{}'::jsonb,actor,false,false);
   RETURN 'test';
  END IF;
- IF c.mode='live' THEN RETURN 'unchanged'; END IF;
+ v_approved:=c.go_live_approved_at IS NOT NULL AND s.approved_domain IS NOT DISTINCT FROM c.domain;
+ IF c.mode='live' AND v_approved AND s.test_passed_at>=c.verified_at THEN RETURN 'unchanged'; END IF;
  IF c.protection_state='paused' THEN RETURN 'paused'; END IF;
  IF p_webhook_ok IS NOT TRUE OR c.webhook_id IS NULL THEN RETURN 'needs_webhook'; END IF;
  IF p_terms IS NULL OR c.terms_version IS DISTINCT FROM p_terms THEN RETURN 'needs_terms'; END IF;
  IF s.business_name IS NULL OR s.postal_address IS NULL THEN RETURN 'needs_footer'; END IF;
- IF s.test_passed_at IS NULL OR s.test_passed_at<c.verified_at THEN RETURN 'needs_test'; END IF;
- IF c.go_live_approved_at IS NULL THEN
-  IF s.go_live_requested_at IS NOT NULL THEN RETURN 'already_requested'; END IF;
+ IF s.test_passed_at IS NULL OR c.verified_at IS NULL OR s.test_passed_at<c.verified_at THEN RETURN 'needs_test'; END IF;
+ IF NOT v_approved THEN
+  IF s.go_live_requested_at>coalesce(c.go_live_approved_at,'-infinity'::timestamptz) THEN RETURN 'already_requested'; END IF;
   UPDATE app_private.email_sending_controls SET go_live_requested_at=clock_timestamp(),go_live_requested_by=actor,row_version=s.row_version+1,updated_at=clock_timestamp()
   WHERE workspace_id=p_workspace;
-  PERFORM app_private.email_protection_note(p_workspace,'go_live_requested','{}'::jsonb,actor,false,true);
+  PERFORM app_private.email_protection_note(p_workspace,'go_live_requested',jsonb_build_object('newDomain',c.go_live_approved_at IS NOT NULL),actor,false,true);
   RETURN 'requested';
  END IF;
  UPDATE app_private.email_connections SET mode='live',row_version=c.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
@@ -563,10 +648,11 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  PERFORM app_private.email_connection_owner(p_session,p_workspace);
+ IF p_key IS NULL OR p_key!~'^test:' THEN RAISE EXCEPTION 'Invalid test' USING ERRCODE='22023'; END IF;
  RETURN app_private.email_send_reserve(p_workspace,p_key,'test');
 END $f$;
 
--- The result of "Send a test to me": accepted by Postmark (the test counts as passed), or released.
+-- The result of "Send a test to me": accepted by Postmark for sending (the test counts as passed), or released.
 CREATE FUNCTION app_private.email_sending_test_result(p_session bytea,p_workspace uuid,p_key text,p_accepted boolean) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; s app_private.email_sending_controls%ROWTYPE; outcome text;
@@ -584,8 +670,31 @@ BEGIN
  RETURN outcome;
 END $f$;
 
--- The founder's read: every business that has a connection, with its state, the numbers of its last protection step
--- and whether it waits for approval, and the account row. Refuses anyone the founder check does not accept.
+-- The same picture without a session, for the signed Group HQ read (it authenticates the founder itself) and the
+-- founder's page: every business with a connection, its state, the numbers of its last protection step, whether it
+-- waits for approval, the account row, and the alert emails given up on in the last 30 days (so none is lost).
+CREATE FUNCTION app_private.email_protection_status() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE a app_private.email_account_protection%ROWTYPE;
+BEGIN
+ IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
+ SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
+ RETURN jsonb_build_object('account',jsonb_build_object('state',a.state,'reason',a.reason,'since',a.since,'rowVersion',a.row_version,
+   'numbers',(SELECT e.numbers FROM app_private.email_account_events e WHERE e.kind='account_held' ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1)),
+  'undelivered',coalesce((SELECT jsonb_agg(jsonb_build_object('workspaceId',x.workspace_id,'audience',x.audience,'kind',x.kind,'at',x.created_at) ORDER BY x.created_at DESC)
+   FROM (SELECT * FROM app_private.email_protection_alerts y WHERE y.given_up_at IS NOT NULL AND y.created_at>clock_timestamp()-interval '30 days' ORDER BY y.created_at DESC LIMIT 20) x),'[]'::jsonb),
+  'businesses',coalesce((SELECT jsonb_agg(jsonb_build_object('workspaceId',c.workspace_id,'businessName',coalesce(s.business_name,c.from_name),'status',c.status,'mode',c.mode,
+    'state',c.protection_state,'reason',c.protection_reason,'since',c.protection_since,'rowVersion',c.row_version,
+    'goLiveRequestedAt',CASE WHEN s.go_live_requested_at>coalesce(c.go_live_approved_at,'-infinity'::timestamptz) THEN s.go_live_requested_at END,
+    'goLiveApprovedAt',c.go_live_approved_at,'sampleState',coalesce(s.sample_state,'none'),
+    'counts',app_private.email_protection_counts(c.workspace_id),
+    'lastStep',(SELECT p.numbers||jsonb_build_object('kind',p.kind,'at',p.occurred_at) FROM app_private.email_protection_events p WHERE p.workspace_id=c.workspace_id
+      AND p.kind IN('slowed','paused','switched_off','sample_held','recovered','lifted','reinstated','sample_released') ORDER BY p.occurred_at DESC,p.id DESC LIMIT 1))
+    ORDER BY c.workspace_id)
+   FROM app_private.email_connections c LEFT JOIN app_private.email_sending_controls s ON s.workspace_id=c.workspace_id),'[]'::jsonb));
+END $f$;
+
+-- The founder's read. Refuses anyone the founder check does not accept.
 CREATE FUNCTION app_private.email_protection_founder_view(p_session bytea) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid;
@@ -596,35 +705,17 @@ BEGIN
  RETURN app_private.email_protection_status();
 END $f$;
 
--- The same picture without a session, for the signed Group HQ read (it authenticates the founder itself).
-CREATE FUNCTION app_private.email_protection_status() RETURNS jsonb
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE a app_private.email_account_protection%ROWTYPE;
-BEGIN
- IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
- SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id;
- RETURN jsonb_build_object('account',jsonb_build_object('state',a.state,'reason',a.reason,'since',a.since,'rowVersion',a.row_version,
-   'numbers',(SELECT e.numbers FROM app_private.email_account_events e WHERE e.kind='account_held' ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1)),
-  'businesses',coalesce((SELECT jsonb_agg(jsonb_build_object('workspaceId',c.workspace_id,'businessName',coalesce(s.business_name,c.from_name),'status',c.status,'mode',c.mode,
-    'state',c.protection_state,'reason',c.protection_reason,'since',c.protection_since,'rowVersion',c.row_version,
-    'goLiveRequestedAt',s.go_live_requested_at,'goLiveApprovedAt',c.go_live_approved_at,'sampleState',coalesce(s.sample_state,'none'),
-    'counts',app_private.email_protection_counts(c.workspace_id),
-    'lastStep',(SELECT p.numbers||jsonb_build_object('kind',p.kind,'at',p.occurred_at) FROM app_private.email_protection_events p WHERE p.workspace_id=c.workspace_id
-      AND p.kind IN('slowed','paused','switched_off','sample_held','recovered','lifted','reinstated','sample_released') ORDER BY p.occurred_at DESC,p.id DESC LIMIT 1))
-    ORDER BY c.workspace_id)
-   FROM app_private.email_connections c LEFT JOIN app_private.email_sending_controls s ON s.workspace_id=c.workspace_id),'[]'::jsonb));
-END $f$;
-
--- The founder's buttons, each recorded with who pressed it. p_action: 'approve' (a first go-live the owner asked for:
--- every condition was checked when it was asked; the connection must still be verified and not paused or off),
--- 'lift' (a pause), 'reinstate' (a business that was switched off), 'release_sample' (a held sample), 'lift_account'
--- (the account hold; p_workspace NULL). p_version is the row version the founder was shown (a stale page changes
--- nothing). A lift or reinstate starts a new sample and only counts what happens from now on; the business restarts
--- slowed and recovers by itself. Answers 'done', 'stale' or 'not_needed'.
+-- The founder's buttons, each recorded with who pressed it. p_action: 'approve' (a go-live the owner asked for, for the
+-- domain in use: the connection must still be verified, not paused or off, with the footer and a test accepted since
+-- the last verification; a new domain restarts the warm-up at its first step), 'lift' (a pause), 'reinstate' (a
+-- business that was switched off), 'release_sample' (a held sample), 'lift_account' (the account hold; p_workspace
+-- NULL). p_version is the row version the founder was shown (a stale page changes nothing). A lift or reinstate starts a
+-- new sample and only counts what happens from now on; the business restarts slowed and recovers by itself. Answers
+-- 'done', 'stale' or 'not_needed'.
 CREATE FUNCTION app_private.email_protection_founder_act(p_session bytea,p_workspace uuid,p_action text,p_version bigint) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; a app_private.email_account_protection%ROWTYPE;
- counts jsonb;
+ counts jsonb; v_new boolean; v_now timestamptz:=clock_timestamp();
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  actor:=app_private.email_protection_founder(p_session);
@@ -635,7 +726,7 @@ BEGIN
   SELECT * INTO a FROM app_private.email_account_protection x WHERE x.id FOR UPDATE;
   IF a.row_version<>p_version THEN RETURN 'stale'; END IF;
   IF a.state<>'held' THEN RETURN 'not_needed'; END IF;
-  UPDATE app_private.email_account_protection SET state='ok',reason=NULL,since=NULL,counted_since=clock_timestamp(),row_version=a.row_version+1,updated_at=clock_timestamp() WHERE id;
+  UPDATE app_private.email_account_protection SET state='ok',reason=NULL,since=NULL,counted_since=v_now,row_version=a.row_version+1,updated_at=v_now WHERE id;
   INSERT INTO app_private.email_account_events(kind,numbers,actor_kind,actor_user_id) VALUES('account_lifted','{}'::jsonb,'user',actor);
   RETURN 'done';
  END IF;
@@ -646,29 +737,35 @@ BEGIN
  s:=app_private.email_sending_controls_row(p_workspace);
  counts:=app_private.email_protection_counts(p_workspace);
  IF p_action='approve' THEN
-  IF c.go_live_approved_at IS NOT NULL OR s.go_live_requested_at IS NULL THEN RETURN 'not_needed'; END IF;
-  IF c.status<>'verified' OR c.protection_state IN('paused','off') THEN RETURN 'stale'; END IF;
-  UPDATE app_private.email_connections SET go_live_approved_by=actor,go_live_approved_at=clock_timestamp(),mode='live',
-   warmup_started_at=coalesce(c.warmup_started_at,clock_timestamp()),daily_cap=50,hourly_cap=13,row_version=c.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
-  UPDATE app_private.email_sending_controls SET warmup_step=0,warmup_step_at=clock_timestamp(),sample_state='sending',sample_started_at=clock_timestamp(),sample_full_at=NULL,
-   row_version=s.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
-  PERFORM app_private.email_protection_note(p_workspace,'go_live_approved',jsonb_build_object('dailyCap',50,'hourlyCap',13),actor,true,false);
+  IF s.go_live_requested_at IS NULL OR s.go_live_requested_at<=coalesce(c.go_live_approved_at,'-infinity'::timestamptz) THEN RETURN 'not_needed'; END IF;
+  IF c.status<>'verified' OR c.protection_state IN('paused','off') OR s.business_name IS NULL OR s.postal_address IS NULL
+   OR s.test_passed_at IS NULL OR c.verified_at IS NULL OR s.test_passed_at<c.verified_at THEN RETURN 'stale'; END IF;
+  v_new:=s.approved_domain IS DISTINCT FROM c.domain;
+  UPDATE app_private.email_connections SET go_live_approved_by=actor,go_live_approved_at=v_now,mode='live',
+   warmup_started_at=CASE WHEN v_new THEN v_now ELSE coalesce(c.warmup_started_at,v_now) END,
+   daily_cap=CASE WHEN v_new THEN 50 ELSE c.daily_cap END,hourly_cap=CASE WHEN v_new THEN 13 ELSE c.hourly_cap END,
+   row_version=c.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
+  UPDATE app_private.email_sending_controls SET approved_domain=c.domain,warmup_step=CASE WHEN v_new THEN 0 ELSE s.warmup_step END,
+   warmup_step_at=CASE WHEN v_new THEN v_now ELSE coalesce(s.warmup_step_at,v_now) END,
+   sample_state=CASE WHEN s.sample_state='held' THEN 'held' ELSE 'sending' END,sample_started_at=v_now,sample_full_at=NULL,
+   row_version=s.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
+  PERFORM app_private.email_protection_note(p_workspace,'go_live_approved',jsonb_build_object('newDomain',v_new,'warmupStep',CASE WHEN v_new THEN 0 ELSE s.warmup_step END),actor,true,false);
   RETURN 'done';
  ELSIF p_action IN('lift','reinstate') THEN
   IF c.protection_state<>(CASE p_action WHEN 'lift' THEN 'paused' ELSE 'off' END) THEN RETURN 'not_needed'; END IF;
   UPDATE app_private.email_connections SET protection_state='slowed',protection_reason=CASE p_action WHEN 'lift' THEN 'Restarted after a pause.' ELSE 'Switched back on after a review.' END,
-   protection_since=clock_timestamp(),row_version=c.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
-  UPDATE app_private.email_sending_controls SET counted_since=clock_timestamp(),warmup_step_at=clock_timestamp(),sample_state='sending',sample_started_at=clock_timestamp(),sample_full_at=NULL,
-   row_version=s.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
+   protection_since=v_now,daily_cap=greatest(1,app_private.email_protection_ramp(s.warmup_step)/2),hourly_cap=ceil(greatest(1,app_private.email_protection_ramp(s.warmup_step)/2)/4.0),
+   row_version=c.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
+  UPDATE app_private.email_sending_controls SET counted_since=v_now,warmup_step_at=v_now,sample_state='sending',sample_started_at=v_now,sample_full_at=NULL,
+   row_version=s.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
   PERFORM app_private.email_protection_note(p_workspace,CASE p_action WHEN 'lift' THEN 'lifted' ELSE 'reinstated' END,
-   coalesce(counts,'{}'::jsonb)-'workspaceId'-'status'-'mode'-'reason'-'now'-'since'-'countedSince'-'warmupStartedAt'-'goLiveApprovedAt'-'warmupStepAt'-'sampleStartedAt'-'sampleFullAt'-'ownerPausedAt'
-    ||jsonb_build_object('previousState',c.protection_state),actor,true,false);
+   jsonb_build_object('previousState',c.protection_state,'sends7',counts->'sends7','hard7',counts->'hard7','soft7',counts->'soft7','complaints30',counts->'complaints30'),actor,true,false);
   RETURN 'done';
  ELSE
   IF s.sample_state<>'held' THEN RETURN 'not_needed'; END IF;
-  UPDATE app_private.email_sending_controls SET sample_state='sending',sample_started_at=clock_timestamp(),sample_full_at=NULL,row_version=s.row_version+1,updated_at=clock_timestamp()
+  UPDATE app_private.email_sending_controls SET sample_state='sending',sample_started_at=v_now,sample_full_at=NULL,row_version=s.row_version+1,updated_at=v_now
   WHERE workspace_id=p_workspace;
-  UPDATE app_private.email_connections SET row_version=c.row_version+1,updated_at=clock_timestamp() WHERE workspace_id=p_workspace;
+  UPDATE app_private.email_connections SET row_version=c.row_version+1,updated_at=v_now WHERE workspace_id=p_workspace;
   PERFORM app_private.email_protection_note(p_workspace,'sample_released','{}'::jsonb,actor,true,false);
   RETURN 'done';
  END IF;
@@ -708,7 +805,8 @@ BEGIN
  RETURN 'retry';
 END $f$;
 
-REVOKE ALL ON FUNCTION app_private.email_sending_controls_row(uuid),
+REVOKE ALL ON FUNCTION app_private.email_protection_ramp(integer),app_private.email_protection_step_days(integer),
+ app_private.email_sending_controls_row(uuid),
  app_private.email_protection_note(uuid,text,jsonb,uuid,boolean,boolean),
  app_private.email_protection_counts(uuid),
  app_private.email_sending_state(bytea,uuid),
@@ -716,6 +814,7 @@ REVOKE ALL ON FUNCTION app_private.email_sending_controls_row(uuid),
  app_private.email_send_reserve(uuid,text,text),
  app_private.email_send_settle(uuid,text,boolean),
  app_private.email_counter_record(uuid,text,text,timestamptz),
+ app_private.email_send_events_prune(uuid),
  app_private.email_sending_config(uuid),
  app_private.email_protection_numbers(),
  app_private.email_protection_apply(uuid,text,text,text,text,text,jsonb,integer,integer,integer,timestamptz,text),
@@ -723,8 +822,8 @@ REVOKE ALL ON FUNCTION app_private.email_sending_controls_row(uuid),
  app_private.email_sending_command(bytea,uuid,text,text,boolean),
  app_private.email_sending_test_reserve(bytea,uuid,text),
  app_private.email_sending_test_result(bytea,uuid,text,boolean),
- app_private.email_protection_founder_view(bytea),
  app_private.email_protection_status(),
+ app_private.email_protection_founder_view(bytea),
  app_private.email_protection_founder_act(bytea,uuid,text,bigint),
  app_private.email_protection_alerts_claim(integer),
  app_private.email_protection_alert_done(uuid,boolean) FROM PUBLIC;
@@ -733,6 +832,7 @@ GRANT EXECUTE ON FUNCTION app_private.email_sending_state(bytea,uuid),
  app_private.email_send_reserve(uuid,text,text),
  app_private.email_send_settle(uuid,text,boolean),
  app_private.email_counter_record(uuid,text,text,timestamptz),
+ app_private.email_send_events_prune(uuid),
  app_private.email_sending_config(uuid),
  app_private.email_protection_numbers(),
  app_private.email_protection_apply(uuid,text,text,text,text,text,jsonb,integer,integer,integer,timestamptz,text),
@@ -740,13 +840,45 @@ GRANT EXECUTE ON FUNCTION app_private.email_sending_state(bytea,uuid),
  app_private.email_sending_command(bytea,uuid,text,text,boolean),
  app_private.email_sending_test_reserve(bytea,uuid,text),
  app_private.email_sending_test_result(bytea,uuid,text,boolean),
- app_private.email_protection_founder_view(bytea),
  app_private.email_protection_status(),
+ app_private.email_protection_founder_view(bytea),
  app_private.email_protection_founder_act(bytea,uuid,text,bigint),
  app_private.email_protection_alerts_claim(integer),
  app_private.email_protection_alert_done(uuid,boolean) TO r72_identity_command;
 
 RESET ROLE;
+SET LOCAL ROLE r72_pp_followup_definer;
+
+-- A Property Predator follow-up run that is due but held (a protection hold, the owner's pause, the sample's wait, an
+-- account hold or a full cap) would fail as delivery_expired once its retry window ran out (0152's claim). While the
+-- sender is held, the window of every due, active run whose step is not handed off is restarted, as 0152's 'resume'
+-- does, but only once the oldest of them has waited 20 minutes (the shortest window is 1 hour), and in their order:
+-- each keeps its place in the queue, so when the hold lifts they go first-due first. A step already claimed and handed
+-- back ('deferred') moves its due and expiry times by the same amount. A step in flight, sent, failed, cancelled, held
+-- for recovery or with an unresolved hand-off is never touched. At most 5,000 runs a call. Answers how many moved.
+CREATE FUNCTION app_private.pp_followup_hold_wait() RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE v_now timestamptz:=clock_timestamp(); n integer;
+BEGIN
+ IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'PP follow-up boundary required' USING ERRCODE='42501'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM app_private.pp_followup_runs r WHERE r.state='active' AND r.due_at<v_now-interval '20 minutes') THEN RETURN 0; END IF;
+ WITH due AS (
+  SELECT r.id,r.due_at,r.current_send_id,row_number() OVER (ORDER BY r.due_at,r.id) AS rn,count(*) OVER () AS total
+  FROM app_private.pp_followup_runs r WHERE r.state='active' AND r.due_at<=v_now
+   AND (r.current_send_id IS NULL OR EXISTS(SELECT 1 FROM app_private.pp_followup_sends q WHERE q.id=r.current_send_id AND q.sent_at IS NULL AND q.failed_at IS NULL
+    AND q.cancelled_at IS NULL AND q.held_at IS NULL AND (q.lease_id IS NULL OR q.lease_until<=v_now)
+    AND NOT EXISTS(SELECT 1 FROM app_private.pp_followup_dispatch_proofs p WHERE p.send_id=q.id AND p.accepted IS NULL)))
+  ORDER BY r.due_at,r.id LIMIT 5000),
+ moved AS (SELECT d.id,d.current_send_id,greatest(d.due_at,v_now-(d.total-d.rn)*interval '1 millisecond')-d.due_at AS shift FROM due d),
+ sends AS (UPDATE app_private.pp_followup_sends q SET due_at=q.due_at+m.shift,expires_at=q.expires_at+m.shift FROM moved m WHERE q.id=m.current_send_id AND m.shift>interval '0' RETURNING q.id)
+ UPDATE app_private.pp_followup_runs r SET due_at=r.due_at+m.shift,updated_at=v_now FROM moved m WHERE r.id=m.id AND m.shift>interval '0';
+ GET DIAGNOSTICS n=ROW_COUNT;
+ RETURN n;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.pp_followup_hold_wait() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.pp_followup_hold_wait() TO r72_identity_command;
+
+RESET ROLE;
 SET LOCAL ROLE r72_owner;
-REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer,r72_pp_followup_definer;
 RESET ROLE;

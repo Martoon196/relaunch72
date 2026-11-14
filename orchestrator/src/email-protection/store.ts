@@ -24,8 +24,8 @@ export class EmailProtectionInvalidError extends Error {
   constructor() { super('Invalid input.'); }
 }
 
-export type ReserveOutcome = 'ok' | 'account_held' | 'off' | 'paused' | 'owner_paused' | 'not_live' | 'not_connected' | 'sample_wait' | 'sample_held'
-  | 'daily_cap' | 'hourly_cap' | 'test_limit';
+export type ReserveOutcome = 'ok' | 'replayed' | 'account_held' | 'off' | 'paused' | 'owner_paused' | 'not_live' | 'not_connected' | 'not_approved' | 'needs_test'
+  | 'sample_wait' | 'sample_held' | 'daily_cap' | 'hourly_cap' | 'test_limit';
 export type SendingCommand = 'test' | 'live' | 'pause' | 'resume';
 export type SendingCommandOutcome = 'test' | 'live' | 'paused' | 'resumed' | 'unchanged' | 'requested' | 'already_requested' | 'not_connected' | 'switched_off'
   | 'needs_webhook' | 'needs_terms' | 'needs_footer' | 'needs_test';
@@ -38,15 +38,26 @@ export interface SendingConfig {
   readonly workspaceId: string; readonly status: string; readonly mode: 'off' | 'test' | 'live'; readonly serverId: number | null; readonly stream: string;
   readonly sealedServerToken: string | null; readonly fromName: string | null; readonly fromAddress: string | null; readonly replyTo: string | null;
   readonly businessName: string | null; readonly postalAddress: string | null; readonly testRecipients: readonly string[];
-  readonly protectionState: ProtectionState; readonly ownerPaused: boolean; readonly sampleState: SampleState;
+  readonly protectionState: ProtectionState; readonly protectionReason: string | null; readonly ownerPaused: boolean; readonly sampleState: SampleState;
   readonly dailyCap: number; readonly hourlyCap: number; readonly accountHeld: boolean; readonly liveDay: number; readonly liveHour: number;
   readonly goLiveRequestedAt: string | null; readonly goLiveApprovedAt: string | null;
+  /** The founder approved a go-live for the domain now in use. */
+  readonly approvedCurrent: boolean;
+  /** A test was accepted for sending since the connection was last verified. */
+  readonly testCurrent: boolean;
   readonly lastStep: (Readonly<Record<string, unknown>> & { readonly kind: string; readonly at: string }) | null;
 }
 export interface SendingDay { readonly day: string; readonly sends: number; readonly hardBounces: number; readonly softBounces: number; readonly complaints: number; readonly unsubscribes: number }
 /** What the owner's page shows beyond 0155's state. */
 export interface SendingState {
-  readonly ownEmail: string | null; readonly businessName: string | null; readonly postalAddress: string | null; readonly testRecipients: readonly string[];
+  /** Who tests go to when no test list is saved: the owner who agreed to the email rules (the sweep uses the same). */
+  readonly defaultTestEmail: string | null;
+  /** How many owner sign-in addresses an alert email could go to. */
+  readonly ownerEmailCount: number;
+  readonly testCurrent: boolean; readonly approvedCurrent: boolean;
+  /** The latest alert email to the owner: 'sent', 'pending', 'given_up', or null (none). */
+  readonly lastOwnerAlert: 'sent' | 'pending' | 'given_up' | null;
+  readonly businessName: string | null; readonly postalAddress: string | null; readonly testRecipients: readonly string[];
   readonly testPassedAt: string | null; readonly ownerPausedAt: string | null; readonly goLiveRequestedAt: string | null; readonly goLiveApprovedAt: string | null;
   readonly sampleState: SampleState; readonly warmupStep: number; readonly accountHeld: boolean;
   readonly lastStep: (Readonly<Record<string, unknown>> & { readonly kind: string; readonly at: string }) | null;
@@ -59,6 +70,8 @@ export interface FounderBusiness {
   readonly lastStep: (Readonly<Record<string, unknown>> & { readonly kind: string; readonly at: string }) | null;
 }
 export interface ProtectionStatus {
+  /** Alert emails given up on in the last 30 days (shown on the founder's page so none is lost). */
+  readonly undelivered?: readonly { readonly workspaceId: string | null; readonly audience: 'owner' | 'founder'; readonly kind: string; readonly at: string }[];
   readonly account: { readonly state: 'ok' | 'held'; readonly reason: string | null; readonly since: string | null; readonly rowVersion: number; readonly numbers: Readonly<Record<string, unknown>> | null };
   readonly businesses: readonly FounderBusiness[];
 }
@@ -96,6 +109,10 @@ export interface EmailProtectionStore {
   /** No session: the signed Group HQ read. null when 0156 is not applied. */
   status(): Promise<ProtectionStatus | null>;
   claimAlerts(limit: number): Promise<readonly ClaimedAlert[]>;
+  /** Removes counter rows that can no longer change a decision (see the migration). */
+  prune(workspaceId: string): Promise<number>;
+  /** Restarts the retry window of due PP follow-up runs while sending is held (0156 pp_followup_hold_wait). */
+  holdWait(): Promise<number>;
   alertDone(id: string, sent: boolean): Promise<void>;
   /** Whether the database has 0156; never throws. */
   present(): Promise<boolean>;
@@ -125,6 +142,7 @@ export function readCounts(value: unknown): ProtectionCounts | null {
     complaints30: int(value.complaints30), unsubscribes30: int(value.unsubscribes30), last50Sends: int(value.last50Sends), hardLast50: int(value.hardLast50),
     liveDay: int(value.liveDay), liveHour: int(value.liveHour), sampleSends: int(value.sampleSends), sampleBounces: int(value.sampleBounces),
     sampleComplaints: int(value.sampleComplaints), stepSends: int(value.stepSends), stepBounces: int(value.stepBounces), stepComplaints: int(value.stepComplaints),
+    stepBusyDays: int(value.stepBusyDays), domain: str(value.domain),
   });
 }
 const lastStep = (value: unknown) => record(value) && typeof value.kind === 'string' && typeof value.at === 'string'
@@ -136,7 +154,8 @@ export function readSendingConfig(value: unknown): SendingConfig | null {
     serverId: int(value.serverId) || null, stream: typeof value.stream === 'string' && /^[a-z0-9-]{1,60}$/u.test(value.stream) ? value.stream : 'broadcast',
     sealedServerToken: str(value.sealedServerToken), fromName: str(value.fromName), fromAddress: str(value.fromAddress), replyTo: str(value.replyTo),
     businessName: str(value.businessName), postalAddress: str(value.postalAddress), testRecipients: strings(value.testRecipients),
-    protectionState: stateOf(value.protectionState), ownerPaused: value.ownerPaused === true, sampleState: sampleOf(value.sampleState),
+    protectionState: stateOf(value.protectionState), protectionReason: str(value.protectionReason), ownerPaused: value.ownerPaused === true, sampleState: sampleOf(value.sampleState),
+    approvedCurrent: value.approvedCurrent === true, testCurrent: value.testCurrent === true,
     dailyCap: int(value.dailyCap), hourlyCap: int(value.hourlyCap), accountHeld: value.accountHeld === true, liveDay: int(value.liveDay), liveHour: int(value.liveHour),
     goLiveRequestedAt: str(value.goLiveRequestedAt), goLiveApprovedAt: str(value.goLiveApprovedAt), lastStep: lastStep(value.lastStep) });
 }
@@ -145,6 +164,8 @@ function readStatus(value: unknown): ProtectionStatus {
   if (!record(value) || !record(value.account) || !Array.isArray(value.businesses)) throw new Error('Invalid protection status');
   const a = value.account;
   return Object.freeze({
+    undelivered: Object.freeze(Array.isArray(value.undelivered) ? value.undelivered.filter(record).map(u => Object.freeze({ workspaceId: str(u.workspaceId),
+      audience: u.audience === 'owner' ? 'owner' as const : 'founder' as const, kind: String(u.kind), at: String(u.at) })) : []),
     account: Object.freeze({ state: a.state === 'held' ? 'held' : 'ok', reason: str(a.reason), since: str(a.since), rowVersion: int(a.rowVersion), numbers: record(a.numbers) ? a.numbers : null }),
     businesses: Object.freeze(value.businesses.filter(record).map(b => Object.freeze({ workspaceId: String(b.workspaceId).toLowerCase(), businessName: str(b.businessName) ?? 'This business',
       status: String(b.status ?? ''), mode: modeOf(b.mode), state: stateOf(b.state), reason: str(b.reason), since: str(b.since), rowVersion: int(b.rowVersion),
@@ -226,7 +247,10 @@ export class PgEmailProtectionStore implements EmailProtectionStore {
   async state(sessionToken: string, workspaceId: string): Promise<SendingState> {
     const value = await this.call<unknown>('SELECT app_private.email_sending_state($1,$2) AS value', [hash(sessionToken), workspaceId]);
     if (!record(value)) throw new Error('Invalid sending state');
-    return Object.freeze({ ownEmail: str(value.ownEmail), businessName: str(value.businessName), postalAddress: str(value.postalAddress), testRecipients: strings(value.testRecipients),
+    return Object.freeze({ defaultTestEmail: str(value.defaultTestEmail), ownerEmailCount: int(value.ownerEmailCount), testCurrent: value.testCurrent === true,
+      approvedCurrent: value.approvedCurrent === true,
+      lastOwnerAlert: value.lastOwnerAlert === 'sent' || value.lastOwnerAlert === 'pending' || value.lastOwnerAlert === 'given_up' ? value.lastOwnerAlert : null,
+      businessName: str(value.businessName), postalAddress: str(value.postalAddress), testRecipients: strings(value.testRecipients),
       testPassedAt: str(value.testPassedAt), ownerPausedAt: str(value.ownerPausedAt), goLiveRequestedAt: str(value.goLiveRequestedAt), goLiveApprovedAt: str(value.goLiveApprovedAt),
       sampleState: sampleOf(value.sampleState), warmupStep: int(value.warmupStep), accountHeld: value.accountHeld === true, lastStep: lastStep(value.lastStep),
       counts: readCounts(value.counts), days: Array.isArray(value.days) ? value.days.filter(record).map(d => Object.freeze({ day: String(d.day), sends: int(d.sends),
@@ -259,6 +283,12 @@ export class PgEmailProtectionStore implements EmailProtectionStore {
     if (!Array.isArray(value)) return [];
     return value.filter(record).map(a => Object.freeze({ id: String(a.id), workspaceId: str(a.workspaceId), audience: a.audience === 'owner' ? 'owner' as const : 'founder' as const,
       kind: String(a.kind), numbers: record(a.numbers) ? a.numbers : {}, attempts: int(a.attempts), businessName: str(a.businessName), ownerEmails: strings(a.ownerEmails) }));
+  }
+  async prune(workspaceId: string): Promise<number> {
+    return Number(await this.optional<number>('SELECT app_private.email_send_events_prune($1) AS value', [workspaceId]) ?? 0);
+  }
+  async holdWait(): Promise<number> {
+    return Number(await this.optional<number>('SELECT app_private.pp_followup_hold_wait() AS value', []) ?? 0);
   }
   async alertDone(id: string, sent: boolean): Promise<void> {
     await this.call('SELECT app_private.email_protection_alert_done($1,$2) AS value', [id, sent]);

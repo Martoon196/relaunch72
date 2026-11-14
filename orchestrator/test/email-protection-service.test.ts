@@ -132,25 +132,41 @@ test('every sentence a business owner reads, for each state, is plain and exact'
   const banner = (over: Partial<Parameters<typeof ownerBanner>[0]>) => ownerBanner({ state: 'ok', trip: null, dailyCap: 50, sampleState: 'passed', sampleTrip: null, ownerPaused: false,
     accountHeld: false, mode: 'live', waitingApproval: false, ...over });
   assert.equal(banner({}), null, 'nothing to say');
-  assert.deepEqual(banner({ state: 'paused', trip }), { tone: 'alert', title: 'Your marketing emails are paused',
-    text: `In the last 7 days, 6 of your 120 emails bounced (5%). Our limit is 4%. ${STILL_GOES} No other business is affected. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then reply to our email. Only we can restart it, and a second pause within 90 days switches your email off.` });
+  assert.deepEqual(banner({ state: 'paused', trip, emailed: true }), { tone: 'alert', title: 'Your marketing emails are paused',
+    text: `In the last 7 days, 6 of your 120 emails bounced (5%). Our limit is 4%. ${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then reply to our email. Only we can restart it, and a second pause within 90 days switches your email off.` });
+  // "Reply to our email" only when an email really went (or is on its way); otherwise what is true.
+  assert.match(banner({ state: 'paused', trip, emailed: false })!.text, /then tell us \(we can see this too\)\./u);
+  assert.doesNotMatch(banner({ state: 'paused', trip, emailed: false })!.text, /reply to our email|we will email/iu);
   assert.equal(banner({ state: 'slowed', trip: judge(counts({ sends7: 150, hard7: 3 })).trip, dailyCap: 25 })!.text,
-    'In the last 7 days, 3 of your 150 emails bounced (2%). Our limit is 2%. They still go, at up to 25 emails a day. This lifts by itself after 7 clean days: bounces under 1% (none, if you sent fewer than 100 emails that week) and fewer than 2 spam reports in 30 days. Remove addresses that bounced and only email people who asked to hear from you.');
-  assert.match(banner({ state: 'off', trip })!.text, /It was paused twice within 90 days, so we switched it off to protect everyone who sends through our shared account\. Sign-in links, receipts and booking and webinar confirmations still go\. Only we can switch it back on: reply to our email to ask for a review\.$/u);
+    'In the last 7 days, 3 of your 150 emails bounced (2%). Our limit is 2%. They still go, at up to 25 emails a day; the rest wait their turn. This lifts by itself after 7 clean days: bounces under 1% (none, if you sent fewer than 100 emails that week) and fewer than 2 spam reports in 30 days. Remove addresses that bounced and only email people who asked to hear from you.');
+  assert.match(banner({ state: 'slowed', trip: null, reasonText: 'Restarted after a pause.' })!.text, /^Restarted after a pause\. They still go/u, 'the stored reason when no slowed step is the latest');
+  assert.match(banner({ state: 'off', trip, emailed: true })!.text, /It was paused twice within 90 days, so we switched it off to protect everyone who sends through our shared account\. Sign-in links, receipts and booking and webinar confirmations still go\. Your marketing emails are waiting and go only if we switch it back on: reply to our email to ask for a review\.$/u);
   const sampleTrip = { line: 'sample' as const, level: 'held' as const, count: 2, total: 50, limit: 1, own: { count: 0, total: 50 } };
-  assert.equal(banner({ sampleState: 'held', sampleTrip })!.text, `We sent the first 50 emails and checked them: 2 bounced and 0 people marked one as spam. Our limit is 1 bounce and no spam reports. Nothing else from this list will go until it is cleaned. Remove old, bought or guessed addresses, then reply to our email and we will let the rest go. ${STILL_GOES}`);
-  assert.equal(banner({ accountHeld: true })!.title, 'Marketing emails are on hold for everyone');
-  assert.equal(banner({ ownerPaused: true })!.text, 'Nothing marketing goes until you press Resume. Tests to your own addresses still work.');
-  assert.equal(banner({ mode: 'test', waitingApproval: true })!.text, 'Waiting for approval. We will email you.');
-  assert.match(banner({ sampleState: 'sending' })!.text, /^Your first 50 marketing emails go first, then we wait 2 hours to check they arrived\./u);
+  assert.equal(banner({ sampleState: 'held', sampleTrip, emailed: true })!.text, `We sent the first 50 emails and checked them: 2 bounced and 0 people marked one as spam. Our limit is 1 bounce and no spam reports. The rest of this list is waiting and will go when it is cleaned and we let it go. Remove old, bought or guessed addresses, then reply to our email. ${STILL_GOES}`);
+  // Slowed and held at once: the held list is the stronger news.
+  assert.equal(banner({ state: 'slowed', sampleState: 'held', sampleTrip })!.title, 'We have held the rest of your list');
+  assert.equal(banner({ accountHeld: true })!.text, `Marketing emails are on hold for every business that sends through our shared email account while we look into it. ${STILL_GOES} Yours are waiting and will go when the hold is lifted. You don't need to do anything.`);
+  assert.equal(banner({ ownerPaused: true })!.text, 'Nothing marketing goes until you press Resume; everything is waiting. Send a test to me still works.');
+  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: true })!.text, 'Waiting for approval. We will email you.');
+  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: false })!.text, 'Waiting for approval. Check this page for the answer.');
+  assert.equal(banner({ notConnected: true, sampleState: 'held' })!.text, 'Email is not connected right now, so nothing is being sent. Reconnect it to carry on. People you have started are waiting and will go when it is connected again.');
+  assert.equal(banner({ needsApproval: true })!.title, 'Your new sending address needs approval');
+  assert.equal(banner({ needsTest: true })!.title, 'Send a test first');
+  assert.equal(banner({ switchedOffHere: true })!.title, 'Sending is switched off on our side');
+  assert.match(banner({ sampleState: 'sending' })!.text, /^Your first 50 marketing emails go first, then we wait 2 hours to check how many bounced or were marked as spam\./u);
   // The strongest wins: off over paused over the account hold over a held sample over slowed.
   assert.equal(banner({ state: 'off', accountHeld: true, sampleState: 'held', ownerPaused: true })!.title, 'Your email sending is switched off');
   assert.equal(banner({ state: 'slowed', accountHeld: true })!.title, 'Marketing emails are on hold for everyone');
+  // The account trip-wire tells a business its OWN numbers only.
+  const account = { line: 'account_bounce' as const, level: 'paused' as const, count: 407, total: 13000, limit: 3, days: 7, own: { count: 117, total: 3000 } };
+  assert.equal(ownerTripped(account), 'In the last 7 days, 117 of your 3,000 emails bounced (3.9%). Together with other businesses this took our shared email account over its 3% limit, and your rate was the highest, so we paused yours first.');
+  assert.doesNotMatch(ownerTripped(account), /407|13,000/u);
   // The emails.
   assert.equal(ownerAlertEmail({ kind: 'slowed', businessName: 'PP', trip, dailyCap: 25, pageUrl: 'u' })!.subject, 'We have slowed PP\'s marketing emails');
   assert.equal(ownerAlertEmail({ kind: 'go_live_approved', businessName: 'PP', trip: null, pageUrl: 'u' })!.subject, 'PP is live');
   assert.equal(ownerAlertEmail({ kind: 'nonsense', businessName: 'PP', trip: null, pageUrl: 'u' }), null);
   assert.equal(founderAlertEmail({ kind: 'go_live_requested', businessName: 'PP', trip: null, pageUrl: 'u' })!.subject, 'PP is ready to go live');
+  assert.equal(founderLine({ kind: 'sample_held', businessName: 'PP', trip: sampleTrip })!.tone, 'red', 'only the founder can release it');
   assert.equal(founderLine({ kind: 'sample_held', businessName: 'PP', trip: sampleTrip })!.sentence, 'PP sent its first 50 emails to a list and the rest is held. Their first 50 emails: 2 bounced, 0 spam reports.');
   for (const text of [banner({ state: 'paused', trip })!.text, ownerAlertEmail({ kind: 'paused', businessName: 'PP', trip, pageUrl: 'u' })!.text]) {
     assert.doesNotMatch(text, /Postmark API|ErrorCode|_|token|EMAIL_/u, 'no setting names or provider text');
