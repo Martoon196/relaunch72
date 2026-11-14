@@ -315,7 +315,7 @@ test('portal readiness and executable follow the composed sender; Start rechecks
 const FLOW_ITEM = '92c4f5a3-b08f-4de1-a4a2-8192a3b4c5d6', FLOW_VERSION = 'a3d506b4-c190-4ef2-b5b3-92a3b4c5d6e7', EMAIL_ITEM = 'b4e617c5-d2a1-4f03-86c4-a3b4c5d6e7f8', EMAIL_VERSION = 'c5f728d6-e3b2-4014-97d5-b4c5d6e7f809';
 const FLOW_RUN: PpFollowupRun = { id: OTHER, contentItemId: FLOW_ITEM, contentVersionId: FLOW_VERSION, contactId: POINT, contactPointId: POINT, email: 'ann@example.com', displayName: 'Ann Smith',
   state: 'active', position: 0, dueAt: '2026-11-12T10:00:00.000Z', reason: null, createdAt: '2026-11-11T10:00:00.000Z', lastAcceptedAt: null, inFlight: false, unknownProofId: null, steps: [] };
-function flowPage(over: { mode?: 'off' | 'test' | 'live'; ready?: boolean; problems?: string[]; runs?: PpFollowupRun[]; permitted?: number; search?: string; contacts?: number; blockers?: string[]; delivery?: boolean } = {}): string {
+function flowPage(over: { mode?: 'off' | 'test' | 'live'; ready?: boolean; problems?: string[]; runs?: PpFollowupRun[]; permitted?: number; search?: string; contacts?: number; blockers?: string[]; delivery?: boolean; connect?: boolean } = {}): string {
   const ready = over.ready ?? true, runs = over.runs ?? [];
   const contacts = Array.from({ length: over.contacts ?? 1 }, (_unused, index) => ({ contactId: POINT, contactPointId: POINT, displayName: `Person ${index + 1}`, email: `person${index + 1}@example.com`, inOpenRun: false }));
   const snapshot = { brand: { productName: 'Property Predator', primaryColor: '#123b48', accentColor: '#e8a33d' }, catalog: { items: [] }, messageChoices: [], workspaceId: PP_FOLLOWUP_WORKSPACE_ID, campaign: PP_FOLLOWUP_CAMPAIGN,
@@ -328,7 +328,7 @@ function flowPage(over: { mode?: 'off' | 'test' | 'live'; ready?: boolean; probl
       { key: 's3', kind: 'email', contentItemId: EMAIL_ITEM, contentVersionId: EMAIL_VERSION, contentSha256: sha }] };
   const detail = { review: { contentItemId: FLOW_ITEM, contentVersionId: FLOW_VERSION, versionNumber: 1, isLatest: true, approvalStatus: 'approved', approvalStale: false }, definition, valid: true,
     blockers: over.blockers ?? (ready ? [] : ['email_not_connected']), messages: [], timeline: [] };
-  return renderPortalFlowPage({ snapshot, detail, csrf: 'csrf', commandId: LEASE.id, now: Date.parse('2026-11-12T12:00:00.000Z') } as unknown as PortalFlowPageInput);
+  return renderPortalFlowPage({ snapshot, detail, csrf: 'csrf', commandId: LEASE.id, now: Date.parse('2026-11-12T12:00:00.000Z'), ...(over.connect ? { emailConnectHref: '/portal/email' } : {}) } as unknown as PortalFlowPageInput);
 }
 /** The owner's main copy: everything outside the editor script and the closed "For your developer" blocks. */
 const ownerCopy = (html: string) => html.replace(/<details><summary>For your developer<\/summary>[\s\S]*?<\/details>/gu, '').replace(/<style>[\s\S]*?<\/style>/u, '');
@@ -350,6 +350,14 @@ test('a mode of test or live with incomplete settings is shown as not set up, ne
   }
   assert.match(flowPage({ mode: 'live' }), /<strong>Email sending is on\.<\/strong> People you start will get these emails\./u);
   assert.match(flowPage({ mode: 'test' }), /<strong>Email sending is in test mode\.<\/strong> Only your test addresses get emails\./u);
+});
+
+test('with Connect email switched on, the set-up note is a plain "Connect email" link and shows no setting names', () => {
+  for (const html of [flowPage({ mode: 'off', ready: false, problems: ['PP_POSTMARK_SERVER_TOKEN is missing'], connect: true }), flowPage({ ready: false, delivery: false, connect: true })]) {
+    assert.match(html, /Email sending isn’t set up yet\.<\/strong> Nothing will be sent\. Your flow is saved\.<\/p>\s*<a class="button" href="\/portal\/email">Connect email<\/a>/u);
+    assert.doesNotMatch(html, /For your developer|PP_POSTMARK_SERVER_TOKEN|PP_MARKETING_MODE|0152/u);
+  }
+  assert.match(flowPage({ mode: 'off', ready: false }), /For your developer/u, 'switched off: unchanged');
 });
 
 test('the owner page speaks plainly: five states, one stop button, clear unknown and in-flight notes', () => {

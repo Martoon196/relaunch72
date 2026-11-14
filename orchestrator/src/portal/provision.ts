@@ -167,6 +167,7 @@ export interface PostgresPortalConfig {
   /** Native local flow authoring; no enrolment or provider capability. */
   followupFlows?: PostgresPortalDeps['followupFlows'];
   seoBlog?: PostgresPortalDeps['seoBlog'];
+  emailConnections?: PostgresPortalDeps['emailConnections'];
   releasedSeoMedia?: PostgresPortalDeps['releasedSeoMedia'];
   seoBlogVaultReady?: boolean;
   webinars?: import('../webinars/service.js').PgWebinarService;
@@ -278,6 +279,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     companyContent: cfg.companyContent,
     followupFlows: cfg.followupFlows,
     seoBlog: cfg.seoBlog,
+    emailConnections: cfg.emailConnections,
     releasedSeoMedia: cfg.releasedSeoMedia,
     seoBlogVaultReady: cfg.seoBlogVaultReady,
     webinars: cfg.webinars,

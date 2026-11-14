@@ -5,6 +5,7 @@ import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/
 import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
 import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
+import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src/db/email-connection-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -166,6 +167,7 @@ const migration151Url = new URL('../../src/db/migrations/0151_mhp_whatsapp_owner
 const migration152Url = new URL('../../src/db/migrations/0152_pp_followup_email_sequences.sql', import.meta.url);
 const migration153Url = new URL('../../src/db/migrations/0153_stop_per_channel_and_email_block_ledger.sql', import.meta.url);
 const migration154Url = new URL('../../src/db/migrations/0154_seo_blog_attach_mhp_workspace.sql', import.meta.url);
+const migration155Url = new URL('../../src/db/migrations/0155_email_connections.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -759,6 +761,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: PP_FOLLOWUP_MIGRATION, version: 152 },
     { filename: EMAIL_BLOCK_MIGRATION, version: 153 },
     { filename: SEO_BLOG_ATTACH_MIGRATION, version: 154 },
+    { filename: EMAIL_CONNECTION_MIGRATION, version: 155 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -909,6 +912,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration152Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration153Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration154Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration155Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -931,6 +935,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===152)?.checksum, PP_FOLLOWUP_CHECKSUM);
   assert.equal(tail.find(m=>m.version===153)?.checksum, EMAIL_BLOCK_CHECKSUM);
   assert.equal(tail.find(m=>m.version===154)?.checksum, SEO_BLOG_ATTACH_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===155)?.checksum, EMAIL_CONNECTION_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
@@ -1066,6 +1071,58 @@ test('0154 attaches only the pinned Martin Howard Property workspace, additively
   assert.match(offer, /RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER/u);
   assert.doesNotMatch(offer, /INSERT|pg_advisory/u);
   assert.match(offer, /NOT EXISTS\(SELECT 1 FROM app\.seo_blog_brands b WHERE b\.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b'\)/u);
+});
+
+test('0155 keeps email connections pinned to Property Predator, additive, behind identity-command definer functions that re-check the owner', async () => {
+  const sql = normalise(await readFile(migration155Url, 'utf8'));
+  assert.match(sql, /^SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s';/u);
+  // Additive: nothing deleted, dropped, altered on an existing table, rewritten or triggered; no ALTER except on the new tables.
+  assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b|CREATE TRIGGER|CREATE OR REPLACE|ALTER POLICY|ALTER FUNCTION|BEGIN;|COMMIT/u);
+  for (const altered of sql.matchAll(/ALTER TABLE ([a-z_.]+)/g)) assert.ok(['app_private.email_connections', 'app_private.email_connection_events', 'app_private.email_protection_events'].includes(altered[1]!), altered[1]);
+  assert.doesNotMatch(sql, /UPDATE app\.|INSERT INTO app\./u, 'no existing app table is written');
+  assert.deepEqual([...sql.matchAll(/CREATE TABLE ([a-z_.]+)/g)].map(m => m[1]), ['app_private.email_connections', 'app_private.email_connection_events', 'app_private.email_protection_events']);
+  for (const table of ['email_connections', 'email_connection_events', 'email_protection_events']) {
+    assert.match(sql, new RegExp(`ALTER TABLE app_private\\.${table} ENABLE ROW LEVEL SECURITY; ALTER TABLE app_private\\.${table} FORCE ROW LEVEL SECURITY; REVOKE ALL ON app_private\\.${table} FROM PUBLIC;`, 'u'));
+    assert.match(sql, new RegExp(`CREATE TABLE app_private\\.${table}\\( (?:id uuid PRIMARY KEY DEFAULT gen_random_uuid\\(\\), )?workspace_id uuid (?:PRIMARY KEY|NOT NULL) CHECK\\(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'\\)`, 'u'), `${table} is pinned`);
+  }
+  // The NOLOGIN definer role, as 0153 makes its own.
+  assert.match(sql, /CREATE ROLE r72_email_connection_definer NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;/u);
+  // Append-only events: the definer may only insert and read them.
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_connection_events TO r72_email_connection_definer;/u);
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_protection_events TO r72_email_connection_definer;/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*(?:UPDATE|DELETE)[^;]* ON app_private\.email_(?:connection|protection)_events/u);
+  // The definer can never change mode, the test list, the protection state, the caps or the go-live approval.
+  const updatable = /GRANT UPDATE\(([^)]*)\) ON app_private\.email_connections TO r72_email_connection_definer;/u.exec(sql)![1]!.split(',');
+  for (const column of ['mode', 'test_recipients', 'protection_state', 'protection_reason', 'protection_since', 'daily_cap', 'hourly_cap', 'warmup_started_at', 'go_live_approved_by', 'go_live_approved_at', 'workspace_id']) {
+    assert.equal(updatable.includes(column), false, column);
+  }
+  // Groundwork defaults and CHECKs.
+  assert.match(sql, /mode text NOT NULL DEFAULT 'off' CHECK\(mode IN\('off','test','live'\)\)/u);
+  assert.match(sql, /protection_state text NOT NULL DEFAULT 'ok' CHECK\(protection_state IN\('ok','slowed','paused','off'\)\)/u);
+  assert.match(sql, /daily_cap integer NOT NULL DEFAULT 50 CHECK\(daily_cap>=0\), hourly_cap integer NOT NULL DEFAULT 13 CHECK\(hourly_cap>=0\)/u);
+  assert.match(sql, /numbers jsonb NOT NULL DEFAULT '\{\}'::jsonb CHECK\(jsonb_typeof\(numbers\)='object' AND octet_length\(numbers::text\)<=4000 AND numbers::text!~'@'\)/u, 'no address in the protection numbers');
+  // Every definer function: search_path=pg_catalog and the identity-command check; only those executable are granted.
+  const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  assert.equal(definers, 14);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
+  assert.equal((sql.match(/IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required'/g) ?? []).length, definers, 'every entry point checks its caller');
+  const granted = /GRANT EXECUTE ON FUNCTION (app_private\.email_connection_state[^;]*) TO r72_identity_command;/u.exec(sql)![1]!;
+  assert.deepEqual([...granted.matchAll(/app_private\.([a-z_]+)\(/g)].map(m => m[1]), ['email_connection_state', 'email_connection_accept_terms', 'email_connection_begin',
+    'email_connection_intend', 'email_connection_record', 'email_connection_save_sealed', 'email_connection_sealed', 'email_connection_checked', 'email_connection_disconnect', 'email_connection_sources']);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.email_connection_actor\(bytea,uuid\) TO r72_email_connection_definer;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.email_connection_person\(uuid\) TO r72_email_connection_definer;/u);
+  // The owner rule: the session resolved in SQL with this workspace selected, an active organisation owner who can manage it.
+  const actor = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_connection_actor('), sql.indexOf('CREATE FUNCTION app_private.email_connection_person('));
+  assert.match(actor, /FROM app_private\.resolve_session\(p_session\) r; IF actor IS NULL OR selected IS DISTINCT FROM p_workspace THEN RETURN NULL;/u);
+  assert.match(actor, /m\.role='owner' AND m\.status='active' AND m\.revoked_at IS NULL/u);
+  assert.match(actor, /AND app_private\.can_manage_workspace\(actor,p_workspace\) THEN RETURN actor;/u);
+  // The page read never returns a sealed column.
+  const state = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_connection_state('), sql.indexOf('CREATE FUNCTION app_private.email_connection_accept_terms('));
+  assert.doesNotMatch(state.replace(/c\.sealed_[a-z_]+ IS NOT NULL/g, ''), /sealed_/u);
+  // Rules before begin.
+  const begin = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_connection_begin('), sql.indexOf('CREATE FUNCTION app_private.email_connection_intend('));
+  assert.match(begin, /IF NOT existing OR p_terms IS NULL OR c\.terms_version IS DISTINCT FROM p_terms THEN RETURN 'terms_required'; END IF;/u);
+  assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer; RESET ROLE;$/u);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {

@@ -11,7 +11,9 @@ import { PP_FOLLOWUP_ROUTE as BASE, type PortalFlowSaveInput, type PortalFlowRev
 import type { PpFollowupCommandResult, PpFollowupRun } from '../pp-followup/repository.js';
 export interface PortalFlowPageInput { readonly snapshot: PortalFlowSnapshot; readonly csrf: string; readonly commandId: string; readonly draft?: PortalFlowSaveInput;
   readonly detail?: PortalFlowReview; readonly preview?: Awaited<ReturnType<PortalFollowupFlowService['preview']>>; readonly simulation?: ReturnType<typeof simulateFollowupFlow>; readonly message?: string;
-  readonly now?: number }
+  readonly now?: number;
+  /** Set when "Connect email" is switched on: the set-up note shows this link instead of the developer details. */
+  readonly emailConnectHref?: string }
 const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${e(value)}">`;
 const when = (value: string | null) => value ? new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }) : '';
 const people = (count: number) => `${count} ${count === 1 ? 'person' : 'people'}`;
@@ -77,7 +79,9 @@ export function renderPortalFlowProblem(message: string, back: string = BASE): s
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Follow-up flows</title><style>body{margin:0;background:#f4f3ef;color:#172b30;font:17px/1.65 system-ui,sans-serif}main{max-width:640px;margin:auto;padding:32px 16px}section{background:#fff;border:1px solid #d2dbdb;border-radius:18px;padding:28px}a{display:inline-block;padding:14px 20px;border-radius:9px;background:#f2b440;color:#172b30;font-weight:700;text-decoration:none}</style></head><body><main><section role="alert"><p>${e(message)}</p><a href="${e(back)}">Back to your follow-ups</a></section></main></body></html>`;
 }
 
-function setupNote(problems: readonly string[]): string {
+function setupNote(problems: readonly string[], connectHref?: string): string {
+  if (connectHref) return `<div class="notice"><p><strong>Email sending isn’t set up yet.</strong> Nothing will be sent. Your flow is saved.</p>
+    <a class="button" href="${e(connectHref)}">Connect email</a></div>`;
   return `<div class="notice"><p><strong>Email sending isn’t set up yet.</strong> Nothing will be sent. Your flow is saved.</p>
     <details><summary>For your developer</summary><ul>${problems.map(problem => `<li>${e(problem)}</li>`).join('')}</ul></details></div>`;
 }
@@ -113,10 +117,10 @@ function searchForm(detail: PortalFlowReview, search: string): string {
 }
 function startControls(page: PortalFlowPageInput, detail: PortalFlowReview, published: boolean): string {
   const delivery = page.snapshot.delivery;
-  if (!delivery) return `${setupNote(['Follow-up email delivery is not composed on this deployment: migration 0152 is not applied or the Property Predator workspace id is not configured.'])}<button disabled type="button">Start a person</button>`;
+  if (!delivery) return `${setupNote(['Follow-up email delivery is not composed on this deployment: migration 0152 is not applied or the Property Predator workspace id is not configured.'], page.emailConnectHref)}<button disabled type="button">Start a person</button>`;
   // Real readiness first: a mode of test or live means nothing unless every setting is complete and a sender runs.
   const ready = page.snapshot.readiness.email, database = delivery.database, mode = delivery.mode, search = delivery.search ?? '';
-  const modeNote = !ready ? setupNote(delivery.problems.length ? delivery.problems : [mode === 'off' ? 'PP_MARKETING_MODE is off. Set it to test or live once the Postmark settings are in place.' : 'Email delivery did not pass its start-up checks.'])
+  const modeNote = !ready ? setupNote(delivery.problems.length ? delivery.problems : [mode === 'off' ? 'PP_MARKETING_MODE is off. Set it to test or live once the Postmark settings are in place.' : 'Email delivery did not pass its start-up checks.'], page.emailConnectHref)
     : mode === 'test' ? '<p class="notice"><strong>Email sending is in test mode.</strong> Only your test addresses get emails. Anyone else you start waits until you switch to live and press Resume.</p>'
     : '<p><strong>Email sending is on.</strong> People you start will get these emails.</p>';
   const savedFields = hidden('csrf', page.csrf) + hidden('commandId', page.commandId) + hidden('itemId', detail.review.contentItemId) + hidden('versionId', detail.review.contentVersionId);

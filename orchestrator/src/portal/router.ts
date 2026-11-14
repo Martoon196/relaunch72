@@ -18,6 +18,8 @@ import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
+import { handleEmailConnection } from './email-connection-router.js';
+import type { EmailConnectionService } from '../email-connections/service.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';
 import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
@@ -554,6 +556,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   followupFlows?: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
+  /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
+  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect'>;
   /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */
   webinars?: PgWebinarService;
   /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
@@ -1983,10 +1987,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     trackAbuseLease(lease);
   }
 
+  if (deps.kind === 'postgres' && (p === '/portal/email' || p.startsWith('/portal/email/'))) {
+    if (!deps.emailConnections) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Email connection isn\'t switched on yet.'); return; }
+    await handleEmailConnection(req, res, url, { portal: deps, service: deps.emailConnections, identity: portalIdentity }); return;
+  }
   if (deps.kind === 'postgres' && (p === '/portal/follow-ups' || p.startsWith('/portal/follow-ups/'))) {
     if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }
     if (!resolvedRequestContext || !deps.abuse || !deps.abuseHashSecret) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Native flow access is temporarily unavailable.'); return; }
-    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId }); return;
+    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId,
+      emailConnect: deps.emailConnections?.enabled === true }); return;
   }
   if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
     if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }

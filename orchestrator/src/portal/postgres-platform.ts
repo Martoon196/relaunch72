@@ -1,3 +1,4 @@
+import { EmailConnectionBounceSources, EmailConnectionService, loadEmailConnectConfig, PgEmailConnectionStore } from '../email-connections/index.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
@@ -219,6 +220,12 @@ export interface PgPortalPlatform {
   mhp?: MhpRuntime;
   /** Bounce, complaint and unsubscribe handling for every configured email source (started by the server). */
   emailBounces?: EmailBounceService;
+  /** Whether bounce handling is on (EMAIL_BOUNCE_HANDLING not off): then the Postmark webhook route is always mounted. */
+  emailBounceHandling?: boolean;
+  /** "Connect email" (0155): the owner's screens; it reports plainly when switched off or when 0155 is not applied. */
+  emailConnections?: EmailConnectionService;
+  /** Stored email connections as bounce sources (started by the server; absent while bounce handling is off). */
+  emailConnectionSources?: EmailConnectionBounceSources;
   /** After-payment work for module kits: replay registration and CRM record (0149). */
   mhpKitJobs?: { replay?: MhpKitReplayRegistrar; crm?: MhpKitCrmRecorder };
   auth: PgPortalAuthService;
@@ -1357,6 +1364,20 @@ export async function buildPgPortalPlatform(
         // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.
         defaults: [...(mhpEnabledForBounces(env) ? [mhpEmailBounceSourceDefault(env)] : []), ...[ppEmailBounceSourceDefault(ppFollowup?.config)].filter(source => source !== null)] }) });
     if (ppFollowup?.config) emailBounces.setEffects(PP_FOLLOWUP_WORKSPACE_ID, ppEmailBounceEffects(ppFollowup.unsubscriber));
+    // "Connect email" (0155). Bad or missing settings never stop start-up: the page then says it isn't switched on.
+    // Stored connections become bounce sources without a restart (loaded at start, about every minute, and on demand).
+    const emailBounceHandling = !emailBounceHandlingDisabled(env);
+    const emailConnectConfig = loadEmailConnectConfig(env, { portalBaseUrl: env.PORTAL_BASE_URL?.trim() });
+    const emailConnectionStore = new PgEmailConnectionStore(identityPool, { log: emailBounceLog });
+    const emailConnectionSources = emailBounceHandling && emailConnectConfig.vault
+      ? new EmailConnectionBounceSources({ store: emailConnectionStore, vault: emailConnectConfig.vault, service: emailBounces, log: emailBounceLog }) : undefined;
+    if (emailConnectionSources) emailBounces.setSourceLoader(emailConnectionSources);
+    if (env.EMAIL_CONNECT !== undefined && !emailConnectConfig.enabled) console.warn(`⚠  Connect email is off: ${emailConnectConfig.problems.join(' ')}`);
+    let emailConnections: EmailConnectionService | undefined;
+    try {
+      emailConnections = new EmailConnectionService({ config: emailConnectConfig, store: emailConnectionStore, log: emailBounceLog,
+        ...(emailConnectionSources ? { bounces: emailConnectionSources } : {}) });
+    } catch { console.warn('⚠  Connect email could not be composed; it stays off.'); }
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
     let webinarStudio: StudioRelay | undefined;
@@ -1496,6 +1517,9 @@ export async function buildPgPortalPlatform(
       operator,
       mhp,
       emailBounces,
+      emailBounceHandling,
+      emailConnections,
+      emailConnectionSources,
       auth,
       abuse,
       crm,

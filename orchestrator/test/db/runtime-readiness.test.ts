@@ -16,6 +16,7 @@ import { MHP_WA_OWNER_CHECKSUM, MHP_WA_OWNER_MIGRATION } from '../../src/db/mhp-
 import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
 import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
+import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src/db/email-connection-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -595,12 +596,40 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
   await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
 });
 
-test('MHP content workspace attach 154 cutover requires the exact applied email block ledger 153 and nothing beyond it', async()=>{
+test('"Connect email" 155 cutover requires the exact applied MHP content workspace attach 154 and nothing beyond it', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,155);
+  assert.deepEqual(all[154],{filename:EMAIL_CONNECTION_MIGRATION,checksum:EMAIL_CONNECTION_CHECKSUM});
+  const through154=all.slice(0,154), connect=all[154]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through154); await capable(all);
+  await assert.rejects(capable(all.slice(0,153)),/schema is behind by 2/);
+  await assert.rejects(capable([...through154,{...connect,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,153),connect]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...through154.slice(0,153),{...through154[153]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...through154.slice(0,152),{...through154[152]!,checksum:'0'.repeat(64)},through154[153]!]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0156_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('MHP content workspace attach 154 binary stays ready after the exact additive "Connect email" 155 and nothing else', async()=>{
+  const directory=await prefixDirectory(154,'attach154-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,154);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[154]!]);
+  await assert.rejects(check([...rows,{...all[154]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0156_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(check([...rows,all[154]!,{filename:'0156_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('MHP content workspace attach 154 cutover requires the exact applied email block ledger 153 and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,154).map(({filename,checksum})=>({filename,checksum}));
+  const attachDirectory=await prefixDirectory(154,'attach154-cutover');
   assert.equal(all.length,154);
   assert.deepEqual(all[153],{filename:SEO_BLOG_ATTACH_MIGRATION,checksum:SEO_BLOG_ATTACH_CHECKSUM});
   const through153=all.slice(0,153), attach=all[153]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),attachDirectory,{});
   await capable(through153); await capable(all);
   await assert.rejects(capable(all.slice(0,152)),/schema is behind by 2/);
   await assert.rejects(capable([...through153,{...attach,checksum:'0'.repeat(64)}]),/checksum changed/);
