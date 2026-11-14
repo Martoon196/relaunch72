@@ -62,7 +62,7 @@ function cardSections(card: BrandDnaCard): string {
   const offers = card.offers.length ? `<ul class="facts">${card.offers.map((o) => `<li><strong>${e(o.name)}</strong>${o.description ? `<br>${e(o.description)}` : ''}${sourceLine(o.source)}
 <span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
-  return `<section class="card"><h2>In a sentence</h2><p>${e(card.summary)}</p>${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
+  return `<section class="card"><h2>In a sentence</h2>${card.summary.trim() ? `<p>${e(card.summary)}</p>` : '<p class="notice">Add a one-line summary before you confirm. Use “Something not right? Change it” below.</p>'}${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
 <section class="card"><h2>What you sell</h2><p class="muted">${card.checked ? 'Prices are shown exactly as written. We never work one out.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
 <section class="card"><h2>Who it is for</h2>${facts(card.audiences, 'We did not find who you sell to written down. Nothing was added.')}</section>
 <section class="card"><h2>What you can say</h2>${facts(card.claims, 'We did not find any claims you make written down. Nothing was added.')}</section>
@@ -82,12 +82,14 @@ const LEFT_OUT_SHOWN = 10;
 function leftOutSection(shell: Shell, card: BrandDnaCard, canEdit: boolean): string {
   const items = card.leftOut;
   if (!items.length) return '';
-  const add = (fix: 'card' | 'documents') => fix === 'card' && canEdit
-    ? '<a href="#dna-change">Add it yourself</a>'
+  // Each link goes where that line can really be added: this card's own form, Brand setup's profile form (positioning),
+  // or the owner's details (a price, an offer, a style note), which a fresh read then uses.
+  const add = (fix: 'card' | 'setup' | 'documents') => fix === 'card' && canEdit ? '<a href="#dna-change">Add it yourself</a>'
+    : fix === 'setup' ? `<a href="${link(shell, 'setup')}#brand-profile">You can add this in Brand setup</a>`
     : `<a href="${link(shell, 'setup')}#brand-guidance">Add it to your details</a>`;
   const more = items.length - LEFT_OUT_SHOWN;
   return `<section class="card" id="left-out"><h2>What we left out</h2>
-<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not find word for word on your website. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
+<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not confirm word for word. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
 <ul class="facts">${items.slice(0, LEFT_OUT_SHOWN).map((i) => `<li>${e(i.label)}<span class="from">${add(i.fix)}</span></li>`).join('')}</ul>
 ${more > 0 ? `<p class="muted">And ${more} more.</p>` : ''}<p class="muted">Nothing left out is used to write your content.</p></section>`;
 }
@@ -95,7 +97,8 @@ ${more > 0 ? `<p class="muted">And ${more} more.</p>` : ''}<p class="muted">Noth
 function correctionForm(shell: Shell, state: BrandDnaState): string {
   const p = state.profile!;
   const area = (id: string, label: string, value: string, hint = '') => `<label for="dna-${id}">${label}</label><textarea id="dna-${id}" name="${id}">${e(value)}</textarea>${hint ? `<small class="muted">${hint}</small>` : ''}`;
-  return `<details class="card" id="dna-change"${state.card?.leftOut.some((l) => l.fix === 'card') && state.status !== 'confirmed' ? ' open' : ''}><summary><strong>Something not right? Change it</strong></summary>
+  const wanted = state.status !== 'confirmed' && (state.card?.leftOut.some((l) => l.fix === 'card') || !p.summary.trim());
+  return `<details class="card" id="dna-change"${wanted ? ' open' : ''}><summary><strong>Something not right? Change it</strong></summary>
 <p class="muted">Use your own words. A line you add is marked “You told us”. To change a price, change it on your website or in your documents, then read your website again.</p>
 ${state.status === 'confirmed' ? '<p class="notice">Saving a change makes a new card. Your content pauses until you confirm the new card.</p>' : ''}
 <form method="post" action="${link(shell, 'dna/edit')}">${csrfField(shell.csrf)}<input type="hidden" name="version" value="${p.version}">
@@ -122,14 +125,20 @@ function lastAttempt(state: BrandDnaState): { text: string; pasteInstead: boolea
     // Seen only while the service is part-way through an update: the reader that picked this up was the older one.
     if (read.error === OLDER_WORKER) return { text: 'We are updating the part of the service that reads websites. This will be ready in a few minutes. Nothing was changed. Press “Read my website” again then.', pasteInstead: false };
     if (reason === 'no_words') return { text: BRAND_DNA_MESSAGES.noWords, pasteInstead: true };
-    // A read that failed outright made no writing call: nothing was spent.
-    return { text: read.state === 'failed' ? BRAND_DNA_MESSAGES.ourSide : read.error ?? BRAND_DNA_MESSAGES.ourSide, pasteInstead: false };
+    // A read that failed before any card was asked for made no writing call, so nothing was spent. Once a card task exists
+    // for it, that is no longer certain, and the page does not say so.
+    const cardAsked = Boolean(made && made.id === brandDnaPayload(read).profileJobId);
+    return { text: cardAsked ? BRAND_DNA_MESSAGES.ourSideRetry : read.state === 'failed' ? BRAND_DNA_MESSAGES.ourSide : read.error ?? BRAND_DNA_MESSAGES.ourSideRetry, pasteInstead: false };
   }
   if (made && ['blocked', 'failed'].includes(made.state) && newerThanCard(made.updatedAt)) {
     const reason = profilePayload(made).reason;
     // A refusal now means nothing verifiable was left (one bad line is taken off the card instead). Cards refused before
     // this change carry the older wording; they are shown the same next step.
-    if (reason === 'rejected') return made.error === BRAND_DNA_MESSAGES.ourSideCard ? { text: BRAND_DNA_MESSAGES.ourSideCard, pasteInstead: false } : { text: BRAND_DNA_MESSAGES.nothingClear, pasteInstead: true };
+    if (reason === 'rejected') {
+      if (made.error === BRAND_DNA_MESSAGES.nothingClear || made.error === BRAND_DNA_MESSAGES.nothingClearDocuments) return { text: made.error, pasteInstead: true };
+      // A shape failure, an answer we could not make true, or a refusal recorded before this wording: ours, try again.
+      return { text: BRAND_DNA_MESSAGES.ourSideCard, pasteInstead: false };
+    }
     if (reason === 'budget') return null;
     if (reason === 'outcome_unknown') return { text: 'The last attempt to make your card did not report back. It may have used some of your monthly allowance. Nothing was saved.', pasteInstead: false };
     return { text: 'Making your card stopped before it finished. Nothing was saved or changed. Please read your website again.', pasteInstead: false };
@@ -194,6 +203,8 @@ ${state.documents ? `<p class="muted">You have already added ${state.documents} 
   const card = state.card, version = state.profile.version;
   const confirmed = state.status === 'confirmed', outOfDate = state.status === 'out_of_date';
   const open = card.conflicts.length;
+  // A website-door card cannot be confirmed without a summary (the server refuses it too).
+  const noSummary = card.checked && !card.summary.trim();
   const pill = outOfDate ? '<span class="pill bad">Out of date</span>' : confirmed ? '<span class="pill ok">Confirmed</span>' : '<span class="pill warn">Needs your confirmation</span>';
   const documentsOnly = state.job?.state === 'done' && brandDnaPayload(state.job).result?.websiteReadable === false
     ? `<p class="notice">We could not read enough words from your website, so this card uses your documents only. ${paste} if anything is missing.</p>` : '';
@@ -210,8 +221,8 @@ ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: 
 ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: false, again: true, commandId })}</details>`;
   } else {
     action = `<form method="post" action="${link(shell, 'dna/confirm')}">${csrfField(shell.csrf)}<input type="hidden" name="version" value="${version}">
-<button class="main" type="submit"${open ? ' disabled aria-describedby="dna-why"' : ''}>Confirm my Brand DNA</button>
-<p class="muted" id="dna-why">${open ? `Choose an answer for ${open === 1 ? 'the question' : `each of the ${open} questions`} above first.` : 'Only a confirmed card is used to write your content. You can change it later.'}</p></form>
+<button class="main" type="submit"${open || noSummary ? ' disabled aria-describedby="dna-why"' : ''}>Confirm my Brand DNA</button>
+<p class="muted" id="dna-why">${open ? `Choose an answer for ${open === 1 ? 'the question' : `each of the ${open} questions`} above first.` : noSummary ? 'Add a one-line summary before you confirm.' : 'Only a confirmed card is used to write your content. You can change it later.'}</p></form>
 <details class="card quiet"><summary>Read my website again</summary><p class="muted">Makes a fresh card from today’s pages and documents. This card is replaced.</p>
 ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: false, again: false, commandId })}</details>`;
   }

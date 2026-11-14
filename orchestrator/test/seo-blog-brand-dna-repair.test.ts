@@ -32,9 +32,10 @@ function verified(): ProfileFacts & { summary: string; positioning: string; voic
 }
 
 /** Every repair must leave a value the strict check accepts. */
-function repaired<T extends ProfileFacts>(value: T) {
-  const result = repairProfileFacts(value, DOCS);
-  assert.deepEqual(strictProfileProblems(result.value, DOCS), [], 'the repaired card passes every word-for-word rule');
+function repaired<T extends ProfileFacts>(value: T, documents: { id: string; text: string }[] = DOCS) {
+  const result = repairProfileFacts(value, documents);
+  assert.ok(result, 'repairable');
+  assert.deepEqual(strictProfileProblems(result.value, documents), [], 'the repaired card passes every word-for-word rule');
   return result;
 }
 
@@ -52,6 +53,20 @@ test('a price not word for word in its source is emptied; the offer and everythi
   assert.deepEqual(result.value.offers, [{ ...plan, price: null }, mentoring]);
   assert.deepEqual(result.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }]);
   assert.deepEqual({ ...result.value, offers: card.offers }, card, 'nothing verified is removed');
+
+  // An emptied price does not live on in the description, exactly as a held price question strips it.
+  const said = repaired({ ...card, offers: [{ ...plan, price: '£39 per month', description: 'The Quay Compliance Plan costs £49 per month. Cancel any time.' }] });
+  assert.equal(said.value.offers[0]!.price, null); assert.equal(said.value.offers[0]!.description, 'Cancel any time.');
+  assert.deepEqual(said.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }, { what: 'offer_detail', text: 'Quay Compliance Plan' }]);
+});
+
+test('hardening: full-width digits and a leading "500) " are figures; "£1," is not found in "£1,500"', () => {
+  const docs = [{ id: 'pricing', text: 'Setup costs £1,500 once. We help landlords in Kent.' }];
+  assert.deepEqual(strictProfileProblems({ ...verified(), sources: [], audiences: [], approvedClaims: [], offers: [{ ...plan, price: '£1,', description: '' }] }, docs).length, 1, 'a price cut at its comma is refused');
+  const sneaky = { ...verified(), offers: [], audiences: [], approvedClaims: [], sources: [], voice: { tone: [], do: [], dont: [], examples: [] } };
+  assert.equal(strictProfileProblems({ ...sneaky, summary: 'Trusted by ５００ landlords in Kent.' }, docs).length, 1, 'full-width digits are read as digits');
+  assert.equal(strictProfileProblems({ ...sneaky, summary: '500) landlords helped across Kent.' }, docs).length, 1, 'a leading number is a figure');
+  assert.equal(strictProfileProblems({ ...sneaky, summary: '30. Years helping landlords in Kent.' }, docs).length, 1);
 });
 
 test('an offer with no valid source, or whose name states a figure its source does not, is dropped', () => {
@@ -61,11 +76,11 @@ test('an offer with no valid source, or whose name states a figure its source do
   assert.deepEqual(result.leftOut, [{ what: 'offer', text: 'Mentoring programme' }, { what: 'offer', text: 'Mentoring programme (500 places)' }], 'the same left-out line is recorded once');
 });
 
-test('a sentence of an offer description stating a figure its source does not is removed; the rest of it and the offer stay', () => {
+test('an offer description stating any figure its source does not is emptied whole; the offer and its price stay', () => {
   const card = { ...verified(), offers: [{ ...plan, description: 'Monthly compliance support. Saves £2,000 a year.' }, { ...mentoring, description: 'Over 900 graduates.' }] };
   const result = repaired(card);
-  assert.equal(result.value.offers[0]!.description, 'Monthly compliance support.'); assert.equal(result.value.offers[0]!.price, '£49 per month');
-  assert.equal(result.value.offers[1]!.description, '', 'a description with nothing verifiable left is emptied, never rewritten');
+  assert.equal(result.value.offers[0]!.description, '', 'never cut down to the sentences that pass'); assert.equal(result.value.offers[0]!.price, '£49 per month');
+  assert.equal(result.value.offers[1]!.description, '');
   assert.deepEqual(result.leftOut, [{ what: 'offer_detail', text: 'Quay Compliance Plan' }, { what: 'offer_detail', text: 'Mentoring programme' }]);
 });
 
@@ -103,7 +118,7 @@ test('questions: unverifiable answers are dropped; one left with fewer than two 
     { field: 'Mentoring length', detail: 'Different lengths', documentIds: ['pricing'], kind: 'other' as const, offer: 'Nonexistent offer', options: [] },
     { field: 'Loose question', detail: 'No kind given', documentIds: ['pricing'] },
   ] };
-  const kept = repairProfileFacts(card, docs);
+  const kept = repairProfileFacts(card, docs)!;
   assert.deepEqual(strictProfileProblems(kept.value, docs), []);
   assert.deepEqual(kept.value.conflicts, [
     { ...priceQuestion, documentIds: ['pricing', 'list'], options: [good, other] },
@@ -111,24 +126,53 @@ test('questions: unverifiable answers are dropped; one left with fewer than two 
   ], 'two verified answers keep the question; an offer name not on the card is emptied; unknown document ids are dropped');
   assert.deepEqual(kept.leftOut, [{ what: 'question', text: 'Loose question' }]);
 
-  const thin = repairProfileFacts({ ...card, conflicts: [{ ...priceQuestion, options: [good, invented] }] }, docs);
+  const thin = repairProfileFacts({ ...card, conflicts: [{ ...priceQuestion, options: [good, invented] }] }, docs)!;
   assert.deepEqual(strictProfileProblems(thin.value, docs), []);
   assert.deepEqual(thin.value.conflicts, []); assert.equal(thin.value.offers[0]!.price, null, 'the price it held stays empty, never picked');
   assert.deepEqual(thin.leftOut, [{ what: 'question', text: 'Plan price' }, { what: 'price', text: 'Quay Compliance Plan' }]);
 
-  const orphan = repairProfileFacts({ ...card, offers: [mentoring], conflicts: [{ ...priceQuestion, options: [good, other] }] }, docs);
-  assert.deepEqual(strictProfileProblems(orphan.value, docs), []);
-  assert.deepEqual(orphan.value.conflicts, [], 'a price question about an offer not on the card is dropped');
+  // A price question about an offer the repair took off goes with it; one about an offer that was never on the card cannot be tied to anything.
+  const dropped = repairProfileFacts({ ...card, offers: [{ ...plan, sourceDocumentId: 'ghost' }, mentoring], conflicts: [{ ...priceQuestion, options: [good, other] }] }, docs)!;
+  assert.deepEqual(strictProfileProblems(dropped.value, docs), []);
+  assert.deepEqual(dropped.value.conflicts, []); assert.deepEqual(dropped.value.offers, [mentoring]);
+  assert.equal(repairProfileFacts({ ...card, offers: [mentoring], conflicts: [{ ...priceQuestion, options: [good, other] }] }, docs), null);
+
+  // The reviewer's case: one verbatim answer and one not. The price and the price in the description both go.
+  const pro = { name: 'Pro plan', description: 'The Pro plan costs £49 per month. Cancel any time.', price: '£49 per month', url: null, sourceDocumentId: 'pro' };
+  const proDocs = [{ id: 'pro', text: 'The Pro plan costs £49 per month. Cancel any time.' }, { id: 'old', text: 'Old leaflet: the Pro plan costs £59 per month.' }];
+  const proQuestion = { field: 'Pro plan price', detail: 'Two prices', documentIds: ['pro', 'old'], kind: 'price' as const, offer: 'Pro plan',
+    options: [{ value: '£49 per month', documentId: 'pro', quote: 'Pro plan costs £49 per month' }, { value: '£69 per month', documentId: 'old', quote: 'Pro plan costs £69 per month' }] };
+  const proCard = { ...verified(), sources: [], audiences: [], approvedClaims: [], offers: [pro], conflicts: [proQuestion] };
+  const fixedPro = repairProfileFacts(proCard, proDocs)!;
+  assert.deepEqual(strictProfileProblems(fixedPro.value, proDocs), []);
+  assert.deepEqual(fixedPro.value.offers, [{ ...pro, price: null, description: 'Cancel any time.' }]);
+  assert.deepEqual(fixedPro.leftOut, [{ what: 'question', text: 'Pro plan price' }, { what: 'price', text: 'Pro plan' }, { what: 'offer_detail', text: 'Pro plan' }]);
+
+  // Not repairable: a dropped price question that names no offer on the card or in the answer, and an "other" question about a price.
+  assert.equal(repairProfileFacts({ ...proCard, conflicts: [{ ...proQuestion, offer: 'Platinum', field: 'Platinum price' }] }, proDocs), null);
+  assert.equal(repairProfileFacts({ ...proCard, conflicts: [{ ...proQuestion, kind: 'other' as const, offer: null, field: 'Membership', detail: 'Two answers' }] }, proDocs), null);
 });
 
-test('free text: a sentence or voice line stating a figure in no document is removed; nothing is reworded', () => {
+test('free text is never cut down to a stronger statement: any failing sentence empties the whole field; a voice line goes alone', () => {
   const card = verified();
   const result = repaired({ ...card, summary: 'Quay Lettings helps private landlords in Kent stay compliant. Trusted by 500 landlords with a 98% pass rate.',
-    positioning: 'Over 20 years of experience.', voice: { tone: ['plain', '10x calmer'], do: ['Explain rules simply', 'Mention our 4.9 rating'], dont: ['Jargon'], examples: ['Trusted by 300 landlords.', 'Rated 4.8 by 1,000 clients.'] } });
-  assert.equal(result.value.summary, card.summary); assert.equal(result.value.positioning, '', 'positioning may be empty');
+    positioning: 'Over 20 years of experience.', voice: { tone: ['plain', '10x calmer'], do: ['Explain rules simply', 'Mention our 4.9 rating'], dont: ['Jargon', 'Never quote 95% yields'], examples: ['Trusted by 300 landlords.', 'Rated 4.8 by 1,000 clients.'] } });
+  assert.equal(result.value.summary, ''); assert.equal(result.value.positioning, '');
   assert.deepEqual(result.value.voice, { tone: ['plain', '10x calmer'], do: ['Explain rules simply'], dont: ['Jargon'], examples: ['Trusted by 300 landlords.'] });
-  assert.deepEqual(result.leftOut.map((l) => l.text), ['Mention our 4.9 rating', 'Rated 4.8 by 1,000 clients.', 'Trusted by 500 landlords with a 98% pass rate.', 'Over 20 years of experience.']);
-  assert.ok(result.leftOut.every((l) => l.what === 'wording'));
+  assert.deepEqual(result.leftOut.map((l) => l.what), ['voice', 'voice_dont', 'voice', 'summary', 'positioning']);
+  assert.deepEqual(leftOutLines(result.leftOut).map((l) => [l.label, l.fix]), [['The style note “Mention our 4.9 rating”', 'documents'], ['The “avoid” line “Never quote 95% yields”', 'card'],
+    ['The style note “Rated 4.8 by 1,000 clients.”', 'documents'], ['The summary', 'card'], ['The positioning line', 'setup']]);
+
+  // The reviewer's examples: what is left would say more than anyone wrote.
+  const docs = [{ id: 'pricing', text: 'We never charge upfront fees. Rent is guaranteed. Weekly calls with your adviser.' }];
+  const offer = (description: string) => ({ ...verified(), sources: [], audiences: [], approvedClaims: [], voice: { tone: [], do: [], dont: [], examples: [] },
+    summary: 'Quay Lettings helps landlords.', positioning: '', offers: [{ name: 'Guaranteed Rent', description, price: null, url: null, sourceDocumentId: 'pricing' }] });
+  for (const description of ['We never charge upfront fees. The only exception is a 15% setup charge on HMOs.', 'Rent is guaranteed. This applies only for the first 18 months.', 'Approx. 52 weekly calls.']) {
+    const fixed = repaired(offer(description), docs);
+    assert.equal(fixed.value.offers[0]!.description, '', description); assert.deepEqual(fixed.leftOut, [{ what: 'offer_detail', text: 'Guaranteed Rent' }]);
+  }
+  const positioned = repaired({ ...offer(''), positioning: 'Rent is guaranteed. This applies only for the first 18 months.' }, docs);
+  assert.equal(positioned.value.positioning, '');
 });
 
 test('nothing verifiable: no offer, audience or claim survives', () => {
@@ -173,11 +217,45 @@ test('extraction: a bad price after the correction pass gives a card with that p
   assert.equal(setup.value.leftOut, undefined);
 });
 
-test('extraction: when nothing verifiable survives, or a required summary would be emptied, the card is refused as before', async () => {
+test('extraction: when nothing verifiable survives the card is refused; an emptied summary alone is not a refusal', async () => {
   const nothing = scripted(() => answer({ audiences: ['Everyone'], sources: [], offers: [{ name: 'Gold', description: '', price: null, url: null, sourceDocumentId: 'ghost' }] }));
   await assert.rejects(extractProfile(nothing, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true }),
     (error: unknown) => error instanceof GenerationRejectedError && error.reason === 'content');
   assert.equal(nothing.calls, 2);
   const boast = scripted(() => answer({ summary: 'Trusted by 500 landlords across Kent.' }));
-  await assert.rejects(extractProfile(boast, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true }), GenerationRejectedError);
+  const made = await extractProfile(boast, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true });
+  assert.equal(made.value.summary, '', 'the verified offer and audience keep the card; the owner adds a summary');
+  assert.deepEqual(made.value.leftOut!.map((l) => l.what), ['price', 'summary', 'link']);
+
+  // An honest answer with nothing on it is not a card either, even though nothing had to be removed.
+  const empty = scripted(() => answer({ offers: [], audiences: [], sources: [], conversionPages: [] }));
+  await assert.rejects(extractProfile(empty, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true }),
+    (error: unknown) => error instanceof GenerationRejectedError && error.outcome === 'nothing_clear');
+  assert.equal(empty.calls, 1, 'nothing to correct, so no correction pass');
+});
+
+test('extraction: a malformed correction pass after a repairable first answer repairs the first answer; a shape failure alone is never masked', async () => {
+  const llm = scripted((attempt) => attempt === 1 ? answer() : 'not json at all');
+  const result = await extractProfile(llm, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true });
+  assert.equal(llm.calls, 2); assert.equal(result.value.offers[0]!.price, null); assert.equal(result.record.tokensIn, 20, 'both calls are accounted');
+  const broken = scripted(() => ({ summary: 'short' }));
+  await assert.rejects(extractProfile(broken, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true }),
+    (error: unknown) => error instanceof GenerationRejectedError && error.reason === 'schema' && error.outcome === undefined);
+});
+
+test('extraction: a price question that cannot be tied to an offer is refused as ours, not turned into a wrong card', async () => {
+  const llm = scripted(() => answer({ conflicts: [{ field: 'Platinum price', detail: 'Two prices', documentIds: ['pricing'], kind: 'price', offer: 'Platinum',
+    options: [{ value: '£49 per month', documentId: 'pricing', quote: 'Plan costs £49 per month' }, { value: '£99 per month', documentId: 'pricing', quote: 'Plan costs £99 per month' }] }] }));
+  await assert.rejects(extractProfile(llm, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict: true }),
+    (error: unknown) => error instanceof GenerationRejectedError && error.outcome === 'unrepairable');
+});
+
+test('extraction: only known fields are kept on both paths; a model-written "strict" or "confirmedAt" never survives', async () => {
+  for (const strict of [false, true]) {
+    const llm = scripted(() => ({ ...answer({ offers: [], conversionPages: [] }), strict: true, confirmedAt: '2026-01-01T00:00:00.000Z', version: 99 }));
+    const result = await extractProfile(llm, { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }), strict });
+    const keys = Object.keys(result.value);
+    assert.ok(!keys.includes('strict') && !keys.includes('confirmedAt') && !keys.includes('version'), String(strict));
+    assert.ok(!(result.value.leftOut ?? []).some((l) => l.text === 'planted by the model'));
+  }
 });
