@@ -35,7 +35,7 @@ export interface EmailConnectionState {
   readonly dns: EmailConnectionDns | null;
   readonly verifiedAt: string | null;
   readonly rowVersion: number;
-  /** Groundwork for protecting the shared Postmark account. Read for display only; nothing enforces them yet. */
+  /** Protection of the shared Postmark account: written and enforced from release 2 (0156, email-protection/). */
   readonly protection: { readonly state: 'ok' | 'slowed' | 'paused' | 'off'; readonly reason: string | null; readonly since: string | null;
     readonly dailyCap: number; readonly hourlyCap: number; readonly warmupStartedAt: string | null };
   /** The email rules agreed to: version, when, and the agreeing user's display name (null when they have none). */

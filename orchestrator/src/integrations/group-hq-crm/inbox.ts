@@ -10,6 +10,7 @@ import { MHP_MARKETING_WORKSPACE_ID } from '../../mhp/marketing-workspace-servic
 import { readOwnerWhatsapp } from './whatsapp-reader.js';
 import { OwnerWhatsAppCommands, OwnerWhatsAppError, isOwnerWhatsAppAction } from './whatsapp-owner.js';
 import { LeadRelayCrmFeed, type LeadRelayFeedStatus } from '../leadrelay/crm-feed.js';
+import type { EmailProtectionService } from '../../email-protection/service.js';
 
 export const GROUP_HQ_INBOX_CRM_PATH = '/api/group-hq/inbox/crm';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -118,6 +119,8 @@ export function inboxSocialPoint(input: InboxSource): string {
 export interface InboxCrmOptions {
   /** Read-only state of the LeadRelay → CRM feed running in this process (counts are in memory). */
   leadrelayFeed?: Pick<LeadRelayCrmFeed, 'status'>;
+  /** Sender protection's founder lines (0156): read only, from the database. */
+  emailProtection?: Pick<EmailProtectionService, 'founderToday'>;
 }
 const LEADRELAY_FEED_OFF = new LeadRelayCrmFeed({ state: 'off' });
 
@@ -188,6 +191,16 @@ export class GroupHqInboxCrmService {
       // outside service: it reports what this process's LeadRelay feed last saw.
       const status: LeadRelayFeedStatus = (this.options.leadrelayFeed ?? LEADRELAY_FEED_OFF).status(brand);
       return { ...status, workspaceId: scope.workspaceId };
+    }
+    if (input.action === 'emailProtectionStatus') {
+      // Read only, after the same actor and brand check: this brand's own business, and the account-wide hold that
+      // concerns every business. Ready-made sentences for Today, each with one button; nothing at all when all is well.
+      const today = this.options.emailProtection ? await this.options.emailProtection.founderToday().catch(() => null) : null;
+      if (!today || !today.available) return { workspaceId: scope.workspaceId, available: false, needsYou: false, sentences: [], items: [], summary: 'Email protection is not switched on here yet.' };
+      const lines = today.lines.filter(line => line.workspaceId === null || line.workspaceId === scope.workspaceId);
+      return { workspaceId: scope.workspaceId, available: true, needsYou: lines.length > 0, sentences: lines.map(line => line.sentence),
+        items: lines.map(line => ({ tone: line.tone, sentence: line.sentence, button: { label: line.button, url: line.url } })),
+        summary: lines.length === 0 ? 'Email sending needs nothing from you.' : lines.length === 1 ? lines[0]!.sentence : `${lines.length} email sending items need you. ${lines[0]!.sentence}` };
     }
     if (input.action === 'contact') {
       const contactId=uuid(input.contactId);

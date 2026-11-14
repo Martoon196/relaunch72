@@ -5,7 +5,7 @@ import {
 } from '../email-bounces/policy.js';
 import type { EmailHealthSnapshot } from '../email-bounces/registry.js';
 import { isReservedEmailAddress } from '../email-bounces/undeliverable.js';
-import type { EmailBounceEffects, EmailBounceService } from '../email-bounces/service.js';
+import type { EmailBounceEffects, EmailBounceService, ProviderReactivation } from '../email-bounces/service.js';
 import type { EmailBounceSourceDefault } from '../email-bounces/config.js';
 import type { PgMhpGrowthService } from './growth-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
@@ -70,8 +70,10 @@ export class MhpEmailHealth {
     if (!result) return { email: address, outcome: 'unavailable' };
     await this.deps.bounces.refreshLedger(this.workspaceId);
     if (result.spamComplaint) return { email: address, outcome: 'spam' };
-    if (result.lifted > 0) return { email: address, outcome: 'lifted' };
-    return { email: address, outcome: result.alreadyLifted ? 'already_lifted' : 'not_blocked' };
+    if (result.lifted === 0 && !result.alreadyLifted) return { email: address, outcome: 'not_blocked' };
+    // Postmark's side too (release 2 of "Connect email"): its suppression on MHP's own streams, with MHP's server token.
+    const provider = await this.deps.bounces.reactivateAtProvider?.(this.workspaceId, address).catch(() => 'unavailable' as const);
+    return { email: address, outcome: result.lifted > 0 ? 'lifted' : 'already_lifted', ...(provider ? { provider } : {}) };
   }
   snapshot(): EmailHealthSnapshot { return this.deps.bounces.registry.snapshot(this.workspaceId); }
 
@@ -188,6 +190,16 @@ export interface MhpEmailLiftOutcome {
    * unavailable: no durable list here, nothing changed.
    */
   readonly outcome: 'lifted' | 'already_lifted' | 'spam' | 'not_blocked' | 'unavailable';
+  /** What Postmark did when asked to reactivate it too: absent when it was not asked. */
+  readonly provider?: ProviderReactivation;
+}
+
+/** The second half of the sentence once Postmark was asked to reactivate the address too. */
+function providerSentence(provider: ProviderReactivation): string {
+  return provider === 'deleted' ? 'Postmark has reactivated it too.'
+    : provider === 'failed' ? 'Postmark kept it on its own list, so Postmark still refuses it.'
+    : provider === 'unavailable' ? 'Postmark could not be reached to reactivate it; press the button again in a minute.'
+    : 'Postmark was not asked: no Postmark server is set up for this brand here.';
 }
 
 export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, result?: MhpEmailHealthCheck,
@@ -207,10 +219,14 @@ export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, res
   const works = (email: string): string => `<form method="post" action="/hq/marketing/email-health/lift"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="email" value="${escapeHtml(email)}"><button type="submit">This address works now</button></form>`;
   const rows = snapshot.blocked.map(item => `<tr><td>${escapeHtml(item.email)}</td><td>${escapeHtml(BLOCK_REASON_PLAIN[item.reason])}</td><td>${escapeHtml(date(item.since))}</td><td>${STOPPED[item.reason]}${
     durable && item.reason === 'hard_bounce' ? works(item.email) : ''}</td></tr>`).join('');
+  const contacts = 'If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that.';
+  const provider = options.lift?.provider;
   const lifted = options.lift ? `<p role="status" class="status">${escapeHtml(({
-    lifted: `We no longer block ${options.lift.email} for that bounce. Now press Reactivate for this address in Postmark, or Postmark will still refuse it. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that.`,
-    already_lifted: `We had already stopped blocking ${options.lift.email} for that bounce. Postmark may still refuse it: press Reactivate for this address in Postmark if you have not done so.`,
-    spam: `${options.lift.email} stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page.`,
+    lifted: provider ? `We no longer block ${options.lift.email} for that bounce. ${providerSentence(provider)} ${contacts}`
+      : `We no longer block ${options.lift.email} for that bounce. Now press Reactivate for this address in Postmark, or Postmark will still refuse it. ${contacts}`,
+    already_lifted: provider ? `We had already stopped blocking ${options.lift.email} for that bounce. ${providerSentence(provider)}`
+      : `We had already stopped blocking ${options.lift.email} for that bounce. Postmark may still refuse it: press Reactivate for this address in Postmark if you have not done so.`,
+    spam: `${options.lift.email} stays blocked: they marked one of your emails as spam, and a spam report cannot be undone, here or at Postmark.`,
     not_blocked: `${options.lift.email} has no bounce recorded in your own records, so nothing changed. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark.`,
     unavailable: `Nothing changed: this list is not kept in your own records yet, so reactivate ${options.lift.email} in Postmark instead.`,
   } as const)[options.lift.outcome])}</p>` : '';
@@ -224,6 +240,6 @@ export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, res
     rows ? `<div class="scroll"><table><thead><tr><th scope="col">Address</th><th scope="col">Why</th><th scope="col">Since</th><th scope="col">What is stopped</th></tr></thead><tbody>${rows}</tbody></table></div>${
       snapshot.blocked.some(item => isReservedEmailAddress(item.email)) ? `<p class="note">${escapeHtml(RESERVED_ADDRESS_NOTE)}</p>` : ''}` : '<p>No blocked addresses. Nothing has bounced or been reported.</p>'}<p class="note">${
     snapshot.lastCheckedAt ? `Last checked with Postmark: ${escapeHtml(dateTime(snapshot.lastCheckedAt))}.` : 'Not checked with Postmark yet.'}${snapshot.incomplete ? ' Postmark could not be fully read last time, so the newest bounces may be missing.' : ''} New bounces and spam reports also arrive here on their own as they happen.</p><p class="note">This list follows Postmark, the service that sends your emails. ${durable
-      ? 'It is also kept in your own records, so a restart does not lose it. A bounce or spam report stays blocked here even if the address is reactivated in Postmark. If you know a bounced address works now, press Reactivate for it in Postmark first, then press &ldquo;This address works now&rdquo; beside it here. A spam report cannot be undone from this page.'
+      ? 'It is also kept in your own records, so a restart does not lose it. A bounce or spam report stays blocked here even if the address is reactivated in Postmark. If you know a bounced address works now, press &ldquo;This address works now&rdquo; beside it here: we stop blocking it and ask Postmark to reactivate it too, and say what Postmark answered. A spam report cannot be undone, here or at Postmark.'
       : 'If an address has been fixed, reactivate it in Postmark and it leaves this list at the next check.'} Someone who unsubscribed gets marketing email again only once they have signed up again and Postmark no longer lists them as unsubscribed. Anyone we also stopped in your contacts stays stopped, exactly as if they had unsubscribed, until they sign up again and tick the box themselves.</p><form method="post" action="/hq/marketing/email-health/check"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Check with Postmark now</button></form></article></main></body></html>`;
 }

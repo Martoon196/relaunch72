@@ -760,7 +760,7 @@ test('on a database at 0154 the feature is simply not offered and nothing errors
   assert.equal(lines.filter(line => line.includes('store_absent')).length, 1, 'said once, at info');
 });
 
-test('no existing sender reads the connection, its mode or the protection groundwork in this release', async () => {
+test('only sender protection (release 2) reads the connection, its mode and its protection; no other sender does', async () => {
   const { readdir, readFile } = await import('node:fs/promises');
   const path = await import('node:path');
   const root = new URL('../src/', import.meta.url).pathname;
@@ -772,7 +772,9 @@ test('no existing sender reads the connection, its mode or the protection ground
     }
   };
   await walk(root);
-  const allowed = (file: string) => file.includes('/email-connections/') || /\/portal\/email-connection-(?:router|view)\.ts$/u.test(file);
+  // Release 2: the stored connection is read for sending only through email-protection/ (the plan the PP follow-up
+  // delivery asks for each sweep), and shown on the owner's page.
+  const allowed = (file: string) => file.includes('/email-connections/') || file.includes('/email-protection/') || /\/portal\/email-connection-(?:router|view)\.ts$/u.test(file);
   const pattern = /app_private\.email_connection|email_connections|email_protection_events|protection_state|go_live_approved|warmup_started_at|terms_accepted|termsAccepted|goLiveApproved|warmupStartedAt|protectionState|EmailConnection(?:Service|Store|BounceSources)|email-connections\//u;
   const readers: string[] = [];
   for (const file of files) {
@@ -780,10 +782,14 @@ test('no existing sender reads the connection, its mode or the protection ground
     const text = await readFile(file, 'utf8');
     if (pattern.test(text)) readers.push(path.relative(root, file));
   }
-  // Only the composition (platform, portal deps, router mount) and the schema gate know about it; no send path does.
-  assert.deepEqual(readers.sort(), ['db/email-connection-schema.ts', 'portal/postgres-platform.ts', 'portal/router.ts'].sort());
-  for (const sender of ['pp-followup/mail.ts', 'pp-followup/dispatch.ts', 'mhp/marketing-mail.ts', 'email/postmark.ts', 'webinars/messages.ts']) {
+  // Only the composition (platform, portal deps, router mount) and the schema gates know about it; no send path does.
+  assert.deepEqual(readers.sort(), ['db/email-connection-schema.ts', 'db/email-protection-schema.ts', 'portal/postgres-platform.ts', 'portal/router.ts'].sort());
+  // PP's follow-up sender takes the plan it is given; MHP, the platform's own mail and webinars never see a connection.
+  for (const sender of ['pp-followup/mail.ts', 'pp-followup/dispatch.ts', 'mhp/marketing-mail.ts', 'mhp/transactional-mail.ts', 'email/postmark.ts', 'webinars/messages.ts']) {
     assert.doesNotMatch(await readFile(path.join(root, sender), 'utf8'), pattern, sender);
+  }
+  for (const untouched of ['mhp/marketing-mail.ts', 'mhp/transactional-mail.ts', 'mhp/owner-email-dispatch.ts', 'mhp/followup-sequence-dispatch.ts', 'email/postmark.ts', 'webinars/messages.ts']) {
+    assert.doesNotMatch(await readFile(path.join(root, untouched), 'utf8'), /email-protection\//u, `${untouched} is untouched by sender protection`);
   }
 });
 

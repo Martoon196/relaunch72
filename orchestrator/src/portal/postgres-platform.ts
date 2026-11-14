@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { PgSeoLimitsService } from './seo-blog-limits-service.js';
-import { EMAIL_CONNECT_BUSINESSES, EmailConnectionBounceSources, EmailConnectionService, loadEmailConnectConfig, PgEmailConnectionStore } from '../email-connections/index.js';
+import { EMAIL_CONNECT_BUSINESSES, EmailConnectionBounceSources, EmailConnectionService, EmailConnectionVault, emailConnectWebhookOrigin, loadEmailConnectConfig,
+  PgEmailConnectionStore } from '../email-connections/index.js';
+import { bannerFromConfig, EmailProtectionService, OwnerSendingService, PgEmailProtectionStore, sendingPlan } from '../email-protection/index.js';
+import type { PortalFlowDelivery } from './followup-flow-service.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
@@ -228,6 +231,13 @@ export interface PgPortalPlatform {
   emailConnections?: EmailConnectionService;
   /** Stored email connections as bounce sources (started by the server; absent while bounce handling is off). */
   emailConnectionSources?: EmailConnectionBounceSources;
+  /** Sender protection (0156): the evaluator, alerts and Today lines (started by the server). Inert at 0155. */
+  emailProtection?: EmailProtectionService;
+  emailProtectionStore?: PgEmailProtectionStore;
+  /** The key that opens a stored connection's server token for the sender (EMAIL_CONNECTION_KEY), or null. */
+  emailSendingVault?: EmailConnectionVault | null;
+  /** Release 2 of "Connect email": the owner's sending controls and the founder's page (only while Connect email is on). */
+  emailSending?: OwnerSendingService;
   /** After-payment work for module kits: replay registration and CRM record (0149). */
   mhpKitJobs?: { replay?: MhpKitReplayRegistrar; crm?: MhpKitCrmRecorder };
   auth: PgPortalAuthService;
@@ -1335,6 +1345,18 @@ export async function buildPgPortalPlatform(
     // PP follow-up email delivery (0152) composes only for its pinned workspace once the migration is applied.
     // While 0152 is pending the flow authoring below is unchanged and readiness reports email as not connected.
     let ppFollowup: PgPortalPlatform['ppFollowup'];
+    // Sender protection (0156) and the stored connection as PP's sender. At 0155 every read answers "not there" and PP's
+    // follow-up email is exactly as before.
+    const emailProtectionLog = (line: string): void => (line.includes('"level":"warn"') ? console.warn : console.info)(line);
+    const emailProtectionStore = new PgEmailProtectionStore(identityPool, { log: emailProtectionLog });
+    const emailSendingVault = (() => { try { return EmailConnectionVault.fromEnv(env); } catch { return null; } })();
+    const ppDeliveryNow: NonNullable<PortalFlowDelivery['current']> = async () => {
+      const config = await emailProtectionStore.sendingConfig(PP_FOLLOWUP_WORKSPACE_ID);
+      const plan = sendingPlan(config, emailSendingVault);
+      if (plan.kind === 'env' || !config) return null;
+      const mode = config.mode === 'test' ? 'test' as const : 'live' as const;
+      return { status: Object.freeze({ mode, ready: true, problems: Object.freeze([]) }), testRecipients: mode === 'test' ? config.testRecipients : null, banner: bannerFromConfig(config) };
+    };
     if (ppFlowWorkspace === PP_FOLLOWUP_WORKSPACE_ID) {
       try {
         const probe = await webPool.query<{ ready: boolean }>(`/* portal.pp-followup-schema-readiness */
@@ -1347,7 +1369,7 @@ export async function buildPgPortalPlatform(
     }
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace,
-        ...(ppFollowup ? { delivery: { identityPool, status: ppFollowup.status, testRecipients: ppFollowup.config?.testRecipients ?? null } } : {}) }) : undefined;
+        ...(ppFollowup ? { delivery: { identityPool, status: ppFollowup.status, testRecipients: ppFollowup.config?.testRecipients ?? null, current: ppDeliveryNow } } : {}) }) : undefined;
     const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
       ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined, commandPool)
       : undefined;
@@ -1365,7 +1387,9 @@ export async function buildPgPortalPlatform(
       : loadEmailBounceConfig(env, { webinarSenders: webinarConfig.senders.values(),
         // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.
         defaults: [...(mhpEnabledForBounces(env) ? [mhpEmailBounceSourceDefault(env)] : []), ...[ppEmailBounceSourceDefault(ppFollowup?.config)].filter(source => source !== null)] }) });
-    if (ppFollowup?.config) emailBounces.setEffects(PP_FOLLOWUP_WORKSPACE_ID, ppEmailBounceEffects(ppFollowup.unsubscriber));
+    // PP's lasting stop runs for PP's own events whichever server sent the email (the environment's, or the stored
+    // connection's from release 2). With neither sending, no PP event arrives and nothing changes.
+    if (ppFollowup) emailBounces.setEffects(PP_FOLLOWUP_WORKSPACE_ID, ppEmailBounceEffects(ppFollowup.unsubscriber));
     // "Connect email" (0155). Bad or missing settings never stop start-up: the page then says it isn't switched on.
     // Stored connections become bounce sources without a restart (loaded at start, about every minute, and on demand).
     const emailBounceHandling = !emailBounceHandlingDisabled(env);
@@ -1389,6 +1413,13 @@ export async function buildPgPortalPlatform(
         founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false,
         ...(emailConnectionSources ? { bounces: emailConnectionSources } : {}) });
     } catch { console.warn('⚠  Connect email could not be composed; it stays off.'); }
+    // The evaluator counts only stored connections' own streams (the webhook and the hourly read feed it).
+    const emailProtection = new EmailProtectionService({ store: emailProtectionStore, log: emailProtectionLog,
+      founderEmail: env.EMAIL_PROTECTION_FOUNDER_EMAIL?.trim() || null, portalOrigin: emailConnectWebhookOrigin(env.PORTAL_BASE_URL?.trim()) });
+    if (emailBounceHandling) emailBounces.setCounter(input => emailProtection.count(input));
+    const emailSending = emailConnections?.enabled ? new OwnerSendingService({ protection: emailProtectionStore, connections: emailConnectionStore,
+      vault: emailConnectConfig.vault, evaluator: emailProtection, bounces: emailBounces, log: emailProtectionLog, portalOrigin: emailConnectWebhookOrigin(env.PORTAL_BASE_URL?.trim()),
+      founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false }) : undefined;
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
     let webinarStudio: StudioRelay | undefined;
@@ -1461,7 +1492,7 @@ export async function buildPgPortalPlatform(
       log: line => (line.includes('"level":"warn"') || line.startsWith('LeadRelay CRM feed is off') ? console.warn : console.info)(line) });
     try {
       if (inboxConfigFailed) throw new Error('Inbox command configuration is invalid');
-      if (inboxConfig) groupHqInboxCrm = createGroupHqInboxCrmMount(webPool, commandPool, inboxConfig, { leadrelayFeed });
+      if (inboxConfig) groupHqInboxCrm = createGroupHqInboxCrmMount(webPool, commandPool, inboxConfig, { leadrelayFeed, emailProtection });
     } catch {
       console.warn('Group HQ inbox command bridge is unavailable; customer workspaces remain mounted.');
     }
@@ -1531,6 +1562,10 @@ export async function buildPgPortalPlatform(
       emailBounceHandling,
       emailConnections,
       emailConnectionSources,
+      emailProtection,
+      emailProtectionStore,
+      emailSendingVault,
+      ...(emailSending ? { emailSending } : {}),
       auth,
       abuse,
       crm,

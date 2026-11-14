@@ -29,6 +29,7 @@ import type { EmailBounceSource } from './config.js';
 import { factBlockReason } from './policy.js';
 import { parsePostmarkJson, readPostmarkWebhook } from './postmark-events.js';
 import type { EmailBounceService } from './service.js';
+import { ledgerEventId } from './ledger.js';
 
 export const POSTMARK_BOUNCE_WEBHOOK_PREFIX = '/api/provider-webhooks/postmark/';
 export const POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
@@ -222,6 +223,12 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
             stillBlocks = !(cleared !== undefined && cleared >= event.at);
           }
           if (lasting && stillBlocks) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
+          // A stored connection's protection counters (0156), once per Postmark event id. A subscription change that only
+          // accompanies a bounce or complaint is not counted twice; an unsubscribe is counted from whichever record says it.
+          const counted = event.kind === 'unsubscribed' ? 'unsubscribe' : !event.counts ? null
+            : event.kind === 'hard_bounce' ? 'hard_bounce' : event.kind === 'soft_bounce' ? 'soft_bounce' : event.kind === 'spam_complaint' ? 'complaint' : null;
+          const key = ledgerEventId(event.eventId);
+          if (source.connection && service.counterSink && counted && key) await service.counterSink({ workspaceId: source.workspaceId, kind: counted, key, at: event.at });
         }
       } catch {
         // Not remembered: Postmark's retry repeats the lasting effect. The in-process block already holds.

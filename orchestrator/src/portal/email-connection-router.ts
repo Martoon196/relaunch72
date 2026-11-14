@@ -8,7 +8,17 @@
  *   POST /portal/email/check        csrf, commandId
  *   POST /portal/email/disconnect   csrf, commandId (also "Start again")
  *   POST /portal/email/use-domain   csrf, commandId (the platform founder only: take over a domain already in the account)
- * Same-origin and CSRF checked like the follow-ups page; the database re-checks the owner on every call.
+ * Release 2 (sending, 0156; offered only once the connection is verified and the database has 0156):
+ *   POST /portal/email/details      csrf, commandId, businessName, postalAddress, testList
+ *   POST /portal/email/test-send    csrf, commandId ("Send a test to me")
+ *   POST /portal/email/go-live      csrf, commandId (the first time: asks the founder)
+ *   POST /portal/email/back-to-test csrf, commandId
+ *   POST /portal/email/pause        csrf, commandId (the owner's own pause; never lifts a protection pause)
+ *   POST /portal/email/resume       csrf, commandId
+ *   POST /portal/email/works-now    csrf, commandId, email ("This address works now" for a hard bounce)
+ *   GET  /portal/email/founder      the founder's page (founder only)
+ *   POST /portal/email/founder/act  csrf, commandId, action, workspace, version (founder only)
+ * Same-origin and CSRF checked like the follow-ups page; the database re-checks the owner (or founder) on every call.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -18,7 +28,13 @@ import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import { FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
 import { EMAIL_CONNECT_BUSINESSES } from '../email-connections/config.js';
 import { EMAIL_CONNECTION_MESSAGES, EmailConnectionError, type EmailConnectionService } from '../email-connections/service.js';
-import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, type EmailConnectionPageInput } from './email-connection-view.js';
+import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, renderFounderProtectionPage,
+  type EmailConnectionPageInput } from './email-connection-view.js';
+import type { OwnerSendingService, SendingResult } from '../email-protection/owner.js';
+import type { FounderAction } from '../email-protection/store.js';
+
+const SENDING_ACTIONS = ['details', 'test-send', 'go-live', 'back-to-test', 'pause', 'resume', 'works-now'] as const;
+const FOUNDER_ACTIONS: readonly FounderAction[] = ['approve', 'lift', 'reinstate', 'release_sample', 'lift_account'];
 
 const STALE = 'This page is out of date. Open Connect email again and try once more. Nothing was changed.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -52,6 +68,8 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
   portal: Pick<PostgresPortalDeps, 'productProfile' | 'portalBaseUrl' | 'sessionSecret'>;
   service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>;
   identity: PortalSessionIdentity | null;
+  /** Release 2's sending controls; absent: the page is exactly release 1's. */
+  sending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/u, '');
   if (path !== BASE && !path.startsWith(`${BASE}/`)) return false;
@@ -67,8 +85,18 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       send(res, 200, EMAIL_CONNECTION_COPY_SCRIPT, 'text/javascript; charset=utf-8'); return true;
     }
     if (!identity) { res.writeHead(303, { location: '/portal/login', 'cache-control': 'no-store' }); res.end(); return true; }
-    const page = async (extra: Partial<EmailConnectionPageInput> = {}): Promise<string> => renderEmailConnectionPage({
-      view: await service.view(identity), csrf: portalCsrfToken(portal.sessionSecret, identity.sessionToken), commandId: randomUUID(), ...extra });
+    const csrf = portalCsrfToken(portal.sessionSecret, identity.sessionToken);
+    const page = async (extra: Partial<EmailConnectionPageInput> = {}): Promise<string> => {
+      const view = await service.view(identity);
+      const sending = input.sending && view.offered && view.state.status === 'verified' ? await input.sending.view(identity, view.state).catch(() => null) : null;
+      return renderEmailConnectionPage({ view, csrf, commandId: randomUUID(), ...(sending?.offered ? { sending } : {}), ...extra });
+    };
+    if (path === `${BASE}/founder`) {
+      if (req.method !== 'GET' || url.search) throw new RouteError(405, STALE);
+      const founder = await input.sending?.founderView(identity).catch(() => null);
+      if (!founder) throw new RouteError(403, 'Only the founder can open this page.');
+      send(res, 200, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID() })); return true;
+    }
     if (path === BASE) {
       if (req.method !== 'GET') throw new RouteError(405, STALE);
       const keys = [...url.searchParams.keys()];
@@ -84,6 +112,34 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     if (req.method !== 'POST') throw new RouteError(405, STALE);
     if (url.search || req.headers.origin !== origin.origin || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new RouteError(403, STALE);
     const action = path.slice(BASE.length + 1);
+    if (action === 'founder/act') {
+      const fields = await readForm(req, ['csrf', 'commandId', 'action', 'workspace', 'version']);
+      if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, fields.get('csrf') ?? '') || !UUID.test(fields.get('commandId') ?? '')) throw new RouteError(403, STALE);
+      const founderAction = fields.get('action') as FounderAction, workspace = fields.get('workspace') ?? '', version = Number(fields.get('version'));
+      if (!input.sending || !FOUNDER_ACTIONS.includes(founderAction) || !Number.isSafeInteger(version) || version < 0
+          || (founderAction === 'lift_account' ? workspace !== '' : !UUID.test(workspace))) throw new RouteError(400, STALE);
+      const result = await input.sending.founderAct(identity, founderAction === 'lift_account' ? null : workspace, founderAction, version);
+      const founder = await input.sending.founderView(identity).catch(() => null);
+      if (!founder) throw new RouteError(403, result.message);
+      send(res, result.ok ? 200 : 409, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID(), message: result })); return true;
+    }
+    if ((SENDING_ACTIONS as readonly string[]).includes(action)) {
+      const sendingAction = action as typeof SENDING_ACTIONS[number];
+      const fields = sendingAction === 'details' ? await readForm(req, ['csrf', 'commandId', 'businessName', 'postalAddress', 'testList'])
+        : sendingAction === 'works-now' ? await readForm(req, ['csrf', 'commandId', 'email']) : await readForm(req, ['csrf', 'commandId']);
+      if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, fields.get('csrf') ?? '') || !UUID.test(fields.get('commandId') ?? '')) throw new RouteError(403, STALE);
+      const view = await service.view(identity);
+      if (!input.sending || !view.offered || view.state.status !== 'verified') throw new RouteError(409, EMAIL_CONNECTION_MESSAGES.nothingToCheck);
+      const state = view.state, sending = input.sending;
+      const details = sendingAction === 'details' ? { businessName: (fields.get('businessName') ?? '').slice(0, 200), postalAddress: (fields.get('postalAddress') ?? '').slice(0, 400),
+        testList: (fields.get('testList') ?? '').slice(0, 2700) } : undefined;
+      const result: SendingResult = sendingAction === 'details' ? await sending.saveDetails(identity, details!)
+        : sendingAction === 'test-send' ? await sending.sendTest(identity, state)
+          : sendingAction === 'works-now' ? await sending.liftAddress(identity, (fields.get('email') ?? '').slice(0, 320))
+            : await sending.command(identity, state, sendingAction === 'go-live' ? 'live' : sendingAction === 'back-to-test' ? 'test' : sendingAction);
+      send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && !result.ok ? { sendingForm: details } : {}) }));
+      return true;
+    }
     if (!['connect', 'continue', 'check', 'disconnect', 'use-domain'].includes(action)) throw new RouteError(404, STALE);
     const fields = action === 'connect'
       ? await readForm(req, ['csrf', 'commandId', 'fromName', 'fromAddress', 'replyTo'], ['agree'])

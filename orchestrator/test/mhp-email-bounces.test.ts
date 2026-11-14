@@ -282,7 +282,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
   assert.doesNotMatch(html, /no email at all|All email/u);
   const durableHtml = emailHealthPage(snapshot, 'csrf-token', undefined, { durable: true });
   assert.match(durableHtml, /also kept in your own records/u);
-  assert.match(durableHtml, /press Reactivate for it in Postmark first/u);
+  assert.match(durableHtml, /we stop blocking it and ask Postmark to reactivate it too, and say what Postmark answered\. A spam report cannot be undone, here or at Postmark\./u);
   assert.equal((durableHtml.match(/This address works now<\/button>/g) ?? []).length, 3, 'one button per hard-bounced address');
   assert.doesNotMatch(durableHtml, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>[^<]*<\/td><td>Marketing and event emails<form/u, 'never for a spam report');
   assert.match(durableHtml, /<form method="post" action="\/hq\/marketing\/email-health\/lift"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="email" value="gone@example\.invalid">/u);
@@ -290,7 +290,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
     /We no longer block gone@example\.invalid for that bounce\. Now press Reactivate for this address in Postmark, or Postmark will still refuse it\. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that\./u);
   const say = (outcome: 'already_lifted' | 'spam' | 'not_blocked' | 'unavailable') => emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome } });
   assert.match(say('already_lifted'), /We had already stopped blocking gone@example\.invalid for that bounce\. Postmark may still refuse it: press Reactivate for this address in Postmark if you have not done so\./u);
-  assert.match(say('spam'), /gone@example\.invalid stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page\./u);
+  assert.match(say('spam'), /gone@example\.invalid stays blocked: they marked one of your emails as spam, and a spam report cannot be undone, here or at Postmark\./u);
   assert.match(say('not_blocked'), /has no bounce recorded in your own records, so nothing changed/u);
   for (const outcome of ['already_lifted', 'spam', 'not_blocked', 'unavailable'] as const) assert.doesNotMatch(say(outcome), /We no longer block|was not blocked by a bounce/u, outcome);
   assert.match(html, /stays stopped, exactly as if they had unsubscribed, until they sign up again and tick the box themselves/u, 'reactivating at Postmark does not re-subscribe anyone');

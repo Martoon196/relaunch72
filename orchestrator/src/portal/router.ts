@@ -20,6 +20,7 @@ import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
 import { handleEmailConnection } from './email-connection-router.js';
 import type { EmailConnectionService } from '../email-connections/service.js';
+import type { OwnerSendingService } from '../email-protection/owner.js';
 import { emailConnectBusiness } from '../email-connections/config.js';
 const emailConnectionBusinessAllowed = (workspaceId: string): boolean => Boolean(emailConnectBusiness(workspaceId));
 import { handleApprovalQueue } from './approval-queue-router.js';
@@ -560,6 +561,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   seoBlog?: PortalSeoBlogService;
   /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
   emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>;
+  /** Release 2 of "Connect email": sending controls and the founder's protection page (0156). */
+  emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
   /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */
   webinars?: PgWebinarService;
   /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
@@ -1991,7 +1994,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   if (deps.kind === 'postgres' && (p === '/portal/email' || p.startsWith('/portal/email/'))) {
     if (!deps.emailConnections) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Email connection isn\'t switched on yet.'); return; }
-    await handleEmailConnection(req, res, url, { portal: deps, service: deps.emailConnections, identity: portalIdentity }); return;
+    await handleEmailConnection(req, res, url, { portal: deps, service: deps.emailConnections, identity: portalIdentity,
+      ...(deps.emailSending ? { sending: deps.emailSending } : {}) }); return;
   }
   if (deps.kind === 'postgres' && (p === '/portal/follow-ups' || p.startsWith('/portal/follow-ups/'))) {
     if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }

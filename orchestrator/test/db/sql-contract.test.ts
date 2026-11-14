@@ -6,6 +6,7 @@ import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-fol
 import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
 import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src/db/email-connection-schema.js';
+import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src/db/email-protection-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -168,6 +169,7 @@ const migration152Url = new URL('../../src/db/migrations/0152_pp_followup_email_
 const migration153Url = new URL('../../src/db/migrations/0153_stop_per_channel_and_email_block_ledger.sql', import.meta.url);
 const migration154Url = new URL('../../src/db/migrations/0154_seo_blog_attach_mhp_workspace.sql', import.meta.url);
 const migration155Url = new URL('../../src/db/migrations/0155_email_connections.sql', import.meta.url);
+const migration156Url = new URL('../../src/db/migrations/0156_email_sending_protection.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -762,6 +764,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: EMAIL_BLOCK_MIGRATION, version: 153 },
     { filename: SEO_BLOG_ATTACH_MIGRATION, version: 154 },
     { filename: EMAIL_CONNECTION_MIGRATION, version: 155 },
+    { filename: EMAIL_PROTECTION_MIGRATION, version: 156 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -913,6 +916,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration153Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration154Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration155Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration156Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -936,6 +940,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===153)?.checksum, EMAIL_BLOCK_CHECKSUM);
   assert.equal(tail.find(m=>m.version===154)?.checksum, SEO_BLOG_ATTACH_CHECKSUM);
   assert.equal(tail.find(m=>m.version===155)?.checksum, EMAIL_CONNECTION_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===156)?.checksum, EMAIL_PROTECTION_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
@@ -1122,6 +1127,65 @@ test('0155 keeps email connections pinned to Property Predator, additive, behind
   // Rules before begin.
   const begin = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_connection_begin('), sql.indexOf('CREATE FUNCTION app_private.email_connection_intend('));
   assert.match(begin, /IF NOT existing OR p_terms IS NULL OR c\.terms_version IS DISTINCT FROM p_terms THEN RETURN 'terms_required'; END IF;/u);
+  assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer; RESET ROLE;$/u);
+});
+
+test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\'s direction and founder-only buttons enforced in SQL', async () => {
+  const sql = normalise(await readFile(migration156Url, 'utf8'));
+  assert.match(sql, /SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s';/u);
+  // Additive: nothing deleted, dropped, replaced or triggered; ALTER only on its own new tables; no role created.
+  assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b|CREATE TRIGGER|CREATE OR REPLACE|ALTER POLICY|ALTER FUNCTION|CREATE ROLE|BEGIN;|COMMIT/u);
+  const tables = ['app_private.email_sending_controls', 'app_private.email_send_events', 'app_private.email_protection_alerts', 'app_private.email_account_protection', 'app_private.email_account_events'];
+  assert.deepEqual([...sql.matchAll(/CREATE TABLE ([a-z_.]+)/g)].map(m => m[1]), tables);
+  for (const altered of sql.matchAll(/ALTER TABLE ([a-z_.]+)/g)) assert.ok(tables.includes(altered[1]!), `${altered[1]} is not one of 0156's own tables`);
+  assert.doesNotMatch(sql, /UPDATE app\.|INSERT INTO app\./u, 'no app table is written');
+  for (const table of tables) assert.match(sql, new RegExp(`ALTER TABLE ${table.replace('.', '\\.')} ENABLE ROW LEVEL SECURITY; ALTER TABLE ${table.replace('.', '\\.')} FORCE ROW LEVEL SECURITY; REVOKE ALL ON ${table.replace('.', '\\.')} FROM PUBLIC;`, 'u'), table);
+  for (const table of ['email_sending_controls', 'email_send_events']) {
+    assert.match(sql, new RegExp(`CREATE TABLE app_private\\.${table}\\( (?:id uuid PRIMARY KEY DEFAULT gen_random_uuid\\(\\), )?workspace_id uuid (?:PRIMARY KEY|NOT NULL) CHECK\\(workspace_id='d975ff66-336a-46c2-b36b-d7095a11af97'\\)`, 'u'), `${table} is pinned`);
+  }
+  // The 0155 groundwork columns become writable through the definer, nothing else of that table.
+  assert.match(sql, /GRANT UPDATE\(mode,test_recipients,protection_state,protection_reason,protection_since,daily_cap,hourly_cap,warmup_started_at,go_live_approved_by,go_live_approved_at\) ON app_private\.email_connections TO r72_email_connection_definer;/u);
+  // Append-only evidence: no DELETE anywhere; a counter row can only be settled; the account log only inserted.
+  assert.doesNotMatch(sql, /GRANT [^;]*DELETE/u);
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_send_events TO r72_email_connection_definer; GRANT UPDATE\(state,settled_at\) ON app_private\.email_send_events TO r72_email_connection_definer;/u);
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_account_events TO r72_email_connection_definer;/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*UPDATE[^;]* ON app_private\.email_(?:protection|account)_events/u);
+  assert.match(sql, /event_key text NOT NULL CHECK\(event_key~'\^\[!-~\]\{1,200\}\$' AND event_key!~'@'\)/u, 'no address in a counter key');
+  assert.match(sql, /UNIQUE\(workspace_id,kind,event_key\)/u, 'replays are counted once');
+  // Every definer function: search_path=pg_catalog and the identity-command check.
+  const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  assert.equal(definers, 23);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
+  assert.equal((sql.match(/IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required'/g) ?? []).length, definers, 'every function checks its caller');
+  const granted = /GRANT EXECUTE ON FUNCTION (app_private\.email_sending_state[^;]*) TO r72_identity_command;/u.exec(sql)![1]!;
+  assert.deepEqual([...granted.matchAll(/app_private\.([a-z_]+)\(/g)].map(m => m[1]), ['email_sending_state', 'email_sending_details', 'email_send_reserve', 'email_send_settle',
+    'email_counter_record', 'email_sending_config', 'email_protection_numbers', 'email_protection_apply', 'email_account_apply', 'email_sending_command', 'email_sending_test_reserve',
+    'email_sending_test_result', 'email_protection_founder_view', 'email_protection_status', 'email_protection_founder_act', 'email_protection_alerts_claim', 'email_protection_alert_done']);
+  for (const helper of ['email_protection_founder(bytea)', 'email_sending_user_email(uuid)', 'email_sending_owner_emails(uuid)']) {
+    assert.match(sql, new RegExp(`GRANT EXECUTE ON FUNCTION app_private\\.${helper.replace(/[()]/g, '\\$&')} TO r72_email_connection_definer;`, 'u'), helper);
+  }
+  // The founder: the session resolved again here, and only a user on the founder list (0145's seo_limit_operators).
+  const founder = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_protection_founder('), sql.indexOf('CREATE FUNCTION app_private.email_sending_user_email('));
+  assert.match(founder, /FROM app_private\.resolve_session\(p_session\) r; IF actor IS NOT NULL AND EXISTS\(SELECT 1 FROM app_private\.seo_limit_operators o WHERE o\.user_id=actor\) THEN RETURN actor;/u);
+  const act = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_protection_founder_act('), sql.indexOf('CREATE FUNCTION app_private.email_protection_alerts_claim('));
+  assert.match(act, /actor:=app_private\.email_protection_founder\(p_session\); IF actor IS NULL THEN RAISE EXCEPTION 'Founder required' USING ERRCODE='42501';/u);
+  // The system can only move a business up the ladder (or slowed back to ok), and a second own pause in 90 days is off.
+  const apply = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_protection_apply('), sql.indexOf('CREATE FUNCTION app_private.email_account_apply('));
+  assert.match(apply, /IF c\.protection_state<>p_from THEN RETURN 'stale'; END IF;/u);
+  assert.match(apply, /IF NOT \(p_from=p_to OR \(p_from='ok' AND p_to IN\('slowed','paused','off'\)\) OR \(p_from='slowed' AND p_to IN\('ok','paused','off'\)\)\) THEN RETURN 'refused'; END IF;/u);
+  assert.match(apply, /p\.kind='paused' AND p\.numbers->>'cause'='own' AND p\.occurred_at>clock_timestamp\(\)-interval '90 days'; IF v_prior IS NOT NULL THEN v_to:='off'; v_kind:='switched_off';/u);
+  // Every send is reserved against the holds and caps before it is handed to Postmark.
+  const reserve = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_send_reserve('), sql.indexOf('CREATE FUNCTION app_private.email_send_settle('));
+  for (const hold of ["RETURN 'off'", "RETURN 'owner_paused'", "RETURN 'account_held'", "RETURN 'paused'", "RETURN 'not_live'", "RETURN 'sample_held'", "RETURN 'sample_wait'", "RETURN 'daily_cap'", "RETURN 'hourly_cap'"]) {
+    assert.ok(reserve.includes(hold), hold);
+  }
+  assert.match(reserve, /IF sample_count>=50 THEN UPDATE app_private\.email_sending_controls SET sample_state='waiting'/u);
+  // The page and the founder never get a sealed value; only the sender's read does.
+  for (const name of ['email_sending_state', 'email_protection_status']) {
+    const start = sql.indexOf(`CREATE FUNCTION app_private.${name}(`);
+    assert.doesNotMatch(sql.slice(start, sql.indexOf('END $f$;', start)), /sealed/u, name);
+  }
+  assert.match(sql, /'sealedServerToken',c\.sealed_server_token/u);
   assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer; RESET ROLE;$/u);
 });
 

@@ -24,8 +24,13 @@ export function ppUnsubscribeUrl(origin: string, secret: string, contactPointId:
 export interface PpFollowupRendered { readonly subject: string; readonly text: string; readonly html: string; readonly unsubscribe: string }
 
 /** Renders the exact approved PP email bytes. Placeholder values are inserted once and never re-scanned. */
+/**
+ * footer (stored email connections only): the business's real name and postal address, printed above the unsubscribe
+ * link in both parts. Without it the bytes are exactly as before.
+ */
 export function renderPpFollowupEmail(input: { canonicalContent: string; contentSha256: string; displayName: string | null;
-  label: string; link: string; unsubscribe: string; productName: string; unsubscribeOrigin: string }): PpFollowupRendered {
+  label: string; link: string; unsubscribe: string; productName: string; unsubscribeOrigin: string;
+  footer?: { readonly businessName: string; readonly postalAddress: string } }): PpFollowupRendered {
   if (createHash('sha256').update(input.canonicalContent, 'utf8').digest('hex') !== input.contentSha256) throw new Error('PP follow-up content digest mismatch');
   const unsubscribe = new URL(input.unsubscribe), expectedOrigin = new URL(input.unsubscribeOrigin).origin;
   if (unsubscribe.origin !== expectedOrigin || unsubscribe.pathname !== PP_FOLLOWUP_UNSUBSCRIBE_ROUTE || unsubscribe.username || unsubscribe.password) throw new Error('PP unsubscribe link is invalid');
@@ -38,7 +43,10 @@ export function renderPpFollowupEmail(input: { canonicalContent: string; content
     LABEL: input.label.slice(0, 200), LINK: link, UNSUBSCRIBE: input.unsubscribe };
   const fill = (value: string) => value.replace(/\{\{(FIRSTNAME|LABEL|LINK|UNSUBSCRIBE)\}\}/gu, (_match, name: string) => values[name]!.replace(/[\r\n]+/gu, ' '));
   const subject = fill(draft.subject).replace(/[\r\n]+/gu, ' ');
-  const body = fill(draft.bodyText), footer = `Unsubscribe: ${input.unsubscribe}`;
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(subject)}</title></head><body style="margin:0;background:#f4f3ef;color:#172b30;font:16px/1.7 Arial,sans-serif"><main style="max-width:640px;margin:auto;padding:32px;background:#fff"><h1 style="font-size:20px;color:#123b48">${escape(input.productName)}</h1><div style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(body)}</div><p style="margin-top:32px;font-size:12px"><a href="${escape(input.unsubscribe)}">Unsubscribe</a> from these emails.</p></main></body></html>`;
+  const body = fill(draft.bodyText);
+  const sender = input.footer ? `${input.footer.businessName.replace(/[\r\n]+/gu, ' ')} · ${input.footer.postalAddress.replace(/[\r\n]+/gu, ' ')}` : null;
+  const footer = `${sender ? `${sender}\n` : ''}Unsubscribe: ${input.unsubscribe}`;
+  const senderHtml = sender ? `<p style="margin-top:32px;font-size:12px">${escape(sender)}</p>` : '';
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(subject)}</title></head><body style="margin:0;background:#f4f3ef;color:#172b30;font:16px/1.7 Arial,sans-serif"><main style="max-width:640px;margin:auto;padding:32px;background:#fff"><h1 style="font-size:20px;color:#123b48">${escape(input.productName)}</h1><div style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(body)}</div>${senderHtml}<p style="margin-top:${sender ? '8' : '32'}px;font-size:12px"><a href="${escape(input.unsubscribe)}">Unsubscribe</a> from these emails.</p></main></body></html>`;
   return Object.freeze({ subject, text: `${body}\n\n${footer}`, html, unsubscribe: input.unsubscribe });
 }
