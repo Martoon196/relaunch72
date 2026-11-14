@@ -139,7 +139,7 @@ const STOPPED: Readonly<Record<EmailBlockReason, string>> = Object.freeze({
 const REQUESTED_EMAILS = 'requested emails (sign-in links, receipts and webinar emails)';
 
 /** Shown under the blocked list when it holds a reserved test address (see undeliverable.ts). */
-export const RESERVED_ADDRESS_NOTE = 'Addresses ending in .invalid, .test or example.com are test addresses, not real people. We no longer send to them at all.';
+export const RESERVED_ADDRESS_NOTE = 'Addresses at example.com, or ending in .invalid or .test, are test addresses, not real people. We no longer send to them at all.';
 
 /** Plain warnings, strongest first. The lines are ours and sit below the provider's own. */
 export function emailHealthWarnings(snapshot: EmailHealthSnapshot): string[] {

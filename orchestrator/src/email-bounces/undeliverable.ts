@@ -6,7 +6,8 @@
  *
  * An email to one of these is never received by a person. Sending it anyway still counts against the account's
  * bounce rate at the provider (Postmark pauses accounts whose bounce rate is high), so every real send path refuses
- * them before any provider call, and the public forms refuse them at the door.
+ * them before any provider call. The sign-up forms still accept them (hundreds of tests and fixtures rely on that),
+ * so a reserved-address sign-up is captured and then simply never emailed.
  *
  * The check is exact on whole domain labels: myexample.com, test.co.uk, invalid.co.uk and example.com.au are real
  * domains and are NOT reserved. No regular expression is used on the whole address, so a display name or a second
@@ -34,8 +35,10 @@ function domainOf(value: string): string | null {
   // One trailing dot is the fully-qualified spelling of the same domain.
   if (domain.endsWith('.')) domain = domain.slice(0, -1);
   if (!domain || domain.length > 253) return null;
-  const ascii = domainToASCII(domain);
-  if (!ascii || ascii.split('.').some(label => label.length === 0)) return null;
+  // A name the converter rejects (for example an invalid "xn--" label under .test) is checked as typed: a crafted
+  // label must not hide a reserved ending.
+  const ascii = domainToASCII(domain) || domain;
+  if (ascii.split('.').some(label => label.length === 0)) return null;
   return ascii;
 }
 

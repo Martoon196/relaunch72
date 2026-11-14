@@ -243,7 +243,7 @@ function snapshotWith(...emails: string[]) {
 test('the email health page explains reserved test addresses under the list only when one is listed', () => {
   const shown = emailHealthPage(snapshotWith('f3-live-pilot-20261101@example.invalid', 'gone@gmail.com'), 'csrf');
   assert.ok(shown.includes(`<p class="note">${RESERVED_ADDRESS_NOTE}</p>`));
-  assert.equal(RESERVED_ADDRESS_NOTE, 'Addresses ending in .invalid, .test or example.com are test addresses, not real people. We no longer send to them at all.');
+  assert.equal(RESERVED_ADDRESS_NOTE, 'Addresses at example.com, or ending in .invalid or .test, are test addresses, not real people. We no longer send to them at all.');
   assert.ok(shown.indexOf('</table>') < shown.indexOf(RESERVED_ADDRESS_NOTE), 'the sentence sits under the list');
   assert.ok(!emailHealthPage(snapshotWith('gone@gmail.com'), 'csrf').includes(RESERVED_ADDRESS_NOTE));
   assert.ok(!emailHealthPage(snapshotWith(), 'csrf').includes(RESERVED_ADDRESS_NOTE));
@@ -254,4 +254,13 @@ test('a hostile reserved address on the list stays escaped beside the sentence',
   const html = emailHealthPage(snapshotWith('"<script>x</script>"@example.invalid'), 'csrf');
   assert.ok(html.includes(RESERVED_ADDRESS_NOTE));
   assert.ok(!html.includes('<script>x</script>'));
+});
+
+test('a crafted label the converter rejects cannot hide a reserved ending; ordinary domains stay ordinary', () => {
+  for (const reserved of ['a@xn--abc.test', 'a@xn--a.invalid', 'a@xn--abc.example.com', 'A@XN--ABC.EXAMPLE.ORG.']) {
+    assert.equal(isReservedEmailAddress(reserved), true, reserved);
+  }
+  for (const real of ['a@xn--abc.co.uk', 'a@xn--bcher-kva.de', 'jo@myexample.com', 'jo@example.co.uk']) {
+    assert.equal(isReservedEmailAddress(real), false, real);
+  }
 });
