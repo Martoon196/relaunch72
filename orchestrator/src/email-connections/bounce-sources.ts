@@ -4,7 +4,12 @@
  * Loaded at start, then about every 60 seconds (so other instances pick up a connection made elsewhere), and on
  * demand when Postmark posts to a connection's address this process has not loaded yet. Each source authenticates
  * the webhook with that connection's own (unsealed) secret and reads its stream with its own server token; neither
- * value is ever logged. A connection that cannot be opened (wrong key) is skipped with one warning line.
+ * value is ever logged. A newly loaded source is swept at once (its suppression list read), not at the next hourly
+ * sweep.
+ *
+ * A stored connection that cannot be opened (EMAIL_CONNECTION_KEY missing, lost or rotated) is reported as
+ * unavailable, so its webhook answers 503 and Postmark retries, never 404 (which Postmark drops). One warning line
+ * names the setting, never a value. Pressing Continue on the email page makes a new secret and webhook.
  */
 import type { EmailBounceService, EmailBounceSource, EmailBounceSourceLoader } from '../email-bounces/index.js';
 import { EMAIL_CONNECT_BUSINESSES, emailConnectBusiness } from './config.js';
@@ -25,37 +30,56 @@ export function connectionBounceSource(input: { workspaceId: string; serverId: s
 export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
   private running: Promise<void> | null = null;
   private lastForced = 0;
-  private warned = new Set<string>();
+  private warned = false;
+  /** Keys whose stored row exists but could not be opened (their webhook answers 503). */
+  private readonly unopenable = new Set<string>();
+  /** When each key was last put in force by apply(): a refresh that began earlier never removes it. */
+  private readonly appliedAt = new Map<string, number>();
+  private sequence = 0;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
 
-  constructor(private readonly input: { store: Pick<EmailConnectionStore, 'sources'>; vault: EmailConnectionVault; service: EmailBounceService;
+  constructor(private readonly input: { store: Pick<EmailConnectionStore, 'sources'>; vault: EmailConnectionVault | null; service: EmailBounceService;
     now?: () => number; log?: (line: string) => void }) {
     this.now = input.now ?? Date.now;
     this.log = input.log ?? (() => undefined);
   }
 
   handles(key: string): boolean { return EMAIL_CONNECT_BUSINESSES.some(business => business.sourceKey === key); }
+  unavailable(key: string): boolean { return this.unopenable.has(key); }
+
+  private put(source: EmailBounceSource): void {
+    const fresh = !this.input.service.dynamicSourceKeys().includes(source.key);
+    this.input.service.upsertSource(source, { replaces: emailConnectBusiness(source.workspaceId)?.replacesSourceKey ?? null });
+    this.unopenable.delete(source.key);
+    // A newly added source is read at once, so bounces from before the webhook existed are known straight away.
+    if (fresh) void this.input.service.sweepSource(source).catch(() => undefined);
+  }
 
   /** Puts one source in force at once (the instance that is creating the webhook, before Postmark checks it). */
   apply(source: EmailBounceSource): void {
-    this.input.service.upsertSource(source, { replaces: emailConnectBusiness(source.workspaceId)?.replacesSourceKey ?? null });
+    this.appliedAt.set(source.key, ++this.sequence);
+    this.put(source);
   }
   remove(workspaceId: string): void {
     const business = emailConnectBusiness(workspaceId);
-    if (business) this.input.service.removeSource(business.sourceKey);
+    if (!business) return;
+    this.appliedAt.set(business.sourceKey, ++this.sequence);
+    this.input.service.removeSource(business.sourceKey);
+    this.unopenable.delete(business.sourceKey);
   }
 
   private open(row: StoredConnectionSource): EmailBounceSource | null {
     try {
+      if (!this.input.vault) throw new Error('no key');
       return connectionBounceSource({ workspaceId: row.workspaceId, serverId: row.serverId, stream: row.stream,
         serverToken: this.input.vault.open(row.workspaceId, 'server_token', row.sealedServerToken),
         webhookSecret: this.input.vault.open(row.workspaceId, 'webhook_secret', row.sealedWebhookSecret) });
     } catch {
-      if (!this.warned.has(row.workspaceId)) {
-        this.warned.add(row.workspaceId);
-        this.log(JSON.stringify({ event: 'email.connections.source_unreadable', level: 'warn', workspace: row.workspaceId.slice(0, 8),
-          message: 'A stored email connection could not be opened with EMAIL_CONNECTION_KEY; its bounce webhook stays closed.' }));
+      if (!this.warned) {
+        this.warned = true;
+        this.log(JSON.stringify({ event: 'email.connections.source_unreadable', level: 'warn',
+          message: 'A stored email connection could not be opened with EMAIL_CONNECTION_KEY (missing, lost or changed). Its bounce webhook answers 503 until the owner presses Continue on the email page.' }));
       }
       return null;
     }
@@ -64,15 +88,22 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
   /** One read of the store. Throws when the store cannot be read (the sources in force are kept). */
   async refresh(): Promise<void> {
     if (this.running) return this.running;
+    const startedAt = this.sequence;
     const run = (async () => {
       const rows = await this.input.store.sources();
-      const wanted = new Map<string, EmailBounceSource>();
+      const wanted = new Map<string, EmailBounceSource>(), unreadable = new Set<string>();
       for (const row of rows ?? []) {
+        const business = emailConnectBusiness(row.workspaceId);
+        if (!business) continue;
         const source = this.open(row);
-        if (source) wanted.set(source.key, source);
+        if (source) wanted.set(source.key, source); else unreadable.add(business.sourceKey);
       }
-      for (const [, source] of wanted) this.apply(source);
-      for (const key of this.input.service.dynamicSourceKeys()) if (this.handles(key) && !wanted.has(key)) this.input.service.removeSource(key);
+      // Anything apply() or remove() did after this read began is newer than what the read saw: left as it is.
+      const touched = (key: string) => (this.appliedAt.get(key) ?? 0) > startedAt;
+      for (const [key, source] of wanted) if (!touched(key)) this.put(source);
+      for (const key of unreadable) if (!touched(key)) { this.input.service.removeSource(key); this.unopenable.add(key); }
+      for (const key of this.input.service.dynamicSourceKeys()) if (this.handles(key) && !wanted.has(key) && !unreadable.has(key) && !touched(key)) this.input.service.removeSource(key);
+      for (const key of [...this.unopenable]) if (!unreadable.has(key) && !touched(key)) this.unopenable.delete(key);
     })();
     this.running = run.finally(() => { this.running = null; });
     return this.running;

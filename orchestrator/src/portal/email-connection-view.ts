@@ -21,6 +21,8 @@ export interface EmailConnectionPageInput {
   readonly message?: { readonly text: string; readonly ok: boolean };
   /** What the owner typed, shown again after a refusal. */
   readonly form?: { readonly fromName: string; readonly fromAddress: string; readonly replyTo: string };
+  /** Only for the platform founder, after a clash with a domain already in the shared account. */
+  readonly offerTakeOver?: boolean;
 }
 
 const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${e(value)}">`;
@@ -63,10 +65,9 @@ function connectForm(page: EmailConnectionPageInput, state: EmailConnectionState
 
 function recordCard(kind: 'TXT' | 'CNAME', host: string, value: string, domain: string, verified: boolean): string {
   const short = shortHost(host, domain);
-  const line = (label: string, text: string) => `<div class="field"><span class="label">${label}</span><code>${e(text)}</code><button type="button" class="secondary copy" data-copy="${e(text)}" hidden>Copy</button></div>`;
+  const line = (label: string, text: string, hint = '') => `<div class="field"><span class="label">${label}</span><code>${e(text)}</code><button type="button" class="secondary copy" data-copy="${e(text)}" hidden>Copy</button>${hint ? `<span class="note">${hint}</span>` : ''}</div>`;
   return `<article class="record"><h3>${kind} record${verified ? ' <span class="tick" aria-label="found">✓ found</span>' : ''}</h3>
-    ${line('Type', kind)}${line('Name (short)', short)}${line('Name (full)', host)}${line('Value', value)}
-    <p class="note">Most providers want the short name. If yours adds your domain by itself and the record ends up as “${e(host)}.${e(domain)}”, use the short name instead.</p></article>`;
+    ${line('Type', kind)}${line('Name', short, 'Most hosts want this short name')}${line('Full name', host, 'Some hosts want the full name')}${line('Value', value)}</article>`;
 }
 
 function mailto(state: EmailConnectionState): string {
@@ -93,6 +94,9 @@ function recordsSection(page: EmailConnectionPageInput, state: EmailConnectionSt
     <details><summary>Start again</summary><p>This removes the connection to the email service. The records you added can stay; they work again when you reconnect.</p>${disconnectForm(page, 'Start again')}</details></section>`;
 }
 
+function takeOverForm(page: EmailConnectionPageInput): string {
+  return `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/use-domain">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Use this domain</button></form>`;
+}
 function continueForm(page: EmailConnectionPageInput): string {
   return `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/continue">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Continue</button></form>`;
 }
@@ -122,8 +126,10 @@ function body(page: EmailConnectionPageInput): string {
     case 'not_connected': case 'disconnected':
       return `${intro}<section class="card"><h2>Your sending address</h2>${connectForm(page, state)}</section>`;
     case 'creating': case 'needs_attention':
-      return `${intro}<section class="card"><h2>Setting up</h2><p>${e(EMAIL_CONNECTION_MESSAGES.unfinished)}</p>${continueForm(page)}
-        <details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details')}</details></section>`;
+      return `${intro}<section class="card"><h2>Setting up</h2><p>Setting up didn’t finish. Press Continue to carry on where it stopped.</p>${continueForm(page)}
+        ${page.offerTakeOver ? takeOverForm(page) : ''}
+        <details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details')}</details>
+        <details><summary>Start again</summary><p>This removes what was set up so far for this business. Nothing is sent and nothing else changes.</p>${disconnectForm(page, 'Start again')}</details></section>`;
     case 'dns_pending':
       return `${intro}${recordsSection(page, state, view.dnsHost)}`;
     case 'verified':

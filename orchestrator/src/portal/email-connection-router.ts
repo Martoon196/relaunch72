@@ -6,7 +6,8 @@
  *   POST /portal/email/connect      csrf, commandId, fromName, fromAddress, replyTo, agree (the email rules tick)
  *   POST /portal/email/continue     csrf, commandId
  *   POST /portal/email/check        csrf, commandId
- *   POST /portal/email/disconnect   csrf, commandId
+ *   POST /portal/email/disconnect   csrf, commandId (also "Start again")
+ *   POST /portal/email/use-domain   csrf, commandId (the platform founder only: take over a domain already in the account)
  * Same-origin and CSRF checked like the follow-ups page; the database re-checks the owner on every call.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -49,7 +50,7 @@ async function readForm(req: IncomingMessage, required: readonly string[], optio
 
 export async function handleEmailConnection(req: IncomingMessage, res: ServerResponse, url: URL, input: {
   portal: Pick<PostgresPortalDeps, 'productProfile' | 'portalBaseUrl' | 'sessionSecret'>;
-  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect'>;
+  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>;
   identity: PortalSessionIdentity | null;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/u, '');
@@ -83,7 +84,7 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     if (req.method !== 'POST') throw new RouteError(405, STALE);
     if (url.search || req.headers.origin !== origin.origin || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new RouteError(403, STALE);
     const action = path.slice(BASE.length + 1);
-    if (!['connect', 'continue', 'check', 'disconnect'].includes(action)) throw new RouteError(404, STALE);
+    if (!['connect', 'continue', 'check', 'disconnect', 'use-domain'].includes(action)) throw new RouteError(404, STALE);
     const fields = action === 'connect'
       ? await readForm(req, ['csrf', 'commandId', 'fromName', 'fromAddress', 'replyTo'], ['agree'])
       : await readForm(req, ['csrf', 'commandId']);
@@ -93,13 +94,15 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     try {
       const result = action === 'connect' ? await service.connect(identity, { ...typed!, agreed: fields.get('agree') === 'yes' })
         : action === 'continue' ? await service.continue(identity)
-          : action === 'check' ? await service.check(identity) : await service.disconnect(identity);
+          : action === 'check' ? await service.check(identity)
+            : action === 'use-domain' ? await service.useExistingDomain(identity) : await service.disconnect(identity);
       send(res, 200, await page({ message: { text: result.message, ok: result.ok } }));
     } catch (error) {
       if (!(error instanceof EmailConnectionError)) throw error;
       // A refusal is shown on the page itself, with what the owner typed kept in the form.
       if (error.status === 403 || error.code === 'off') throw new RouteError(error.status, error.message);
-      send(res, error.status, await page({ message: { text: error.message, ok: false }, ...(typed ? { form: typed } : {}) }));
+      send(res, error.status, await page({ message: { text: error.message, ok: false }, ...(typed ? { form: typed } : {}),
+        ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}) }));
     }
     return true;
   } catch (error) {

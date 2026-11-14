@@ -66,6 +66,8 @@ export interface PostmarkServer {
 export interface PostmarkStream { readonly id: string; readonly type: string; readonly archived: boolean }
 export interface PostmarkWebhook {
   readonly id: number; readonly url: string; readonly stream: string; readonly username: string | null;
+  /** Postmark's verification status: only a 'verified' webhook receives events. */
+  readonly status: 'verified' | 'unverified' | null;
   /** The HTTP Basic password stored on the webhook (non-enumerable), compared with ours and then dropped. */
   readonly password: string | null;
 }
@@ -94,6 +96,8 @@ export interface PostmarkAccountApi {
   createDomain(input: { name: string; returnPathDomain: string }): Promise<PostmarkDomain>;
   verifyDkim(id: number): Promise<PostmarkDomain>;
   verifyReturnPath(id: number): Promise<PostmarkDomain>;
+  /** DELETE /domains/{id}. */
+  deleteDomain(id: number): Promise<void>;
   /** Calls made with one server's token (kept in this closure only). */
   server(serverToken: string): PostmarkServerApi;
 }
@@ -145,7 +149,8 @@ function readWebhook(value: unknown): PostmarkWebhook | null {
   if (id === null || url === null || stream === null) return null;
   const auth = record(value.HttpAuth) ? value.HttpAuth : {};
   const username = text(auth.Username, 400);
-  return Object.freeze(hidden({ id, url, stream, username } as PostmarkWebhook, 'password', text(auth.Password, 400)));
+  const status = value.Status === 'verified' || value.Status === 'unverified' ? value.Status : null;
+  return Object.freeze(hidden({ id, url, stream, username, status } as PostmarkWebhook, 'password', text(auth.Password, 400)));
 }
 function readDomain(value: unknown): PostmarkDomain {
   if (!record(value)) throw new PostmarkAccountError('invalid_response');
@@ -180,8 +185,10 @@ function requester(header: 'X-Postmark-Account-Token' | 'X-Postmark-Server-Token
       throw new PostmarkAccountError(name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network');
     }
     if (!response.ok) {
-      // Only the numeric ErrorCode is kept from an error body; Postmark's message text is never carried.
-      let errorCode: number | null = null;
+      // Only the numeric ErrorCode is kept from an error body (or, without one, the X-PM-ApiErrorCode header);
+      // Postmark's message text is never carried.
+      const header = response.headers.get('x-pm-apierrorcode');
+      let errorCode: number | null = header && /^[0-9]{1,6}$/u.test(header.trim()) ? Number(header.trim()) : null;
       try {
         const parsed: unknown = JSON.parse(await readCapped(response, MAX_ERROR_BYTES));
         if (record(parsed) && typeof parsed.ErrorCode === 'number' && Number.isSafeInteger(parsed.ErrorCode)) errorCode = parsed.ErrorCode;
@@ -236,6 +243,7 @@ export function createPostmarkAccountApi(input: { accountToken: string; fetch?: 
     async createDomain({ name, returnPathDomain }) { return readDomain(await call('POST', '/domains', { Name: name, ReturnPathDomain: returnPathDomain })); },
     async verifyDkim(domainId) { return readDomain(await call('PUT', `/domains/${id(domainId)}/verifyDkim`)); },
     async verifyReturnPath(domainId) { return readDomain(await call('PUT', `/domains/${id(domainId)}/verifyReturnPath`)); },
+    async deleteDomain(domainId) { await call('DELETE', `/domains/${id(domainId)}`); },
     server(serverToken) { return createPostmarkServerApi({ serverToken, fetch: fetcher, timeoutMs }); },
   };
   return Object.freeze({ ...api, toJSON: () => ({ postmark: '[REDACTED]' }) });

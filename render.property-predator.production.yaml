@@ -421,6 +421,18 @@ services:
       # is test or live. With PP_MARKETING_MODE off there is no PP handler at all.
       - key: PP_POSTMARK_WEBHOOK_SECRET
         sync: false
+      # "Connect email" (migration 0155): owners connect their business's email at
+      # /portal/email. Off unless EMAIL_CONNECT is exactly "enabled" with the
+      # Postmark ACCOUNT token (Postmark: Account > API Tokens) and a 32-byte
+      # base64 key that seals the saved server token and webhook secret. Losing
+      # or changing the key is recoverable: the owner presses Continue. Sends
+      # nothing in this release. Names only; values are set in the dashboard.
+      - key: EMAIL_CONNECT
+        sync: false
+      - key: POSTMARK_ACCOUNT_TOKEN
+        sync: false
+      - key: EMAIL_CONNECTION_KEY
+        sync: false
 
       # Mailgun EU INGRESS slots only. The public web service never receives the
       # outbound API key. Signed provider test events are permitted; they cause

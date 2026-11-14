@@ -13,7 +13,7 @@ import { createPostmarkBounceWebhook, EmailBounceService, loadEmailBounceConfig,
 import {
   connectionServerName, createPostmarkAccountApi, createPostmarkServerApi, dnsHostFromNameServers, EMAIL_CONNECT_BUSINESSES, EMAIL_CONNECTION_MESSAGES, EMAIL_TERMS,
   EMAIL_TERMS_VERSION, EmailConnectionBounceSources, EmailConnectionError, EmailConnectionService, EmailConnectionVault, emailConnectionKey, freeMailboxDomain,
-  loadEmailConnectConfig, lookUpCname, lookUpTxt, parseEmailAddress, PostmarkAccountError, reservedDomain, shortHost,
+  loadEmailConnectConfig, lookUpCname, lookUpTxt, parseEmailAddress, PostmarkAccountError, publicSuffixOnly, reservedDomain, senderName, shortHost,
 } from '../src/email-connections/index.js';
 import { ACCOUNT_TOKEN, FakePostmark, fakeResolver, MemoryEmailConnectionStore, OWNER_SESSION, PP_WS } from './email-connections-fixtures.js';
 
@@ -123,6 +123,10 @@ test('the feature is on only with EMAIL_CONNECT=enabled and well-formed settings
     assert.ok(config.problems.length > 0);
     assert.doesNotMatch(config.problems.join(' '), /abc|short|11111111/u);
   }
+  // Bounce handling off: Connect email is off too, with a plain reason.
+  const noBounces = loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN, bounceHandling: false });
+  assert.equal(noBounces.enabled, false);
+  assert.deepEqual(noBounces.problems, ['EMAIL_BOUNCE_HANDLING is off, so Connect email stays off.']);
   // A bad configuration never throws: the service is simply off.
   const service = new EmailConnectionService({ config: loadEmailConnectConfig({}, {}), store: new MemoryEmailConnectionStore() });
   assert.equal(service.enabled, false);
@@ -132,7 +136,15 @@ test('free mailboxes and reserved test domains are refused; addresses and hosts 
   for (const domain of ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.co.uk', 'hotmail.fr', 'yahoo.com', 'yahoo.co.uk', 'icloud.com', 'live.com', 'aol.com', 'btinternet.com', 'mail.gmail.com']) {
     assert.equal(freeMailboxDomain(domain), true, domain);
   }
-  for (const domain of ['propertypredator.com', 'live.mybusiness.co.uk', 'yahooligans-shop.com', 'mygmail.com']) assert.equal(freeMailboxDomain(domain), false, domain);
+  for (const domain of ['propertypredator.com', 'live.mybusiness.co.uk', 'yahooligans-shop.com', 'mygmail.com', 'live.tv', 'aol.io', 'shop.live.co', 'hotmail.agency']) {
+    assert.equal(freeMailboxDomain(domain), false, `${domain} is a real business domain`);
+  }
+  for (const suffix of ['co.uk', 'org.uk', 'com.au']) assert.equal(publicSuffixOnly(suffix), true, suffix);
+  assert.equal(publicSuffixOnly('brand.co.uk'), false);
+  // The sender name rule is the 0155 CHECK on from_name.
+  assert.equal(senderName('  Property Predator  '), 'Property Predator');
+  for (const bad of ['', '   ', 'a'.repeat(101), 'A <b>', 'Say "hi"', 'back\\slash', 'line\nbreak', 'c1\u0085']) assert.equal(senderName(bad), null, JSON.stringify(bad));
+  assert.equal(senderName("O'Brien & Co"), "O'Brien & Co");
   for (const domain of ['example.com', 'mail.example.org', 'shop.test', 'x.invalid', 'localhost', 'a.example']) assert.equal(reservedDomain(domain), true, domain);
   assert.equal(reservedDomain('example.co.uk'), false, 'the shared rule: a real domain');
   assert.deepEqual(parseEmailAddress(' Hello@Mail.Brand.co.uk '), { address: 'hello@mail.brand.co.uk', domain: 'mail.brand.co.uk' });
@@ -160,18 +172,20 @@ test('our own DNS look-ups tell found, different, missing and unknown apart', as
 
 // ---------- the state machine ----------
 
-function harness(options: { resolver?: ReturnType<typeof fakeResolver>; configured?: boolean } = {}) {
+function harness(options: { resolver?: ReturnType<typeof fakeResolver>; configured?: boolean; founder?: boolean } = {}) {
   const postmark = new FakePostmark(), store = new MemoryEmailConnectionStore(), lines: string[] = [];
   const log = (line: string) => { lines.push(line); };
   const config = loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN });
-  const ledgerWrites: unknown[] = [];
+  const ledgerWrites: unknown[] = [], sweeps: string[] = [];
   const ledger: EmailBlockLedger = { covers: () => true, status: () => 'available', decide: async () => null, recordList: async () => null, rows: async () => null,
     record: async input => { ledgerWrites.push(input); return 'recorded'; }, lift: async input => { ledgerWrites.push(input); return 1; } };
   // Optionally an env-configured PP source exists too (PP_POSTMARK_* set): the stored connection must win.
   const env = options.configured ? { PP_POSTMARK_SERVER_TOKEN: 'env-pp-server-token-0123456789', PP_POSTMARK_WEBHOOK_SECRET: 'env-pp-webhook-secret-0123456789' } : {};
   const bounces = new EmailBounceService({ log, ledger, config: loadEmailBounceConfig(env, { defaults: options.configured
     ? [{ key: 'pp', workspaceId: PP_WS, tokenEnv: 'PP_POSTMARK_SERVER_TOKEN', webhookSecretEnv: 'PP_POSTMARK_WEBHOOK_SECRET', marketingStreams: ['broadcast'], serviceStreams: [] }] : [] }),
-    apiFor: () => null });
+    // The configured PP source is swept with a stand-in that counts reads; stored sources have nothing to read here.
+    apiFor: source => source.key === 'pp' ? { suppressions: async () => { sweeps.push(source.key); return []; }, bounces: async () => ({ total: 0, received: 0, rows: [] }),
+      totals: async () => ({ sent: null, bounced: null, complaints: null }) } : null });
   const effects: unknown[] = [];
   bounces.setEffects(PP_WS, { onMarketingBlock: async input => { effects.push(input); } });
   assert.ok(config.enabled);
@@ -179,7 +193,8 @@ function harness(options: { resolver?: ReturnType<typeof fakeResolver>; configur
   bounces.setSourceLoader(sources);
   const webhook = createPostmarkBounceWebhook({ service: bounces, log });
   const account = createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch });
-  const service = new EmailConnectionService({ config, store, account, resolver: options.resolver ?? fakeResolver(), bounces: sources, log, secret: () => SECRET, lockWaitMs: 3_000 });
+  const service = new EmailConnectionService({ config, store, account, resolver: options.resolver ?? fakeResolver(), bounces: sources, log, secret: () => SECRET, lockWaitMs: 3_000,
+    founder: async () => options.founder === true });
   const post = async (body: unknown, auth = `${EMAIL_CONNECT_BUSINESSES[0]!.sourceKey}:${SECRET}`, path = KEYPATH) => {
     const captured = { status: 0, body: '' };
     const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: path,
@@ -202,7 +217,7 @@ function harness(options: { resolver?: ReturnType<typeof fakeResolver>; configur
     }
     return true;
   };
-  return { postmark, store, lines, service, bounces, sources, post, samples, ledgerWrites, effects };
+  return { postmark, store, lines, service, bounces, sources, post, samples, ledgerWrites, effects, sweeps, config };
 }
 
 const counts = (postmark: FakePostmark) => ({
@@ -219,8 +234,8 @@ test('Connect creates the server, the Broadcast stream, the webhook (secret save
   assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 1, domains: 1 });
   const server = h.postmark.servers[0]!;
   assert.equal(server.name, connectionServerName(EMAIL_CONNECT_BUSINESSES[0]!));
-  assert.equal(server.name, 'Relaunch72 · Property Predator · d975ff66');
-  assert.deepEqual(server.webhooks.map(w => [w.url, w.stream, w.username]), [[`${ORIGIN}/api/provider-webhooks/postmark/conn-d975ff66`, 'broadcast', 'conn-d975ff66']]);
+  assert.equal(server.name, 'Relaunch72 - Property Predator - d975ff66336a46c2b36bd7095a11af97', 'ASCII only, the full workspace id');
+  assert.deepEqual(server.webhooks.map(w => [w.url, w.stream, w.username]), [[`${ORIGIN}/api/provider-webhooks/postmark/conn-d975ff66336a46c2b36bd7095a11af97`, 'broadcast', 'conn-d975ff66336a46c2b36bd7095a11af97']]);
   assert.equal(h.postmark.domains[0]!.name, DOMAIN);
   assert.equal(h.postmark.domains[0]!.returnPath, `pm-bounces.${DOMAIN}`);
   const state = await h.store.state(OWNER_SESSION, PP_WS);
@@ -238,6 +253,9 @@ test('Connect creates the server, the Broadcast stream, the webhook (secret save
   assert.deepEqual(h.effects, []);
   assert.equal(h.bounces.registry.decide(PP_WS, 'john@example.com', 'marketing').blocked, false);
   for (const sample of h.samples('broadcast')) assert.deepEqual(JSON.parse((await h.post(sample)).body), { received: true, outcome: 'ignored' });
+  // A body we cannot read: 200, nothing recorded, one line with the source key and size only.
+  assert.equal((await h.post({ RecordType: 'Bounce', Email: 'x@readers-test.co.uk' })).status, 200);
+  assert.ok(h.lines.some(line => /webhook_unreadable_ignored.*"bytes":\d+/u.test(line) && !line.includes('readers-test')));
   assert.deepEqual(h.ledgerWrites, []);
   // A real event for the connected server is recorded as today.
   const real = { RecordType: 'Bounce', ID: 777, Type: 'HardBounce', ServerID: server.id, MessageStream: 'broadcast', Email: 'reader@readers-test.co.uk', BouncedAt: '2026-11-14T09:00:00Z',
@@ -245,10 +263,10 @@ test('Connect creates the server, the Broadcast stream, the webhook (secret save
   assert.equal((await h.post(real)).status, 200);
   assert.equal(h.bounces.registry.decide(PP_WS, 'reader@readers-test.co.uk', 'marketing').blocked, true);
   assert.equal(h.ledgerWrites.length, 1);
-  assert.equal((h.ledgerWrites[0] as unknown as { sourceKey: string }).sourceKey, 'conn-d975ff66');
+  assert.equal((h.ledgerWrites[0] as unknown as { sourceKey: string }).sourceKey, 'conn-d975ff66336a46c2b36bd7095a11af97');
   assert.equal(h.effects.length, 1, 'the brand\'s own lasting stop runs, as for any source');
   // Wrong password: 401.
-  assert.equal((await h.post(real, `conn-d975ff66:wrong-secret-wrong-secret-wrong-secret`)).status, 401);
+  assert.equal((await h.post(real, `conn-d975ff66336a46c2b36bd7095a11af97:wrong-secret-wrong-secret-wrong-secret`)).status, 401);
   assert.equal((await h.post(real, `pp:${SECRET}`)).status, 401, 'the Basic user must be the source key');
   // Nothing sensitive in any log line.
   const token = server.token, all = h.lines.join('\n');
@@ -326,6 +344,8 @@ test('free mailboxes, reserved domains and bad details are refused before Postma
   await refused({ fromAddress: 'me@shop.example.com' }, EMAIL_CONNECTION_MESSAGES.reservedDomain);
   await refused({ fromAddress: 'me@brand.test' }, EMAIL_CONNECTION_MESSAGES.reservedDomain);
   await refused({ fromAddress: 'not an address' }, EMAIL_CONNECTION_MESSAGES.needFrom);
+  await refused({ fromAddress: 'me@co.uk' }, EMAIL_CONNECTION_MESSAGES.publicSuffix);
+  await refused({ fromName: 'Say "hi"' }, 'Enter the sender name: up to 100 characters, without < > " or \\.');
   await refused({ fromName: '' }, EMAIL_CONNECTION_MESSAGES.needName);
   await refused({ fromName: '<script>' }, EMAIL_CONNECTION_MESSAGES.needName);
   await refused({ replyTo: 'nope' }, EMAIL_CONNECTION_MESSAGES.needReplyTo);
@@ -359,19 +379,73 @@ test('the email rules: required on the server, idempotent, and a new version nee
   assert.ok(view.offered && view.state.protection.dailyCap === 50 && view.state.protection.hourlyCap === 13 && view.state.protection.state === 'ok');
 });
 
-test('a domain already in the shared account is never adopted unless this business started creating it', async () => {
-  const h = harness();
-  // Another business's (or a hand-made) domain of the same name already in our Postmark account.
-  h.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: true, returnPathVerified: true });
-  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'That domain is already connected to another business.');
-  await assert.rejects(h.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.domainTaken);
-  assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).domainId, null);
-  // Our own interrupted create (the answer was lost) IS adopted.
+test('B1: a domain already in the shared account is never adopted, whatever fails, unless this business created it and it is still unverified', async () => {
+  // A foreign, fully verified domain of the same name, and every kind of interruption around the domain list.
+  for (const fail of [500, 429, 503] as const) {
+    const h = harness();
+    h.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: true, returnPathVerified: true });
+    h.postmark.failOn(c => c.method === 'GET' && c.path.startsWith('/domains?'), fail);
+    await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.busy);
+    assert.equal(h.store.events.some(e => e.step === 'domain' && e.outcome === 'started'), false, 'a failed list writes no intent');
+    // A failed write of "domain_taken" too.
+    let dropped = false;
+    const original = h.store.record.bind(h.store);
+    h.store.record = async (...args: Parameters<typeof original>) => { if (args[3] === 'domain_taken' && !dropped) { dropped = true; throw new Error('write lost'); } return original(...args); };
+    for (let press = 0; press < 4; press++) {
+      await assert.rejects(h.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError
+        && [EMAIL_CONNECTION_MESSAGES.domainInUse, EMAIL_CONNECTION_MESSAGES.busy].includes(e.message as never));
+    }
+    const state = await h.store.state(OWNER_SESSION, PP_WS);
+    assert.equal(state.domainId, null, `${fail}: never adopted`);
+    assert.equal(state.status, 'needs_attention');
+    assert.equal(h.postmark.count('POST', /^\/domains$/u), 0, 'and never created on top');
+  }
+  // An unverified foreign domain is not adopted either (no run of ours ever started creating it).
+  const u = harness();
+  u.postmark.domains.push({ id: 6, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: false, returnPathVerified: false });
+  await assert.rejects(u.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'That domain is already in use. If it is yours, contact support.');
+  await assert.rejects(u.service.continue(owner));
+  assert.equal((await u.store.state(OWNER_SESSION, PP_WS)).domainId, null);
+  // It appears between our list and our create (512): someone else's, never adopted.
+  const r = harness();
+  r.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 422, 512);
+  await assert.rejects(r.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  // Our own create whose answer was lost IS adopted on Continue (still unverified, our intent was written).
   const g = harness();
   g.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 500, null, true);
   await assert.rejects(g.service.connect(owner, FORM));
   assert.equal((await g.service.continue(owner)).ok, true);
   assert.equal(g.postmark.domains.length, 1);
+  assert.equal((await g.store.state(OWNER_SESSION, PP_WS)).dns!.origin, 'created');
+  // ...but not once it shows a verified record (someone proved it with DNS we never handed out).
+  const v = harness();
+  v.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 500, null, true);
+  await assert.rejects(v.service.connect(owner, FORM));
+  v.postmark.domains[0]!.dkimVerified = true;
+  await assert.rejects(v.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+});
+
+test('B1: the founder alone is offered "Use this domain", which takes the domain over for this business and records who', async () => {
+  const f = harness({ founder: true });
+  f.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: true, returnPathVerified: false });
+  await assert.rejects(f.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_account'
+    && e.message === 'This domain is already in our email account. If it belongs to this business, press Use this domain.');
+  const result = await f.service.useExistingDomain(owner);
+  assert.equal(result.ok, true);
+  const state = await f.store.state(OWNER_SESSION, PP_WS);
+  assert.deepEqual([state.status, state.domainId, state.dns!.origin], ['dns_pending', 5, 'taken_over']);
+  assert.deepEqual([state.dns!.dkim.verified, state.dns!.returnPath.verified], [true, false], 'Postmark\'s current flags, read not assumed');
+  assert.ok(f.store.events.some(e => e.step === 'domain' && e.outcome === 'founder_takeover'), 'who did it is in the events (the actor of that event)');
+  assert.equal(f.postmark.domains.length, 1);
+  // Disconnect never deletes a domain that was taken over (it was not created by this business).
+  await f.service.disconnect(owner);
+  assert.equal(f.postmark.domains.length, 1);
+  // A customer is never offered it, and cannot press it.
+  const c = harness({ founder: false });
+  c.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: true, returnPathVerified: true });
+  await assert.rejects(c.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  await assert.rejects(c.service.useExistingDomain(owner), (e: unknown) => e instanceof EmailConnectionError && e.status === 403);
+  assert.equal((await c.store.state(OWNER_SESSION, PP_WS)).domainId, null);
 });
 
 test('Check answers in exactly the four plain sentences, from Postmark\'s verified flags; our look-up only picks the wording', async () => {
@@ -381,7 +455,10 @@ test('Check answers in exactly the four plain sentences, from Postmark\'s verifi
   assert.equal((await h.service.check(owner)).message, 'Not found yet. This can take up to 48 hours; press Check again later.');
   h = await setup();
   dns.txt[`${h.postmark.domains[0]!.id}pm._domainkey.${DOMAIN}`] = [['k=rsa; p=WRONG']];
-  assert.equal((await h.service.check(owner)).message, 'The value doesn\'t match. Copy it again from this page.');
+  assert.equal((await h.service.check(owner)).message, 'The TXT record\'s value doesn\'t match. Copy it again from this page.');
+  h = await setup();
+  dns.cname[`pm-bounces.${DOMAIN}`] = ['elsewhere.example.net'];
+  assert.equal((await h.service.check(owner)).message, 'The CNAME record\'s value doesn\'t match. Copy it again from this page.');
   h = await setup();
   h.postmark.domains[0]!.dkimVerified = true;
   assert.equal((await h.service.check(owner)).message, 'Found 1 of 2: the CNAME record is missing.');
@@ -399,38 +476,186 @@ test('Check answers in exactly the four plain sentences, from Postmark\'s verifi
   assert.equal(state.status, 'verified');
   assert.equal(state.mode, 'off');
   assert.ok(state.dns!.dkim.verified && state.dns!.returnPath.verified);
+  assert.equal(state.dns!.origin, 'created', 'how the domain was got is kept through Check');
   // Postmark busy on check: the plain busy sentence.
   h.postmark.failOn(c => c.path.endsWith('/verifyDkim'), 503);
   await assert.rejects(h.service.check(owner), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.busy);
+  // An answer about another domain is never stored.
+  h.postmark.domains[0]!.name = 'other-brand-test.co.uk';
+  await assert.rejects(h.service.check(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'wrong_domain');
+  h.postmark.domains[0]!.name = DOMAIN;
+  // Check needs the current rules too.
+  h.store.row!.terms = { version: '2025-01-01', acceptedAt: new Date().toISOString(), acceptedByName: null };
+  await assert.rejects(h.service.check(owner), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.termsFirst);
 });
 
-test('Disconnect deletes the webhook, forgets both secrets, keeps the server and domain for re-adoption, and stops the bounce source', async () => {
+test('Disconnect deletes the webhook, forgets both secrets, releases its own unverified domain, keeps the server (and a verified domain), and stops the bounce source', async () => {
   const h = harness();
   await h.service.connect(owner, FORM);
-  assert.deepEqual(h.bounces.dynamicSourceKeys(), ['conn-d975ff66']);
+  assert.deepEqual(h.bounces.dynamicSourceKeys(), ['conn-d975ff66336a46c2b36bd7095a11af97']);
   await h.service.disconnect(owner);
   const state = await h.store.state(OWNER_SESSION, PP_WS);
   assert.equal(state.status, 'disconnected');
   assert.equal(state.webhookId, null);
   assert.equal(state.hasServerToken || state.hasWebhookSecret, false);
-  assert.ok(state.serverId && state.domainId, 'server and domain ids are kept');
-  assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 0, domains: 1 });
+  assert.ok(state.serverId, 'the server id is kept');
+  assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 0, domains: 0 }, 'our own unverified domain is deleted at Postmark');
+  assert.ok(h.lines.some(line => line.includes('"outcome":"domain_removed"')));
   assert.deepEqual(h.bounces.dynamicSourceKeys(), []);
   assert.equal((await h.post({ RecordType: 'Bounce' })).status, 404, 'the address is closed');
-  // Reconnecting adopts the same server and domain and makes one new webhook.
+  // Reconnecting adopts the same server and makes one new webhook and domain.
   await h.service.connect(owner, FORM);
   assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 1, domains: 1 });
+  // A verified domain is kept on disconnect, and adopted by its id on reconnect.
+  h.postmark.domains[0]!.dkimVerified = true; h.postmark.domains[0]!.returnPathVerified = true;
+  await h.service.check(owner);
+  const verifiedId = h.postmark.domains[0]!.id;
+  await h.service.disconnect(owner);
+  assert.equal(h.postmark.domains.length, 1);
+  await h.service.connect(owner, FORM);
+  assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).domainId, verifiedId);
+  assert.equal(h.postmark.domains.length, 1);
 });
 
-test('an account token Postmark refuses reads as "not switched on" to the owner and is logged without the token', async () => {
+test('S3: changing to another domain releases the earlier unverified one; a verified one is kept', async () => {
+  const h = harness();
+  await h.service.connect(owner, FORM);
+  // Interrupted after the domain was made (as a lost answer on a later step would leave it), then other details.
+  h.store.row!.status = 'needs_attention';
+  await h.service.connect(owner, { ...FORM, fromAddress: 'hello@other-brand-test.co.uk' });
+  assert.deepEqual(h.postmark.domains.map(d => d.name), ['other-brand-test.co.uk'], 'the earlier unverified domain was released');
+  assert.ok(h.store.events.some(e => e.step === 'domain' && e.outcome === 'domain_removed'), 'and the outcome recorded');
+  // Verified: kept.
+  h.postmark.domains[0]!.dkimVerified = true;
+  h.store.row!.status = 'needs_attention';
+  await h.service.connect(owner, FORM);
+  assert.deepEqual(h.postmark.domains.map(d => d.name).sort(), [DOMAIN, 'other-brand-test.co.uk']);
+  assert.ok(h.store.events.some(e => e.step === 'domain' && e.outcome === 'domain_kept'));
+});
+
+test('S2: a lost or changed EMAIL_CONNECTION_KEY is recoverable without SQL', async () => {
+  const h = harness();
+  await h.service.connect(owner, FORM);
+  // The key changes (rotated or lost): every sealed value is unreadable now.
+  const rotated = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 3).toString('base64') }, { portalBaseUrl: ORIGIN });
+  const lines: string[] = [];
+  const bounces = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
+  const sources = new EmailConnectionBounceSources({ store: h.store, vault: rotated.vault, service: bounces, log: line => lines.push(line) });
+  bounces.setSourceLoader(sources);
+  await sources.refresh();
+  const hook = createPostmarkBounceWebhook({ service: bounces });
+  const captured = { status: 0 };
+  const req = Object.assign(Readable.from([Buffer.from('{}')]), { method: 'POST', url: KEYPATH, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: '127.0.0.5' } }) as unknown as IncomingMessage;
+  await hook.handle(req, { writeHead(s: number) { captured.status = s; }, end() {} } as unknown as ServerResponse, new URL(KEYPATH, ORIGIN));
+  assert.equal(captured.status, 503, 'retried by Postmark, never dropped');
+  assert.equal(lines.filter(line => line.includes('EMAIL_CONNECTION_KEY')).length, 1, 'one line names the setting');
+  assert.equal(lines.join('\n').includes(Buffer.alloc(32, 3).toString('base64')), false);
+  const service = new EmailConnectionService({ config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+    resolver: fakeResolver(), bounces: sources, secret: () => 'whsec-new-secret-after-rotation-0123456789', lockWaitMs: 2000 });
+  // Continue: the unreadable secret is treated as absent; a new one is saved and the webhook replaced.
+  h.store.row!.status = 'needs_attention';
+  h.postmark.verify = async () => true; // the new webhook is checked against the other instance's handler here
+  assert.equal((await service.continue(owner)).ok, true);
+  assert.deepEqual(h.postmark.servers[0]!.webhooks.map(w => w.password), ['whsec-new-secret-after-rotation-0123456789']);
+  assert.deepEqual(bounces.dynamicSourceKeys(), ['conn-d975ff66336a46c2b36bd7095a11af97']);
+  await sources.refresh();
+  assert.equal(sources.unavailable('conn-d975ff66336a46c2b36bd7095a11af97'), false);
+  // Disconnect with a server token that cannot be opened: read again from the account, the webhook still deleted.
+  h.store.row!.sealedServerToken = h.config.vault!.seal(PP_WS, 'server_token', 'srv-under-old-key-0123456789');
+  await service.disconnect(owner);
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 0);
+});
+
+test('B2: PP\'s env-configured bounce source keeps answering and being swept through Connect, Continue, Check and Disconnect', async () => {
+  const h = harness({ configured: true });
+  const ppPost = async () => (await h.post({ RecordType: 'Bounce', ID: 9, Type: 'HardBounce', ServerID: 1, MessageStream: 'broadcast', Email: 'env-reader@readers-test.co.uk',
+    BouncedAt: '2026-11-14T09:00:00Z', Inactive: true }, 'pp:env-pp-webhook-secret-0123456789', '/api/provider-webhooks/postmark/pp')).status;
+  const swept = async () => { const before = h.sweeps.length; await h.bounces.sweepWorkspace(PP_WS); return h.sweeps.length > before; };
+  assert.equal(await ppPost(), 200); assert.equal(await swept(), true);
+  h.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 503);
+  await assert.rejects(h.service.connect(owner, FORM));
+  assert.equal(await ppPost(), 200); assert.equal(await swept(), true);
+  await h.service.continue(owner);
+  assert.deepEqual(h.bounces.sources.map(s => s.key).sort(), ['conn-d975ff66336a46c2b36bd7095a11af97', 'pp'], 'both sources, side by side');
+  assert.equal(await ppPost(), 200); assert.equal(await swept(), true);
+  await h.service.check(owner);
+  assert.equal(await ppPost(), 200); assert.equal(await swept(), true);
+  await h.service.disconnect(owner);
+  assert.equal(await ppPost(), 200); assert.equal(await swept(), true);
+  assert.equal(h.lines.some(line => line.includes('configured_source_replaced')), false);
+});
+
+test('S1: the run lock is taken only after the owner check, and someone else\'s run gets its own plain message', async () => {
+  const h = harness();
+  let locks = 0;
+  const original = h.store.lock.bind(h.store);
+  h.store.lock = async (...args) => { locks++; return original(...args); };
+  for (const call of [() => h.service.continue({ ...owner, sessionToken: 'stranger-session-0123456789' }), () => h.service.check({ ...owner, sessionToken: 'stranger-session-0123456789' }),
+    () => h.service.disconnect({ ...owner, sessionToken: 'stranger-session-0123456789' })]) {
+    await assert.rejects(call(), (e: unknown) => e instanceof EmailConnectionError && e.status === 403);
+  }
+  assert.equal(locks, 0, 'a stranger never takes or waits for the lock');
+  h.store.lock = async () => null;
+  await assert.rejects(h.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.message === 'This is already being set up in another window. Give it a moment, then refresh.');
+  h.store.lock = original;
+  assert.deepEqual(await h.service.continue(owner), { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToContinue }, 'Continue with nothing started says so');
+});
+
+test('permanent failures say what is true, never "Press Continue"', async () => {
+  const cases: [string, (c: { method: string; path: string }) => boolean, number, number | null, string][] = [
+    ['plan limit', c => c.method === 'POST' && c.path === '/servers', 422, 614, EMAIL_CONNECTION_MESSAGES.planLimit],
+    ['refused', c => c.method === 'POST' && c.path === '/servers', 422, 608, EMAIL_CONNECTION_MESSAGES.needsHand],
+    ['webhook verification', c => c.method === 'POST' && c.path === '/webhooks', 422, 1364, EMAIL_CONNECTION_MESSAGES.unfinished],
+  ];
+  for (const [name, match, status, code, message] of cases) {
+    const h = harness();
+    h.postmark.failOn(match, status, code);
+    await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === message, name);
+  }
+  // An archived Broadcast stream of that name on the business's server needs a person.
+  const a = harness();
+  a.postmark.servers.push({ id: 900, name: connectionServerName(EMAIL_CONNECT_BUSINESSES[0]!), token: 'srv-archived-0123456789abcdef', webhooks: [],
+    streams: [{ id: 'broadcast', type: 'Broadcasts', archived: true }] });
+  await assert.rejects(a.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.needsHand);
+  // The code only in the X-PM-ApiErrorCode header is read too.
+  const hh = harness();
+  hh.postmark.headerCode = 614;
+  hh.postmark.failOn(c => c.method === 'POST' && c.path === '/servers', 422);
+  await assert.rejects(hh.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.planLimit);
+});
+
+test('a webhook Postmark marks unverified is replaced, not adopted; a refresh that raced apply() never removes the new source', async () => {
+  const h = harness();
+  h.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 503);
+  await assert.rejects(h.service.connect(owner, FORM));
+  const hook = h.postmark.servers[0]!.webhooks[0]!;
+  hook.status = 'unverified';
+  await h.service.continue(owner);
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 1);
+  assert.notEqual(h.postmark.servers[0]!.webhooks[0]!.id, hook.id, 'replaced');
+  // Race: a refresh reads the store before the secret is saved, apply() happens, then the read finishes.
+  const g = harness();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const realSources = g.store.sources.bind(g.store);
+  g.store.sources = async () => { const rows = await realSources(); await gate; return rows; };
+  const racing = g.sources.refresh();
+  g.store.sources = realSources;
+  await g.service.connect(owner, FORM);
+  release(); await racing;
+  assert.deepEqual(g.bounces.dynamicSourceKeys(), ['conn-d975ff66336a46c2b36bd7095a11af97']);
+});
+
+test('a refused account token and an unapproved account read plainly to the owner; the token is never logged', async () => {
   const h = harness();
   h.postmark.failOn(() => true, 401, 10);
-  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.off);
+  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'Email connection is not available right now. We have been told.');
   assert.ok(h.lines.some(line => line.includes('email.connections.account_token_refused')));
   assert.equal(h.lines.join('\n').includes(ACCOUNT_TOKEN), false);
   const g = harness();
   g.postmark.failOn(() => true, 422, 412);
-  await assert.rejects(g.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.awaitingApproval);
+  await assert.rejects(g.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError
+    && e.message === 'We are finishing set-up on our side. You can carry on; sending opens up shortly.');
 });
 
 test('only the eligible owner, only an allowed business', async () => {
@@ -444,19 +669,7 @@ test('only the eligible owner, only an allowed business', async () => {
 
 // ---------- dynamic bounce sources ----------
 
-test('stored connections are added and removed without a restart; configured sources are unchanged; the stored one wins over PP\'s env source', async () => {
-  const h = harness({ configured: true });
-  assert.deepEqual(h.bounces.sources.map(s => s.key), ['pp'], 'before: the env source as today');
-  await h.service.connect(owner, FORM);
-  assert.deepEqual(h.bounces.sources.map(s => s.key), ['conn-d975ff66'], 'the stored connection replaces PP\'s env source');
-  const replaced = h.lines.filter(line => line.includes('configured_source_replaced'));
-  assert.equal(replaced.length, 1);
-  await h.sources.refresh(); await h.sources.refresh();
-  assert.equal(h.lines.filter(line => line.includes('configured_source_replaced')).length, 1, 'logged once');
-  assert.equal(h.lines.join('\n').includes('env-pp-'), false, 'without secrets');
-  await h.service.disconnect(owner);
-  assert.deepEqual(h.bounces.sources.map(s => s.key), ['pp'], 'after disconnect the env source applies again');
-
+test('stored connections are added and removed without a restart, from this or another instance', async () => {
   // Another instance: the store has a connection this process never loaded. Postmark's post triggers a read.
   const a = harness();
   await a.service.connect(owner, FORM);
@@ -467,12 +680,12 @@ test('stored connections are added and removed without a restart; configured sou
   const call = async () => {
     const captured = { status: 0 };
     const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(a.samples('broadcast')[0]))]), { method: 'POST', url: KEYPATH,
-      headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`conn-d975ff66:${SECRET}`).toString('base64')}` }, socket: { remoteAddress: '127.0.0.2' } }) as unknown as IncomingMessage;
+      headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`conn-d975ff66336a46c2b36bd7095a11af97:${SECRET}`).toString('base64')}` }, socket: { remoteAddress: '127.0.0.2' } }) as unknown as IncomingMessage;
     await hook.handle(req, { writeHead(s: number) { captured.status = s; }, end() {} } as unknown as ServerResponse, new URL(KEYPATH, ORIGIN));
     return captured.status;
   };
   assert.equal(await call(), 200, 'loaded on demand, then answered');
-  assert.deepEqual(other.dynamicSourceKeys(), ['conn-d975ff66']);
+  assert.deepEqual(other.dynamicSourceKeys(), ['conn-d975ff66336a46c2b36bd7095a11af97']);
   // The store cannot be read: 503 (Postmark retries), never a 4xx (Postmark drops those).
   const cold = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
   const broken = new MemoryEmailConnectionStore(); broken.sourcesFail = new Error('database down');

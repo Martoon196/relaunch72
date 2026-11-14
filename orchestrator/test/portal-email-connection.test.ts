@@ -20,11 +20,11 @@ const KEY = Buffer.alloc(32, 9).toString('base64');
 const owner = { sessionToken: OWNER_SESSION, userId: '00000000-0000-4000-8000-000000000001', workspaceId: PP_WS, userEmail: 'owner@relaunch72-test.co.uk' };
 const portal = { productProfile: { id: 'property_predator_growth' } as never, portalBaseUrl: ORIGIN, sessionSecret: SESSION_SECRET };
 
-function setup(env: NodeJS.ProcessEnv = { EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }) {
+function setup(env: NodeJS.ProcessEnv = { EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, founder = false) {
   const postmark = new FakePostmark(), store = new MemoryEmailConnectionStore(new Set([OWNER_SESSION]), { [OWNER_SESSION]: 'Pat <O\'Brien>' });
   const service = new EmailConnectionService({ config: loadEmailConnectConfig(env, { portalBaseUrl: ORIGIN }), store,
     account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
-    resolver: fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] } }), secret: () => SECRET, lockWaitMs: 2000 });
+    resolver: fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] } }), secret: () => SECRET, lockWaitMs: 2000, founder: async () => founder });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, headers: Record<string, string> = {}) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';
     const captured = { status: 0, body: '', headers: {} as Record<string, string> };
@@ -52,7 +52,7 @@ test('every state of the page, from the form to connected, in plain English and 
   assert.equal(page.status, 200);
   assert.match(page.headers['content-security-policy']!, /script-src 'self'/u);
   for (const label of ['Sender name', 'Send from (an address on your own domain)', 'Replies go to', '>Connect<', 'I agree to these email rules']) assert.ok(page.body.includes(label), label);
-  for (const rule of EMAIL_TERMS) assert.ok(page.body.includes(rule.replace(/"/g, '&quot;')), rule);
+  for (const rule of EMAIL_TERMS) assert.ok(page.body.includes(rule.replace(/"/g, '&quot;').replace(/'/g, '&#39;')), rule);
   assert.match(page.body, /<input id="email-agree" type="checkbox" name="agree" value="yes" required>/u);
   assert.match(page.body, /aria-label="Business"[^]*Property Predator/u, 'the Business picker offers Property Predator only');
   sensitive(page.body, h.postmark);
@@ -73,6 +73,8 @@ test('every state of the page, from the form to connected, in plain English and 
   const id = h.postmark.domains[0]!.id;
   assert.ok(page.body.includes(`<code>${id}pm._domainkey</code>`), 'the short host');
   assert.ok(page.body.includes(`<code>${id}pm._domainkey.propertypredator-test.co.uk</code>`), 'the full host');
+  assert.match(page.body, /Most hosts want this short name/u); assert.match(page.body, /Some hosts want the full name/u);
+  assert.doesNotMatch(page.body, /by itself/u);
   assert.ok(page.body.includes('<code>pm-bounces</code>') && page.body.includes('<code>pm.mtasv.net</code>'));
   assert.match(page.body, /TXT record/u); assert.match(page.body, /CNAME record/u);
   assert.match(page.body, /data-copy="[^"]+" hidden>Copy</u, 'Copy buttons only appear with JavaScript');
@@ -106,8 +108,10 @@ test('Continue after an interruption, and the busy message', async () => {
   assert.equal(page.status, 503);
   assert.match(page.body, /The email service is busy\. Try again in a minute\./u);
   page = await h.call('GET', '/portal/email');
-  assert.match(page.body, /We couldn&#39;t finish setting up\. Press Continue\./u);
+  assert.match(page.body, /Setting up didn’t finish\. Press Continue to carry on where it stopped\./u);
   assert.match(page.body, />Continue</u);
+  assert.match(page.body, /<summary>Start again<\/summary>[^]*action="\/portal\/email\/disconnect"/u, 'a safe Start again');
+  assert.doesNotMatch(page.body, /use-domain/u, 'no take-over offered to anyone but the founder');
   page = await h.call('POST', '/portal/email/continue', { csrf: h.csrf, commandId: h.commandId });
   assert.match(page.body, /Add these 2 records/u);
 });
@@ -141,4 +145,38 @@ test('the page escapes every stored value', () => {
   assert.doesNotMatch(html, /<script>alert|<script>\.x/u);
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
   assert.ok(html.includes('value="c&quot;sr&lt;f"'));
+});
+
+test('the founder sees "Use this domain" for a domain already in the account; a customer sees "contact support"', async () => {
+  const fields = { fromName: 'PP', fromAddress: 'hello@propertypredator-test.co.uk', replyTo: '', agree: 'yes' };
+  const f = setup(undefined, true);
+  f.postmark.domains.push({ id: 5, name: 'propertypredator-test.co.uk', returnPath: 'pm-bounces.propertypredator-test.co.uk', dkimVerified: true, returnPathVerified: true });
+  let page = await f.call('POST', '/portal/email/connect', { csrf: f.csrf, commandId: f.commandId, ...fields });
+  assert.match(page.body, /This domain is already in our email account\. If it belongs to this business, press Use this domain\./u);
+  assert.match(page.body, /action="\/portal\/email\/use-domain"[^]*>Use this domain</u);
+  page = await f.call('POST', '/portal/email/use-domain', { csrf: f.csrf, commandId: f.commandId });
+  assert.equal(page.status, 200);
+  assert.match(page.body, /Add these 2 records/u);
+  const c = setup();
+  c.postmark.domains.push({ id: 5, name: 'propertypredator-test.co.uk', returnPath: 'pm-bounces.propertypredator-test.co.uk', dkimVerified: true, returnPathVerified: true });
+  page = await c.call('POST', '/portal/email/connect', { csrf: c.csrf, commandId: c.commandId, ...fields });
+  assert.match(page.body, /That domain is already in use\. If it is yours, contact support\./u);
+  assert.doesNotMatch(page.body, /use-domain|Use this domain/u);
+  page = await c.call('POST', '/portal/email/use-domain', { csrf: c.csrf, commandId: c.commandId });
+  assert.equal(page.status, 403);
+});
+
+test('the home page links to Connect email only when it is switched on and the database has 0155', async () => {
+  const { renderGrowthHomeBody } = await import('../src/portal/growth-home.js');
+  const { PROPERTY_PREDATOR_GROWTH_PROFILE } = await import('../src/portal/product-profile.js');
+  const h = setup();
+  assert.equal(await h.service.available(), true);
+  h.store.absent = true;
+  assert.equal(await h.service.available(), false, 'at 0154: never shown');
+  assert.equal(await setup({}).service.available(), false, 'switched off: never shown');
+  {
+    const snapshot = { workspace: { id: PP_WS, name: 'PP', snapshotAt: new Date().toISOString() }, stages: [], contacts: [], opportunities: [], tasks: [] } as never;
+    assert.match(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE as never, undefined, { emailConnectAvailable: true }), /href="\/portal\/email">Connect email</u);
+    assert.doesNotMatch(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE as never, undefined, { emailConnectAvailable: false }), /\/portal\/email"/u);
+  }
 });

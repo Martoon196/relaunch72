@@ -14,7 +14,9 @@ import type { EmailConnectionSecretField } from './vault.js';
 export type EmailConnectionStatus = 'not_connected' | 'creating' | 'dns_pending' | 'verified' | 'needs_attention' | 'disconnected';
 export type EmailConnectionStep = 'server' | 'stream' | 'secret' | 'webhook' | 'domain';
 export interface DnsRecordState { readonly host: string; readonly value: string; readonly verified: boolean }
-export interface EmailConnectionDns { readonly dkim: DnsRecordState; readonly returnPath: DnsRecordState }
+/** How this business got its Postmark domain: created by its own run, adopted by id, or taken over by the founder. */
+export type DomainOrigin = 'created' | 'adopted' | 'taken_over';
+export interface EmailConnectionDns { readonly dkim: DnsRecordState; readonly returnPath: DnsRecordState; readonly origin?: DomainOrigin }
 export interface EmailConnectionState {
   readonly status: EmailConnectionStatus;
   readonly step: EmailConnectionStep | null;
@@ -48,7 +50,8 @@ export interface StoredConnectionSource {
 }
 export type BeginOutcome = 'started' | 'terms_required' | 'already_connected' | 'domain_taken';
 export type TermsOutcome = 'accepted' | 'already';
-export type StepOutcome = 'created' | 'adopted' | 'busy' | 'unauthorized' | 'refused' | 'failed' | 'plan_limit' | 'domain_taken' | 'public_domain' | 'awaiting_approval';
+export type StepOutcome = 'created' | 'adopted' | 'busy' | 'unauthorized' | 'refused' | 'failed' | 'plan_limit' | 'domain_taken' | 'public_domain' | 'awaiting_approval'
+  | 'founder_takeover' | 'domain_removed' | 'domain_kept' | 'domain_gone' | 'domain_remove_failed';
 export type CheckOutcome = 'verified' | 'partial' | 'pending';
 export interface StepValues { readonly serverId?: number; readonly stream?: string; readonly webhookId?: number; readonly domainId?: number; readonly dns?: EmailConnectionDns }
 
@@ -82,6 +85,8 @@ export interface EmailConnectionStore {
    * another run still holds it after waitMs.
    */
   lock(workspaceId: string, waitMs: number): Promise<(() => Promise<void>) | null>;
+  /** Whether the database has 0155 (so an entry to the page may be shown). */
+  present(): Promise<boolean>;
 }
 
 /** 42883 undefined function, 42P01 undefined table, 3F000 undefined schema: the database still ends before 0155. */
@@ -104,7 +109,8 @@ function readRecord(value: unknown): DnsRecordState | null {
 export function readDns(value: unknown): EmailConnectionDns | null {
   if (!record(value)) return null;
   const dkim = readRecord(value.dkim), returnPath = readRecord(value.returnPath);
-  return dkim && returnPath ? Object.freeze({ dkim, returnPath }) : null;
+  const origin = value.origin === 'created' || value.origin === 'adopted' || value.origin === 'taken_over' ? value.origin : undefined;
+  return dkim && returnPath ? Object.freeze({ dkim, returnPath, ...(origin ? { origin } : {}) }) : null;
 }
 
 export function readEmailConnectionState(value: unknown): EmailConnectionState {
@@ -130,7 +136,9 @@ export function readEmailConnectionState(value: unknown): EmailConnectionState {
 export class PgEmailConnectionStore implements EmailConnectionStore {
   private absentUntil = 0;
   private answered = false;
-  constructor(private readonly pool: Pick<Pool, 'query' | 'connect'>, private readonly options: { now?: () => number; log?: (line: string) => void } = {}) {}
+  constructor(private readonly pool: Pick<Pool, 'query' | 'connect'>, private readonly options: { now?: () => number; log?: (line: string) => void;
+    /** A dedicated small pool for the run lock (the platform gives it one connection of its own). */
+    lockPool?: Pick<Pool, 'connect'> } = {}) {}
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
 
@@ -218,25 +226,48 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
     return out;
   }
 
-  /** A session-level advisory lock on one dedicated connection, tried every 250 ms until waitMs has passed. */
-  async lock(workspaceId: string, waitMs: number): Promise<(() => Promise<void>) | null> {
-    const client: PoolClient = await this.pool.connect();
-    const key = `email-connection-run:${workspaceId.toLowerCase()}`;
+  /** Whether this database has 0155 at all (cached for a few minutes); never throws. */
+  async present(): Promise<boolean> {
+    if (this.answered) return true;
+    if (this.now() < this.absentUntil) return false;
     try {
-      const deadline = this.now() + waitMs;
-      for (;;) {
-        const result = await client.query<{ held: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1,155)) AS held', [key]);
-        if (result.rows[0]?.held === true) break;
-        if (this.now() >= deadline) { client.release(); return null; }
-        await new Promise(resolve => setTimeout(resolve, 250));
+      const result = await this.pool.query<{ ready: boolean }>(`/* email-connections.schema-readiness */
+        SELECT to_regprocedure('app_private.email_connection_state(bytea,uuid)') IS NOT NULL AS ready`);
+      if (result.rows[0]?.ready === true) return true;
+      this.absentUntil = this.now() + RECHECK_MS;
+      return false;
+    } catch { return false; }
+  }
+
+  /**
+   * One run per business at a time, across every instance: a transaction-level advisory lock held in ONE open
+   * transaction, so it stays on one backend even behind a transaction pooler. It uses its own small pool (never one
+   * of the shared identity connections) and gives the connection back between tries, so a waiter holds nothing.
+   */
+  async lock(workspaceId: string, waitMs: number): Promise<(() => Promise<void>) | null> {
+    const pool = this.options.lockPool ?? this.pool;
+    const key = `email-connection-run:${workspaceId.toLowerCase()}`;
+    const deadline = this.now() + waitMs;
+    for (;;) {
+      const client: PoolClient = await pool.connect();
+      let held = false;
+      try {
+        await client.query('BEGIN');
+        const result = await client.query<{ held: boolean }>('SELECT pg_try_advisory_xact_lock(hashtextextended($1,155)) AS held', [key]);
+        held = result.rows[0]?.held === true;
+        if (!held) await client.query('ROLLBACK');
+      } catch (error) { client.release(true); throw error; }
+      if (held) {
+        let released = false;
+        return async () => {
+          if (released) return;
+          released = true;
+          try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); }
+        };
       }
-    } catch (error) { client.release(true); throw error; }
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1,155))', [key]); client.release(); }
-      catch { client.release(true); }
-    };
+      client.release();
+      if (this.now() >= deadline) return null;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
   }
 }

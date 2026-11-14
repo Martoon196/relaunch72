@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { PgSeoLimitsService } from './seo-blog-limits-service.js';
 import { EmailConnectionBounceSources, EmailConnectionService, loadEmailConnectConfig, PgEmailConnectionStore } from '../email-connections/index.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
@@ -1367,15 +1369,22 @@ export async function buildPgPortalPlatform(
     // "Connect email" (0155). Bad or missing settings never stop start-up: the page then says it isn't switched on.
     // Stored connections become bounce sources without a restart (loaded at start, about every minute, and on demand).
     const emailBounceHandling = !emailBounceHandlingDisabled(env);
-    const emailConnectConfig = loadEmailConnectConfig(env, { portalBaseUrl: env.PORTAL_BASE_URL?.trim() });
-    const emailConnectionStore = new PgEmailConnectionStore(identityPool, { log: emailBounceLog });
-    const emailConnectionSources = emailBounceHandling && emailConnectConfig.vault
+    const emailConnectConfig = loadEmailConnectConfig(env, { portalBaseUrl: env.PORTAL_BASE_URL?.trim(), bounceHandling: emailBounceHandling });
+    // The run lock has one connection of its own, so a run never holds one of the shared identity connections.
+    const emailConnectionLockPool = createDatabasePool({ ...identityConfig, maxConnections: 1 });
+    pools.push(emailConnectionLockPool);
+    const emailConnectionStore = new PgEmailConnectionStore(identityPool, { log: emailBounceLog, lockPool: emailConnectionLockPool });
+    // Loaded whenever bounce handling is on, even without a key: a stored connection that cannot be opened then answers
+    // 503 (Postmark retries) instead of 404 (Postmark drops).
+    const emailConnectionSources = emailBounceHandling
       ? new EmailConnectionBounceSources({ store: emailConnectionStore, vault: emailConnectConfig.vault, service: emailBounces, log: emailBounceLog }) : undefined;
     if (emailConnectionSources) emailBounces.setSourceLoader(emailConnectionSources);
     if (env.EMAIL_CONNECT !== undefined && !emailConnectConfig.enabled) console.warn(`⚠  Connect email is off: ${emailConnectConfig.problems.join(' ')}`);
     let emailConnections: EmailConnectionService | undefined;
     try {
       emailConnections = new EmailConnectionService({ config: emailConnectConfig, store: emailConnectionStore, log: emailBounceLog,
+        // The founder is whoever the SEO limits page lets in (the same database check), and nobody when that is not composed.
+        founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false,
         ...(emailConnectionSources ? { bounces: emailConnectionSources } : {}) });
     } catch { console.warn('⚠  Connect email could not be composed; it stays off.'); }
     let webinars: PgWebinarService | undefined;

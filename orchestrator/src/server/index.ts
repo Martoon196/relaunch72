@@ -1054,7 +1054,8 @@ async function main(): Promise<void> {
   // Every MHP marketing, sequence and sign-up email passes this one sender, which refuses blocked addresses.
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret, fetch,
     emailBounces && mhpEmailHealth ? { guard: emailBounces.guard, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
-  // Stored email connections are loaded before the first sweep reads every source, then about every minute.
+  // Stored email connections (0155) are read now and then about every minute; each newly loaded one is swept as soon
+  // as it is loaded (not at the first hourly sweep below, which may start before that read has finished).
   const stopEmailConnectionSources = postgresPortal?.emailConnectionSources?.start() ?? (() => {});
   const stopEmailBounces = emailBounces && postgresPortal?.emailBounceHandling ? emailBounces.start() : () => {};
   // LeadRelay enquiries and call results into the brand CRM: reads and acknowledges only, sends nothing.

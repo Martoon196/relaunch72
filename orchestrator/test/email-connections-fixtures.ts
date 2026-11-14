@@ -16,7 +16,7 @@ export const PP_WS = 'd975ff66-336a-46c2-b36b-d7095a11af97';
 export const OWNER_SESSION = 'owner-session-token-0123456789abcdef';
 
 interface FakeServer { id: number; name: string; token: string; streams: { id: string; type: string; archived: boolean }[];
-  webhooks: { id: number; url: string; stream: string; username: string; password: string }[] }
+  webhooks: { id: number; url: string; stream: string; username: string; password: string; status: 'verified' | 'unverified' }[] }
 interface FakeDomain { id: number; name: string; returnPath: string; dkimVerified: boolean; returnPathVerified: boolean }
 export interface FakeCall { readonly method: string; readonly path: string; readonly header: string; readonly token: string; readonly body: unknown }
 
@@ -34,6 +34,8 @@ export class FakePostmark {
   verify: (hook: { url: string; username: string; password: string; stream: string; serverId: number }) => Promise<boolean> = async () => true;
 
   failOn(match: (call: FakeCall) => boolean, status = 500, code: number | null = null, after = false): void { this.failures.push({ match, status, code, after }); }
+  /** The error code only in the X-PM-ApiErrorCode header, with an empty body. */
+  headerCode: number | null = null;
   count(method: string, path: RegExp): number { return this.calls.filter(call => call.method === method && path.test(call.path)).length; }
 
   readonly fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -48,6 +50,7 @@ export class FakePostmark {
     this.calls.push(call);
     const failure = this.failures.find(item => item.match(call));
     if (failure) this.failures.splice(this.failures.indexOf(failure), 1);
+    if (failure && !failure.after && this.headerCode !== null) return new Response('', { status: failure.status, headers: { 'x-pm-apierrorcode': String(this.headerCode) } });
     if (failure && !failure.after) return this.json(failure.status, failure.code === null ? { Message: 'Fake failure' } : { ErrorCode: failure.code, Message: `secret-ish text ${token}` });
     const answer = await this.route(call, url);
     if (failure) return this.json(failure.status, failure.code === null ? { Message: 'Fake failure' } : { ErrorCode: failure.code, Message: 'lost' });
@@ -100,6 +103,7 @@ export class FakePostmark {
         const domain = this.domains.find(item => item.id === Number(m![1]));
         if (!domain) return this.json(422, { ErrorCode: 510, Message: 'no' });
         if ((method === 'GET' && !m[2]) || (method === 'PUT' && m[2])) return this.json(200, this.domainBody(domain));
+        if (method === 'DELETE' && !m[2]) { this.domains.splice(this.domains.indexOf(domain), 1); return this.json(200, { ErrorCode: 0, Message: `Domain ${domain.name} removed.` }); }
       }
       return this.json(404, { ErrorCode: 0, Message: 'unknown' });
     }
@@ -119,10 +123,10 @@ export class FakePostmark {
       const stream = url.searchParams.get('MessageStream');
       if (!server.streams.some(s => s.id === stream)) return this.json(422, { ErrorCode: 1226, Message: 'no stream' });
       return this.json(200, { Webhooks: server.webhooks.filter(hook => hook.stream === stream).map(hook => ({ ID: hook.id, Url: hook.url, MessageStream: hook.stream,
-        HttpAuth: { Username: hook.username, Password: hook.password }, Triggers: {} })) });
+        HttpAuth: { Username: hook.username, Password: hook.password }, Status: hook.status, Triggers: {} })) });
     }
     if (method === 'POST' && path === '/webhooks') {
-      const hook = { id: this.nextId++, url: body!.Url, stream: body!.MessageStream, username: body!.HttpAuth.Username, password: body!.HttpAuth.Password };
+      const hook = { id: this.nextId++, url: body!.Url, stream: body!.MessageStream, username: body!.HttpAuth.Username, password: body!.HttpAuth.Password, status: 'verified' as const };
       if (!(await this.verify({ ...hook, serverId: server.id }))) return this.json(422, { ErrorCode: 1364, Message: '2/3 triggers verified successfully' });
       server.webhooks.push(hook);
       return this.json(200, { ID: hook.id, Url: hook.url, MessageStream: hook.stream, HttpAuth: { Username: hook.username, Password: hook.password } });
@@ -237,6 +241,8 @@ export class MemoryEmailConnectionStore implements EmailConnectionStore {
     this.bump(row); this.event('disconnect', 'done');
   }
   sourcesFail: Error | null = null;
+  absent = false;
+  async present(): Promise<boolean> { return !this.absent; }
   async sources(): Promise<readonly StoredConnectionSource[] | null> {
     if (this.sourcesFail) throw this.sourcesFail;
     const row = this.row;

@@ -88,6 +88,8 @@ export interface EmailBounceSourceLoader {
   handles(key: string): boolean;
   /** Reads the stored connections now (joined and rate-limited). Throws when the store cannot be read. */
   refreshNow(): Promise<void>;
+  /** True when this key's stored connection exists but cannot be opened right now (answered 503, so Postmark retries). */
+  unavailable?(key: string): boolean;
 }
 
 const SOURCE_KEY = /^[a-z0-9][a-z0-9-]{0,39}$/u;

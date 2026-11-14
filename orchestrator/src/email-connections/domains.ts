@@ -26,23 +26,42 @@ export function parseEmailAddress(raw: string): { readonly address: string; read
   return Object.freeze({ address, domain });
 }
 
-const FREE = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'ymail.com', 'rocketmail.com',
-  'proton.me', 'protonmail.com', 'pm.me', 'mail.com', 'zoho.com', 'zohomail.com', 'fastmail.com', 'hey.com', 'tutanota.com', 'tuta.io',
+/**
+ * Known free mailbox domains, exactly, with their well-known country variants listed one by one. Nothing is matched by
+ * pattern, so a real business domain such as live.tv, aol.io or shop.live.co is never refused.
+ */
+const FREE = new Set([
+  'gmail.com', 'googlemail.com',
+  'outlook.com', 'outlook.co.uk', 'outlook.fr', 'outlook.de', 'outlook.es', 'outlook.it', 'outlook.ie',
+  'hotmail.com', 'hotmail.co.uk', 'hotmail.fr', 'hotmail.de', 'hotmail.es', 'hotmail.it', 'hotmail.ie', 'hotmail.nl',
+  'live.com', 'live.co.uk', 'live.fr', 'live.de', 'live.ie', 'live.nl', 'live.it', 'msn.com', 'windowslive.com',
+  'yahoo.com', 'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'yahoo.es', 'yahoo.it', 'yahoo.ie', 'yahoo.ca', 'yahoo.com.au', 'ymail.com', 'rocketmail.com',
+  'icloud.com', 'me.com', 'mac.com', 'aol.com', 'aol.co.uk', 'aim.com',
+  'proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me', 'tutanota.com', 'tuta.io', 'fastmail.com', 'hey.com', 'zoho.com', 'zohomail.com', 'mail.com',
+  'gmx.com', 'gmx.co.uk', 'gmx.de', 'gmx.net', 'web.de', 'yandex.com', 'yandex.ru', 'mail.ru', 'qq.com', '163.com',
   'btinternet.com', 'btopenworld.com', 'sky.com', 'virginmedia.com', 'blueyonder.co.uk', 'ntlworld.com', 'talktalk.net', 'tiscali.co.uk',
-  'gmx.com', 'gmx.co.uk', 'web.de', 'qq.com', '163.com', 'mail.ru', 'yandex.com']);
-/** Brands whose free mailboxes run under many country endings (yahoo.co.uk, hotmail.fr, live.com …). */
-const FREE_BRANDS = new Set(['yahoo', 'hotmail', 'live', 'outlook', 'gmx', 'yandex', 'aol', 'windowslive']);
+]);
 
-/** True for a free mailbox domain (or one of its subdomains): an address there cannot be sent from by a business. */
+/** True for a known free mailbox domain or one of its subdomains: a business cannot send from it. */
 export function freeMailboxDomain(domain: string): boolean {
   const labels = domain.toLowerCase().split('.');
-  for (let start = 0; start < labels.length - 1; start++) {
-    const candidate = labels.slice(start).join('.');
-    if (FREE.has(candidate)) return true;
-    // yahoo.com, yahoo.co.uk, hotmail.fr: the brand followed by a short country or generic ending only.
-    if (FREE_BRANDS.has(labels[start]!) && /^(?:[a-z]{2,3}\.)?[a-z]{2,3}$/u.test(labels.slice(start + 1).join('.'))) return true;
-  }
+  for (let start = 0; start < labels.length - 1; start++) if (FREE.has(labels.slice(start).join('.'))) return true;
   return false;
+}
+
+/** Endings that are not anyone's own domain (a bare public suffix such as co.uk). */
+const PUBLIC_SUFFIXES = new Set(['co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk', 'net.uk', 'sch.uk', 'ac.uk', 'gov.uk', 'nhs.uk', 'police.uk',
+  'com.au', 'net.au', 'org.au', 'co.nz', 'org.nz', 'co.za', 'co.in', 'co.jp', 'com.br', 'com.cn', 'com.mx', 'co.ie', 'com.sg', 'com.hk']);
+/** True when the name is a bare public suffix, not a registered domain. */
+export function publicSuffixOnly(domain: string): boolean { return PUBLIC_SUFFIXES.has(domain.toLowerCase()); }
+
+/**
+ * The sender name rule, the same as the 0155 CHECK on from_name: 1 to 100 characters after trimming, and no control
+ * characters, <, >, " or \. Returns the trimmed name, or null when it breaks the rule.
+ */
+export function senderName(raw: string): string | null {
+  const name = raw.trim();
+  return name.length >= 1 && name.length <= 100 && !/[\u0000-\u001f\u007f-\u009f<>"\\]/u.test(name) ? name : null;
 }
 
 /** True for a domain reserved for testing or documentation (the platform's one rule, shared with every send path). */

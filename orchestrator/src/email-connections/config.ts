@@ -21,15 +21,18 @@ export interface EmailConnectBusiness {
   readonly name: string;
   /** Path segment of this connection's bounce webhook, and its Basic user name. */
   readonly sourceKey: string;
-  /** An env-configured bounce source this stored connection replaces when both exist (the stored one wins). */
+  /**
+   * An env-configured bounce source this stored connection replaces when both exist. None in this release: PP's
+   * env-configured source ('pp') keeps answering and being swept, because PP's sends still use the env server.
+   */
   readonly replacesSourceKey: string | null;
 }
 
-/** The Postmark bounce source key of a stored connection: "conn-" and the first 8 hex digits of the workspace id. */
-export const connectionSourceKey = (workspaceId: string): string => `conn-${workspaceId.toLowerCase().slice(0, 8)}`;
+/** The Postmark bounce source key of a stored connection: "conn-" and all 32 hex digits of the workspace id (37 characters). */
+export const connectionSourceKey = (workspaceId: string): string => `conn-${workspaceId.toLowerCase().replace(/-/gu, '')}`;
 
 export const EMAIL_CONNECT_BUSINESSES: readonly EmailConnectBusiness[] = Object.freeze([
-  Object.freeze({ workspaceId: PP_EMAIL_WORKSPACE_ID, name: 'Property Predator', sourceKey: connectionSourceKey(PP_EMAIL_WORKSPACE_ID), replacesSourceKey: 'pp' }),
+  Object.freeze({ workspaceId: PP_EMAIL_WORKSPACE_ID, name: 'Property Predator', sourceKey: connectionSourceKey(PP_EMAIL_WORKSPACE_ID), replacesSourceKey: null }),
 ]);
 export const emailConnectBusiness = (workspaceId: string): EmailConnectBusiness | undefined =>
   EMAIL_CONNECT_BUSINESSES.find(business => business.workspaceId === workspaceId.toLowerCase());
@@ -48,8 +51,10 @@ export function emailConnectWebhookOrigin(portalBaseUrl: string | undefined): st
   } catch { return null; }
 }
 
-export function loadEmailConnectConfig(env: NodeJS.ProcessEnv, options: { portalBaseUrl?: string | undefined } = {}): EmailConnectConfig {
+export function loadEmailConnectConfig(env: NodeJS.ProcessEnv, options: { portalBaseUrl?: string | undefined; bounceHandling?: boolean } = {}): EmailConnectConfig {
   const problems: string[] = [];
+  // Without bounce handling a connection could not hear about bounces, so connecting is not offered either.
+  if (options.bounceHandling === false) problems.push('EMAIL_BOUNCE_HANDLING is off, so Connect email stays off.');
   const vault = (() => { try { return EmailConnectionVault.fromEnv(env); } catch { return null; } })();
   if (env[EMAIL_CONNECT_ENV] !== 'enabled') problems.push(`${EMAIL_CONNECT_ENV} is not set to enabled.`);
   const token = env[POSTMARK_ACCOUNT_TOKEN_ENV]?.trim() ?? '';

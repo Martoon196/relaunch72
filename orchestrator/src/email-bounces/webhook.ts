@@ -140,6 +140,12 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           return true;
         }
         source = service.source(key);
+        if (!source && loader.unavailable?.(key)) {
+          // The connection exists but its secret cannot be opened here (the key is missing or changed): retried, not dropped.
+          req.resume();
+          send(res, 503, { error: 'temporarily_unavailable' }, { 'retry-after': '300' });
+          return true;
+        }
       }
       if (!source) { send(res, 404, { error: 'not_found' }); return true; }
       // Nothing is read from an unauthenticated caller: the body is discarded unbuffered.
@@ -157,8 +163,8 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       }
       const contentType = String(req.headers['content-type'] ?? '').split(';', 1)[0]!.trim().toLowerCase();
       if (contentType !== 'application/json') return refuse(415, { error: 'unsupported_media_type' });
-      let payload: unknown;
-      try { payload = parsePostmarkJson((await readBody(req, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES)).toString('utf8')); }
+      let payload: unknown, size = 0;
+      try { const body = await readBody(req, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES); size = body.length; payload = parsePostmarkJson(body.toString('utf8')); }
       catch (error) {
         send(res, error instanceof BodyTooLarge ? 413 : 400, { error: error instanceof BodyTooLarge ? 'payload_too_large' : 'invalid_json' });
         return true;
@@ -166,7 +172,10 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       const reading = readPostmarkWebhook(payload);
       // A stored connection answers a body it cannot read with 200 and records nothing: Postmark's set-up samples must
       // pass, and a 400 would be dropped by Postmark anyway.
-      if (reading.outcome === 'invalid') { send(res, source.connection ? 200 : 400, source.connection ? { received: true, outcome: 'ignored' } : { error: 'invalid_event' }); return true; }
+      if (reading.outcome === 'invalid') {
+        if (source.connection) log(JSON.stringify({ event: 'email.bounces.webhook_unreadable_ignored', source: source.key, bytes: size }));
+        send(res, source.connection ? 200 : 400, source.connection ? { received: true, outcome: 'ignored' } : { error: 'invalid_event' }); return true;
+      }
       if (reading.outcome === 'ignored') { send(res, 200, { received: true, outcome: 'ignored' }); return true; }
       const event = reading.event;
       if (source.connection && (!source.serverId || event.serverId !== source.serverId)) {
