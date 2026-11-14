@@ -4,7 +4,7 @@ import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
-import { decideRecipient, EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
+import { decideRecipient, EmailGuardUnavailableError, EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -116,7 +116,15 @@ export interface MhpRenderedMarketingSend {
   /** The prospect this email is addressed to. Travels with the message so a later bounce or complaint can stop that person. */
   prospectId?: string;
 }
-export interface MhpRenderedMarketingSender { sendRendered(item: MhpRenderedMarketingSend): Promise<string> }
+export interface MhpRenderedMarketingSender {
+  sendRendered(item: MhpRenderedMarketingSend): Promise<string>;
+  /** False while the durable block list cannot be read: claim nothing this sweep (claims spend attempts). */
+  recipientsAvailable?(): Promise<boolean>;
+}
+/** Asks the sender's guard before any claim; true when it has no durable list to ask. */
+export async function mhpRecipientsAvailable(sender: Partial<MhpRenderedMarketingSender>): Promise<boolean> {
+  try { return await (sender.recipientsAvailable?.() ?? Promise.resolve(true)); } catch { return false; }
+}
 /** Refuses bounced, complained and unsubscribed addresses for one workspace before any provider call. */
 export interface MhpRecipientGuard { guard: EmailSendGuard; workspaceId: string }
 const PROSPECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -156,12 +164,12 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
         if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
           let code: unknown;
           try { code = (await response.json() as { ErrorCode?: unknown })?.ErrorCode; } catch { code = undefined; }
-          if (code === 406) throw new EmailRecipientBlockedError('unsubscribed', 'Postmark refused an inactive recipient');
+          if (code === 406) throw new EmailRecipientBlockedError('provider_inactive', 'Postmark refused an inactive recipient');
         } else await response.body?.cancel().catch(() => undefined);
         throw new Error('Marketing delivery was not accepted');
       }
       const parsed = await response.json() as { MessageID?: unknown; ErrorCode?: unknown };
-      if (parsed?.ErrorCode === 406) throw new EmailRecipientBlockedError('unsubscribed', 'Postmark refused an inactive recipient');
+      if (parsed?.ErrorCode === 406) throw new EmailRecipientBlockedError('provider_inactive', 'Postmark refused an inactive recipient');
       const body = parsed;
       if (body.ErrorCode !== 0 || typeof body.MessageID !== 'string' || body.MessageID.length < 1 || body.MessageID.length > 200) {
         throw new Error('Marketing delivery was not accepted');
@@ -170,6 +178,7 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
     };
   return {
     sendRendered,
+    recipientsAvailable: async () => !recipients || !recipients.guard.available || recipients.guard.available(recipients.workspaceId),
     send: (item: MhpClaimedSend) => {
       if (item.template === 'application_notify' && normalizeMhpEmail(item.email) !== config.notifyTo) throw new Error('Application notification recipient changed');
       // An application notice goes to the owner, not the applicant, so it never carries the applicant's prospect id.
@@ -187,14 +196,23 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
     sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
       onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void };
     /** A send was refused because the address does not work (hard bounce): stop that person's email for good. */
-    onBlocked?: (prospectId: string) => Promise<void> } = {}): () => void {
+    onBlocked?: (prospectId: string) => Promise<void>;
+    /** One line per skipped sweep; never an address. */
+    log?: (line: string) => void } = {}): () => void {
+  const log = options.log ?? ((line: string) => console.warn(line));
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
     if (running || stopped) return;
     running = true;
-    let sent = 0, failed = 0;
+    let sent = 0, failed = 0, unavailable = false;
     try {
-      for (let page = 0; page < 4 && !stopped; page++) {
+      // Claims spend attempts and cannot hand them back, so while the durable block list cannot be read nothing is
+      // claimed at all (built-in event emails wait too: they are delayed, never lost or spent).
+      if (!await mhpRecipientsAvailable(sender as Partial<MhpRenderedMarketingSender>)) {
+        log(JSON.stringify({ event: 'mhp.marketing.sweep_skipped', level: 'warn', reason: 'email_block_list_unavailable' }));
+        return;
+      }
+      for (let page = 0; page < 4 && !stopped && !unavailable; page++) {
         const batch = await growth.claim(25, 120, config.testRecipients);
         for (const item of batch) {
           try {
@@ -202,6 +220,8 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
             await growth.settle(item.id, true, reference); sent++;
           } catch (error) {
             failed++;
+            // The list went away after the probe: this claim is spent, but nothing more is claimed this sweep.
+            if (error instanceof EmailGuardUnavailableError) unavailable = true;
             // Only a dead address stops the person here. Anyone blocked from marketing alone keeps the event emails
             // they asked for (their webinar reminders are queued beside this one, and the stop would cancel them).
             if (error instanceof EmailRecipientBlockedError && refusalStopsPerson(error.reason) && item.template !== 'application_notify') {
@@ -212,11 +232,11 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
         }
         if (batch.length < 25) break;
       }
-      if (options.owner && !stopped) {
+      if (options.owner && !stopped && !unavailable) {
         const owner = await dispatchMhpOwnerEmails({ ...options.owner, testRecipients: config.testRecipients, stopped: () => stopped, onBlocked: options.onBlocked });
         sent += owner.sent; failed += owner.failed;
       }
-      if (options.sequences && !stopped) {
+      if (options.sequences && !stopped && !unavailable) {
         const sequences = await dispatchMhpSequenceEmails({ ...options.sequences, testRecipients: config.testRecipients, stopped: () => stopped, onBlocked: options.onBlocked });
         sent += sequences.sent; failed += sequences.failed + sequences.unknown;
       }

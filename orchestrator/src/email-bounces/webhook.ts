@@ -168,9 +168,17 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           const lasting = factBlockReason(event.kind);
           // Durable first (0153): if the ledger exists and the write fails, Postmark's retry writes it again.
           // Before 0153 the ledger answers 'unavailable' and the event is handled exactly as it was.
-          if (lasting) await service.ledger?.record({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, reason: lasting,
-            eventId: event.eventId, stream: event.stream, at: event.at });
-          if (lasting) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
+          const written = lasting ? await service.ledger?.record({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, reason: lasting,
+            eventId: event.eventId, stream: event.stream, at: event.at }) : undefined;
+          // A replay (or a retry) of an event the ledger already holds, for an address the ledger no longer blocks for
+          // that reason (the owner lifted the bounce, or a newer re-subscribe lifted the unsubscribe): the brand's lasting
+          // stop is NOT run again, so a retried old bounce never re-stops a person the owner has just let back in.
+          let stillBlocks = true;
+          if (lasting && written === 'exists' && service.ledger) {
+            const now = await service.ledger.decide(source.workspaceId, event.email, lasting === 'unsubscribed' ? 'marketing' : 'service');
+            stillBlocks = now !== null && now.blocked && now.reason === lasting;
+          }
+          if (lasting && stillBlocks) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
         }
       } catch {
         // Not remembered: Postmark's retry repeats the lasting effect. The in-process block already holds.

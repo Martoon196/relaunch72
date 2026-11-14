@@ -286,7 +286,12 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
   assert.doesNotMatch(durableHtml, /cross@example\.invalid<\/td><td>They marked one of your emails as spam<\/td><td>[^<]*<\/td><td>Marketing and event emails<form/u, 'never for a spam report');
   assert.match(durableHtml, /<form method="post" action="\/hq\/marketing\/email-health\/lift"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="email" value="gone@example\.invalid">/u);
   assert.match(emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome: 'lifted' } }),
-    /gone@example\.invalid can be emailed again\. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that\./u);
+    /We no longer block gone@example\.invalid for that bounce\. Now press Reactivate for this address in Postmark, or Postmark will still refuse it\. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that\./u);
+  const say = (outcome: 'already_lifted' | 'spam' | 'not_blocked' | 'unavailable') => emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome } });
+  assert.match(say('already_lifted'), /We had already stopped blocking gone@example\.invalid for that bounce\. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark\./u);
+  assert.match(say('spam'), /gone@example\.invalid stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page\./u);
+  assert.match(say('not_blocked'), /has no bounce recorded in your own records, so nothing changed/u);
+  for (const outcome of ['already_lifted', 'spam', 'not_blocked', 'unavailable'] as const) assert.doesNotMatch(say(outcome), /We no longer block|was not blocked by a bounce/u, outcome);
   assert.match(html, /stays stopped, exactly as if they had unsubscribed, until they sign up again and tick the box themselves/u, 'reactivating at Postmark does not re-subscribe anyone');
   assert.match(html, /Only 100 emails went out in this period/u);
   assert.match(html, /2 people were newly stopped in your contacts/u);
@@ -371,7 +376,7 @@ test('"This address works now": the owner\'s own form (same origin, CSRF) in the
   assert.deepEqual(r.lifts, []);
   const done = await r.request('POST', '/hq/marketing/email-health/lift', body(), { origin: ORIGIN });
   assert.equal(done.status, 200); assert.deepEqual(r.lifts, [`${TOKEN} gone@example.invalid`]);
-  assert.match(done.body, /<p role="status" class="status">gone@example\.invalid can be emailed again\./u);
+  assert.match(done.body, /<p role="status" class="status">We no longer block gone@example\.invalid for that bounce\. Now press Reactivate for this address in Postmark/u);
   const personal = routes({ selected: PERSONAL });
   assert.equal((await personal.request('POST', '/hq/marketing/email-health/lift', body(), { origin: ORIGIN })).status, 403);
   assert.deepEqual(personal.lifts, []);

@@ -4,7 +4,8 @@ import { parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-cont
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
-import { EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
+import { EmailGuardUnavailableError, EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
+import { mhpRecipientsAvailable } from './marketing-mail.js';
 
 export interface MhpSequenceDispatch extends MhpOwnerEmailDispatch {
   unknown(lease: MhpOwnerEmailLease): Promise<void>;
@@ -42,7 +43,10 @@ export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispa
     try { const result = await input.queue.enrolCaptures(100); try { input.onEntryResult?.(result); } catch { /* telemetry only */ } }
     catch { try { input.onEntryError?.(); } catch { /* Entry failure must not starve existing due runs. */ } }
   }
-  for (let page = 0; page < 4 && !input.stopped?.(); page++) {
+  // Claims spend attempts; while the durable block list cannot be read, claim nothing (tried again next sweep).
+  if (!await mhpRecipientsAvailable(input.sender)) return { sent, failed, unknown };
+  let unavailable = false;
+  for (let page = 0; page < 4 && !input.stopped?.() && !unavailable; page++) {
     const batch = await input.queue.claim(25, 120, input.testRecipients);
     for (const lease of batch) {
       let proofIssued = false, prospectId: string | null = null;
@@ -58,6 +62,7 @@ export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispa
         const reference = await input.sender.sendRendered({ id: prepared.id, email: prepared.email, tag: 'owner_sequence', rendered, prospectId: prepared.prospectId });
         await input.queue.settle(lease, true, reference); sent++;
       } catch (error) {
+        if (error instanceof EmailGuardUnavailableError) unavailable = true;
         if (error instanceof EmailRecipientBlockedError && prospectId) {
           // Classified and definite: the sender refused before any provider call, so nothing can have been delivered.
           // The proof is closed as not accepted. A dead address also stops the person, so the next claim ends the run

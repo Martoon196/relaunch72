@@ -313,7 +313,7 @@ test('Postmark 406 after a re-allow: the guard lets marketing go, Postmark still
   const fetcher = (async () => { calls++; return new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 }); }) as unknown as typeof fetch;
   const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', fetcher, { guard: service.guard, workspaceId: MHP });
   await assert.rejects(sender.sendRendered({ id: 'a', email: 'back@example.invalid', tag: 'owner_sequence', rendered }),
-    (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'unsubscribed');
+    (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'provider_inactive');
   assert.equal(calls, 1, 'Postmark was asked once and said no');
   // Another 4xx without 406 stays a plain refusal, as before.
   const other = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters',

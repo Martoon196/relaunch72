@@ -80,6 +80,11 @@ export interface EmailSendGuard {
   decide(workspaceId: string, email: string, purpose: EmailPurpose): EmailSendDecision;
   /** The durable answer: the database ledger where it exists, with the in-process list in front of it. */
   check?(workspaceId: string, email: string, purpose: EmailPurpose): Promise<EmailSendDecision>;
+  /**
+   * False when the durable list is in use for this workspace but cannot be read right now. A dispatcher asks this
+   * BEFORE claiming, so a database fault never spends a claimed attempt (claims count attempts and cannot hand them back).
+   */
+  available?(workspaceId: string): Promise<boolean>;
 }
 
 /** What every send path calls: the durable check when the guard has one, otherwise the in-process answer. */
@@ -97,8 +102,11 @@ export function refusalStopsPerson(reason: EmailRefusalReason): boolean {
   return reason === 'hard_bounce' || reason === 'spam_complaint';
 }
 
-/** Why a sender refused before any provider call: a block, or (marketing only) the durable list could not be read. */
-export type EmailRefusalReason = EmailBlockReason | 'check_unavailable';
+/**
+ * Why a send was a definite non-send: a block of ours; (marketing only) the durable list could not be read; or the
+ * provider itself refused the recipient as inactive on that stream (Postmark 406), which is not a block of ours.
+ */
+export type EmailRefusalReason = EmailBlockReason | 'check_unavailable' | 'provider_inactive';
 
 /** Thrown by a sender that refused before any provider call: a definite non-send. */
 export class EmailRecipientBlockedError extends Error {

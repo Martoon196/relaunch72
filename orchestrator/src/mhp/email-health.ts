@@ -68,8 +68,9 @@ export class MhpEmailHealth {
       note: 'Owner confirmed in Growth HQ that this address works now' });
     if (!result) return { email: address, outcome: 'unavailable' };
     await this.deps.bounces.refreshLedger(this.workspaceId);
-    if (result.lifted === 0) return { email: address, outcome: result.spamComplaint ? 'spam' : 'not_blocked' };
-    return { email: address, outcome: result.spamComplaint ? 'spam' : 'lifted' };
+    if (result.spamComplaint) return { email: address, outcome: 'spam' };
+    if (result.lifted > 0) return { email: address, outcome: 'lifted' };
+    return { email: address, outcome: result.alreadyLifted ? 'already_lifted' : 'not_blocked' };
   }
   snapshot(): EmailHealthSnapshot { return this.deps.bounces.registry.snapshot(this.workspaceId); }
 
@@ -167,8 +168,12 @@ export function emailHealthCard(snapshot: EmailHealthSnapshot): string {
 /** What pressing "This address works now" did, in the owner's words. */
 export interface MhpEmailLiftOutcome {
   readonly email: string;
-  /** lifted: done; not_blocked: nothing to undo; spam: a spam report also blocks it; unavailable: no durable list here. */
-  readonly outcome: 'lifted' | 'not_blocked' | 'spam' | 'unavailable';
+  /**
+   * lifted: our block is lifted now; already_lifted: an owner had already lifted it; spam: a spam report blocks it
+   * whatever the bounce says (the bounce may or may not have been lifted); not_blocked: no bounce was recorded;
+   * unavailable: no durable list here, nothing changed.
+   */
+  readonly outcome: 'lifted' | 'already_lifted' | 'spam' | 'not_blocked' | 'unavailable';
 }
 
 export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, result?: MhpEmailHealthCheck,
@@ -189,9 +194,10 @@ export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, res
   const rows = snapshot.blocked.map(item => `<tr><td>${escapeHtml(item.email)}</td><td>${escapeHtml(BLOCK_REASON_PLAIN[item.reason])}</td><td>${escapeHtml(date(item.since))}</td><td>${STOPPED[item.reason]}${
     durable && item.reason === 'hard_bounce' ? works(item.email) : ''}</td></tr>`).join('');
   const lifted = options.lift ? `<p role="status" class="status">${escapeHtml(({
-    lifted: `${options.lift.email} can be emailed again. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that.`,
-    not_blocked: `${options.lift.email} was not blocked by a bounce, so nothing changed.`,
-    spam: `${options.lift.email} can be emailed again as far as the bounce goes, but it is still blocked because they marked an email as spam.`,
+    lifted: `We no longer block ${options.lift.email} for that bounce. Now press Reactivate for this address in Postmark, or Postmark will still refuse it. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that.`,
+    already_lifted: `We had already stopped blocking ${options.lift.email} for that bounce. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark.`,
+    spam: `${options.lift.email} stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page.`,
+    not_blocked: `${options.lift.email} has no bounce recorded in your own records, so nothing changed. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark.`,
     unavailable: `Nothing changed: this list is not kept in your own records yet, so reactivate ${options.lift.email} in Postmark instead.`,
   } as const)[options.lift.outcome])}</p>` : '';
   const outcome = result ? `<p role="status" class="status">${result.complete ? 'Checked with Postmark.' : 'Postmark could not be fully read just now, so this may be missing the newest bounces. Try again in a minute.'} ${

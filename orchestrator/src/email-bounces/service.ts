@@ -110,6 +110,7 @@ export class EmailBounceService {
       whenReady: (timeoutMs?: number) => registry.whenReady(timeoutMs),
       decide: (workspaceId: string, email: string, purpose: EmailPurpose) => registry.decide(workspaceId, email, purpose),
       check: (workspaceId: string, email: string, purpose: EmailPurpose) => this.check(workspaceId, email, purpose),
+      available: (workspaceId: string) => this.available(workspaceId),
     });
     for (const source of this.sources) for (const [stream, kind] of source.streams) this.registry.declareStream(source.workspaceId, source.key, stream, kind);
     // With nothing to read there is nothing to wait for.
@@ -142,6 +143,12 @@ export class EmailBounceService {
     return { blocked: true, reason };
   }
 
+  /** One cheap ledger read for a reserved, never-used address: can marketing be checked right now? */
+  async available(workspaceId: string): Promise<boolean> {
+    if (!this.ledger?.covers(workspaceId)) return true;
+    try { await this.ledger.decide(workspaceId, 'ledger-probe@example.invalid', 'marketing'); return true; } catch { return false; }
+  }
+
   /** True once the durable ledger has answered in this process (so the owner page may say it is kept in our records). */
   get durable(): boolean { return this.ledger?.status() === 'available'; }
 
@@ -152,7 +159,8 @@ export class EmailBounceService {
   async ownerLiftHardBounce(input: { sessionToken: string; workspaceId: string; email: string; note: string }): Promise<OwnerLiftResult | null> {
     if (!this.ledger?.ownerLift || !this.ledger.covers(input.workspaceId)) return null;
     const result = await this.ledger.ownerLift(input);
-    if (result && result.lifted > 0) this.registry.clearHardBounce(input.workspaceId, input.email);
+    // After any answer the ledger holds no unlifted hard bounce for the address: hide this process's copies too.
+    if (result) this.registry.clearHardBounce(input.workspaceId, input.email);
     return result;
   }
 
