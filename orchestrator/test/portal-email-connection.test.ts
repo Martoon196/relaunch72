@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createPostmarkAccountApi, EMAIL_TERMS, EmailConnectionService, loadEmailConnectConfig } from '../src/email-connections/index.js';
+import { createPostmarkAccountApi, EMAIL_CONNECT_BUSINESSES, EMAIL_TERMS, EmailConnectionService, loadEmailConnectConfig } from '../src/email-connections/index.js';
 import { handleEmailConnection } from '../src/portal/email-connection-router.js';
 import { renderEmailConnectionPage } from '../src/portal/email-connection-view.js';
 import { portalCsrfToken } from '../src/portal/session.js';
@@ -75,7 +75,8 @@ test('every state of the page, from the form to connected, in plain English and 
   assert.ok(page.body.includes(`<code>${id}pm._domainkey.propertypredator-test.co.uk</code>`), 'the full host');
   assert.match(page.body, /Most hosts want this short name/u); assert.match(page.body, /Some hosts want the full name/u);
   assert.doesNotMatch(page.body, /by itself/u);
-  assert.ok(page.body.includes('<code>pm-bounces</code>') && page.body.includes('<code>pm.mtasv.net</code>'));
+  assert.match(page.body, /<code>pm-[0-9a-f]{10}<\/code>/u, 'the CNAME name is this business\'s proof label');
+  assert.ok(page.body.includes('<code>pm.mtasv.net</code>'));
   assert.match(page.body, /TXT record/u); assert.match(page.body, /CNAME record/u);
   assert.match(page.body, /data-copy="[^"]+" hidden>Copy</u, 'Copy buttons only appear with JavaScript');
   assert.match(page.body, /Where do I add these\?[^]*Cloudflare[^]*DNS only[^]*grey cloud/u, 'Cloudflare detected from the name servers');
@@ -108,7 +109,8 @@ test('Continue after an interruption, and the busy message', async () => {
   assert.equal(page.status, 503);
   assert.match(page.body, /The email service is busy\. Try again in a minute\./u);
   page = await h.call('GET', '/portal/email');
-  assert.match(page.body, /Setting up didn’t finish\. Press Continue to carry on where it stopped\./u);
+  assert.match(page.body, /Setting up didn’t finish\./u);
+  assert.doesNotMatch(page.body, /carry on where it stopped/u);
   assert.match(page.body, />Continue</u);
   assert.match(page.body, /<summary>Start again<\/summary>[^]*action="\/portal\/email\/disconnect"/u, 'a safe Start again');
   assert.doesNotMatch(page.body, /use-domain/u, 'no take-over offered to anyone but the founder');
@@ -137,7 +139,7 @@ test('same-origin, CSRF, exact fields and the allowed business are enforced; swi
 
 test('the page escapes every stored value', () => {
   const html = renderEmailConnectionPage({ csrf: 'c"sr<f', commandId: 'id', view: { offered: true, dnsHost: null,
-    business: { workspaceId: PP_WS, name: 'Property Predator', sourceKey: 'conn-d975ff66', replacesSourceKey: 'pp' },
+    business: EMAIL_CONNECT_BUSINESSES[0]!,
     state: { status: 'dns_pending', step: null, domain: 'x.co.uk', fromName: '<img>', fromAddress: 'a@x.co.uk', replyTo: null, serverId: 1, domainId: 2, stream: 'broadcast',
       webhookId: 3, hasServerToken: true, hasWebhookSecret: true, mode: 'off', verifiedAt: null, rowVersion: 1,
       dns: { dkim: { host: '<script>.x.co.uk', value: '"><script>alert(1)</script>', verified: false }, returnPath: { host: 'pm-bounces.x.co.uk', value: 'pm.mtasv.net', verified: true } },

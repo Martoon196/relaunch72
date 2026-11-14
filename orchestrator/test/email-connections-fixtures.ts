@@ -6,7 +6,7 @@
 import type { DnsResolver } from '../src/email-connections/domains.js';
 import type {
   BeginOutcome, CheckOutcome, EmailConnectionDns, EmailConnectionForm, EmailConnectionState, EmailConnectionStep, EmailConnectionStore,
-  StepOutcome, StepValues, StoredConnectionSource, TermsOutcome,
+  RunLock, StepOutcome, StepValues, StoredConnectionSource, TermsOutcome,
 } from '../src/email-connections/store.js';
 import { EmailConnectionForbiddenError } from '../src/email-connections/store.js';
 import type { EmailConnectionSecretField } from '../src/email-connections/vault.js';
@@ -249,7 +249,11 @@ export class MemoryEmailConnectionStore implements EmailConnectionStore {
     if (!row || row.status === 'disconnected' || !row.serverId || !row.sealedServerToken || !row.sealedWebhookSecret) return [];
     return [{ workspaceId: PP_WS, serverId: String(row.serverId), stream: row.stream ?? 'broadcast', sealedServerToken: row.sealedServerToken, sealedWebhookSecret: row.sealedWebhookSecret }];
   }
-  async lock(_workspace: string, waitMs: number): Promise<(() => Promise<void>) | null> {
+  /** Set true to make the next held lock report itself lost after this many lost() calls. */
+  loseLockAfter: number | null = null;
+  otherHolds: boolean | 'unknown' = false;
+  async otherConnectionHolds(): Promise<boolean> { if (this.otherHolds === 'unknown') throw new Error('cannot tell'); return this.otherHolds; }
+  async lock(_workspace: string, waitMs: number): Promise<RunLock | null> {
     if (this.held) {
       const got = await new Promise<boolean>(resolve => {
         const timer = setTimeout(() => { this.waiters.splice(this.waiters.indexOf(wake), 1); resolve(false); }, waitMs);
@@ -259,7 +263,12 @@ export class MemoryEmailConnectionStore implements EmailConnectionStore {
       if (!got) return null;
     }
     this.held = true;
-    return async () => { const next = this.waiters.shift(); if (next) next(); else this.held = false; };
+    let calls = 0, released = false;
+    const loseAfter = this.loseLockAfter; this.loseLockAfter = null;
+    return {
+      lost: () => loseAfter !== null && ++calls > loseAfter,
+      release: async () => { if (released) return; released = true; const next = this.waiters.shift(); if (next) next(); else this.held = false; },
+    };
   }
 }
 

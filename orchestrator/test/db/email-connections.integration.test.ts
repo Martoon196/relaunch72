@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { expectPostgresError, openTestDatabase, ownerQuery, resetIdentityTables, testDatabaseSkipReason } from './database-helper.js';
 import { loginRole } from './webinar-harness.js';
 import { EMAIL_TERMS_VERSION, EmailConnectionForbiddenError, EmailConnectionVault, PgEmailConnectionStore } from '../../src/email-connections/index.js';
@@ -29,6 +30,7 @@ async function session(admin: Admin, user: string, workspace: string): Promise<s
 test('0155 on real roles: the eligible owner only, pinned to Property Predator, sealed values never in the page read, append-only events, rules before begin', { skip, timeout: 180_000 }, async () => {
   const admin = await openTestDatabase();
   const identity = await loginRole(admin, 'r72_identity_command'), web = await loginRole(admin, 'r72_web'), content = await loginRole(admin, 'r72_content_command');
+  const extraPools: pg.Pool[] = [];
   try {
     await resetIdentityTables(admin);
     await ownerQuery(admin, 'DELETE FROM app_private.email_connections').catch(() => undefined);
@@ -52,7 +54,12 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     END $s$`);
     const ownerToken = await session(admin, owner, PP), adminToken = await session(admin, admin2, PP), viewerToken = await session(admin, billingOwner, PP),
       strangerToken = await session(admin, stranger, OTHER_WS), ownerElsewhere = await session(admin, owner, PP_SECOND);
-    const store = new PgEmailConnectionStore(identity);
+    // As production builds it: the run lock on a small pool of its own (one per business plus one).
+    const connectionString = (identity as unknown as { options: { connectionString: string } }).options.connectionString;
+    const lockPool = new pg.Pool({ connectionString, max: 2, connectionTimeoutMillis: 300 });
+    extraPools.push(lockPool);
+    lockPool.on('error', () => undefined);
+    const store = new PgEmailConnectionStore(identity, { lockPool });
 
     // Only the eligible owner: an org admin who is not an org owner, an org owner who cannot manage the workspace, another
     // business's owner, the owner with another workspace selected and a made-up session are all refused.
@@ -167,14 +174,37 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     assert.equal(await store.begin(ownerToken, PP, FORM, EMAIL_TERMS_VERSION), 'started');
     assert.equal((await store.state(ownerToken, PP)).domainId, 777);
 
-    // One run per business across instances.
-    const release = await store.lock(PP, 100);
-    assert.ok(release);
-    assert.equal(await store.lock(PP, 300), null);
-    await release!();
-    const again = await store.lock(PP, 100); assert.ok(again); await again!();
+    // One run per business across instances (another instance: its own store and lock pool).
+    const otherPool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 300 });
+    extraPools.push(otherPool);
+    otherPool.on('error', () => undefined);
+    const otherInstance = new PgEmailConnectionStore(identity, { lockPool: otherPool });
+    const held = await store.lock(PP, 100);
+    assert.ok(held && !held.lost());
+    assert.equal(await otherInstance.lock(PP, 400), null, 'held elsewhere');
+    // While the lock is held, the shared identity pool still answers (the run holds none of its connections).
+    assert.equal((await store.state(ownerToken, PP)).status, 'creating');
+    // The same lock pool full: a connect timeout is "still held", never a fault.
+    const second = await store.lock('0b155000-0000-4000-8000-0000000000aa', 100);
+    assert.ok(second);
+    assert.equal(await store.lock('0b155000-0000-4000-8000-0000000000bb', 700), null);
+    await second!.release();
+    await held!.release();
+    const again = await otherInstance.lock(PP, 300); assert.ok(again); await again!.release();
+    // The lock's connection dropped mid-run (the server's idle-in-transaction timeout ends it): no unhandled 'error',
+    // the lock reports itself lost, and a later run can take it.
+    const shortPool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 300, options: '-c idle_in_transaction_session_timeout=800' });
+    shortPool.on('error', () => undefined);
+    extraPools.push(shortPool);
+    const shortStore = new PgEmailConnectionStore(identity, { lockPool: shortPool });
+    const doomed = await shortStore.lock(PP, 300);
+    assert.ok(doomed);
+    for (let i = 0; i < 60 && !doomed!.lost(); i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(doomed!.lost(), true, 'the dropped connection marks the lock lost');
+    await doomed!.release();
+    const after = await shortStore.lock(PP, 1_000); assert.ok(after && !after.lost()); await after!.release();
   } finally {
-    await Promise.allSettled([identity.end(), web.end(), content.end()]);
+    await Promise.allSettled([identity.end(), web.end(), content.end(), ...extraPools.map(pool => pool.end())]);
     await admin.end();
   }
 });

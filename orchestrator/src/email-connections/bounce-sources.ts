@@ -9,7 +9,7 @@
  *
  * A stored connection that cannot be opened (EMAIL_CONNECTION_KEY missing, lost or rotated) is reported as
  * unavailable, so its webhook answers 503 and Postmark retries, never 404 (which Postmark drops). One warning line
- * names the setting, never a value. Pressing Continue on the email page makes a new secret and webhook.
+ * names the setting, never a value. Pressing Repair (or Continue) on the email page makes a new secret and webhook.
  */
 import type { EmailBounceService, EmailBounceSource, EmailBounceSourceLoader } from '../email-bounces/index.js';
 import { EMAIL_CONNECT_BUSINESSES, emailConnectBusiness } from './config.js';
@@ -79,7 +79,7 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
       if (!this.warned) {
         this.warned = true;
         this.log(JSON.stringify({ event: 'email.connections.source_unreadable', level: 'warn',
-          message: 'A stored email connection could not be opened with EMAIL_CONNECTION_KEY (missing, lost or changed). Its bounce webhook answers 503 until the owner presses Continue on the email page.' }));
+          message: 'A stored email connection could not be opened with EMAIL_CONNECTION_KEY (missing, lost or changed). Its bounce webhook answers 503 until the owner presses Repair (or Continue) on the email page, which makes a new secret and webhook.' }));
       }
       return null;
     }

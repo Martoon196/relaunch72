@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PgSeoLimitsService } from './seo-blog-limits-service.js';
-import { EmailConnectionBounceSources, EmailConnectionService, loadEmailConnectConfig, PgEmailConnectionStore } from '../email-connections/index.js';
+import { EMAIL_CONNECT_BUSINESSES, EmailConnectionBounceSources, EmailConnectionService, loadEmailConnectConfig, PgEmailConnectionStore } from '../email-connections/index.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
@@ -1370,8 +1370,10 @@ export async function buildPgPortalPlatform(
     // Stored connections become bounce sources without a restart (loaded at start, about every minute, and on demand).
     const emailBounceHandling = !emailBounceHandlingDisabled(env);
     const emailConnectConfig = loadEmailConnectConfig(env, { portalBaseUrl: env.PORTAL_BASE_URL?.trim(), bounceHandling: emailBounceHandling });
-    // The run lock has one connection of its own, so a run never holds one of the shared identity connections.
-    const emailConnectionLockPool = createDatabasePool({ ...identityConfig, maxConnections: 1 });
+    // The run lock has connections of its own (one per business that may connect, plus one), so a run never holds one
+    // of the shared identity connections and one business's run never queues another's. createDatabasePool gives the
+    // pool its own 'error' listener; each lock client gets one too (store.lock).
+    const emailConnectionLockPool = createDatabasePool({ ...identityConfig, maxConnections: EMAIL_CONNECT_BUSINESSES.length + 1 });
     pools.push(emailConnectionLockPool);
     const emailConnectionStore = new PgEmailConnectionStore(identityPool, { log: emailBounceLog, lockPool: emailConnectionLockPool });
     // Loaded whenever bounce handling is on, even without a key: a stored connection that cannot be opened then answers

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 /**
  * Seals the two secrets of an email connection (the Postmark server token and the bounce webhook secret) before they
@@ -57,6 +57,17 @@ export class EmailConnectionVault {
     } catch {
       throw new EmailConnectionVaultError();
     }
+  }
+
+  /**
+   * The proof a domain was created by THIS business with THIS key: the Return-Path label we create the domain with,
+   * "pm-" and the first 10 hex digits of HMAC-SHA256(key, "return-path:v1:<workspaceId>|<domain>"). A valid DNS label
+   * (13 lower-case letters and digits). Nobody without the key can make a domain carry it. After the key is changed,
+   * domains made under the old key no longer match: they are then reachable only by the id saved on the business's
+   * row, or by the founder's take-over.
+   */
+  returnPathLabel(workspaceId: string, domain: string): string {
+    return `pm-${createHmac('sha256', this.#key).update(`return-path:v1:${workspaceId.toLowerCase()}|${domain.toLowerCase()}`).digest('hex').slice(0, 10)}`;
   }
 
   toJSON() { return { credentials: '[REDACTED]' }; }

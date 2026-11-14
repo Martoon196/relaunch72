@@ -45,7 +45,7 @@ import { freeMailboxDomain, lookUpCname, lookUpDnsHost, lookUpTxt, parseEmailAdd
   type DnsHost, type DnsResolver, type DnsSeen } from './domains.js';
 import { createPostmarkAccountApi, POSTMARK_CODES, PostmarkAccountError, type PostmarkAccountApi, type PostmarkDomain, type PostmarkServerApi } from './postmark-account-api.js';
 import { EmailConnectionAbsentError, EmailConnectionForbiddenError, type DomainOrigin, type EmailConnectionDns, type EmailConnectionState, type EmailConnectionStep,
-  type EmailConnectionStore, type StepOutcome } from './store.js';
+  type EmailConnectionStore, type RunLock, type StepOutcome } from './store.js';
 import { EMAIL_TERMS_VERSION } from './terms.js';
 import type { EmailBounceSource } from '../email-bounces/index.js';
 
@@ -63,11 +63,17 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   busy: 'The email service is busy. Try again in a minute.',
   locked: 'This is already being set up in another window. Give it a moment, then refresh.',
   off: 'Email connection isn\'t switched on yet.',
-  notAvailable: 'Email connection is not available right now. We have been told.',
-  awaitingApproval: 'We are finishing set-up on our side. You can carry on; sending opens up shortly.',
+  notAvailable: 'Email connection is not available right now.',
+  awaitingApproval: 'Our email account is still being approved, so set-up is paused here. We will pick it up as soon as it is approved; press Continue later.',
   unfinished: 'We couldn\'t finish setting up. Press Continue.',
-  planLimit: 'Our email account has reached its limit for new businesses. We have been told and will sort it out.',
-  needsHand: 'Part of the email set-up needs a hand from us. We have been told.',
+  interrupted: 'This was interrupted. Press Continue.',
+  planLimit: 'Our email account has reached its limit for new businesses.',
+  needsHand: 'Part of the email set-up needs a hand from us.',
+  /** Added to a permanent failure only when its event really was written to the events table the platform owner reads. */
+  logged: ' We have logged this and will sort it out.',
+  tryLater: ' Please try again later.',
+  wrongDomain: 'Something doesn\'t look right with this domain at the email service. Please contact support.',
+  repaired: 'Your email connection was repaired. Press Check to confirm your records.',
   termsFirst: 'Tick the email rules first.',
   needName: 'Enter the sender name: up to 100 characters, without < > " or \\.',
   needFrom: 'Enter the address to send from, on your own domain, like hello@yourbusiness.co.uk.',
@@ -93,7 +99,9 @@ export class EmailConnectionError extends Error {
 
 export type EmailConnectionView =
   | { readonly offered: false; readonly message: string }
-  | { readonly offered: true; readonly business: EmailConnectBusiness; readonly state: EmailConnectionState; readonly dnsHost: DnsHost | null };
+  | { readonly offered: true; readonly business: EmailConnectBusiness; readonly state: EmailConnectionState; readonly dnsHost: DnsHost | null;
+      /** A connected business whose saved secrets cannot be opened (the key changed): Continue repairs it. */
+      readonly repair?: boolean };
 
 export interface EmailConnectionResult { readonly ok: boolean; readonly message: string }
 
@@ -114,7 +122,8 @@ const missing = (error: unknown) => error instanceof PostmarkAccountError && (er
   || error.errorCode === POSTMARK_CODES.webhookNotFound);
 
 class StepFailure extends Error {
-  constructor(readonly outcome: StepOutcome, readonly ownerMessage: string, readonly status = 409) { super(outcome); }
+  /** permanent: pressing Continue will not help; the owner is told it is logged only when the event was written. */
+  constructor(readonly outcome: StepOutcome, readonly ownerMessage: string, readonly status = 409, readonly permanent = false) { super(outcome); }
 }
 
 /** What a Postmark failure means for the owner, and the code recorded for the step. Permanent ones never say "Continue". */
@@ -122,12 +131,12 @@ function failureOf(error: unknown, domain = 'that domain'): StepFailure {
   if (error instanceof StepFailure) return error;
   if (error instanceof PostmarkAccountError) {
     if (error.category === 'busy' || error.category === 'timeout' || error.category === 'network') return new StepFailure('busy', EMAIL_CONNECTION_MESSAGES.busy, 503);
-    if (error.category === 'unauthorized') return new StepFailure('unauthorized', EMAIL_CONNECTION_MESSAGES.notAvailable, 503);
+    if (error.category === 'unauthorized') return new StepFailure('unauthorized', EMAIL_CONNECTION_MESSAGES.notAvailable, 503, true);
     if (error.errorCode === POSTMARK_CODES.pendingApproval || error.errorCode === POSTMARK_CODES.notApproved) return new StepFailure('awaiting_approval', EMAIL_CONNECTION_MESSAGES.awaitingApproval);
-    if (error.errorCode === POSTMARK_CODES.limitReached) return new StepFailure('plan_limit', EMAIL_CONNECTION_MESSAGES.planLimit);
+    if (error.errorCode === POSTMARK_CODES.limitReached) return new StepFailure('plan_limit', EMAIL_CONNECTION_MESSAGES.planLimit, 409, true);
     if (error.errorCode === POSTMARK_CODES.publicDomain) return new StepFailure('public_domain', EMAIL_CONNECTION_MESSAGES.freeMailbox(domain), 400);
     if (error.errorCode === POSTMARK_CODES.webhookVerificationFailed) return new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.unfinished);
-    return new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand);
+    return new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand, 409, true);
   }
   return new StepFailure('failed', EMAIL_CONNECTION_MESSAGES.unfinished);
 }
@@ -138,6 +147,8 @@ export class EmailConnectionService {
   private readonly resolver: DnsResolver;
   private readonly log: (line: string) => void;
   private readonly secret: () => string;
+  /** Runs in progress in THIS process, by workspace: a second window for the same business is told at once. */
+  private readonly inFlight = new Set<string>();
 
   constructor(private readonly input: {
     config: EmailConnectConfig;
@@ -195,19 +206,38 @@ export class EmailConnectionService {
     try { state = await this.read(identity, business); }
     catch (error) { if (error instanceof EmailConnectionError && error.code === 'off') return { offered: false, message: EMAIL_CONNECTION_MESSAGES.off }; throw error; }
     const dnsHost = state.status === 'dns_pending' && state.domain ? await lookUpDnsHost(this.resolver, state.domain) : null;
-    return { offered: true, business, state, dnsHost };
+    const repair = await this.repairNeeded(identity, business, state).catch(() => false);
+    return { offered: true, business, state, dnsHost, ...(repair ? { repair } : {}) };
   }
 
   /** The owner check runs first (a database read with the session); only then is the business's run lock taken. */
-  private async locked<T>(identity: PortalSessionIdentity, work: (business: EmailConnectBusiness) => Promise<T>): Promise<T> {
+  private async locked<T>(identity: PortalSessionIdentity, work: (business: EmailConnectBusiness, lock: RunLock) => Promise<T>): Promise<T> {
     if (!this.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
     const business = this.business(identity);
     await this.read(identity, business);
-    let release: (() => Promise<void>) | null;
-    try { release = await this.input.store.lock(business.workspaceId, this.input.lockWaitMs ?? LOCK_WAIT_MS); }
-    catch (error) { throw this.storeError(error); }
-    if (!release) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.locked, 'locked');
-    try { return await work(business); } finally { await release(); }
+    // The same business already running in this process: said at once, without queueing on the lock's connection.
+    if (this.inFlight.has(business.workspaceId)) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.locked, 'locked');
+    this.inFlight.add(business.workspaceId);
+    try {
+      let lock: RunLock | null;
+      // Another instance may hold it: waited for up to the deadline.
+      try { lock = await this.input.store.lock(business.workspaceId, this.input.lockWaitMs ?? LOCK_WAIT_MS); }
+      catch (error) { throw this.storeError(error); }
+      if (!lock) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.locked, 'locked');
+      try { return await work(business, lock); } finally { await lock.release(); }
+    } finally { this.inFlight.delete(business.workspaceId); }
+  }
+
+  /** Whether another business's connection row holds this domain; when that cannot be told, assumed yes (refuse). */
+  private async heldElsewhere(workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean> {
+    try { return await this.input.store.otherConnectionHolds(workspaceId, domain); } catch { return true; }
+  }
+
+  /** The Return-Path host that proves THIS business created a domain with today's key (see vault.returnPathLabel). */
+  private proofHost(workspaceId: string, domain: string): string {
+    const config = this.input.config;
+    if (!config.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
+    return `${config.vault.returnPathLabel(workspaceId, domain)}.${domain}`;
   }
 
   /**
@@ -220,8 +250,12 @@ export class EmailConnectionService {
     let outcome: 'domain_removed' | 'domain_kept' | 'domain_gone' | 'domain_remove_failed';
     try {
       const domain = await this.account!.getDomain(state.domainId).catch(error => { if (missing(error)) return null; throw error; });
+      // Deleted only when it still carries THIS business's proof (so it is certainly the one we created), both records are
+      // unverified, and no other business's connection holds it.
       if (!domain) outcome = 'domain_gone';
-      else if (domain.dkimVerified || domain.returnPathVerified || domain.name !== state.domain) outcome = 'domain_kept';
+      else if (domain.dkimVerified || domain.returnPathVerified || domain.name !== state.domain || !state.domain
+        || domain.returnPathHost !== this.proofHost(business.workspaceId, state.domain)
+        || await this.heldElsewhere(business.workspaceId, { id: domain.id, name: domain.name })) outcome = 'domain_kept';
       else { await this.account!.deleteDomain(state.domainId); outcome = 'domain_removed'; }
     } catch { outcome = 'domain_remove_failed'; }
     this.log(JSON.stringify({ event: 'email.connections.unverified_domain', level: outcome === 'domain_remove_failed' ? 'warn' : 'info', outcome, workspace: business.workspaceId.slice(0, 8) }));
@@ -246,7 +280,7 @@ export class EmailConnectionService {
     if (form.replyTo.trim() && (!replyTo || reservedDomain(replyTo.domain))) throw new EmailConnectionError(400, EMAIL_CONNECTION_MESSAGES.needReplyTo, 'reply_to');
     // The rules are agreed to on the server; an unticked box changes nothing at all.
     if (!form.agreed) throw new EmailConnectionError(400, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
-    return this.locked(identity, async business => {
+    return this.locked(identity, async (business, lock) => {
       const before = await this.read(identity, business);
       // A different domain while not connected: this business's own unverified domain is released first.
       if (before.domain && before.domain !== from.domain && before.status !== 'dns_pending' && before.status !== 'verified') {
@@ -261,15 +295,16 @@ export class EmailConnectionService {
       if (begun === 'terms_required') throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
       if (begun === 'domain_taken') throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.domainTaken, 'domain_taken');
       if (begun === 'already_connected') throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.alreadyConnected, 'already_connected');
-      return this.run(identity, business, false);
+      return this.run(identity, business, false, lock);
     });
   }
 
   /** "Continue" after an interruption: the same steps on the saved details, adopting whatever already exists. */
   async continue(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
-    return this.locked(identity, async business => {
+    return this.locked(identity, async (business, lock) => {
       const state = await this.read(identity, business);
-      if (state.status === 'creating' || state.status === 'needs_attention') return this.run(identity, business, false);
+      if (state.status === 'creating' || state.status === 'needs_attention') return this.run(identity, business, false, lock);
+      if (await this.repairNeeded(identity, business, state)) return this.repair(identity, business, state, lock);
       if (state.status === 'verified') return { ok: true, message: EMAIL_CONNECTION_MESSAGES.connectedNext };
       if (state.status === 'dns_pending') return { ok: true, message: EMAIL_CONNECTION_MESSAGES.started };
       return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToContinue };
@@ -280,14 +315,14 @@ export class EmailConnectionService {
   async useExistingDomain(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
     if (!this.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
     if (!(await this.isFounder(identity))) throw new EmailConnectionError(403, EMAIL_CONNECTION_MESSAGES.domainInUse, 'not_founder');
-    return this.locked(identity, async business => {
+    return this.locked(identity, async (business, lock) => {
       const state = await this.read(identity, business);
       if (state.status !== 'creating' && state.status !== 'needs_attention') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToContinue };
-      return this.run(identity, business, true);
+      return this.run(identity, business, true, lock);
     });
   }
 
-  private async run(identity: PortalSessionIdentity, business: EmailConnectBusiness, takeOver: boolean): Promise<EmailConnectionResult> {
+  private async run(identity: PortalSessionIdentity, business: EmailConnectBusiness, takeOver: boolean, lock: RunLock): Promise<EmailConnectionResult> {
     const { store } = this.input, token = identity.sessionToken, ws = business.workspaceId;
     const config = this.input.config;
     if (!config.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
@@ -297,7 +332,12 @@ export class EmailConnectionService {
     if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
     if (!state.domain) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.nothingToContinue, 'no_details');
     let step: EmailConnectionStep = 'server';
-    const intend = async (next: EmailConnectionStep) => { step = next; await store.intend(token, ws, next); };
+    // Every step checks the run lock is still held; a lost lock stops the run here instead of carrying on unlocked.
+    const intend = async (next: EmailConnectionStep) => {
+      step = next;
+      if (lock.lost()) throw new StepFailure('failed', EMAIL_CONNECTION_MESSAGES.interrupted);
+      await store.intend(token, ws, next);
+    };
     try {
       // 1. Server.
       await intend('server');
@@ -328,7 +368,7 @@ export class EmailConnectionService {
           if (!(error instanceof PostmarkAccountError && error.errorCode === POSTMARK_CODES.streamIdExists)) throw error;
           const again = (await serverApi.listBroadcastStreams(true)).find(stream => stream.id === BROADCAST_STREAM);
           // An archived stream of that name cannot be used; that needs a person, not another press.
-          if (!again || again.archived) throw new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand);
+          if (!again || again.archived) throw new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand, 409, true);
         }
       }
       await store.record(token, ws, 'stream', streamOutcome, { stream: BROADCAST_STREAM });
@@ -358,17 +398,22 @@ export class EmailConnectionService {
       if (!webhook) { webhook = await serverApi.createWebhook({ url, stream: BROADCAST_STREAM, username: business.sourceKey, password: secret }); webhookOutcome = 'created'; }
       await store.record(token, ws, 'webhook', webhookOutcome, { webhookId: webhook.id });
 
-      // 5. Domain (see DOMAIN ADOPTION above). The account is listed BEFORE any intent is written.
-      const wanted = state.domain;
-      let domain: PostmarkDomain | null = null, origin: DomainOrigin = state.dns?.origin ?? 'adopted', domainOutcome: StepOutcome = 'adopted';
+      // 5. Domain (see DOMAIN ADOPTION above). The account is listed BEFORE any intent is written; a failed list is
+      // recorded under this step.
+      step = 'domain';
+      const wanted = state.domain, proof = this.proofHost(ws, wanted);
+      const proven = (d: PostmarkDomain) => d.name === wanted && d.returnPathHost === proof;
+      let domain: PostmarkDomain | null = null, origin: DomainOrigin = 'adopted', domainOutcome: StepOutcome = 'adopted';
       if (state.domainId) {
+        // By the id on our own row. 'created' only when it carries our proof; a taken-over domain stays taken over.
         domain = await account.getDomain(state.domainId).catch(error => { if (missing(error)) return null; throw error; });
         if (domain && domain.name !== wanted) domain = null;
+        if (domain) origin = proven(domain) ? 'created' : state.dns?.origin === 'taken_over' ? 'taken_over' : 'adopted';
       }
-      const taken = async (): Promise<never> => {
-        // Even when this write is lost, nothing was adopted and no intent exists: the next run lists again.
+      const taken = async (offerTakeOver: boolean): Promise<never> => {
+        // Even when this write is lost, nothing was adopted: the next run lists again and checks the proof again.
         await store.record(token, ws, 'domain', 'domain_taken').catch(() => this.log(JSON.stringify({ event: 'email.connections.record_failed', level: 'warn', step: 'domain' })));
-        const founder = await this.isFounder(identity);
+        const founder = offerTakeOver && await this.isFounder(identity);
         this.log(JSON.stringify({ event: 'email.connections.domain_in_account', level: 'warn', workspace: ws.slice(0, 8), founder }));
         throw founder ? new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.founderTakeOver, 'domain_in_account')
           : new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.domainInUse, 'domain_in_use');
@@ -377,26 +422,32 @@ export class EmailConnectionService {
         const found = (await account.listDomains()).find(item => item.name === wanted);
         if (found) {
           const details = await account.getDomain(found.id);
-          if (details.name !== wanted) await taken();
-          if (state.domainAttempted && !details.dkimVerified && !details.returnPathVerified) { domain = details; origin = 'created'; }
+          const elsewhere = await this.heldElsewhere(ws, { id: details.id, name: details.name });
+          if (details.name !== wanted || elsewhere) await taken(false);
+          // Our own create whose answer was lost: it carries our proof and nobody has verified it.
+          if (proven(details) && !details.dkimVerified && !details.returnPathVerified) { domain = details; origin = 'created'; }
           else if (takeOver) {
             // The founder's decision, recorded (with who) before the domain is saved for this business.
             await store.record(token, ws, 'domain', 'founder_takeover');
             domain = details; origin = 'taken_over';
             this.log(JSON.stringify({ event: 'email.connections.domain_taken_over', level: 'warn', workspace: ws.slice(0, 8) }));
-          } else await taken();
+          } else await taken(true);
         }
       }
-      // Only now, when we are about to create (or have just found our own), is the intent written.
       await intend('domain');
       if (!domain) {
-        try { domain = await account.createDomain({ name: wanted, returnPathDomain: `pm-bounces.${wanted}` }); domainOutcome = 'created'; origin = 'created'; }
+        let created: PostmarkDomain;
+        try { created = await account.createDomain({ name: wanted, returnPathDomain: proof }); }
         catch (error) {
           // It appeared between our list and our create: someone else's. Never adopted.
-          if (error instanceof PostmarkAccountError && error.errorCode === POSTMARK_CODES.domainExists) await taken();
+          if (error instanceof PostmarkAccountError && error.errorCode === POSTMARK_CODES.domainExists) await taken(true);
           throw error;
         }
+        // The answer must be the domain we asked for, carrying our proof; anything else is never saved.
+        if (!proven(created)) throw new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand, 409, true);
+        domain = created; domainOutcome = 'created'; origin = 'created';
       }
+      if (lock.lost()) throw new StepFailure('failed', EMAIL_CONNECTION_MESSAGES.interrupted);
       await store.record(token, ws, 'domain', domainOutcome, { domainId: domain.id, dns: recordsOf(domain, origin) });
       this.log(JSON.stringify({ event: 'email.connections.records_waiting', workspace: ws.slice(0, 8) }));
       return { ok: true, message: EMAIL_CONNECTION_MESSAGES.started };
@@ -409,18 +460,54 @@ export class EmailConnectionService {
         ...(error instanceof PostmarkAccountError ? { status: error.status, code: error.errorCode } : {}) }));
       if (failure.outcome === 'unauthorized') this.log(JSON.stringify({ event: 'email.connections.account_token_refused', level: 'warn',
         message: 'Postmark refused POSTMARK_ACCOUNT_TOKEN; Connect email cannot work until it is corrected.' }));
-      await store.record(token, ws, step, failure.outcome).catch(() => this.log(JSON.stringify({ event: 'email.connections.record_failed', level: 'warn', step })));
-      throw new EmailConnectionError(failure.status, failure.ownerMessage, failure.outcome);
+      const recorded = await store.record(token, ws, step, failure.outcome).then(() => true, () => { this.log(JSON.stringify({ event: 'email.connections.record_failed', level: 'warn', step })); return false; });
+      // "We have logged this" only when the event the platform owner reads really was written.
+      const message = failure.permanent ? failure.ownerMessage + (recorded ? EMAIL_CONNECTION_MESSAGES.logged : EMAIL_CONNECTION_MESSAGES.tryLater) : failure.ownerMessage;
+      throw new EmailConnectionError(failure.status, message, failure.outcome);
     }
+  }
+
+  /** A connected (or waiting) business whose saved server token or webhook secret cannot be opened with today's key. */
+  private async repairNeeded(identity: PortalSessionIdentity, business: EmailConnectBusiness, state: EmailConnectionState): Promise<boolean> {
+    const config = this.input.config;
+    if (!config.enabled || (state.status !== 'dns_pending' && state.status !== 'verified')) return false;
+    const sealed = await this.input.store.sealed(identity.sessionToken, business.workspaceId);
+    if (!sealed.serverToken || !sealed.webhookSecret) return true;
+    try { config.vault.open(business.workspaceId, 'server_token', sealed.serverToken); config.vault.open(business.workspaceId, 'webhook_secret', sealed.webhookSecret); return false; }
+    catch { return true; }
+  }
+
+  /**
+   * Remakes the webhook secret and the webhook for a connected business whose saved secrets no longer open. 0155 lets
+   * secrets be saved only while setting up, so the connection is set back to "setting up" with the SAME details (the
+   * server, stream and domain are adopted by id; nothing is deleted except our old webhook), then the steps run again:
+   * one webhook at our address afterwards, with a new secret. Postmark's verified flags are read again by Check.
+   */
+  private async repair(identity: PortalSessionIdentity, business: EmailConnectBusiness, state: EmailConnectionState, lock: RunLock): Promise<EmailConnectionResult> {
+    const { store } = this.input, token = identity.sessionToken, ws = business.workspaceId;
+    if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
+    if (!state.domain || !state.fromName || !state.fromAddress) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.nothingToContinue, 'no_details');
+    this.log(JSON.stringify({ event: 'email.connections.repair', level: 'warn', workspace: ws.slice(0, 8),
+      message: 'Saved email connection secrets could not be opened with EMAIL_CONNECTION_KEY; the webhook secret and webhook are being remade.' }));
+    try {
+      await store.disconnect(token, ws);
+      const begun = await store.begin(token, ws, { domain: state.domain, fromName: state.fromName, fromAddress: state.fromAddress, replyTo: state.replyTo }, EMAIL_TERMS_VERSION);
+      if (begun !== 'started') throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.unfinished, 'repair');
+    } catch (error) { throw this.storeError(error); }
+    // The stale webhook (secret we can no longer read) is found at our address and replaced by run().
+    await this.run(identity, business, false, lock);
+    return { ok: true, message: EMAIL_CONNECTION_MESSAGES.repaired };
   }
 
   /** "Check": Postmark verifies both records; its answer is stored; our look-ups only choose the message. */
   async check(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
-    return this.locked(identity, async business => {
+    return this.locked(identity, async (business, lock) => {
       const account = this.account!;
       const state = await this.read(identity, business);
       if ((state.status !== 'dns_pending' && state.status !== 'verified') || !state.domainId || !state.domain) return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToCheck };
       if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
+      // Secrets that no longer open (the key changed): the webhook is remade first, so the check answers truly.
+      if (await this.repairNeeded(identity, business, state)) await this.repair(identity, business, state, lock);
       let dkim: PostmarkDomain, returnPath: PostmarkDomain;
       try {
         dkim = await account.verifyDkim(state.domainId);
@@ -429,12 +516,12 @@ export class EmailConnectionService {
         const failure = failureOf(error);
         this.log(JSON.stringify({ event: 'email.connections.check_failed', level: 'warn', outcome: failure.outcome,
           ...(error instanceof PostmarkAccountError ? { status: error.status, code: error.errorCode } : {}) }));
-        throw new EmailConnectionError(503, failure.outcome === 'unauthorized' ? EMAIL_CONNECTION_MESSAGES.notAvailable : EMAIL_CONNECTION_MESSAGES.busy, failure.outcome);
+        throw new EmailConnectionError(503, failure.outcome === 'unauthorized' ? EMAIL_CONNECTION_MESSAGES.notAvailable + EMAIL_CONNECTION_MESSAGES.tryLater : EMAIL_CONNECTION_MESSAGES.busy, failure.outcome);
       }
       // The answer must be about this business's own domain.
       if (dkim.name !== state.domain || returnPath.name !== state.domain) {
         this.log(JSON.stringify({ event: 'email.connections.check_wrong_domain', level: 'warn', workspace: business.workspaceId.slice(0, 8) }));
-        throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.needsHand, 'wrong_domain');
+        throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.wrongDomain, 'wrong_domain');
       }
       const dkimOk = dkim.dkimVerified, returnPathOk = returnPath.returnPathVerified;
       const dns: EmailConnectionDns = Object.freeze({
@@ -464,7 +551,7 @@ export class EmailConnectionService {
    * are kept with their ids saved, so a later Connect adopts them.
    */
   async disconnect(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
-    return this.locked(identity, async business => {
+    return this.locked(identity, async (business, lock) => {
       const config = this.input.config;
       if (!config.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
       const state = await this.read(identity, business);

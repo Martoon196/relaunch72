@@ -425,7 +425,8 @@ services:
       # /portal/email. Off unless EMAIL_CONNECT is exactly "enabled" with the
       # Postmark ACCOUNT token (Postmark: Account > API Tokens) and a 32-byte
       # base64 key that seals the saved server token and webhook secret. Losing
-      # or changing the key is recoverable: the owner presses Continue. Sends
+      # or changing the key is recoverable: the owner presses Repair on the email
+      # page (a new webhook secret and webhook are made). Sends
       # nothing in this release. Names only; values are set in the dashboard.
       - key: EMAIL_CONNECT
         sync: false

@@ -237,13 +237,18 @@ test('Connect creates the server, the Broadcast stream, the webhook (secret save
   assert.equal(server.name, 'Relaunch72 - Property Predator - d975ff66336a46c2b36bd7095a11af97', 'ASCII only, the full workspace id');
   assert.deepEqual(server.webhooks.map(w => [w.url, w.stream, w.username]), [[`${ORIGIN}/api/provider-webhooks/postmark/conn-d975ff66336a46c2b36bd7095a11af97`, 'broadcast', 'conn-d975ff66336a46c2b36bd7095a11af97']]);
   assert.equal(h.postmark.domains[0]!.name, DOMAIN);
-  assert.equal(h.postmark.domains[0]!.returnPath, `pm-bounces.${DOMAIN}`);
+  // Created with this business's proof as its Return-Path, and the CNAME shown to the owner uses it.
+  const proof = `${h.config.vault!.returnPathLabel(PP_WS, DOMAIN)}.${DOMAIN}`;
+  assert.match(proof, /^pm-[0-9a-f]{10}\./u, 'a valid DNS label');
+  assert.equal(h.postmark.domains[0]!.returnPath, proof);
   const state = await h.store.state(OWNER_SESSION, PP_WS);
   assert.equal(state.status, 'dns_pending');
   assert.equal(state.mode, 'off', 'this release never switches sending on');
   assert.deepEqual([state.fromAddress, state.replyTo, state.domain], ['hello@mail.propertypredator-test.co.uk', 'team@propertypredator-test.co.uk', DOMAIN]);
   assert.equal(state.dns!.dkim.host, `${h.postmark.domains[0]!.id}pm._domainkey.${DOMAIN}`);
   assert.equal(state.dns!.returnPath.value, 'pm.mtasv.net');
+  assert.equal(state.dns!.returnPath.host, proof);
+  assert.equal(state.dns!.origin, 'created');
   // Intent first, and the secret saved before the webhook was asked for.
   const order = h.store.events.map(e => `${e.step}:${e.outcome}`);
   assert.deepEqual(order, ['terms:accepted', 'begin:started', 'server:started', 'server:token_saved', 'server:created', 'stream:started', 'stream:created',
@@ -326,11 +331,14 @@ test('a double press creates nothing twice', async () => {
   const h = harness();
   const [a, b] = await Promise.allSettled([h.service.connect(owner, FORM), h.service.connect(owner, FORM)]);
   assert.equal(a.status, 'fulfilled');
-  // The second press waited for the first, then found the connection already waiting for its records.
-  assert.ok(b.status === 'rejected' && (b.reason as EmailConnectionError).message === EMAIL_CONNECTION_MESSAGES.alreadyConnected);
+  // The second press (same business, same process) is told at once that the first is still running.
+  assert.ok(b.status === 'rejected' && (b.reason as EmailConnectionError).message === 'This is already being set up in another window. Give it a moment, then refresh.');
   assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 1, domains: 1 });
-  const [c, d] = await Promise.all([h.service.continue(owner), h.service.continue(owner)]);
-  assert.equal(c.ok && d.ok, true);
+  const [c, d] = await Promise.allSettled([h.service.continue(owner), h.service.continue(owner)]);
+  assert.ok(c.status === 'fulfilled' && c.value.ok);
+  assert.ok(d.status === 'rejected' && (d.reason as EmailConnectionError).code === 'locked');
+  // A different business is never held up by it (the queue is per business).
+  assert.equal((await h.service.continue(owner)).ok, true, 'once the first run finished the lock is free again');
   assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 1, domains: 1 });
 });
 
@@ -457,7 +465,7 @@ test('Check answers in exactly the four plain sentences, from Postmark\'s verifi
   dns.txt[`${h.postmark.domains[0]!.id}pm._domainkey.${DOMAIN}`] = [['k=rsa; p=WRONG']];
   assert.equal((await h.service.check(owner)).message, 'The TXT record\'s value doesn\'t match. Copy it again from this page.');
   h = await setup();
-  dns.cname[`pm-bounces.${DOMAIN}`] = ['elsewhere.example.net'];
+  dns.cname[`${h.config.vault!.returnPathLabel(PP_WS, DOMAIN)}.${DOMAIN}`] = ['elsewhere.example.net'];
   assert.equal((await h.service.check(owner)).message, 'The CNAME record\'s value doesn\'t match. Copy it again from this page.');
   h = await setup();
   h.postmark.domains[0]!.dkimVerified = true;
@@ -467,7 +475,7 @@ test('Check answers in exactly the four plain sentences, from Postmark\'s verifi
   // Our look-up says found, Postmark says not yet: Postmark wins (not connected).
   h = await setup();
   const id = h.postmark.domains[0]!.id;
-  dns.txt[`${id}pm._domainkey.${DOMAIN}`] = [['k=rsa; p=KEY' + id]]; dns.cname[`pm-bounces.${DOMAIN}`] = ['pm.mtasv.net'];
+  dns.txt[`${id}pm._domainkey.${DOMAIN}`] = [['k=rsa; p=KEY' + id]]; dns.cname[`${h.config.vault!.returnPathLabel(PP_WS, DOMAIN)}.${DOMAIN}`] = ['pm.mtasv.net'];
   assert.notEqual((await h.service.check(owner)).message, EMAIL_CONNECTION_MESSAGES.checkBoth);
   assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).status, 'dns_pending');
   h.postmark.domains[0]!.dkimVerified = true; h.postmark.domains[0]!.returnPathVerified = true;
@@ -603,8 +611,8 @@ test('S1: the run lock is taken only after the owner check, and someone else\'s 
 
 test('permanent failures say what is true, never "Press Continue"', async () => {
   const cases: [string, (c: { method: string; path: string }) => boolean, number, number | null, string][] = [
-    ['plan limit', c => c.method === 'POST' && c.path === '/servers', 422, 614, EMAIL_CONNECTION_MESSAGES.planLimit],
-    ['refused', c => c.method === 'POST' && c.path === '/servers', 422, 608, EMAIL_CONNECTION_MESSAGES.needsHand],
+    ['plan limit', c => c.method === 'POST' && c.path === '/servers', 422, 614, 'Our email account has reached its limit for new businesses. We have logged this and will sort it out.'],
+    ['refused', c => c.method === 'POST' && c.path === '/servers', 422, 608, 'Part of the email set-up needs a hand from us. We have logged this and will sort it out.'],
     ['webhook verification', c => c.method === 'POST' && c.path === '/webhooks', 422, 1364, EMAIL_CONNECTION_MESSAGES.unfinished],
   ];
   for (const [name, match, status, code, message] of cases) {
@@ -616,12 +624,19 @@ test('permanent failures say what is true, never "Press Continue"', async () => 
   const a = harness();
   a.postmark.servers.push({ id: 900, name: connectionServerName(EMAIL_CONNECT_BUSINESSES[0]!), token: 'srv-archived-0123456789abcdef', webhooks: [],
     streams: [{ id: 'broadcast', type: 'Broadcasts', archived: true }] });
-  await assert.rejects(a.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.needsHand);
+  await assert.rejects(a.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.needsHand + EMAIL_CONNECTION_MESSAGES.logged);
+  // When the event could not be written, the owner is not told it was logged.
+  const nolog = harness();
+  const realRecord = nolog.store.record.bind(nolog.store);
+  nolog.store.record = async (...args: Parameters<typeof realRecord>) => { if (args[3] === 'plan_limit') throw new Error('write lost'); return realRecord(...args); };
+  nolog.postmark.failOn(c => c.method === 'POST' && c.path === '/servers', 422, 614);
+  await assert.rejects(nolog.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError
+    && e.message === 'Our email account has reached its limit for new businesses. Please try again later.');
   // The code only in the X-PM-ApiErrorCode header is read too.
   const hh = harness();
   hh.postmark.headerCode = 614;
   hh.postmark.failOn(c => c.method === 'POST' && c.path === '/servers', 422);
-  await assert.rejects(hh.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.planLimit);
+  await assert.rejects(hh.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.planLimit + EMAIL_CONNECTION_MESSAGES.logged);
 });
 
 test('a webhook Postmark marks unverified is replaced, not adopted; a refresh that raced apply() never removes the new source', async () => {
@@ -649,13 +664,13 @@ test('a webhook Postmark marks unverified is replaced, not adopted; a refresh th
 test('a refused account token and an unapproved account read plainly to the owner; the token is never logged', async () => {
   const h = harness();
   h.postmark.failOn(() => true, 401, 10);
-  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'Email connection is not available right now. We have been told.');
+  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'Email connection is not available right now. We have logged this and will sort it out.');
   assert.ok(h.lines.some(line => line.includes('email.connections.account_token_refused')));
   assert.equal(h.lines.join('\n').includes(ACCOUNT_TOKEN), false);
   const g = harness();
   g.postmark.failOn(() => true, 422, 412);
   await assert.rejects(g.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError
-    && e.message === 'We are finishing set-up on our side. You can carry on; sending opens up shortly.');
+    && e.message === 'Our email account is still being approved, so set-up is paused here. We will pick it up as soon as it is approved; press Continue later.');
 });
 
 test('only the eligible owner, only an allowed business', async () => {
@@ -770,4 +785,180 @@ test('no existing sender reads the connection, its mode or the protection ground
   for (const sender of ['pp-followup/mail.ts', 'pp-followup/dispatch.ts', 'mhp/marketing-mail.ts', 'email/postmark.ts', 'webinars/messages.ts']) {
     assert.doesNotMatch(await readFile(path.join(root, sender), 'utf8'), pattern, sender);
   }
+});
+
+// ---------- second review: the create carries a proof ----------
+
+test('F1: a domain found by name is adopted only when it carries this business\'s proof and is unverified', async () => {
+  const foreign = (h: ReturnType<typeof harness>, id: number) => h.postmark.domains.push({ id, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: false, returnPathVerified: false });
+  // (a) D -> Start again (our unverified D is deleted) -> a third party creates D -> reconnect: refused.
+  const a = harness();
+  await a.service.connect(owner, FORM);
+  await a.service.disconnect(owner);
+  assert.equal(a.postmark.domains.length, 0);
+  foreign(a, 501);
+  await assert.rejects(a.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  for (let press = 0; press < 3; press++) await assert.rejects(a.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  assert.notEqual((await a.store.state(OWNER_SESSION, PP_WS)).domainId, 501, 'never adopted');
+  // (b) 512 race plus a lost "domain_taken" write -> next Continue: refused.
+  const b = harness();
+  b.postmark.failOn(c => c.method === 'POST' && c.path === '/domains', 422, 512);
+  const original = b.store.record.bind(b.store);
+  b.store.record = async (...args: Parameters<typeof original>) => { if (args[3] === 'domain_taken') throw new Error('write lost'); return original(...args); };
+  await assert.rejects(b.service.connect(owner, FORM));
+  foreign(b, 502);
+  await assert.rejects(b.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  assert.equal((await b.store.state(OWNER_SESSION, PP_WS)).domainId, null);
+  // (c) our create failed before Postmark acted; a third party creates the domain later: refused.
+  const c = harness();
+  c.postmark.failOn(cl => cl.method === 'POST' && cl.path === '/domains', 500);
+  await assert.rejects(c.service.connect(owner, FORM));
+  foreign(c, 503);
+  await assert.rejects(c.service.continue(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  // Our own create whose answer was lost: the proof matches and it is unverified: adopted, as 'created'.
+  const d = harness();
+  d.postmark.failOn(cl => cl.method === 'POST' && cl.path === '/domains', 500, null, true);
+  await assert.rejects(d.service.connect(owner, FORM));
+  assert.equal((await d.service.continue(owner)).ok, true);
+  assert.deepEqual([d.postmark.domains.length, (await d.store.state(OWNER_SESSION, PP_WS)).dns!.origin], [1, 'created']);
+  // After the key changes, our old domain no longer matches the proof: reachable only by the id on the row (or take-over).
+  const rotated = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 4).toString('base64') }, { portalBaseUrl: ORIGIN });
+  assert.notEqual(rotated.vault!.returnPathLabel(PP_WS, DOMAIN), d.config.vault!.returnPathLabel(PP_WS, DOMAIN));
+  assert.notEqual(d.config.vault!.returnPathLabel(PP_WS, DOMAIN), d.config.vault!.returnPathLabel(PP_WS, 'other-brand-test.co.uk'), 'one proof per domain');
+});
+
+test('F2: only our own created domain is ever deleted; adopted and taken-over domains never are, and nothing is deleted or taken over when another business holds it', async () => {
+  // Taken over, changed away and back: never deleted.
+  const f = harness({ founder: true });
+  f.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: false, returnPathVerified: false });
+  await assert.rejects(f.service.connect(owner, FORM));
+  await f.service.useExistingDomain(owner);
+  assert.equal((await f.store.state(OWNER_SESSION, PP_WS)).dns!.origin, 'taken_over');
+  f.store.row!.status = 'needs_attention';
+  await f.service.connect(owner, { ...FORM, fromAddress: 'hello@other-brand-test.co.uk' });
+  f.store.row!.status = 'needs_attention';
+  await f.service.connect(owner, FORM).catch(() => undefined);
+  await f.service.disconnect(owner);
+  assert.ok(f.postmark.domains.some(d => d.id === 5), 'the taken-over domain is still there');
+  // Adopted by id after a reconnect keeps 'created' only with our proof; a domain on our row without the proof is 'adopted'.
+  const g = harness();
+  await g.service.connect(owner, FORM);
+  const ours = g.postmark.domains[0]!;
+  ours.returnPath = `pm-bounces.${DOMAIN}`; // no longer carries our proof (as after a key change)
+  g.store.row!.status = 'needs_attention';
+  await g.service.continue(owner);
+  assert.equal((await g.store.state(OWNER_SESSION, PP_WS)).dns!.origin, 'adopted');
+  await g.service.disconnect(owner);
+  assert.equal(g.postmark.domains.length, 1, 'an adopted domain is never deleted');
+  // Another business's row holds the domain (or that cannot be told): no delete, no take-over.
+  const h = harness({ founder: true });
+  await h.service.connect(owner, FORM);
+  h.store.otherHolds = 'unknown';
+  await h.service.disconnect(owner);
+  assert.equal(h.postmark.domains.length, 1, 'kept when it cannot be told who else holds it');
+  const t = harness({ founder: true });
+  t.postmark.domains.push({ id: 5, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: true, returnPathVerified: true });
+  t.store.otherHolds = true;
+  await assert.rejects(t.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use', 'no take-over offered');
+  await assert.rejects(t.service.useExistingDomain(owner), (e: unknown) => e instanceof EmailConnectionError && e.code === 'domain_in_use');
+  assert.equal((await t.store.state(OWNER_SESSION, PP_WS)).domainId, null);
+});
+
+test('F3: a lock lost mid-run stops the run cleanly at its next step, and a later run takes the lock', async () => {
+  const h = harness();
+  h.store.loseLockAfter = 2; // still held for the first two steps, then the connection drops
+  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'This was interrupted. Press Continue.');
+  const state = await h.store.state(OWNER_SESSION, PP_WS);
+  assert.equal(state.status, 'needs_attention');
+  assert.equal(state.webhookId, null, 'nothing after the lost lock ran');
+  assert.equal((await h.service.continue(owner)).ok, true);
+  assert.deepEqual(counts(h.postmark), { servers: 1, streams: 1, webhooks: 1, domains: 1 });
+  // The Postgres lock: a client that emits 'error' while held never crashes the process and is discarded.
+  const { PgEmailConnectionStore } = await import('../src/email-connections/store.js');
+  const { EventEmitter } = await import('node:events');
+  const released: boolean[] = [];
+  const makeClient = () => Object.assign(new EventEmitter(), {
+    query: async (sql: string) => ({ rows: sql.includes('pg_try_advisory_xact_lock') ? [{ held: true }] : [] }),
+    release: (destroy?: boolean) => { released.push(destroy === true); },
+  });
+  let client = makeClient();
+  const pool = { query: async () => ({ rows: [] }), connect: async () => client };
+  const store = new PgEmailConnectionStore(pool as never, { lockPool: pool as never });
+  const lock = await store.lock(PP_WS, 100);
+  client.emit('error', new Error('terminating connection due to idle-in-transaction timeout'));
+  assert.equal(lock!.lost(), true);
+  await lock!.release();
+  assert.deepEqual(released, [true], 'a lost connection is destroyed, not returned to the pool');
+  client = makeClient();
+  const next = await store.lock(PP_WS, 100);
+  assert.equal(next!.lost(), false);
+  await next!.release();
+  assert.deepEqual(released, [true, false]);
+  // A pool-connect timeout means "still held", answered as such at the deadline.
+  const full = new PgEmailConnectionStore(pool as never, { lockPool: { connect: async () => { throw new Error('timeout exceeded when trying to connect'); } } as never });
+  assert.equal(await full.lock(PP_WS, 300), null);
+});
+
+test('F5: a connected business whose secrets no longer open is repaired by Check or Continue (one webhook, new secret)', async () => {
+  const h = harness();
+  await h.service.connect(owner, FORM);
+  h.postmark.domains[0]!.dkimVerified = true; h.postmark.domains[0]!.returnPathVerified = true;
+  await h.service.check(owner);
+  assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).status, 'verified');
+  // The key changes.
+  const rotated = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 6).toString('base64') }, { portalBaseUrl: ORIGIN });
+  const service = new EmailConnectionService({ config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+    resolver: fakeResolver(), bounces: h.sources, secret: () => 'whsec-repaired-secret-0123456789-abcdef', lockWaitMs: 2000 });
+  h.postmark.verify = async () => true;
+  const view = await service.view(owner);
+  assert.ok(view.offered && view.repair === true, 'the page offers Repair');
+  const domainId = h.postmark.domains[0]!.id;
+  assert.equal((await service.check(owner)).message, 'Both found. Your email is connected.');
+  assert.deepEqual(h.postmark.servers[0]!.webhooks.map(w => w.password), ['whsec-repaired-secret-0123456789-abcdef'], 'one webhook at our address, with the new secret');
+  const state = await h.store.state(OWNER_SESSION, PP_WS);
+  assert.deepEqual([state.status, state.domainId], ['verified', domainId], 'the same domain, verified again from Postmark\'s flags');
+  assert.equal(h.postmark.domains.length, 1, 'nothing else was deleted or created');
+  const again = await service.view(owner);
+  assert.ok(again.offered && again.repair === undefined);
+  // Continue repairs too.
+  const r2 = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 8).toString('base64') }, { portalBaseUrl: ORIGIN });
+  const s2 = new EmailConnectionService({ config: r2, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+    resolver: fakeResolver(), secret: () => 'whsec-second-repair-0123456789-abcdefgh', lockWaitMs: 2000 });
+  assert.equal((await s2.continue(owner)).message, 'Your email connection was repaired. Press Check to confirm your records.');
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 1);
+});
+
+test('F7/F8: the domain list pages by rows received and refuses an incomplete list; a failed list is recorded under the domain step', async () => {
+  const pages: unknown[] = [
+    { TotalCount: 3, Domains: [{ ID: 1, Name: 'a-test.co.uk' }, { ID: 2, Name: 'b-test.co.uk' }] },
+    { TotalCount: 3, Domains: [{ ID: 3, Name: 'c-test.co.uk' }] },
+  ];
+  const seen: string[] = [];
+  const fetcher = (async (url: string) => { seen.push(new URL(url).search); return new Response(JSON.stringify(pages.shift()), { status: 200 }); }) as unknown as typeof fetch;
+  assert.deepEqual((await createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: fetcher }).listDomains()).map(d => d.id), [1, 2, 3]);
+  assert.deepEqual(seen, ['?count=500&offset=0', '?count=500&offset=2']);
+  for (const bad of [{ Domains: [] }, { TotalCount: 5, Domains: [] }]) {
+    const api = createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: (async () => new Response(JSON.stringify(bad), { status: 200 })) as unknown as typeof fetch });
+    await assert.rejects(api.listDomains(), (e: unknown) => e instanceof PostmarkAccountError && e.category === 'invalid_response');
+  }
+  const h = harness();
+  h.postmark.failOn(c => c.method === 'GET' && c.path.startsWith('/domains?'), 500);
+  await assert.rejects(h.service.connect(owner, FORM));
+  assert.equal(h.store.events.at(-1)!.step, 'domain');
+  assert.equal(h.store.events.at(-1)!.outcome, 'busy');
+  // A create answer that is not the domain asked for is never saved.
+  const g = harness();
+  const route = g.postmark.fetch;
+  (g.postmark as unknown as { fetch: typeof fetch }).fetch = (async (input: string, init?: RequestInit) => {
+    const answer = await route(input, init);
+    if (init?.method === 'POST' && new URL(input).pathname === '/domains') {
+      const body = await answer.json() as Record<string, unknown>;
+      return new Response(JSON.stringify({ ...body, Name: 'someone-else-test.co.uk' }), { status: 200 });
+    }
+    return answer;
+  }) as typeof fetch;
+  const service = new EmailConnectionService({ config: g.config, store: g.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: g.postmark.fetch }),
+    resolver: fakeResolver(), bounces: g.sources, secret: () => SECRET, lockWaitMs: 2000 });
+  await assert.rejects(service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message.startsWith(EMAIL_CONNECTION_MESSAGES.needsHand));
+  assert.equal((await g.store.state(OWNER_SESSION, PP_WS)).domainId, null);
 });

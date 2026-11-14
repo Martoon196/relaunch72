@@ -224,19 +224,24 @@ export function createPostmarkAccountApi(input: { accountToken: string; fetch?: 
       return readServer(await call('POST', '/servers', { Name: name, ...(color ? { Color: color } : {}), DeliveryType: 'Live' }));
     },
     async listDomains() {
+      // Every page, advancing by the rows actually received, until TotalCount is reached. A missing TotalCount, an empty
+      // page before the end or an absurd total is an error ("could not check"), never a silently short list.
       const out: PostmarkDomainSummary[] = [];
-      // At most 5 pages of 500: far more domains than one Postmark account for a handful of businesses holds.
-      for (let offset = 0; offset < 2500; offset += 500) {
+      let offset = 0, total: number | null = null;
+      do {
         const body = await call('GET', `/domains?${new URLSearchParams({ count: '500', offset: String(offset) }).toString()}`);
-        if (!record(body) || !Array.isArray(body.Domains)) throw new PostmarkAccountError('invalid_response');
+        if (!record(body) || !Array.isArray(body.Domains) || typeof body.TotalCount !== 'number' || !Number.isSafeInteger(body.TotalCount)
+            || body.TotalCount < 0 || body.TotalCount > 1_000_000) throw new PostmarkAccountError('invalid_response');
+        total = body.TotalCount;
+        if (body.Domains.length === 0 && offset < total) throw new PostmarkAccountError('invalid_response');
         for (const item of body.Domains) {
-          if (!record(item)) continue;
+          if (!record(item)) throw new PostmarkAccountError('invalid_response');
           const domainId = positiveId(item.ID), name = text(item.Name, 255);
-          if (domainId !== null && name) out.push(Object.freeze({ id: domainId, name: name.toLowerCase() }));
+          if (domainId === null || !name) throw new PostmarkAccountError('invalid_response');
+          out.push(Object.freeze({ id: domainId, name: name.toLowerCase() }));
         }
-        const total = typeof body.TotalCount === 'number' ? body.TotalCount : 0;
-        if (body.Domains.length < 500 || offset + 500 >= total) break;
-      }
+        offset += body.Domains.length;
+      } while (offset < total);
       return Object.freeze(out);
     },
     async getDomain(domainId) { return readDomain(await call('GET', `/domains/${id(domainId)}`)); },

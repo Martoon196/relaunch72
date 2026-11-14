@@ -91,9 +91,13 @@ function recordsSection(page: EmailConnectionPageInput, state: EmailConnectionSt
       <ol>${help.steps.map(step => `<li>${e(step)}</li>`).join('')}</ol></details>
     <p><a class="button secondary" href="${e(mailto(state))}">Email these to whoever looks after my website</a></p>
     <form method="post" action="${EMAIL_CONNECTION_ROUTE}/check">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Check</button></form>
-    <details><summary>Start again</summary><p>This removes the connection to the email service. The records you added can stay; they work again when you reconnect.</p>${disconnectForm(page, 'Start again')}</details></section>`;
+    <details><summary>Start again</summary><p>Starting again means you will be given new records to add. The old ones can be removed.</p>${disconnectForm(page, 'Start again')}</details></section>`;
 }
 
+function repairCard(page: EmailConnectionPageInput): string {
+  return `<section class="card notice"><h2>Your email connection needs a repair</h2><p>Press Repair and we will set the connection up again with the same details. Your records stay the same.</p>
+    <form method="post" action="${EMAIL_CONNECTION_ROUTE}/continue">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Repair</button></form></section>`;
+}
 function takeOverForm(page: EmailConnectionPageInput): string {
   return `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/use-domain">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Use this domain</button></form>`;
 }
@@ -112,7 +116,7 @@ function connectedCard(page: EmailConnectionPageInput, state: EmailConnectionSta
     <ul class="ticks"><li>✓ TXT record found</li><li>✓ CNAME record found</li></ul>
     <p class="notice"><strong>${e(EMAIL_CONNECTION_MESSAGES.connectedNext)}</strong></p>
     <form method="post" action="${EMAIL_CONNECTION_ROUTE}/check">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit" class="secondary">Check again</button></form>
-    <details><summary>Disconnect</summary><p>Emails stop being connected for this business. Nothing is deleted at the email service, and you can connect again later.</p>${disconnectForm(page)}</details>
+    <details><summary>Disconnect</summary><p>Email stops being connected for this business. Your sending domain is kept if it is already proven, and you can connect again later.</p>${disconnectForm(page)}</details>
     ${terms ? `<p class="small">Agreed by ${e(terms.acceptedByName ?? 'the business owner')} on ${e(day(terms.acceptedAt))}.</p>` : ''}</section>`;
 }
 
@@ -126,14 +130,14 @@ function body(page: EmailConnectionPageInput): string {
     case 'not_connected': case 'disconnected':
       return `${intro}<section class="card"><h2>Your sending address</h2>${connectForm(page, state)}</section>`;
     case 'creating': case 'needs_attention':
-      return `${intro}<section class="card"><h2>Setting up</h2><p>Setting up didn’t finish. Press Continue to carry on where it stopped.</p>${continueForm(page)}
+      return `${intro}<section class="card"><h2>Setting up</h2><p>Setting up didn’t finish.</p>${continueForm(page)}
         ${page.offerTakeOver ? takeOverForm(page) : ''}
         <details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details')}</details>
         <details><summary>Start again</summary><p>This removes what was set up so far for this business. Nothing is sent and nothing else changes.</p>${disconnectForm(page, 'Start again')}</details></section>`;
     case 'dns_pending':
-      return `${intro}${recordsSection(page, state, view.dnsHost)}`;
+      return `${intro}${view.repair ? repairCard(page) : ''}${recordsSection(page, state, view.dnsHost)}`;
     case 'verified':
-      return `${intro}${connectedCard(page, state)}`;
+      return `${intro}${view.repair ? repairCard(page) : ''}${connectedCard(page, state)}`;
   }
 }
 

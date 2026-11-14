@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { EmailConnectionSecretField } from './vault.js';
+import { EMAIL_CONNECT_BUSINESSES } from './config.js';
 
 export type EmailConnectionStatus = 'not_connected' | 'creating' | 'dns_pending' | 'verified' | 'needs_attention' | 'disconnected';
 export type EmailConnectionStep = 'server' | 'stream' | 'secret' | 'webhook' | 'domain';
@@ -84,10 +85,18 @@ export interface EmailConnectionStore {
    * One run per workspace at a time, across every instance. Resolves to a release function once held, or null when
    * another run still holds it after waitMs.
    */
-  lock(workspaceId: string, waitMs: number): Promise<(() => Promise<void>) | null>;
+  lock(workspaceId: string, waitMs: number): Promise<RunLock | null>;
   /** Whether the database has 0155 (so an entry to the page may be shown). */
   present(): Promise<boolean>;
+  /**
+   * Whether a connection row of ANOTHER workspace holds this Postmark domain id or domain name. Answers false only when
+   * that is certain; throws when it cannot tell (callers then refuse to delete or take over).
+   */
+  otherConnectionHolds(workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean>;
 }
+
+/** A held run lock. lost() turns true if the lock's connection dropped: the run must stop at its next step. */
+export interface RunLock { release(): Promise<void>; lost(): boolean }
 
 /** 42883 undefined function, 42P01 undefined table, 3F000 undefined schema: the database still ends before 0155. */
 const ABSENT = new Set(['42883', '42P01', '3F000']);
@@ -244,30 +253,60 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
    * transaction, so it stays on one backend even behind a transaction pooler. It uses its own small pool (never one
    * of the shared identity connections) and gives the connection back between tries, so a waiter holds nothing.
    */
-  async lock(workspaceId: string, waitMs: number): Promise<(() => Promise<void>) | null> {
+  async lock(workspaceId: string, waitMs: number): Promise<RunLock | null> {
     const pool = this.options.lockPool ?? this.pool;
     const key = `email-connection-run:${workspaceId.toLowerCase()}`;
     const deadline = this.now() + waitMs;
     for (;;) {
-      const client: PoolClient = await pool.connect();
+      let client: PoolClient;
+      try { client = await pool.connect(); }
+      catch (error) {
+        // Every lock connection is busy: some run still holds it. That is "still held", never a fault.
+        if (!/timeout/iu.test(String((error as Error)?.message ?? ''))) throw error;
+        if (this.now() >= deadline) return null;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+      // An idle-in-transaction timeout or a dropped connection must never become an unhandled 'error' (that would end
+      // the web process): it marks the lock lost, and the run stops at its next step.
+      let lost = false;
+      const onError = () => { lost = true; };
+      client.on('error', onError);
       let held = false;
       try {
         await client.query('BEGIN');
         const result = await client.query<{ held: boolean }>('SELECT pg_try_advisory_xact_lock(hashtextextended($1,155)) AS held', [key]);
         held = result.rows[0]?.held === true;
         if (!held) await client.query('ROLLBACK');
-      } catch (error) { client.release(true); throw error; }
+      } catch (error) { client.removeListener('error', onError); client.release(true); throw error; }
       if (held) {
         let released = false;
-        return async () => {
-          if (released) return;
-          released = true;
-          try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); }
+        return {
+          lost: () => lost,
+          release: async () => {
+            if (released) return;
+            released = true;
+            if (lost) { client.removeListener('error', onError); client.release(true); return; }
+            try { await client.query('ROLLBACK'); client.removeListener('error', onError); client.release(); }
+            catch { client.removeListener('error', onError); client.release(true); }
+          },
         };
       }
+      client.removeListener('error', onError);
       client.release();
       if (this.now() >= deadline) return null;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
+  }
+
+  /**
+   * 0155 pins app_private.email_connections to the Property Predator workspace, so while only that business is allowed
+   * no other row can exist: the answer is certainly false. Once a second business is allowed (a later migration lifts
+   * the pin and adds a definer read for this), this refuses until that read is wired here.
+   */
+  async otherConnectionHolds(workspaceId: string, _domain: { id: number | null; name: string }): Promise<boolean> {
+    const others = EMAIL_CONNECT_BUSINESSES.filter(business => business.workspaceId !== workspaceId.toLowerCase());
+    if (others.length === 0) return false;
+    throw new Error('Cannot tell whether another business holds this domain');
   }
 }
