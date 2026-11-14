@@ -203,6 +203,16 @@ export interface ProfileFactSource {
   readonly quote: string | null;
 }
 
+/**
+ * One line the website door could not find word for word and so left off the card (Brand DNA only).
+ * Kept so the owner is told plainly what is missing and can add it themselves. Never sent to any writing step.
+ */
+export interface ProfileLeftOut {
+  readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'wording' | 'link';
+  /** The offer name, audience, claim, question or removed words, as the model gave them. Untrusted: always escaped. */
+  readonly text: string;
+}
+
 export interface BrandProfile {
   readonly brandId: string;
   readonly version: number;
@@ -224,6 +234,8 @@ export interface BrandProfile {
   readonly missingFacts: readonly string[];
   /** Where each audience, claim and settled fact was read. Absent on profiles made before Brand DNA. */
   readonly sources?: readonly ProfileFactSource[];
+  /** Website door only: what was taken off the proposed card because it could not be found word for word. Absent when nothing was. */
+  readonly leftOut?: readonly ProfileLeftOut[];
   /**
    * Set only on a card made by the website door: every price, audience and claim was checked word for word
    * against its source. Such a card cannot be confirmed with an open question or once it is out of date.

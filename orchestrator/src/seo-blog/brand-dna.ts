@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import type {
   BrandProfile, InventoryPage, Job, KnowledgeCategory, KnowledgeDocument, ProfileConflict, ProfileConflictOption,
-  ProfileFactSource, ProfileOffer,
+  ProfileFactSource, ProfileLeftOut, ProfileOffer,
 } from './types.js';
 import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
@@ -27,6 +27,20 @@ export const BRAND_DNA_STAGE = 'brand_dna';
 export const BRAND_PAGE_LIMIT = 12;
 /** Characters kept per page. */
 export const BRAND_PAGE_TEXT_LIMIT = 8000;
+/**
+ * What the owner is told when a read cannot end in a card. Each says what to do next in one sentence;
+ * the page puts the button for it right underneath.
+ */
+export const BRAND_DNA_MESSAGES = Object.freeze({
+  /** The address gave no readable words. Button: paste your details. */
+  noWords: 'We could not read any words on that address. Check the address, or paste your details instead.',
+  /** The model answered, but nothing on its card could be found word for word. Button: paste your details. */
+  nothingClear: 'We read your website but could not find enough clear facts to make a card. Paste a short description of what you sell and who it is for, and we will use that.',
+  /** The website read itself failed. No writing call was made, so nothing was spent. Button: Read my website. */
+  ourSide: 'Something went wrong on our side. Nothing was spent. Press Read my website again.',
+  /** The writing call answered in a shape we could not use. Its usage is recorded, so this does not say nothing was spent. */
+  ourSideCard: 'Something went wrong on our side while making your card. Nothing was saved. Press Read my website again.',
+});
 /** Fewer readable words than this across the whole read means the site could not really be read. */
 export const BRAND_DNA_MIN_WORDS = 60;
 
@@ -236,8 +250,8 @@ export function withoutOtherPrices(description: string, keep: string | null): st
 }
 
 /**
- * Reasons a site-fed extraction must be rejected. Any entry sends the model's one correction pass;
- * a second failure stops the task with nothing saved.
+ * Reasons a site-fed extraction must be corrected. Any entry sends the model's one correction pass; what still
+ * fails after it is taken off the card by `repairProfileFacts`, and only a card with nothing verifiable left is refused.
  */
 export function strictProfileProblems(value: ProfileFacts, documents: readonly SourceText[]): string[] {
   const byId = new Map(documents.map((d) => [d.id, d]));
@@ -294,6 +308,107 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
 }
 
 const clip = (text: unknown, max: number) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+// ─── Repair instead of reject ────────────────────────────────────────────────
+
+export interface ProfileRepair<T> {
+  readonly value: T;
+  /** Exactly what was taken off, in order. Empty when nothing needed removing. */
+  readonly leftOut: readonly ProfileLeftOut[];
+}
+
+/** Whole sentences of `text` that carry no figure `known` refuses. Removal only; what is kept is unchanged. Empty when nothing safe is left. */
+function withoutUnknownFigures(text: string, known: (figure: string) => boolean): { text: string; removed: string[] } {
+  if (materialFigures(text).every(known)) return { text, removed: [] };
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter((s) => materialFigures(s).every(known));
+  const removed = sentences.filter((s) => !kept.includes(s));
+  const joined = kept.join(' ').trim();
+  // Splitting can, in odd cases, change what reads as a figure. Never keep anything the whole-text check would still refuse.
+  return materialFigures(joined).every(known) ? { text: joined, removed } : { text: '', removed: [text] };
+}
+
+/**
+ * Website door only, after the model's correction pass: take off exactly the lines that cannot be found word for word
+ * and keep everything that can. It never adds, rewrites or paraphrases anything; it only removes a line or empties a
+ * price. Each rule mirrors one in `strictProfileProblems`, so `strictProfileProblems(result.value, documents)` is [].
+ */
+export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): ProfileRepair<T> {
+  const byId = new Map(documents.map((d) => [d.id, d]));
+  const everywhere = documents.map((d) => d.text ?? '').join('\n');
+  const leftOut: ProfileLeftOut[] = [];
+  const leave = (what: ProfileLeftOut['what'], text: string) => { if (!leftOut.some((l) => l.what === what && sameValue(l.text, text))) leftOut.push({ what, text: clip(text, 300) }); };
+
+  // A source line counts only when its quote is word for word in a supplied document.
+  const sources = (value.sources ?? []).filter((s) => s.documentId && byId.has(s.documentId) && appearsIn(byId.get(s.documentId)!.text, s.quote));
+
+  // Offers: no valid source, or a figure in the name the source does not state, drops the offer. A price not word for
+  // word in the source is emptied. A sentence of the description stating a figure the source does not is removed.
+  const offers: ProfileOffer[] = [];
+  for (const o of value.offers) {
+    const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
+    if (!doc || materialFigures(o.name).some((f) => !appearsIn(doc.text, f))) { leave('offer', o.name); continue; }
+    let next: ProfileOffer = o;
+    if (o.price && !appearsIn(doc.text, o.price)) { next = { ...next, price: null }; leave('price', o.name); }
+    const description = withoutUnknownFigures(o.description ?? '', (f) => appearsIn(doc.text, f));
+    if (description.removed.length) { next = { ...next, description: description.text }; leave('offer_detail', o.name); }
+    offers.push(next);
+  }
+
+  // Audiences and claims: kept only with a word-for-word quote that carries their key words and figures.
+  const supported = (field: 'audience' | 'claim', item: string) => sources.some((s) => s.field === field && sameValue(s.value, item) && unsupportedBy(item, s.quote) === null);
+  const audiences = value.audiences.filter((a) => supported('audience', a) || (leave('audience', a), false));
+  const approvedClaims = value.approvedClaims.filter((c) => supported('claim', c) || (leave('claim', c), false));
+  const keptSources = sources.filter((s) => s.field === 'audience' ? audiences.some((a) => sameValue(a, s.value)) : s.field === 'claim' ? approvedClaims.some((c) => sameValue(c, s.value)) : true);
+
+  // Questions: unverifiable answers are dropped; a question left with fewer than two answers, a malformed one, or a price
+  // question about an offer no longer on the card is dropped. A price it held stays empty: nothing is chosen.
+  const noPrice = new Set<ProfileOffer>();
+  const conflicts: ProfileConflict[] = [];
+  for (const c of value.conflicts) {
+    const named = typeof c.offer === 'string' && c.offer.trim() ? offers.find((o) => sameValue(o.name, c.offer!)) ?? null : undefined;
+    const options = (c.options ?? []).filter((option) => {
+      const doc = byId.get(option.documentId);
+      return doc && appearsIn(doc.text, option.quote) && meaningfulQuote(option.quote) && appearsIn(doc.text, option.value)
+        && materialFigures(option.value).every((f) => appearsIn(option.quote, f));
+    });
+    const malformed = (c.kind !== 'price' && c.kind !== 'other') || (c.kind === 'price' && !named);
+    const thinned = options.length < (c.options ?? []).length && options.length < 2;
+    if (malformed || thinned) {
+      leave('question', c.field);
+      const about = named ?? (c.kind === 'price' || c.kind === undefined ? priceConflictOffer(c, offers) : null);
+      if (about && (c.kind === 'price' || c.kind === undefined)) noPrice.add(about);
+      continue;
+    }
+    const { offer: _offer, options: _options, ...rest } = c;
+    conflicts.push({ ...rest, documentIds: c.documentIds.filter((id) => byId.has(id)),
+      // An offer name that is not on the card is emptied (only allowed for a question that is not about a price).
+      ...(c.offer !== undefined ? { offer: named ? c.offer : null } : {}), ...(c.options !== undefined ? { options } : {}) });
+  }
+  const pricedOffers = offers.map((o) => noPrice.has(o) && o.price ? (leave('price', o.name), { ...o, price: null }) : o);
+
+  // Free text carries no source line, so a sentence (or a voice line) stating a figure in no document is removed.
+  const anywhere = (f: string) => appearsIn(everywhere, f);
+  const freeText = (text: string | undefined): string | undefined => {
+    if (text === undefined) return undefined;
+    const kept = withoutUnknownFigures(text, anywhere);
+    for (const removed of kept.removed) leave('wording', removed);
+    return kept.text;
+  };
+  const lines = (items: readonly string[]) => items.filter((line) => materialFigures(line).every(anywhere) || (leave('wording', line), false));
+  const voice = value.voice ? { ...value.voice, tone: lines(value.voice.tone), do: lines(value.voice.do), dont: lines(value.voice.dont), examples: lines(value.voice.examples) } : undefined;
+  const summary = freeText(value.summary), positioning = freeText(value.positioning);
+
+  const repaired: T = { ...value, offers: pricedOffers, audiences, approvedClaims, conflicts,
+    ...(value.sources !== undefined ? { sources: keptSources } : {}),
+    ...(summary !== undefined ? { summary } : {}), ...(positioning !== undefined ? { positioning } : {}), ...(voice ? { voice } : {}) };
+  return { value: repaired, leftOut };
+}
+
+/** True when nothing a reader could rely on is left: no offer, no audience and no claim. */
+export function nothingVerifiable(value: Pick<ProfileFacts, 'offers' | 'audiences' | 'approvedClaims'>): boolean {
+  return value.offers.length === 0 && value.audiences.length === 0 && value.approvedClaims.length === 0;
+}
 
 /**
  * Keep only provenance that can be shown truthfully. Used on every extraction: on the older
@@ -467,6 +582,8 @@ export interface DnaConflict {
   readonly detail: string;
   readonly options: readonly { readonly index: number; readonly value: string; readonly source: DnaSource }[];
 }
+/** One line taken off the card because it could not be found word for word. `fix` says where the owner can add it. */
+export interface DnaLeftOut { readonly label: string; readonly fix: 'card' | 'documents' }
 export interface BrandDnaCard {
   readonly summary: string;
   readonly positioning: string;
@@ -482,6 +599,24 @@ export interface BrandDnaCard {
   readonly unsourced: number;
   /** True only for a card made by the website door, where every price, audience and claim was checked word for word. */
   readonly checked: boolean;
+  /** What was left off this card because it could not be found word for word. Never used in writing. */
+  readonly leftOut: readonly DnaLeftOut[];
+}
+
+const LEFT_OUT_LABEL: Record<ProfileLeftOut['what'], [string, DnaLeftOut['fix']]> = {
+  price: ['The price of', 'documents'], offer: ['The offer', 'documents'], offer_detail: ['Part of the description of', 'documents'],
+  audience: ['Who it is for:', 'card'], claim: ['The claim', 'card'], question: ['The question about', 'documents'],
+  wording: ['The sentence', 'card'], link: ['The link', 'documents'],
+};
+
+/** "The price of “Mentoring programme”". Plain words; the quoted part is the model's and is escaped wherever it is shown. */
+export function leftOutLines(items: readonly ProfileLeftOut[] | undefined): DnaLeftOut[] {
+  return (items ?? []).flatMap((item) => {
+    const known = LEFT_OUT_LABEL[item.what];
+    if (!known) return [];
+    const whole = clip(item.text, 2000), text = whole.slice(0, 120).trim();
+    return [{ label: `${known[0]} “${text}${whole.length > 120 ? '…' : ''}”`, fix: known[1] }];
+  });
 }
 
 export function documentLabel(doc: Pick<KnowledgeDocument, 'title' | 'origin'> | null | undefined): string {
@@ -522,7 +657,7 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
       index, title: c.field, detail: c.detail,
       options: (c.options ?? []).map((o, i) => ({ index: i, value: o.value, source: from(o.documentId, o.quote)! })),
     })),
-    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true,
+    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true, leftOut: leftOutLines(profile.leftOut),
   };
 }
 

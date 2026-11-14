@@ -714,7 +714,9 @@ async function handlePost(
       };
       if (parts[1] === 'read' && parts.length === 2) {
         await engine.requestBrandDna(actor, brandId, { commandId: f('commandId') ?? '', website: f('website'), readAgain: f('again') === '1', acknowledgePriorUsage: f('acknowledgePriorUsage') === '1' });
-        return ok(here, 'Reading your website. It carries on in the background.');
+        // No message rides along: the page itself says "Reading your website" while it reads, then shows the card or one
+        // clear message. A carried message outlived the read and was shown next to the result or the error.
+        return redirect(res, here);
       }
       if (parts[1] === 'settle' && parts.length === 2) {
         const picked = (f('choice') ?? '').trim();

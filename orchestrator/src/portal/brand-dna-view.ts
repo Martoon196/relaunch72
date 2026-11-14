@@ -8,7 +8,7 @@
 
 import type { BrandDnaState } from '../seo-blog/engine.js';
 import type { BrandDnaCard, DnaItem, DnaSource } from '../seo-blog/brand-dna.js';
-import { brandDnaPayload } from '../seo-blog/brand-dna.js';
+import { BRAND_DNA_MESSAGES, brandDnaPayload } from '../seo-blog/brand-dna.js';
 import { profilePayload } from '../seo-blog/profile-jobs.js';
 import { escapeHtml as e } from './ui.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -75,10 +75,27 @@ ${card.missing.length ? `<section class="card"><h2>What we could not find</h2><p
 ${card.unsourced ? `<p class="notice">${card.unsourced} line${card.unsourced === 1 ? '' : 's'} on this card ${card.unsourced === 1 ? 'has' : 'have'} no recorded source. Check ${card.unsourced === 1 ? 'it' : 'them'} yourself before you rely on ${card.unsourced === 1 ? 'it' : 'them'}.</p>` : ''}</section>`;
 }
 
+/** Most lines listed under "What we left out". The rest are counted, so the section stays short on a phone. */
+const LEFT_OUT_SHOWN = 10;
+
+/** What was taken off the card, said plainly, each with the existing way to add it by hand. */
+function leftOutSection(shell: Shell, card: BrandDnaCard, canEdit: boolean): string {
+  const items = card.leftOut;
+  if (!items.length) return '';
+  const add = (fix: 'card' | 'documents') => fix === 'card' && canEdit
+    ? '<a href="#dna-change">Add it yourself</a>'
+    : `<a href="${link(shell, 'setup')}#brand-guidance">Add it to your details</a>`;
+  const more = items.length - LEFT_OUT_SHOWN;
+  return `<section class="card" id="left-out"><h2>What we left out</h2>
+<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not find word for word on your website. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
+<ul class="facts">${items.slice(0, LEFT_OUT_SHOWN).map((i) => `<li>${e(i.label)}<span class="from">${add(i.fix)}</span></li>`).join('')}</ul>
+${more > 0 ? `<p class="muted">And ${more} more.</p>` : ''}<p class="muted">Nothing left out is used to write your content.</p></section>`;
+}
+
 function correctionForm(shell: Shell, state: BrandDnaState): string {
   const p = state.profile!;
   const area = (id: string, label: string, value: string, hint = '') => `<label for="dna-${id}">${label}</label><textarea id="dna-${id}" name="${id}">${e(value)}</textarea>${hint ? `<small class="muted">${hint}</small>` : ''}`;
-  return `<details class="card"><summary><strong>Something not right? Change it</strong></summary>
+  return `<details class="card" id="dna-change"${state.card?.leftOut.some((l) => l.fix === 'card') && state.status !== 'confirmed' ? ' open' : ''}><summary><strong>Something not right? Change it</strong></summary>
 <p class="muted">Use your own words. A line you add is marked “You told us”. To change a price, change it on your website or in your documents, then read your website again.</p>
 ${state.status === 'confirmed' ? '<p class="notice">Saving a change makes a new card. Your content pauses until you confirm the new card.</p>' : ''}
 <form method="post" action="${link(shell, 'dna/edit')}">${csrfField(shell.csrf)}<input type="hidden" name="version" value="${p.version}">
@@ -104,11 +121,15 @@ function lastAttempt(state: BrandDnaState): { text: string; pasteInstead: boolea
     if (reason === 'allowance') return null; // The allowance notice below already says what to do.
     // Seen only while the service is part-way through an update: the reader that picked this up was the older one.
     if (read.error === OLDER_WORKER) return { text: 'We are updating the part of the service that reads websites. This will be ready in a few minutes. Nothing was changed. Press “Read my website” again then.', pasteInstead: false };
-    return { text: read.state === 'failed' ? 'We could not finish reading your website. Nothing was changed. Please try again.' : read.error ?? 'Reading your website stopped. Nothing was changed.', pasteInstead: reason === 'no_words' };
+    if (reason === 'no_words') return { text: BRAND_DNA_MESSAGES.noWords, pasteInstead: true };
+    // A read that failed outright made no writing call: nothing was spent.
+    return { text: read.state === 'failed' ? BRAND_DNA_MESSAGES.ourSide : read.error ?? BRAND_DNA_MESSAGES.ourSide, pasteInstead: false };
   }
   if (made && ['blocked', 'failed'].includes(made.state) && newerThanCard(made.updatedAt)) {
     const reason = profilePayload(made).reason;
-    if (reason === 'rejected') return { text: made.error ?? 'We stopped before making your card rather than guess. Nothing was saved.', pasteInstead: false };
+    // A refusal now means nothing verifiable was left (one bad line is taken off the card instead). Cards refused before
+    // this change carry the older wording; they are shown the same next step.
+    if (reason === 'rejected') return made.error === BRAND_DNA_MESSAGES.ourSideCard ? { text: BRAND_DNA_MESSAGES.ourSideCard, pasteInstead: false } : { text: BRAND_DNA_MESSAGES.nothingClear, pasteInstead: true };
     if (reason === 'budget') return null;
     if (reason === 'outcome_unknown') return { text: 'The last attempt to make your card did not report back. It may have used some of your monthly allowance. Nothing was saved.', pasteInstead: false };
     return { text: 'Making your card stopped before it finished. Nothing was saved or changed. Please read your website again.', pasteInstead: false };
@@ -116,7 +137,11 @@ function lastAttempt(state: BrandDnaState): { text: string; pasteInstead: boolea
   return null;
 }
 
-export function brandDnaPage(shell: Shell, state: BrandDnaState, commandId: string): string {
+export function brandDnaPage(given: Shell, state: BrandDnaState, commandId: string): string {
+  const stopped = state.working ? null : lastAttempt(state);
+  // Exactly one state on screen: a message carried over from an earlier press is never shown beside "reading" or beside
+  // what stopped the read. (The page that refreshes itself while reading also reloads without it.)
+  const shell: Shell = state.working || stopped ? { ...given, notice: null } : given;
   const paste = `<a href="${link(shell, 'setup')}#brand-guidance">Paste your details instead</a>`;
   const body = (title: string, inner: string, head = '') => layout(shell, title, `${STYLE}<div class="dna">${inner}</div>`, head);
 
@@ -125,10 +150,9 @@ export function brandDnaPage(shell: Shell, state: BrandDnaState, commandId: stri
     return body('Brand DNA', `<h1>${reading ? 'Reading your website' : 'Making your Brand DNA card'}</h1>
 <p class="lead">${reading ? 'We are reading the pages that describe your business.' : 'Your pages are read. We are putting your card together.'} This usually takes a minute or two.</p>
 <section class="card" role="status"><p>You can leave this page. It carries on without you, and nothing is published.</p><p><a class="button main" href="${link(shell, 'dna')}">Check again</a></p></section>`,
-    '<meta http-equiv="refresh" content="8">');
+    `<meta http-equiv="refresh" content="8;url=${e(link(shell, 'dna'))}">`);
   }
 
-  const stopped = lastAttempt(state);
   const stoppedNotice = stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}</p>` : '';
   const { allowance } = state;
   // Where the owner can actually raise it. The founder sets every business's limits on one page (and only sees this
@@ -194,6 +218,6 @@ ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: 
 
   return body('Your Brand DNA', `<h1>Your Brand DNA ${pill}</h1>
 <p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : card.checked ? 'Check each line. Every one says where we found it.' : 'Check each line before you confirm it.'}</p>
-${stoppedNotice}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${cardSections(card)}
+${stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}${stopped.pasteInstead ? ` ${paste}.` : ''}</p>` : ''}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${leftOutSection(shell, card, !outOfDate)}${cardSections(card)}
 ${outOfDate ? '' : correctionForm(shell, state)}${look}${outOfDate ? '' : action}`);
 }

@@ -18,7 +18,7 @@ import {
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import {
-  BRAND_DNA_MIN_WORDS, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
+  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
   type BrandDnaCard, type BrandDnaJobPayload, type BrandDnaResult, type ConflictChoice,
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
@@ -591,10 +591,9 @@ export class SeoBlogEngine {
         if (p.receipt || s.job.state === 'cancelled' || p.start?.nonce !== payload.start!.nonce) return { job: s.job, write: false };
         if (rejected) {
           const at = this.now();
-          // Nothing read from the website was kept: the pages held with this task are dropped with it.
-          const message = rejected.reason === 'content'
-            ? 'We stopped before making your card. It would have included a price or a fact we could not find word for word in your website pages or documents, and we do not guess. Nothing was saved or changed.'
-            : 'We could not put your card together this time. Nothing was saved or changed. Please try again.';
+          // Nothing read from the website was kept: the pages held with this task are dropped with it. A content refusal
+          // now means nothing verifiable survived the repair (one unverifiable line is taken off the card, never the card).
+          const message = rejected.reason === 'content' ? BRAND_DNA_MESSAGES.nothingClear : BRAND_DNA_MESSAGES.ourSideCard;
           return { job: this.profileHold(s.job, 'rejected', message, at), write: true,
             usage: { brandId: job.brandId, kind: 'model_tokens' as const, amount: rejected.record.tokensIn + rejected.record.tokensOut, at, reference: `profile:${s.job.id}:${payload.start!.nonce}:rejected` },
             event: { brandId: job.brandId, at, actor: 'system', kind: 'profile.rejected', message: `Brand DNA card not made: ${rejected.message}`.slice(0, 400), subjectId: s.job.id } };
@@ -788,10 +787,7 @@ export class SeoBlogEngine {
     const result: BrandDnaResult = { pagesRead: plan.pagesRead, pagesChanged: websiteReadable ? plan.documents.length : 0, words: plan.words, websiteReadable };
     if (!websiteReadable && !before.some((d) => d.text)) {
       await this.holdBrandDna(job, 'no_words', result);
-      const opened = pages.some((p) => p.fetchStatus === 'ok');
-      throw new SeoBlogError(409, opened
-        ? 'We could not read enough words from your website. Some websites only show their words inside a browser. Paste your details instead and we will use those.'
-        : `We could not open ${brand.website}. Check the address is right. You can also paste your details instead and we will use those.`);
+      throw new SeoBlogError(409, BRAND_DNA_MESSAGES.noWords);
     }
     // Nothing is saved here. New and changed pages travel with the card task and become brand documents only in the
     // same write as the card built from them, so a refused or failed card leaves the brand exactly as it was.

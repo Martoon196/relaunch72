@@ -12,6 +12,7 @@ import {
   strictProfileProblems, websiteDocumentId, websiteDocuments,
 } from '../src/seo-blog/brand-dna.js';
 import { loadPrompt } from '../src/stages/prompt.js';
+import { profileForPrompt } from '../src/seo-blog/generation.js';
 import type { FetchTransport } from '../src/seo-blog/safe-fetch.js';
 import { buildInventory } from '../src/seo-blog/inventory.js';
 import { normaliseHexColour, parseHtmlPage } from '../src/seo-blog/html.js';
@@ -250,27 +251,61 @@ test('website address only: the site is read and a proposed card cites the pages
   await assert.rejects(h.engine.requestBrandDna(STRANGER, brand.id, { commandId: randomUUID() }), { status: 404 });
 });
 
-test('an invented price is rejected: one correction pass, then the card is refused, nothing saved and the known usage recorded once', async () => {
+test('an invented price that survives the correction pass is left blank, not fatal: the card is made and says what was left out', async () => {
   const h = harness(); seedSite(h);
   useModel(h, (docs) => { const card = honestCard(docs, 1) as { offers: { price: string }[] }; card.offers[0]!.price = '£39 per month'; return card; });
   const brand = await newBrand(h);
   await read(h, brand.id); await work(h);
-  assert.equal(await h.engine.getProfile(OWNER, brand.id), null);
   assert.equal(h.llm.calls.length, 2, 'the existing single critique retry, never more');
+  const profile = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.ok(profile, 'one unverifiable price never costs the owner the whole card');
+  assert.equal(profile.strict, true); assert.equal(profile.offers[0]!.name, 'Quay Compliance Plan'); assert.equal(profile.offers[0]!.price, null, 'the price is left blank, never guessed');
+  assert.deepEqual(profile.audiences, ['Private landlords in Kent']); assert.deepEqual(profile.approvedClaims, ['We help landlords in Kent'], 'everything verified is kept');
+  assert.deepEqual(profile.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }]);
   const cardJob = (await h.engine.listJobs(OWNER, brand.id)).find(isProfileJob)!;
-  assert.equal(cardJob.state, 'blocked'); assert.equal(profilePayload(cardJob).reason, 'rejected'); assert.match(cardJob.error!, /could not find word for word/);
+  assert.equal(cardJob.state, 'done'); assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, 3600, 'both calls are accounted, once');
+  assert.ok(!JSON.stringify(profileForPrompt(profile)).includes('leftOut'), 'what was left out is never sent to a writing step');
+  assert.ok(!JSON.stringify(profileForPrompt(profile)).includes('£39'));
+
+  const shown = door((await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
+  assert.match(shown, /<h2>What we left out<\/h2>\s*<p>We left out 1 thing we could not find word for word on your website\. You can add it yourself\.<\/p>/);
+  assert.match(shown, new RegExp(`<li>The price of “Quay Compliance Plan”<span class="from"><a href="/portal/seo-blog/b/${brand.id}/setup#brand-guidance">Add it to your details</a>`));
+  assert.match(shown, /Price: none found in your pages or documents/); assert.doesNotMatch(shown, /£39/);
+  assert.doesNotMatch(shown, /We stopped before making your card|role="alert"/, 'a card, not an error');
+  assert.match(shown, /<button class="main" type="submit">Confirm my Brand DNA<\/button>/); assert.equal(mains(shown), 1);
+
+  // The correction pass still works: a model that fixes the price on its second answer produces the card with nothing left out.
+  const g = harness(); seedSite(g);
+  useModel(g, (docs, attempt) => { const card = honestCard(docs, attempt) as { offers: { price: string }[] }; if (attempt === 1) card.offers[0]!.price = '£39 per month'; return card; });
+  const second = await newBrand(g); await read(g, second.id); await work(g);
+  const fixed = (await g.engine.getProfile(OWNER, second.id))!;
+  assert.equal(fixed.offers[0]!.price, '£49 per month'); assert.equal(g.llm.calls.length, 2); assert.equal(fixed.leftOut, undefined);
+});
+
+test('nothing verifiable survives: the card is refused with one next step, the paste button is the main button, and usage is recorded once', async () => {
+  const h = harness(); seedSite(h);
+  useModel(h, (docs) => ({ ...honestCard(docs, 1), offers: [{ name: 'Gold Plan', description: 'Everything', price: '£10 per month', url: null, sourceDocumentId: 'made-up' }],
+    audiences: ['Landlords everywhere'], approvedClaims: ['Rated best in Kent'], sources: [] }));
+  const brand = await newBrand(h);
+  await read(h, brand.id); await work(h);
+  assert.equal(await h.engine.getProfile(OWNER, brand.id), null);
+  assert.equal(h.llm.calls.length, 2);
+  const cardJob = (await h.engine.listJobs(OWNER, brand.id)).find(isProfileJob)!;
+  assert.equal(cardJob.state, 'blocked'); assert.equal(profilePayload(cardJob).reason, 'rejected');
+  assert.equal(cardJob.error, 'We read your website but could not find enough clear facts to make a card. Paste a short description of what you sell and who it is for, and we will use that.');
   assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, 3600, 'both calls are accounted');
   assert.equal((await h.engine.listKnowledge(OWNER, brand.id)).length, 0, 'no page read for a refused card is kept'); assert.equal(profilePayload(cardJob).staged, undefined);
   await work(h); assert.equal(h.llm.calls.length, 2, 'a refused card is never retried on its own');
   const state = await h.engine.brandDna(OWNER, brand.id);
   assert.equal(state.status, 'none'); assert.equal(state.uncertainEarlierAttempt, false, 'a known rejection is not an uncertain charge');
-  assert.ok((await h.engine.activity(OWNER, brand.id)).some((e) => e.kind === 'profile.rejected' && /£39 per month/.test(e.message)));
+  assert.ok((await h.engine.activity(OWNER, brand.id)).some((e) => e.kind === 'profile.rejected'));
 
-  // The correction pass works: a model that fixes the price on its second answer produces the card.
-  const g = harness(); seedSite(g);
-  useModel(g, (docs, attempt) => { const card = honestCard(docs, attempt) as { offers: { price: string }[] }; if (attempt === 1) card.offers[0]!.price = '£39 per month'; return card; });
-  const second = await newBrand(g); await read(g, second.id); await work(g);
-  assert.equal((await g.engine.getProfile(OWNER, second.id))!.offers[0]!.price, '£49 per month'); assert.equal(g.llm.calls.length, 2);
+  const page = await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`);
+  const shown = door(page.body);
+  assert.match(shown, /role="alert">We read your website but could not find enough clear facts to make a card\./);
+  assert.match(shown, new RegExp(`<a class="button main" href="/portal/seo-blog/b/${brand.id}/setup#brand-guidance">Paste your details instead</a>`));
+  assert.equal(mains(page.body), 1); assert.match(shown, /<summary>Try my website again<\/summary>/);
+  assert.doesNotMatch(page.body, /Reading your website|carries on in the background/, 'never the reading state beside the error');
 });
 
 test('a page and a document disagree: shown as a question, confirm is refused until the owner settles it from the stored choices', async () => {
@@ -335,7 +370,7 @@ test('a website that shows almost no words says so and offers pasting; pasted de
   await read(h, brand.id); await work(h);
   const held = (await h.engine.listJobs(OWNER, brand.id))[0]!;
   assert.equal(held.state, 'blocked'); assert.equal(brandDnaPayload(held).reason, 'no_words');
-  assert.match(held.error!, /could not read enough words from your website.*Paste your details instead/);
+  assert.equal(held.error, 'We could not read any words on that address. Check the address, or paste your details instead.');
   assert.equal((await h.engine.listKnowledge(OWNER, brand.id)).length, 0); assert.equal(h.llm.calls.length, 0); assert.equal(await h.engine.getProfile(OWNER, brand.id), null);
 
   await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'product_facts', title: 'About my business', pastedText: `${HOME_WORDS} ${ABOUT_WORDS} ${PRICING_WORDS}` });
@@ -344,10 +379,10 @@ test('a website that shows almost no words says so and offers pasting; pasted de
   assert.equal(state.status, 'proposed'); assert.equal(brandDnaPayload(state.job!).result!.websiteReadable, false); assert.equal(state.pages, 0);
   assert.equal(state.card!.offers[0]!.priceSource!.label, 'From your document “About my business”');
 
-  // A website that cannot be opened at all is named as such.
+  // A website that cannot be opened at all gets the same one next step: check the address, or paste.
   const g = harness(); useModel(g, honestCard);
   const down = await newBrand(g); await read(g, down.id); await work(g);
-  assert.match((await g.engine.listJobs(OWNER, down.id))[0]!.error!, /We could not open https:\/\/quay\.example\. Check the address is right/);
+  assert.match((await g.engine.listJobs(OWNER, down.id))[0]!.error!, /We could not read any words on that address\. Check the address, or paste your details instead\./);
 });
 
 test('a confirmed card is never made out of date silently: reading again needs the deliberate press, at request time and in the worker', async () => {
@@ -463,9 +498,11 @@ test('the door: one main button, plain words, CSRF and workspace checks, and a r
   assert.equal((await h.engine.listJobs(OWNER, brand.id)).length, 0);
 
   const started = await call(service, owner, 'POST', `${base}/read`, { ...form, _csrf: csrf });
-  assert.equal(started.status, 303); assert.match(started.headers.location!, new RegExp(`^${base}\\?n=`));
+  // No message rides along in the address: it would outlive the read and sit beside the card or an error.
+  assert.equal(started.status, 303); assert.equal(started.headers.location, base);
   const waiting = await call(service, owner, 'GET', base);
-  assert.match(door(waiting.body), /<h1>Reading your website<\/h1>/); assert.match(waiting.body, /<meta http-equiv="refresh" content="8">/); assert.equal(mains(waiting.body), 1);
+  assert.match(door(waiting.body), /<h1>Reading your website<\/h1>/); assert.equal(mains(waiting.body), 1);
+  assert.match(waiting.body, new RegExp(`<meta http-equiv="refresh" content="8;url=${base}">`), 'the page refreshes onto the clean address');
   assert.doesNotMatch(door(waiting.body), /<form/); assert.doesNotMatch(door(waiting.body), JARGON);
   await work(h);
 
@@ -537,7 +574,7 @@ test('blocked screens say what to do: set an allowance, or paste details when th
 
   const brand = await newBrand(h, 1_000_000, 'Quay Two'); await read(h, brand.id); await work(h);
   const empty = door((await call(service, owner, 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
-  assert.match(empty, /role="alert">We could not read enough words from your website/);
+  assert.match(empty, /role="alert">We could not read any words on that address\. Check the address, or paste your details instead\./);
   assert.match(empty, new RegExp(`<a class="button main" href="/portal/seo-blog/b/${brand.id}/setup#brand-guidance">Paste your details instead</a>`));
   assert.equal(mains(empty), 1); assert.match(empty, /<summary>Try my website again<\/summary>/); assert.doesNotMatch(empty, JARGON);
 });
@@ -669,8 +706,8 @@ test('a refused or failed card leaves a confirmed brand exactly as it was; pages
   const before = await snapshot();
   assert.equal(before.status, 'confirmed'); assert.equal(before.readiness.profile, 'confirmed'); assert.equal(before.documents.length, 1); assert.equal(before.profile!.strict, undefined);
 
-  // Refused: the model keeps an audience it cannot quote, twice.
-  answer = (docs, attempt) => ({ ...honestCard(docs, attempt), audiences: ['Private landlords in Kent', 'Landlords everywhere'] });
+  // Refused: nothing on the model's answer can be found word for word, twice. (One bad line alone is now left off the card instead.)
+  answer = (docs, attempt) => ({ ...honestCard(docs, attempt), offers: [], audiences: ['Landlords everywhere'], approvedClaims: ['Rated best in Kent'], sources: [] });
   await read(h, brand.id, { readAgain: true });
   await h.engine.tick('reader');
   const waiting = (await h.engine.listJobs(OWNER, brand.id)).find((j) => isProfileJob(j) && j.state === 'queued')!;
@@ -678,7 +715,7 @@ test('a refused or failed card leaves a confirmed brand exactly as it was; pages
   assert.deepEqual(await snapshot(), before, 'reading the website on its own changes nothing: the confirmed card is still current while the new one is made');
   await work(h);
   const refused = (await h.engine.listJobs(OWNER, brand.id)).find((j) => isProfileJob(j) && profilePayload(j).reason === 'rejected')!;
-  assert.match(refused.error!, /could not find word for word.*Nothing was saved or changed\./); assert.equal(profilePayload(refused).staged, undefined);
+  assert.match(refused.error!, /could not find enough clear facts to make a card/); assert.equal(profilePayload(refused).staged, undefined);
   assert.deepEqual(await snapshot(), before, 'refused: same documents, same confirmed card, still ready to plan');
   const spent = (await h.engine.usage(OWNER, brand.id)).model_tokens;
 
@@ -935,4 +972,81 @@ test('wording: verbatim prices are promised only on a website-door card, no dead
   const updating = door((await call(serviceFor(g), owner, 'GET', `/portal/seo-blog/b/${waiting.id}/dna`)).body);
   assert.match(updating, /This will be ready in a few minutes\. Nothing was changed\./); assert.doesNotMatch(updating, /does not support|worker|task stage/);
   assert.match(updating, /Read my website<\/button>/);
+});
+
+// ─── Never a dead end ────────────────────────────────────────────────────────
+
+test('what was left out is listed escaped, capped, each with the existing way to add it; hostile offer names never run', async () => {
+  const h = harness(); seedSite(h);
+  const hostile = 'Quay <script>alert(1)</script> "Plan" & <img src=x onerror=alert(2)>';
+  useModel(h, (docs) => {
+    const card = honestCard(docs, 1) as { offers: Record<string, unknown>[]; audiences: string[] };
+    const priced = docs.find((d) => d.text.includes('£49 per month'))!;
+    card.offers.push({ name: hostile, description: '', price: '£1 per month', url: null, sourceDocumentId: priced.id });
+    for (let i = 0; i < 11; i++) card.audiences.push(`Unquoted audience ${String.fromCharCode(97 + i)}`);
+    return card;
+  });
+  const brand = await newBrand(h);
+  await read(h, brand.id); await work(h);
+  const profile = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.equal(profile.leftOut!.length, 12); assert.deepEqual(profile.leftOut![0], { what: 'price', text: hostile });
+  assert.equal(profile.offers.find((o) => o.name === hostile)!.price, null); assert.deepEqual(profile.audiences, ['Private landlords in Kent']);
+  const page = (await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body;
+  const shown = door(page);
+  assert.doesNotMatch(page, /<script>alert|<img src=x/); assert.match(shown, /The price of “Quay &lt;script&gt;alert\(1\)&lt;\/script&gt; &quot;Plan&quot; &amp; &lt;img src=x onerror=alert\(2\)&gt;”/);
+  assert.match(shown, /We left out 12 things we could not find word for word on your website\. You can add them yourself\./);
+  const listed = shown.slice(shown.indexOf('id="left-out"'), shown.indexOf('</section>', shown.indexOf('id="left-out"')));
+  assert.equal((listed.match(/<li>/g) ?? []).length, 10); assert.match(listed, /And 2 more\./); assert.match(listed, /Nothing left out is used to write your content\./);
+  assert.match(listed, /<li>Who it is for: “Unquoted audience a”<span class="from"><a href="#dna-change">Add it yourself<\/a>/);
+  assert.match(shown, /<details class="card" id="dna-change" open>/, 'the existing correction form is where an audience is added by hand');
+  assert.doesNotMatch(JSON.stringify(profileForPrompt(profile)), /Unquoted audience|£1 per month/);
+});
+
+test('exactly one state: a carried message never sits beside reading or an error, and the reading page refreshes onto the clean address', async () => {
+  const { h, brand, profile } = await proposedCard();
+  const service = serviceFor(h), owner = identity(OWNER.userId), csrf = portalCsrfToken(SECRET, owner.sessionToken), base = `/portal/seo-blog/b/${brand.id}/dna`;
+  const edited = await call(service, owner, 'POST', `${base}/edit`, { _csrf: csrf, version: String(profile.version), summary: profile.summary, audiences: profile.audiences.join('\n'), approvedClaims: profile.approvedClaims.join('\n'), exclusions: '', voiceDont: '' });
+  const withNotice = edited.headers.location!;
+  assert.match((await call(service, owner, 'GET', withNotice)).body, /role="status">Your changes are saved/);
+
+  let answer: CardScript = (docs) => ({ ...honestCard(docs, 1), offers: [], audiences: ['Landlords everywhere'], approvedClaims: [], sources: [] });
+  useModel(h, (docs, attempt) => answer(docs, attempt));
+  const press = { _csrf: csrf, commandId: randomUUID(), website: 'quay.example' };
+  h.clock.advance(1000);
+  assert.equal((await call(service, owner, 'POST', `${base}/read`, press)).headers.location, base);
+  const reading = (await call(service, owner, 'GET', withNotice)).body;
+  assert.match(reading, /<h1>Reading your website<\/h1>/); assert.doesNotMatch(reading, /Your changes are saved|role="alert"/);
+  assert.match(reading, new RegExp(`content="8;url=${base}"`));
+
+  await work(h);
+  const failedPage = (await call(service, owner, 'GET', withNotice)).body;
+  assert.match(failedPage, /role="alert">We read your website but could not find enough clear facts to make a card\./);
+  assert.doesNotMatch(failedPage, /Reading your website|carries on in the background|Your changes are saved|http-equiv="refresh"/);
+  assert.match(door(failedPage), /Paste your details instead<\/a>\./, 'the next step is right there');
+
+  // Pressing again after a failure: the same press (same form) never starts or charges anything again; a new press is one new attempt.
+  const calls = h.llm.calls.length, spent = (await h.engine.usage(OWNER, brand.id)).model_tokens;
+  assert.equal(calls, 1 + 2, "the first card, then the refused attempt with its one correction pass"); assert.equal(spent, 1800 + 3600);
+  await call(service, owner, 'POST', `${base}/read`, press); await work(h);
+  assert.equal(h.llm.calls.length, calls, 'a resubmitted earlier press replays its finished attempt'); assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, spent);
+  answer = honestCard;
+  const again = { _csrf: csrf, commandId: randomUUID(), website: 'quay.example' };
+  h.clock.advance(1000);
+  await Promise.all([call(service, owner, 'POST', `${base}/read`, again), call(service, owner, 'POST', `${base}/read`, again)]);
+  await work(h);
+  assert.equal(h.llm.calls.length, calls + 1, 'pressed twice: one read, one card, charged once'); assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, spent + 1800);
+  const card = (await call(service, owner, 'GET', withNotice)).body;
+  assert.match(door(card), /Needs your confirmation/); assert.doesNotMatch(card, /role="alert"|Reading your website/);
+});
+
+test('a read that failed on our side says so in one sentence with "Read my website" as the main button', async () => {
+  const g = harness(); seedSite(g); useModel(g, honestCard);
+  const brand = await newBrand(g); const job = await read(g, brand.id);
+  const stored = (await g.store.getJob(brand.id, job.id))!;
+  g.clock.advance(1000);
+  await g.store.updateJob({ ...stored, state: 'failed', error: 'ECONNRESET at socket 3', progress: 'Failed.', updatedAt: g.clock.now() });
+  const page = (await call(serviceFor(g), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body;
+  assert.match(door(page), /role="alert">Something went wrong on our side\. Nothing was spent\. Press Read my website again\.<\/p>/);
+  assert.match(door(page), /<button class="main" type="submit">Read my website<\/button>/); assert.equal(mains(page), 1);
+  assert.doesNotMatch(page, /ECONNRESET|Reading your website/);
 });
