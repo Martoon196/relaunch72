@@ -15,6 +15,7 @@ import type {
   KnowledgeDocument, Publication, TopicPlan, UsageKind, UsageRecord, WebsiteInventory,
 } from './types.js';
 import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
+import { businessName } from './existing-workspace.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
@@ -33,6 +34,15 @@ export interface CreateBrandInput {
   readonly actorId: string;
   readonly name: string;
   readonly slug: string;
+  readonly website: string | null;
+  readonly now: string;
+}
+
+/** Use one existing workspace for content (migration 0154) instead of creating a new one. */
+export interface AttachWorkspaceInput {
+  readonly commandId: string;
+  readonly actorId: string;
+  readonly workspaceId: string;
   readonly website: string | null;
   readonly now: string;
 }
@@ -91,6 +101,13 @@ export interface SeoBlogStore {
   beginPublication(input: { brandId: string; articleId: string; resumePublicationId: string | null; decide: (snapshot: PublicationSnapshot) => BeginDecision }): Promise<BeginResult>;
 
   createBrand(input: CreateBrandInput): Promise<{ brand: Brand; created: boolean }>;
+  /**
+   * Whether this actor may use the existing workspace for content and it is not used yet. Optional: a store (or a
+   * database before migration 0154) without it never offers the option. Never throws for a missing capability.
+   */
+  existingWorkspaceOffer?(actorId: string, workspaceId: string): Promise<boolean>;
+  /** Adds the existing workspace as a business with the default settings; idempotent per command. */
+  attachExistingWorkspace?(input: AttachWorkspaceInput): Promise<{ brand: Brand; attached: boolean }>;
   listBrands(actorId: string): Promise<Brand[]>;
   canManage(actorId: string, brandId: string): Promise<boolean>;
   getBrand(brandId: string): Promise<Brand | null>;
@@ -161,6 +178,9 @@ export interface SocialAttestationOutcome {
 
 const clone = <T>(value: T): T => structuredClone(value);
 
+/** Mirrors the PostgreSQL store's read: the existing MHP workspace reads as its business name. */
+function named(b: Brand): Brand { return { ...b, name: businessName(b.id, b.name) }; }
+
 export class MemorySeoBlogStore implements SeoBlogStore {
   private brands = new Map<string, Brand>();
   private brandCommands = new Map<string, string>();
@@ -196,6 +216,8 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     if (!this.members.has(brandId)) this.members.set(brandId, new Set());
     this.members.get(brandId)!.add(actorId);
   }
+  /** Test helper: the existing workspace an owner may use for content, and who may use it (the database rule in 0154). */
+  existingWorkspace: { id: string; organizationId: string; name: string; owners: Set<string> } | null = null;
   /** Test helper: model revocation before a worker's begin/apply boundary. */
   revoke(actorId: string, brandId: string): void { this.members.get(brandId)?.delete(actorId); }
 
@@ -321,17 +343,44 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     return { brand: clone(brand), created: true };
   }
 
+  async existingWorkspaceOffer(actorId: string, workspaceId: string): Promise<boolean> {
+    const x = this.existingWorkspace;
+    return Boolean(x && x.id === workspaceId && x.owners.has(actorId) && !this.brands.has(x.id));
+  }
+
+  async attachExistingWorkspace(input: AttachWorkspaceInput): Promise<{ brand: Brand; attached: boolean }> {
+    const key = `${input.actorId}:${input.commandId}`;
+    const existing = this.brandCommands.get(key);
+    if (existing) {
+      if (existing !== input.workspaceId) throw new SeoBlogError(400, 'Refresh the page and try again.');
+      return { brand: named(clone(this.brands.get(existing)!)), attached: false };
+    }
+    const x = this.existingWorkspace;
+    if (!x || x.id !== input.workspaceId || !x.owners.has(input.actorId)) throw new SeoBlogError(403, 'Only the Martin Howard Property owner can do this.');
+    let attached = false;
+    if (!this.brands.has(x.id)) {
+      this.brands.set(x.id, { id: x.id, organizationId: x.organizationId, name: x.name, slug: 'mhp-brand-marketing', website: input.website,
+        locale: 'en-GB', timezone: 'Europe/London', settings: clone(DEFAULT_BRAND_SETTINGS), createdAt: input.now, createdBy: input.actorId, rowVersion: 1 });
+      attached = true;
+    }
+    for (const owner of x.owners) this.grant(owner, x.id);
+    this.brandCommands.set(key, x.id);
+    return { brand: named(clone(this.brands.get(x.id)!)), attached };
+  }
+
   async listBrands(actorId: string): Promise<Brand[]> {
-    return [...this.brands.values()].filter((b) => this.members.get(b.id)?.has(actorId)).map(clone).sort((a, b) => a.name.localeCompare(b.name));
+    return [...this.brands.values()].filter((b) => this.members.get(b.id)?.has(actorId)).map((b) => named(clone(b))).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async canManage(actorId: string, brandId: string): Promise<boolean> {
-    return Boolean(this.members.get(brandId)?.has(actorId));
+    // The existing workspace is managed by its owners before it is a business, as in the database.
+    const x = this.existingWorkspace;
+    return Boolean(this.members.get(brandId)?.has(actorId)) || Boolean(x && x.id === brandId && x.owners.has(actorId));
   }
 
   async getBrand(brandId: string): Promise<Brand | null> {
     const b = this.brands.get(brandId);
-    return b ? clone(b) : null;
+    return b ? named(clone(b)) : null;
   }
 
   async updateBrand(brand: Brand): Promise<Brand> {

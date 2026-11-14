@@ -34,6 +34,7 @@ import { researchQueries, researchQuerySeeds, ResearchUnavailableError, Research
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
+import { EXISTING_WORKSPACE, namesExistingWorkspace } from './existing-workspace.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls, type ProfileJobPayload, type ProfileJobReceipt, type ProfileJobSnapshot } from './profile-jobs.js';
 import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeAuthorityFor, programmeInputSnapshot, programmeReadinessIssue, programmeRun, programmeSha, programmeKnowledgeRefs, researchDiagnostic,
@@ -230,6 +231,9 @@ export class SeoBlogEngine {
     if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
     const name = cleanText(String(input.name ?? '')).replace(/\s+/g, ' ');
     if (name.length < 2 || name.length > 120) throw new SeoBlogError(400, 'Enter a brand name between 2 and 120 characters.');
+    // Martin Howard Property already has its workspace: for whoever manages it, the ordinary form never makes a second,
+    // empty one (0154). Any other customer with a similar name gets the ordinary form and never sees MHP wording.
+    if (namesExistingWorkspace(name, input.website) && await this.managesExistingWorkspace(actor)) throw new SeoBlogError(409, `${EXISTING_WORKSPACE.name} already has its own workspace, so it is not added again as a new business.`, 'existing_workspace');
     const website = input.website?.trim() ? normaliseWebsite(input.website) : null;
     const result = await this.store.createBrand({ commandId: input.commandId, actorId: actor.userId, name, slug: slugify(name, 60), website, now: this.now() });
     if (result.created) await this.log(result.brand.id, actor.userId, 'brand.created', `Brand “${name}” created.`);
@@ -240,6 +244,29 @@ export class SeoBlogEngine {
     return this.store.listBrands(actor.userId);
   }
 
+  /** Whether this person manages Martin Howard Property's existing workspace (works on a database at 0153 and 0154). */
+  async managesExistingWorkspace(actor: Actor): Promise<boolean> {
+    return this.store.canManage(actor.userId, EXISTING_WORKSPACE.id).catch(() => false);
+  }
+
+  /** Whether "Use Martin Howard Property here" is offered to this owner: eligible, and not yet one of their businesses. */
+  async existingWorkspaceOffer(actor: Actor): Promise<boolean> {
+    if (!this.store.existingWorkspaceOffer) return false;
+    return this.store.existingWorkspaceOffer(actor.userId, EXISTING_WORKSPACE.id);
+  }
+
+  /**
+   * Martin Howard Property's content uses its existing workspace (owner decision, 0154): no new workspace, the same
+   * default settings as a new business, and the database starts every allowance at 0.
+   */
+  async attachExistingWorkspace(actor: Actor, input: { commandId: string }): Promise<{ brand: Brand; attached: boolean }> {
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    if (!this.store.attachExistingWorkspace) throw new SeoBlogError(404, 'This is not switched on yet. Nothing was changed.', 'existing_workspace_unavailable');
+    const result = await this.store.attachExistingWorkspace({ commandId: input.commandId, actorId: actor.userId, workspaceId: EXISTING_WORKSPACE.id, website: null, now: this.now() });
+    if (result.attached) await this.log(result.brand.id, actor.userId, 'brand.attached', `${EXISTING_WORKSPACE.name} now uses its existing workspace for content.`);
+    return result;
+  }
+
   async getBrand(actor: Actor, brandId: string): Promise<Brand> {
     return this.brandFor(actor, brandId);
   }
@@ -247,10 +274,13 @@ export class SeoBlogEngine {
   async updateBrandBasics(actor: Actor, brandId: string, input: { rowVersion: number; website: string | null; locale: string; timezone: string }): Promise<Brand> {
     const brand = await this.brandFor(actor, brandId);
     if (brand.rowVersion !== input.rowVersion) throw new StaleWriteError('brand');
-    if (!isValidTimeZone(input.timezone)) throw new SeoBlogError(400, 'Choose a valid timezone, for example Europe/London.');
-    if (!/^[a-z]{2,3}(-[A-Z]{2})?$/.test(input.locale)) throw new SeoBlogError(400, 'Choose a locale such as en-GB.');
+    // The existing MHP workspace's language and time zone belong to its account (CRM, webinars, social scheduling):
+    // content setup sends them back unchanged, so the database never rewrites them.
+    const fixed = brand.id.toLowerCase() === EXISTING_WORKSPACE.id;
+    if (!fixed && !isValidTimeZone(input.timezone)) throw new SeoBlogError(400, 'Choose a valid timezone, for example Europe/London.');
+    if (!fixed && !/^[a-z]{2,3}(-[A-Z]{2})?$/.test(input.locale)) throw new SeoBlogError(400, 'Choose a locale such as en-GB.');
     const website = input.website?.trim() ? normaliseWebsite(input.website) : null;
-    const updated = await this.store.updateBrand({ ...brand, website, locale: input.locale, timezone: input.timezone });
+    const updated = await this.store.updateBrand({ ...brand, website, locale: fixed ? brand.locale : input.locale, timezone: fixed ? brand.timezone : input.timezone });
     await this.log(brandId, actor.userId, 'brand.updated', 'Brand website, locale or timezone updated.');
     return updated;
   }

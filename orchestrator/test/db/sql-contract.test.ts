@@ -4,6 +4,7 @@ import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/grou
 import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
 import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
+import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -164,6 +165,7 @@ const migration150Url = new URL('../../src/db/migrations/0150_mhp_kit_course_cre
 const migration151Url = new URL('../../src/db/migrations/0151_mhp_whatsapp_owner_one_to_one.sql', import.meta.url);
 const migration152Url = new URL('../../src/db/migrations/0152_pp_followup_email_sequences.sql', import.meta.url);
 const migration153Url = new URL('../../src/db/migrations/0153_stop_per_channel_and_email_block_ledger.sql', import.meta.url);
+const migration154Url = new URL('../../src/db/migrations/0154_seo_blog_attach_mhp_workspace.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -756,6 +758,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0151_mhp_whatsapp_owner_one_to_one.sql', version: 151 },
     { filename: PP_FOLLOWUP_MIGRATION, version: 152 },
     { filename: EMAIL_BLOCK_MIGRATION, version: 153 },
+    { filename: SEO_BLOG_ATTACH_MIGRATION, version: 154 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -905,6 +908,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration151Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration152Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration153Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration154Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -926,6 +930,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===148)?.checksum, OPERATOR_OAUTH_CHECKSUM);
   assert.equal(tail.find(m=>m.version===152)?.checksum, PP_FOLLOWUP_CHECKSUM);
   assert.equal(tail.find(m=>m.version===153)?.checksum, EMAIL_BLOCK_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===154)?.checksum, SEO_BLOG_ATTACH_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
@@ -1026,6 +1031,41 @@ test('0153 makes a STOP per channel and keeps the email block ledger pinned, add
   assert.doesNotMatch(sql, /GRANT (?:INSERT|UPDATE|DELETE|ALL)[^;]* ON app\./u, 'no new write grant on a shared table');
   // Nothing about a message body or provider payload is stored.
   assert.doesNotMatch(sql.slice(sql.indexOf('CREATE TABLE app_private.email_address_blocks('), sql.indexOf('CREATE INDEX email_address_blocks_address')), /body|payload|subject|metadata/iu);
+});
+
+test('0154 attaches only the pinned Martin Howard Property workspace, additively, behind two content-command definer functions', async () => {
+  const sql = normalise(await readFile(migration154Url, 'utf8'));
+  assert.match(sql, /^SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s';/u);
+  // Additive: nothing deleted, dropped, altered, rewritten or triggered; no role, table, policy or grant on a table.
+  assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b|\bALTER\b|\bUPDATE\b|CREATE TRIGGER|CREATE OR REPLACE|CREATE ROLE|CREATE TABLE|CREATE POLICY|BEGIN;|COMMIT/u);
+  assert.doesNotMatch(sql, /GRANT [^;]* ON (?:TABLE )?app/u);
+  assert.equal((sql.match(/CREATE FUNCTION/g) ?? []).length, 2);
+  // Owned by r72_owner exactly like seo_blog_create_brand (0131), executable by the content command role only.
+  assert.match(sql, /SET LOCAL ROLE r72_owner; CREATE FUNCTION app_private\.seo_blog_attach_workspace_offer\(p_workspace uuid\)/u);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.seo_blog_attach_workspace_offer\(uuid\), app_private\.seo_blog_attach_workspace\(uuid,uuid,text,jsonb\) FROM PUBLIC;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.seo_blog_attach_workspace_offer\(uuid\), app_private\.seo_blog_attach_workspace\(uuid,uuid,text,jsonb\) TO r72_content_command; RESET ROLE;$/u);
+  assert.equal((sql.match(/GRANT /g) ?? []).length, 1);
+  const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  assert.equal(definers, 2);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
+  assert.equal((sql.match(/IF session_user<>'r72_content_command' THEN RAISE EXCEPTION/g) ?? []).length, definers, 'every entry point checks its caller');
+  // Pinned: the MHP workspace in the MHP organisation, its canonical slug, an active org owner who can manage it.
+  const attach = sql.slice(sql.indexOf('CREATE FUNCTION app_private.seo_blog_attach_workspace('), sql.indexOf('REVOKE ALL'));
+  assert.match(attach, /brand CONSTANT uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; org CONSTANT uuid:='ba41b1a4-9752-4dbf-8312-d04a0f03d0b8';/u);
+  assert.match(attach, /IF p_workspace IS DISTINCT FROM brand THEN RAISE EXCEPTION/u);
+  assert.match(attach, /w\.id=brand AND w\.organization_id=org AND w\.slug::text='mhp-brand-marketing' AND w\.status='active' AND o\.status='active'/u);
+  assert.match(attach, /m\.organization_id=org AND m\.user_id=actor AND m\.role='owner' AND m\.status='active' AND m\.revoked_at IS NULL/u);
+  assert.match(attach, /NOT app_private\.can_manage_workspace\(actor,brand\)/u);
+  assert.match(attach, /pg_advisory_xact_lock\(hashtextextended\('seo-blog-brand:'\|\|actor::text,131\)\)/u, 'the same per-user lock as seo_blog_create_brand');
+  assert.match(attach, /INSERT INTO app\.seo_blog_brands\(workspace_id,organization_id,created_by_user_id,website,settings\) VALUES\(brand,org,actor,p_website,p_settings\) ON CONFLICT \(workspace_id\) DO NOTHING;/u);
+  assert.match(attach, /INSERT INTO app\.seo_blog_brand_commands\(user_id,command_id,workspace_id\) VALUES\(actor,p_command,brand\);/u);
+  // Writes only the two blog tables: never a workspace, organisation, membership, CRM, consent, webinar or email row.
+  assert.deepEqual([...sql.matchAll(/INSERT INTO ([a-z_.]+)/g)].map((m) => m[1]), ['app.seo_blog_brands', 'app.seo_blog_brand_commands']);
+  assert.doesNotMatch(sql, /contact|consent|suppression|webinar|email|crm|pipeline|mhp_/iu);
+  const offer = sql.slice(sql.indexOf('CREATE FUNCTION app_private.seo_blog_attach_workspace_offer('), sql.indexOf('CREATE FUNCTION app_private.seo_blog_attach_workspace(p_command'));
+  assert.match(offer, /RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER/u);
+  assert.doesNotMatch(offer, /INSERT|pg_advisory/u);
+  assert.match(offer, /NOT EXISTS\(SELECT 1 FROM app\.seo_blog_brands b WHERE b\.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b'\)/u);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {
