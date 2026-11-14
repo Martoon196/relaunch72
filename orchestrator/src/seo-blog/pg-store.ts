@@ -14,7 +14,7 @@ import type { Pool } from 'pg';
 import { withTransaction, type DbTransaction } from '../db/transaction.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import type { DatabaseRequestContext } from '../db/rls.js';
-import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
+import type { AttachWorkspaceInput, BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
@@ -92,6 +92,45 @@ export class PgSeoBlogStore implements SeoBlogStore {
     const brand = await this.getBrand(result.workspaceId);
     if (!brand) throw new SeoBlogError(503, 'The new brand could not be read back.');
     return { brand, created: result.created };
+  }
+
+  /**
+   * Migration 0154. On a database that still ends at 0153 the function does not exist (42883), and on one where this
+   * role cannot call it (42501) the option is simply not offered; nothing else is affected.
+   */
+  async existingWorkspaceOffer(actorId: string, workspaceId: string): Promise<boolean> {
+    this.assertActor(actorId);
+    const selected = (this.principal as { selectedWorkspaceId: string }).selectedWorkspaceId;
+    try {
+      return await this.tx(selected, async (t) => {
+        const r = await t.query<{ offer: boolean }>('SELECT app_private.seo_blog_attach_workspace_offer($1) AS offer', [workspaceId]);
+        return r.rows[0]?.offer === true;
+      }, true);
+    } catch (error) {
+      if (['42883', '42501'].includes((error as { code?: string }).code ?? '')) return false;
+      throw error;
+    }
+  }
+
+  /** The default brand settings are the same single source as createBrand; the database then zeroes every allowance (0145 trigger). */
+  async attachExistingWorkspace(input: AttachWorkspaceInput): Promise<{ brand: Brand; attached: boolean }> {
+    this.assertActor(input.actorId);
+    const selected = (this.principal as { selectedWorkspaceId: string }).selectedWorkspaceId;
+    const result = await this.tx(selected, async (t) => {
+      const r = await t.query<{ result: { workspaceId: string; attached: boolean } }>(
+        'SELECT app_private.seo_blog_attach_workspace($1, $2, $3, $4) AS result',
+        [input.commandId, input.workspaceId, input.website, JSON.stringify(DEFAULT_BRAND_SETTINGS)]);
+      return r.rows[0]!.result;
+    }).catch((error) => {
+      const code = (error as { code?: string }).code;
+      if (code === '42883') throw new SeoBlogError(404, 'This is not switched on yet. Nothing was changed.', 'existing_workspace_unavailable');
+      if (code === '42501') throw new SeoBlogError(403, 'Only the Martin Howard Property owner can do this.');
+      if (code === '22023') throw new SeoBlogError(400, 'Refresh the page and try again.');
+      throw error;
+    });
+    const brand = await this.getBrand(result.workspaceId);
+    if (!brand) throw new SeoBlogError(503, 'The business could not be read back.');
+    return { brand, attached: result.attached };
   }
 
   async listBrands(actorId: string): Promise<Brand[]> {

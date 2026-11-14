@@ -13,13 +13,14 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
-  activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, overviewPage, publishingPage,
+  activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, EXISTING_WORKSPACE_ANCHOR, overviewPage, publishingPage,
   SEO_BLOG_BASE, SEO_BLOG_SWITCH_TARGETS, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
+import { EXISTING_WORKSPACE } from '../seo-blog/existing-workspace.js';
 import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
 import { PROFILE_STATUS_SCRIPT } from './profile-status.js';
 import { KNOWLEDGE_CATEGORY_SCRIPT } from './knowledge-category.js';
@@ -246,7 +247,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       // Which door each brand shows ("Start with your website" until it has a card). A brand that cannot be read keeps the default door.
       const dna = new Map((await Promise.all(brands.map(async (b) => [b.id, await engine.brandDnaStatus(actor, b.id).catch(() => undefined)] as const)))
         .flatMap(([id, status]) => status ? [[id, status] as const] : []));
-      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID(), dna));
+      // "Use Martin Howard Property here": only for its eligible owner, only once, never when the database cannot do it.
+      const existing = !brands.some((b) => b.id.toLowerCase() === EXISTING_WORKSPACE.id) && await engine.existingWorkspaceOffer(actor).catch(() => false);
+      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID(), dna,
+        existing ? randomUUID() : null));
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
@@ -468,11 +472,34 @@ async function handlePost(
   res: ServerResponse, engine: SeoBlogEngine, actor: Actor, path: string, brandId: string | null, rest: string, form: FormData,
   f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void, input: SeoBlogRouteInput,
 ): Promise<void> {
+  if (path === `${SEO_BLOG_BASE}/brands/existing`) {
+    // Martin Howard Property's existing workspace, then the same Brand DNA door as a newly added business.
+    let used: Awaited<ReturnType<SeoBlogEngine['attachExistingWorkspace']>>;
+    try { used = await engine.attachExistingWorkspace(actor, { commandId: f('commandId') ?? '' }); }
+    catch (error) {
+      if (error instanceof SeoBlogError && error.status < 500) {
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message)}#${EXISTING_WORKSPACE_ANCHOR}`);
+      }
+      throw error;
+    }
+    return ok(`${SEO_BLOG_BASE}/b/${used.brand.id}/dna`, used.attached ? `${EXISTING_WORKSPACE.name} is ready. Start with its website.` : `${EXISTING_WORKSPACE.name} is already here.`);
+  }
   if (path === `${SEO_BLOG_BASE}/brands`) {
     // A new business lands on the Brand DNA door ("Start with your website"), not on the long setup page.
     let made: Awaited<ReturnType<SeoBlogEngine['createBrand']>>;
     try { made = await engine.createBrand(actor, { commandId: f('commandId') ?? '', name: f('name') ?? '', website: f('website') }); }
     catch (error) {
+      // Martin Howard Property typed into the ordinary form: never a duplicate. Open it if it is already here,
+      // point to its card if it can be used here, otherwise say why nothing was added.
+      if (error instanceof SeoBlogError && error.code === 'existing_workspace') {
+        const brands = await engine.listBrands(actor).catch(() => []);
+        const here = brands.find((b) => b.id.toLowerCase() === EXISTING_WORKSPACE.id);
+        if (here) return ok(`${SEO_BLOG_BASE}/b/${here.id}/dna`, `${EXISTING_WORKSPACE.name} is already here.`);
+        if (await engine.existingWorkspaceOffer(actor).catch(() => false)) {
+          return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', `${EXISTING_WORKSPACE.name} already has a workspace. Use the ${EXISTING_WORKSPACE.name} card on this page instead.`)}#${EXISTING_WORKSPACE_ANCHOR}`);
+        }
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message)}#add-business`);
+      }
       // Stay on the form with the reason (a name that is too short, a duplicate, or an account that may not add one).
       if (error instanceof SeoBlogError && error.status < 500 && error.status !== 404) {
         // The engine says "brand"; every page says "business".

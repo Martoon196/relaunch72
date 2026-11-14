@@ -34,6 +34,7 @@ import { researchQueries, researchQuerySeeds, ResearchUnavailableError, Research
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
+import { EXISTING_WORKSPACE, namesExistingWorkspace } from './existing-workspace.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls, type ProfileJobPayload, type ProfileJobReceipt, type ProfileJobSnapshot } from './profile-jobs.js';
 import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeAuthorityFor, programmeInputSnapshot, programmeReadinessIssue, programmeRun, programmeSha, programmeKnowledgeRefs, researchDiagnostic,
@@ -230,6 +231,8 @@ export class SeoBlogEngine {
     if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
     const name = cleanText(String(input.name ?? '')).replace(/\s+/g, ' ');
     if (name.length < 2 || name.length > 120) throw new SeoBlogError(400, 'Enter a brand name between 2 and 120 characters.');
+    // Martin Howard Property already has its workspace: the ordinary form never makes a second, empty one (0154).
+    if (namesExistingWorkspace(name, input.website)) throw new SeoBlogError(409, `${EXISTING_WORKSPACE.name} already has its own workspace, so it is not added again as a new business.`, 'existing_workspace');
     const website = input.website?.trim() ? normaliseWebsite(input.website) : null;
     const result = await this.store.createBrand({ commandId: input.commandId, actorId: actor.userId, name, slug: slugify(name, 60), website, now: this.now() });
     if (result.created) await this.log(result.brand.id, actor.userId, 'brand.created', `Brand “${name}” created.`);
@@ -238,6 +241,24 @@ export class SeoBlogEngine {
 
   listBrands(actor: Actor): Promise<Brand[]> {
     return this.store.listBrands(actor.userId);
+  }
+
+  /** Whether "Use Martin Howard Property here" is offered to this owner: eligible, and not yet one of their businesses. */
+  async existingWorkspaceOffer(actor: Actor): Promise<boolean> {
+    if (!this.store.existingWorkspaceOffer) return false;
+    return this.store.existingWorkspaceOffer(actor.userId, EXISTING_WORKSPACE.id);
+  }
+
+  /**
+   * Martin Howard Property's content uses its existing workspace (owner decision, 0154): no new workspace, the same
+   * default settings as a new business, and the database starts every allowance at 0.
+   */
+  async attachExistingWorkspace(actor: Actor, input: { commandId: string }): Promise<{ brand: Brand; attached: boolean }> {
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    if (!this.store.attachExistingWorkspace) throw new SeoBlogError(404, 'This is not switched on yet. Nothing was changed.', 'existing_workspace_unavailable');
+    const result = await this.store.attachExistingWorkspace({ commandId: input.commandId, actorId: actor.userId, workspaceId: EXISTING_WORKSPACE.id, website: null, now: this.now() });
+    if (result.attached) await this.log(result.brand.id, actor.userId, 'brand.attached', `${EXISTING_WORKSPACE.name} now uses its existing workspace for content.`);
+    return result;
   }
 
   async getBrand(actor: Actor, brandId: string): Promise<Brand> {

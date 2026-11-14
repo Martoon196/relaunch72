@@ -19,6 +19,7 @@ import { addDays, utcToLocal } from '../seo-blog/schedule.js';
 import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type SocialDispatch, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
 import type { WebsitePublisher } from '../seo-blog/publishers/types.js';
 import { escapeHtml as e } from './ui.js';
+import { EXISTING_WORKSPACE } from '../seo-blog/existing-workspace.js';
 import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action-feedback.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls } from '../seo-blog/profile-jobs.js';
 import { editorialRecommendations, legacyPlanningHold, programmeRun, programmeSummary, suggestedKnowledgeCategory } from '../seo-blog/programme.js';
@@ -119,7 +120,17 @@ export function brandDnaDoor(brand: Brand, status: BrandDnaDoorStatus | undefine
   return `<a class="button${status === 'confirmed' ? ' secondary' : ''}" href="${url(brand, 'dna')}">${label}</a>`;
 }
 
-export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>): string {
+/** Where the "Use Martin Howard Property here" card sits on the businesses page. */
+export const EXISTING_WORKSPACE_ANCHOR = 'use-existing';
+
+/** One plain card: Martin Howard Property's own workspace, offered only to its eligible owner and only until used. */
+function existingWorkspaceCard(shell: Shell, commandId: string): string {
+  return `<section class="card" id="${EXISTING_WORKSPACE_ANCHOR}" aria-labelledby="${EXISTING_WORKSPACE_ANCHOR}-title"><h2 id="${EXISTING_WORKSPACE_ANCHOR}-title">${e(EXISTING_WORKSPACE.name)}</h2>
+<p>This uses the ${e(EXISTING_WORKSPACE.name)} workspace you already have. Nothing is spent until an allowance is set.</p>
+<form method="post" action="${SEO_BLOG_BASE}/brands/existing">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}"><button type="submit">Use ${e(EXISTING_WORKSPACE.name)} here</button></form></section>`;
+}
+
+export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<string, BrandDnaDoorStatus>, existingCommandId: string | null = null): string {
   const cards = shell.brands.map((b) => `<article class="card"><h3><a href="${url(b, 'overview')}">${e(b.name)}</a></h3><p class="muted">${b.website ? e(b.website) : 'No website yet'}</p>${dna ? `<p>${brandDnaDoor(b, dna.get(b.id))}</p>` : ''}
 <p><a href="${APPROVALS_HREF}?brand=${e(b.id)}">Approvals</a> · <a href="${CAMPAIGN_RESULTS_HREF}?brand=${e(b.id)}">Campaign results</a></p>
 <p class="muted">Automatic publishing: <strong>${b.settings.autoPublish ? 'on' : 'off'}</strong>${b.settings.pauseAll ? ' · <span class="pill bad">publishing paused</span>' : ''}</p></article>`).join('');
@@ -128,7 +139,7 @@ export function brandsPage(shell: Shell, commandId: string, dna?: ReadonlyMap<st
 <p>Each business has its own content, its own approvals and its own results. ${shell.brands.length ? 'Open one to carry on, or add another.' : 'Add your first business to start.'}</p>
 <p class="row" style="align-items:center"><a class="button" href="#add-business" style="flex:0 1 auto">Add a business</a>${shell.brands.length ? `<a class="button secondary" href="${APPROVALS_HREF}${many ? '?brand=all' : `?brand=${e(shell.brands[0]!.id)}`}" style="flex:0 1 auto">${many ? 'See what is waiting in every business' : 'See what is waiting for approval'}</a>` : ''}</p>
 <div class="grid">${cards || '<p class="muted">No businesses yet.</p>'}</div>
-<section class="card" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title">Add a business</h2>
+${existingCommandId ? existingWorkspaceCard(shell, existingCommandId) : ''}<section class="card" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title">Add a business</h2>
 <p>Type the name of the business. On the next screen you paste its website address and we read it for you.</p>
 <form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(commandId)}">
 <div class="row"><div><label for="name">Business name</label><input id="name" name="name" type="text" required minlength="2" maxlength="120" autocomplete="organization"></div><div><label for="website">Website address (you can add it on the next screen)</label><input id="website" name="website" type="text" inputmode="url" placeholder="www.example.co.uk"></div></div>
