@@ -22,6 +22,9 @@ import { ppEmailBounceEffects } from '../../src/pp-followup/bounces.js';
 import { EmailBounceService } from '../../src/email-bounces/service.js';
 import { PgEmailBlockLedger } from '../../src/email-bounces/ledger.js';
 import { decideRecipient } from '../../src/email-bounces/policy.js';
+import { createPostmarkBounceWebhook } from '../../src/email-bounces/webhook.js';
+import { Readable } from 'node:stream';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const skip = testDatabaseSkipReason();
 const WS = PP_FOLLOWUP_WORKSPACE_ID, SECRET = 'synthetic-pp-followup-unsubscribe-secret-0152';
@@ -644,5 +647,64 @@ test('PP owner undo of a wrong hard bounce (0153): the ledger lift and a release
     assert.equal((await ledger.decide(WS, dead.email, 'service'))!.blocked, true);
     assert.equal((await w.repo.blockEmail(dead.point, 'hard_bounce')).recorded, true, 'the released CRM stop is written again');
     assert.deepEqual([(await w.run(dead)).state, (await w.run(dead)).reason], ['stopped', 'delivery_failed']);
+  } finally { await w.close(); }
+});
+
+test('PP second review (0153): a spam report on the same point is never released by an owner lift; a replayed old bounce after a lift does not re-stop the person, a new one does', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(1, 24);
+    const ledger = new PgEmailBlockLedger(w.identityPool);
+    const token = (w.ownerId as { sessionToken: string }).sessionToken;
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); return who; };
+    // 1. Hard bounce, then a spam report, on the same point: the lift releases nothing in the CRM; the gate still refuses.
+    const both = await start('Both');
+    const at = Date.now() - 3_600_000;
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: both.email, reason: 'hard_bounce', eventId: `bounce:h-${both.point}`, stream: 'broadcast', at }), 'recorded');
+    await w.repo.blockEmail(both.point, 'hard_bounce');
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: both.email, reason: 'spam_complaint', eventId: `bounce:s-${both.point}`, stream: 'broadcast', at: at + 1000 }), 'recorded');
+    await w.repo.blockEmail(both.point, 'spam_complaint');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: both.email, note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: true, alreadyLifted: false });
+    assert.equal((await w.admin.query("SELECT count(*)::int AS n FROM app.communication_suppression_events WHERE contact_point_id=$1 AND state='released'", [both.point])).rows[0].n, 0);
+    assert.equal((await w.act(flow, 'enrol', { point: both.point })).reason, 'not_permitted');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: both.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true, alreadyLifted: true }, 'a second press releases nothing either');
+
+    // 2. Replay after a lift: first delivery fails after the ledger write, the owner lifts, Postmark retries.
+    const back = await start('Replay');
+    assert.equal((await w.act(flow, 'enrol', { point: back.point })).changed, 1);
+    const source = { key: 'pp', workspaceId: WS, token: null, webhookSecret: 'pp-webhook-secret-synthetic-0123456789', serverId: null, streams: new Map([['broadcast', 'marketing' as const]]) };
+    const service = new EmailBounceService({ config: { blockers: [], sources: [source] }, ledger });
+    const effects = ppEmailBounceEffects(w.repo);
+    let failOnce = true;
+    service.setEffects(WS, { onMarketingBlock: async input => { if (failOnce) { failOnce = false; throw new Error('database unavailable'); } await effects.onMarketingBlock(input); } });
+    const webhook = createPostmarkBounceWebhook({ service });
+    const post = async (body: unknown) => {
+      const captured = { status: 0 };
+      const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: '/api/provider-webhooks/postmark/pp',
+        headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`pp:${source.webhookSecret}`).toString('base64')}` }, socket: { remoteAddress: '127.0.0.1' } }) as unknown as IncomingMessage;
+      const res = { writeHead(status: number) { captured.status = status; }, end() {} } as unknown as ServerResponse;
+      await webhook.handle(req, res, new URL(req.url!, 'https://hq.propertypredator.com'));
+      return captured.status;
+    };
+    const stops = async () => (await w.admin.query("SELECT state,reason FROM app.communication_suppression_events WHERE contact_point_id=$1 AND channel='email' ORDER BY recorded_at,id", [back.point])).rows;
+    const original = { RecordType: 'Bounce', MessageStream: 'broadcast', ID: Number(`92${Date.now() % 1e9}`), Type: 'HardBounce', TypeCode: 1, Email: back.email,
+      BouncedAt: new Date(Date.now() - 60_000).toISOString(), Inactive: true, ServerID: 1, Metadata: { send: 's', point: back.point } };
+    assert.equal(await post(original), 503);
+    assert.deepEqual(await stops(), [], 'the CRM stop did not land');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: back.email, note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false, alreadyLifted: false });
+    assert.equal(await post(original), 200, 'Postmark retries the same bounce');
+    assert.deepEqual(await stops(), [], 'the person is not re-stopped');
+    assert.equal((await w.run(back)).state, 'active', 'their run keeps going');
+    assert.equal(await post({ ...original, ID: original.ID + 1, BouncedAt: new Date().toISOString() }), 200, 'a genuinely new bounce');
+    assert.deepEqual(await stops(), [{ state: 'suppressed', reason: 'hard_bounce' }]);
+    assert.deepEqual([(await w.run(back)).state, (await w.run(back)).reason], ['stopped', 'delivery_failed']);
+    // If a re-stop ever landed after a lift, a second press repairs it (the release runs again for an owner-lifted bounce).
+    const repaired = await start('Repair');
+    await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: repaired.email, reason: 'hard_bounce', eventId: `bounce:r-${repaired.point}`, stream: 'broadcast', at });
+    await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' });
+    await w.repo.blockEmail(repaired.point, 'hard_bounce');
+    assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).reason, 'not_permitted');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' }), { lifted: 0, released: 1, spamComplaint: false, alreadyLifted: true });
+    assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).changed, 1);
   } finally { await w.close(); }
 });
