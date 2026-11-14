@@ -10,6 +10,7 @@ import { accentPalette } from './colour.js';
 import type { WebinarConfig, WebinarSender } from './config.js';
 import { formatInZone } from './schedule.js';
 import type { WebinarBrand, WebinarEvent } from './types.js';
+import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
 
 export type MessagePurpose = 'confirmation' | 'reminder' | 'reschedule' | 'cancellation' | 'replay_available' | 'access_link';
 
@@ -120,12 +121,23 @@ export interface MailResult {
 
 export interface WebinarMailer {
   send(sender: WebinarSender, to: string, message: ComposedMessage, metadata: Record<string, string>): Promise<MailResult>;
+  /**
+   * True when this mailer will refuse the address outright because it is a reserved test address (example.com,
+   * .invalid, .test ...). The worker asks before the job is marked 'calling', so the job is settled 'blocked' and
+   * no attempt is spent. Absent means never.
+   */
+  refusesAddress?(to: string): boolean;
 }
+
+export const RESERVED_ADDRESS_BLOCK_REASON = 'Not sent: this is a test address (such as example.com or .invalid), not a real person, so it is never emailed.';
 
 /** Postmark transactional send. A timeout is 'unknown' — the caller never resends it blindly. */
 export function createPostmarkMailer(fetcher: typeof fetch = fetch): WebinarMailer {
   return {
+    refusesAddress: (to: string) => refusesReservedRecipient(fetcher, to),
     async send(sender, to, message, metadata) {
+      // Last line of defence: a reserved test address is a permanent, definite rejection and Postmark is never called.
+      if (refusesReservedRecipient(fetcher, to)) return { outcome: 'rejected', detail: RESERVED_ADDRESS_BLOCK_REASON };
       let res: Response;
       try {
         res = await fetcher('https://api.postmarkapp.com/email', {

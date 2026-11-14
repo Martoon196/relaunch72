@@ -1,6 +1,7 @@
 import { MHP_AUTH_ORIGIN, normalizeMhpEmail, type MhpAuthPurpose } from './auth-service.js';
 import type { MhpKitReceipt } from './kit-service.js';
 import { MHP_SELLER_FOOTER } from './kits.js';
+import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
 
 export class MhpWelcomeDeliveryError extends Error {
   constructor(readonly outcome: 'rejected' | 'unknown') { super('MHP purchase welcome delivery needs attention'); }
@@ -33,6 +34,12 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
   let inFlight = 0;
   const deliver = async (email: string, subject: string, plain: string, html: string, tag: string, purchase = false): Promise<void> => {
     if (!configured) throw new Error('MHP transactional email is not configured');
+    // A reserved test address (example.com, .invalid, .test ...) can never receive a sign-in link or a receipt, and
+    // the send would count as a bounce. Refused before any provider call: a definite rejection, never 'unknown'.
+    if (refusesReservedRecipient(fetcher, email)) {
+      if (purchase) throw new MhpWelcomeDeliveryError('rejected');
+      throw new Error('MHP transactional delivery refused a reserved test address');
+    }
     const endpoint = provider === 'brevo' ? 'https://api.brevo.com/v3/smtp/email' : 'https://api.postmarkapp.com/email';
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
     const payload = provider === 'brevo'

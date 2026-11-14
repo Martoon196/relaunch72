@@ -4,6 +4,7 @@ import {
   normalizeBounceEmail, type EmailBlockReason,
 } from '../email-bounces/policy.js';
 import type { EmailHealthSnapshot } from '../email-bounces/registry.js';
+import { isReservedEmailAddress } from '../email-bounces/undeliverable.js';
 import type { EmailBounceEffects, EmailBounceService } from '../email-bounces/service.js';
 import type { EmailBounceSourceDefault } from '../email-bounces/config.js';
 import type { PgMhpGrowthService } from './growth-service.js';
@@ -137,6 +138,9 @@ const STOPPED: Readonly<Record<EmailBlockReason, string>> = Object.freeze({
 /** The transactional stream carries more than webinar emails: sign-in links and receipts are counted in its totals too. */
 const REQUESTED_EMAILS = 'requested emails (sign-in links, receipts and webinar emails)';
 
+/** Shown under the blocked list when it holds a reserved test address (see undeliverable.ts). */
+export const RESERVED_ADDRESS_NOTE = 'Addresses ending in .invalid, .test or example.com are test addresses, not real people. We no longer send to them at all.';
+
 /** Plain warnings, strongest first. The lines are ours and sit below the provider's own. */
 export function emailHealthWarnings(snapshot: EmailHealthSnapshot): string[] {
   const warnings: string[] = [];
@@ -217,7 +221,8 @@ export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, res
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Emails that bounced or complained · Growth HQ</title><style>${PAGE_STYLE}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Owner navigation"><a href="/hq/marketing">Marketing workspace</a><a href="/hq">Owner HQ</a></nav></header><main><article><span class="eyebrow">Growth HQ · MHP brand</span><h1>Emails that bounced or complained</h1><p>When an email cannot be delivered, or someone marks it as spam, we automatically stop sending that address marketing and event emails. When someone unsubscribes we stop marketing email only. Sign-in links and receipts still go. Email services switch off accounts that keep sending to bad addresses, so this page shows how you are doing. Texts and WhatsApp are not affected.</p>${outcome}${lifted}${
     warnings.map(text => `<div class="warning" role="alert"><strong>Warning.</strong> ${escapeHtml(text)}</div>`).join('')}<h2>This month</h2><ul class="figures"><li><strong>${month.bounced}</strong>${month.bounced === 1 ? 'address' : 'addresses'} bounced</li><li><strong>${month.complained}</strong>${month.complained === 1 ? 'person' : 'people'} marked an email as spam</li><li><strong>${month.unsubscribed}</strong>unsubscribed through the email service</li></ul><h2>Last ${window.days} days</h2><p>${escapeHtml(overall)}</p>${small}${
     streams ? `<div class="scroll"><table><thead><tr><th scope="col">Kind of email</th><th scope="col">Sent</th><th scope="col">Bounced</th><th scope="col">Reported as spam</th></tr></thead><tbody>${streams}</tbody></table></div>` : ''}<p class="note">We warn when bounces reach ${percent(BOUNCE_WARNING_RATE)} or spam reports reach ${percent(COMPLAINT_WARNING_RATE)}. Those lines are ours, set well below Postmark's own (about ${percent(PROVIDER_BOUNCE_LIMIT_RATE)} and ${percent(PROVIDER_COMPLAINT_LIMIT_RATE)}), so you hear about it first.</p><h2>Addresses we no longer email</h2>${
-    rows ? `<div class="scroll"><table><thead><tr><th scope="col">Address</th><th scope="col">Why</th><th scope="col">Since</th><th scope="col">What is stopped</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>No blocked addresses. Nothing has bounced or been reported.</p>'}<p class="note">${
+    rows ? `<div class="scroll"><table><thead><tr><th scope="col">Address</th><th scope="col">Why</th><th scope="col">Since</th><th scope="col">What is stopped</th></tr></thead><tbody>${rows}</tbody></table></div>${
+      snapshot.blocked.some(item => isReservedEmailAddress(item.email)) ? `<p class="note">${escapeHtml(RESERVED_ADDRESS_NOTE)}</p>` : ''}` : '<p>No blocked addresses. Nothing has bounced or been reported.</p>'}<p class="note">${
     snapshot.lastCheckedAt ? `Last checked with Postmark: ${escapeHtml(dateTime(snapshot.lastCheckedAt))}.` : 'Not checked with Postmark yet.'}${snapshot.incomplete ? ' Postmark could not be fully read last time, so the newest bounces may be missing.' : ''} New bounces and spam reports also arrive here on their own as they happen.</p><p class="note">This list follows Postmark, the service that sends your emails. ${durable
       ? 'It is also kept in your own records, so a restart does not lose it. A bounce or spam report stays blocked here even if the address is reactivated in Postmark. If you know a bounced address works now, press Reactivate for it in Postmark first, then press &ldquo;This address works now&rdquo; beside it here. A spam report cannot be undone from this page.'
       : 'If an address has been fixed, reactivate it in Postmark and it leaves this list at the next check.'} Someone who unsubscribed gets marketing email again only once they have signed up again and Postmark no longer lists them as unsubscribed. Anyone we also stopped in your contacts stays stopped, exactly as if they had unsubscribed, until they sign up again and tick the box themselves.</p><form method="post" action="/hq/marketing/email-health/check"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Check with Postmark now</button></form></article></main></body></html>`;

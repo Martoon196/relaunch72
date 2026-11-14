@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
@@ -202,9 +203,9 @@ test('An eligible link request does not wait for the provider and expose mailbox
 test('Transactional MHP mail uses only scoped Brevo sender credentials and fixed endpoint', async () => {
   const calls: { url: string; options: RequestInit }[] = [];
   const fetcher = (async (url: string | URL | Request, options: RequestInit) => { calls.push({ url: String(url), options }); return new Response('{}', { status: 201 }); }) as typeof fetch;
-  const unconfigured = createMhpTransactionalMailer({ BREVO_API_KEY: 'legacy-credential-must-not-be-used' }, fetcher);
+  const unconfigured = createMhpTransactionalMailer({ BREVO_API_KEY: 'legacy-credential-must-not-be-used' }, testTransport(fetcher));
   assert.equal(unconfigured.configured, false);
-  const mailer = createMhpTransactionalMailer({ MHP_BREVO_API_KEY: 'test-provider-token', MHP_BREVO_SENDER_ID: '1' }, fetcher);
+  const mailer = createMhpTransactionalMailer({ MHP_BREVO_API_KEY: 'test-provider-token', MHP_BREVO_SENDER_ID: '1' }, testTransport(fetcher));
   await mailer.sendAuthLink(ROW.user_email, `${MHP_AUTH_ORIGIN}/portal/auth/verify?purpose=magic&token=${TOKEN}`, 'magic');
   assert.equal(calls[0]!.url, 'https://api.brevo.com/v3/smtp/email');
   const body = JSON.parse(String(calls[0]!.options.body)); assert.deepEqual(body.sender, { id: 1 }); assert.equal(body.to[0].email, ROW.user_email);
@@ -215,7 +216,7 @@ test('Transactional MHP mail uses only scoped Brevo sender credentials and fixed
 test('Transactional MHP Postmark disables tracking and redacts failures', async () => {
   const calls: RequestInit[] = [];
   const fetcher = (async (_url: unknown, options: RequestInit) => { calls.push(options); return new Response('sensitive provider error', { status: 400 }); }) as typeof fetch;
-  const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, fetcher);
+  const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, testTransport(fetcher));
   await assert.rejects(mailer.sendAuthLink(ROW.user_email, `${MHP_AUTH_ORIGIN}/portal/auth/verify?purpose=reset&token=${TOKEN}`, 'reset'), error => error instanceof Error && error.message === 'MHP transactional delivery unavailable');
   const body = JSON.parse(String(calls[0]!.body)); assert.equal(body.TrackLinks, 'None'); assert.equal(body.TrackOpens, false);
 });
@@ -223,7 +224,7 @@ test('Transactional MHP Postmark disables tracking and redacts failures', async 
 test('MHP access invite uses the transactional stream, fixed sign-in page and escaped member details', async () => {
   const sent: RequestInit[] = [];
   const fetcher = (async (_url: unknown, options: RequestInit) => { sent.push(options); return new Response('{}', { status: 200 }); }) as typeof fetch;
-  const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, fetcher);
+  const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, testTransport(fetcher));
   await mailer.sendAccessInvite('member@example.invalid', '<Mentee>', 'Property Mentoring');
   const body = JSON.parse(String(sent[0]!.body));
   assert.equal(body.MessageStream, 'outbound'); assert.equal(body.Tag, 'mhp-access');
@@ -235,7 +236,7 @@ test('MHP access invite uses the transactional stream, fixed sign-in page and es
 test('Detached MHP mail has a hard in-flight cap and releases capacity after delivery', async () => {
   const releases: Array<(response: Response) => void> = [];
   const fetcher = (() => new Promise<Response>(resolve => releases.push(resolve))) as typeof fetch;
-  const mailer = createMhpTransactionalMailer({ MHP_BREVO_API_KEY: 'test-provider-token' }, fetcher);
+  const mailer = createMhpTransactionalMailer({ MHP_BREVO_API_KEY: 'test-provider-token' }, testTransport(fetcher));
   const url = `${MHP_AUTH_ORIGIN}/portal/auth/verify?purpose=magic&token=${TOKEN}`;
   const pending = Array.from({ length: 8 }, () => mailer.sendAuthLink(ROW.user_email, url, 'magic'));
   await assert.rejects(mailer.sendAuthLink(ROW.user_email, url, 'magic'), /unavailable/);

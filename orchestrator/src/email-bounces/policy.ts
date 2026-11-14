@@ -103,10 +103,12 @@ export function refusalStopsPerson(reason: EmailRefusalReason): boolean {
 }
 
 /**
- * Why a send was a definite non-send: a block of ours; (marketing only) the durable list could not be read; or the
- * provider itself refused the recipient as inactive on that stream (Postmark 406), which is not a block of ours.
+ * Why a send was a definite non-send: a block of ours; (marketing only) the durable list could not be read; the
+ * provider itself refused the recipient as inactive on that stream (Postmark 406), which is not a block of ours; or
+ * the address is a reserved test address (example.com, .invalid, .test ...) that no email can ever reach
+ * (see undeliverable.ts). A reserved address is refused before any provider call and never stops a person record.
  */
-export type EmailRefusalReason = EmailBlockReason | 'check_unavailable' | 'provider_inactive';
+export type EmailRefusalReason = EmailBlockReason | 'check_unavailable' | 'provider_inactive' | 'reserved_address';
 
 /** Thrown by a sender that refused before any provider call: a definite non-send. */
 export class EmailRecipientBlockedError extends Error {

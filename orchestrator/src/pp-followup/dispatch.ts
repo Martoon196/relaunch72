@@ -41,7 +41,9 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
       // Checked before any proof: an unspent lease simply runs out and the step is claimed again.
       if (expiring(lease.leaseUntil)) { failed++; continue; }
       const to = normalizePpEmail(lease.email);
-      if (!to) { failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is looked at again */ } continue; }
+      // An address that is not an address, or a reserved test address (example.com, .invalid ...) that no email can
+      // reach: the run fails at once with no proof spent, and nothing is ever handed to Postmark for it.
+      if (!to || input.sender.refusesAddress?.(to)) { failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is looked at again */ } continue; }
       if (input.config.testRecipients && !input.config.testRecipients.includes(to)) { failed++; continue; }
       // Bounced, complained or unsubscribed at Postmark: a definite non-send with no proof spent, the same outcome
       // Postmark's own "inactive recipient" answer would give. The run fails; it is never held as unknown.

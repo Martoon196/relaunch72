@@ -11,6 +11,7 @@
 import https from 'node:https';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { DeliveryEmail } from '../deliver/deliver.js';
+import { isReservedEmailAddress } from '../email-bounces/undeliverable.js';
 
 export interface Attachment {
   name: string;
@@ -70,6 +71,11 @@ export function makePostmark(token: string): PostmarkLike {
   const agent = proxy ? new HttpsProxyAgent(proxy) : undefined;
   return {
     send(msg: PostmarkMessage): Promise<PostmarkResult> {
+      // This is the real network client, so there is no test seam: a reserved test address (example.com, .invalid,
+      // .test ...) can never receive the email and would count as a bounce. Refused before any request.
+      if (isReservedEmailAddress(msg.to)) {
+        return Promise.reject(new EmailError('refusing to send: the recipient is a reserved test address (such as example.com or .invalid); nothing was sent'));
+      }
       const payload = JSON.stringify({
         From: msg.from,
         To: msg.to,

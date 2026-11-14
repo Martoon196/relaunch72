@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../../src/email-bounces/undeliverable.js';
 /**
  * PP follow-up email sequences (0152) on a disposable PostgreSQL with the actual roles. The owner saves and
  * publishes a flow through the real PP portal service (r72_web, r72_content_adapter, r72_content_command),
@@ -290,7 +291,7 @@ const SENDER: PpMarketingConfig = { mode: 'live', token: 'aaaaaaaa-bbbb-cccc-ddd
 function postmark(answer: () => Response | Error) {
   const to: string[] = [];
   const fetcher = (async (_url: string, init: RequestInit) => { const reply = answer(); if (reply instanceof Error) throw reply; to.push(JSON.parse(String(init.body)).To as string); return reply; }) as unknown as typeof fetch;
-  return { to, sender: createPpPostmarkSender(SENDER, fetcher) };
+  return { to, sender: createPpPostmarkSender(SENDER, testTransport(fetcher)) };
 }
 const accepted = () => new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${randomUUID()}` }), { status: 200 });
 
@@ -473,8 +474,8 @@ test('PP follow-up bounces: a blocked address is refused before any proof, and a
     registry.record(WS, { sourceKey: 'pp', stream: 'broadcast', id: 'bounce:1', kind: 'hard_bounce', email: gone.email, at: Date.now() - 60_000 });
     const recipients = { guard: registry, workspaceId: WS };
     const bodies: { To: string; Metadata: Record<string, string> }[] = [];
-    const sender = createPpPostmarkSender(SENDER, (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
-      return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${randomUUID()}` }), { status: 200 }); }) as unknown as typeof fetch, recipients);
+    const sender = createPpPostmarkSender(SENDER, testTransport((async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${randomUUID()}` }), { status: 200 }); }) as unknown as typeof fetch), recipients);
     const result = await dispatchPpFollowupEmails({ queue: w.queue, sender, unsubscribeSecret: SECRET, recipients, config: { ...CONFIG, testRecipients: [gone.email, fine.email] } });
     assert.deepEqual(result, { sent: 1, failed: 1, unknown: 0 });
     assert.deepEqual(bodies.map(body => body.To), [fine.email], 'Postmark was only asked to send to the healthy address');
@@ -570,7 +571,7 @@ test('PP scope rule on the durable ledger (0153): a hard bounce or spam report s
     assert.equal(service.registry.decide(WS, gone.email, 'marketing').blocked, false, 'nothing in this process knows the address');
     const recipients = { guard: service.guard, workspaceId: WS };
     const to: string[] = [];
-    const sender = createPpPostmarkSender(SENDER, (async (_u: string, init: RequestInit) => { to.push(JSON.parse(String(init.body)).To); return accepted(); }) as unknown as typeof fetch, recipients);
+    const sender = createPpPostmarkSender(SENDER, testTransport((async (_u: string, init: RequestInit) => { to.push(JSON.parse(String(init.body)).To); return accepted(); }) as unknown as typeof fetch), recipients);
     assert.deepEqual(await dispatchPpFollowupEmails({ queue: w.queue, sender, unsubscribeSecret: SECRET, recipients, config: { ...CONFIG, testRecipients: [gone.email] } }), { sent: 0, failed: 1, unknown: 0 });
     assert.deepEqual(to, []);
     assert.equal((await w.send(gone)).last_failure, 'recipient_refused');

@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -87,7 +88,7 @@ test('Postmark sender posts one broadcast message with one-click unsubscribe and
   const accept = () => new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-1' }), { status: 200 });
   let reply: Response | undefined;
   const fetcher = (async (url: string, init: RequestInit) => { calls.push({ url, init }); const next = reply ?? accept(); reply = undefined; return next; }) as unknown as typeof fetch;
-  const sender = createPpPostmarkSender(config(), fetcher);
+  const sender = createPpPostmarkSender(config(), testTransport(fetcher));
   assert.equal(await sender.sendRendered({ id: 'send-1', email: 'Ann@Example.com', tag: 'pp_followup', rendered: rendered() }), 'pm-1');
   assert.equal(calls[0]!.url, 'https://api.postmarkapp.com/email');
   const headers = calls[0]!.init.headers as Record<string, string>, body = JSON.parse(String(calls[0]!.init.body));
@@ -98,7 +99,7 @@ test('Postmark sender posts one broadcast message with one-click unsubscribe and
   assert.equal(await sender.sendRendered({ id: 'send-1b', email: "O'Brien@Example.com", tag: 'pp_followup', rendered: rendered() }), 'pm-1');
   assert.equal(JSON.parse(String(calls[1]!.init.body)).To, "o'brien@example.com");
   const refusal = async (answer: Response | Error, email = 'ann@example.com') => {
-    const using = answer instanceof Error ? createPpPostmarkSender(config(), (async () => { throw answer; }) as unknown as typeof fetch) : sender;
+    const using = answer instanceof Error ? createPpPostmarkSender(config(), testTransport((async () => { throw answer; }) as unknown as typeof fetch)) : sender;
     if (!(answer instanceof Error)) reply = answer;
     try { await using.sendRendered({ id: 'send-x', email, tag: 'pp_followup', rendered: rendered() }); return 'accepted'; }
     catch (error) { return error instanceof PpNotSentError ? error.scope : 'unknown'; }
@@ -123,7 +124,7 @@ test('Postmark sender posts one broadcast message with one-click unsubscribe and
   assert.equal(await refusal(new DOMException('The operation timed out', 'TimeoutError')), 'unknown');
   reply = new Response(JSON.stringify({ ErrorCode: 406, Message: 'Inactive recipient' }), { status: 200 });
   await assert.rejects(sender.sendRendered({ id: 'send-2', email: 'ann@example.com', tag: 'pp_followup', rendered: rendered() }), /not accepted/u);
-  const testSender = createPpPostmarkSender(config({ mode: 'test', testRecipients: ['owner@example.com'] }), fetcher);
+  const testSender = createPpPostmarkSender(config({ mode: 'test', testRecipients: ['owner@example.com'] }), testTransport(fetcher));
   const before = calls.length;
   await assert.rejects(testSender.sendRendered({ id: 'send-4', email: 'ann@example.com', tag: 'pp_followup', rendered: rendered() }), /test list/u);
   assert.equal(calls.length, before, 'test mode refuses before any provider call');
