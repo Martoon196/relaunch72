@@ -310,7 +310,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
 const HOST = 'app.martinhowardproperty.co.uk', ORIGIN = `https://${HOST}`, SESSION_SECRET = 'mhp-bounce-synthetic-session-secret-at-least-32';
 const TOKEN = Buffer.alloc(32, 7).toString('base64url'), PERSONAL = '12400000-0000-4000-8000-000000000002';
 function routes(options: { selected?: string; owner?: boolean; configured?: boolean } = {}) {
-  const selected = options.selected ?? WS, checks: string[] = [], lifts: string[] = [];
+  const selected = options.selected ?? WS, checks: string[] = [], lifts: string[] = [], selects: string[] = [];
   const f = health({ registrants: [registrant({})] });
   const portal = { kind: 'postgres', secure: true, sessionSecret: SESSION_SECRET, sessionCookieName: '__Host-mhp_session', productProfile: MARTIN_HOWARD_PROPERTY_PROFILE,
     portalBaseUrl: ORIGIN, now: () => now, auth: { resolve: async (token: string) => token === TOKEN ? { sessionToken: TOKEN, userId: ids.user, workspaceId: selected, userEmail: 'owner@example.invalid' } : null,
@@ -323,7 +323,7 @@ function routes(options: { selected?: string; owner?: boolean; configured?: bool
     commerce: { billingEnabled: false, snapshot: async () => { throw new Error('excluded'); }, refund: async () => {}, billingPortal: async () => '', webhook: async () => {} },
     marketingWorkspace: { snapshot: async () => { if (options.owner === false) throw new MhpCommerceError(403, 'Owner access to the MHP marketing workspace is required.');
       return { userId: ids.user, selectedWorkspaceId: selected, personalWorkspaceId: PERSONAL, marketingWorkspaceId: selected === WS ? WS : null, marketingSelected: selected === WS }; },
-      select: async () => { throw new Error('unused'); } },
+      select: async (_identity: unknown, action: string) => { selects.push(action); return { workspaceId: action === 'open' ? WS : PERSONAL, sessionToken: TOKEN, expiresAt: new Date(now + 3_600_000).toISOString() }; } },
     ...(options.configured === false ? {} : { emailHealth: { configured: true, durable: true, snapshot: () => f.service.snapshot(),
       check: async (token: string) => { checks.push(token); return f.service.check('session-token'); },
       lift: async (token: string, email: string) => { lifts.push(`${token} ${email}`); return { email, outcome: 'lifted' as const }; } } }) });
@@ -336,7 +336,7 @@ function routes(options: { selected?: string; owner?: boolean; configured?: bool
     await mount.handle(req, res); return captured;
   }
   const form = (csrf = portalCsrfToken(SESSION_SECRET, TOKEN)) => new URLSearchParams({ csrf }).toString();
-  return { request, form, checks, lifts, f };
+  return { request, form, checks, lifts, selects, f };
 }
 
 test('marketing screen: the card and the page appear only inside the MHP brand workspace, and the check needs the owner\'s own form', async () => {
@@ -357,13 +357,19 @@ test('marketing screen: the card and the page appear only inside the MHP brand w
 
   const personal = routes({ selected: PERSONAL });
   assert.doesNotMatch((await personal.request('GET', '/hq/marketing')).body, /bounced or complained/u);
-  assert.equal((await personal.request('GET', '/hq/marketing/email-health')).status, 403, 'addresses are never shown outside the brand workspace');
+  const outside = await personal.request('GET', '/hq/marketing/email-health');
+  assert.equal(outside.status, 200, 'a proper page, not a bare error');
+  assert.doesNotMatch(outside.body, /@example\.invalid|This address works now/u, 'addresses are never shown outside the brand workspace');
+  assert.match(outside.body, /<h1>Emails that bounced or complained<\/h1><p>This page shows the brand&#39;s own email addresses|<h1>Emails that bounced or complained<\/h1><p>This page shows the brand's own email addresses/u);
+  assert.match(outside.body, /<form method="post" action="\/hq\/marketing\/open"><input type="hidden" name="csrf" value="[^"]+"><input type="hidden" name="commandId" value="[0-9a-f-]{36}"><input type="hidden" name="then" value="email-health"><button type="submit">Open marketing workspace<\/button><\/form>/u);
   assert.equal((await personal.request('POST', '/hq/marketing/email-health/check', personal.form(), { origin: ORIGIN })).status, 403);
   assert.equal((await routes({ owner: false }).request('GET', '/hq/marketing/email-health')).status, 403);
   assert.equal((await routes({ configured: false }).request('GET', '/hq/marketing/email-health')).status, 404);
   assert.doesNotMatch((await routes({ configured: false }).request('GET', '/hq/marketing')).body, /bounced or complained/u);
   const signedOut = await r.request('GET', '/hq/marketing/email-health', '', { cookie: '' });
-  assert.deepEqual([signedOut.status, signedOut.headers.location], [303, '/portal/login']);
+  assert.deepEqual([signedOut.status, signedOut.headers.location], [303, '/portal/login?next=%2Fhq%2Fmarketing%2Femail-health']);
+  assert.equal((await r.request('GET', '/hq/marketing', '', { cookie: '' })).headers.location, '/portal/login?next=%2Fhq%2Fmarketing');
+  assert.equal((await r.request('POST', '/hq/marketing/email-health/check', r.form(), { cookie: '', origin: ORIGIN })).headers.location, '/portal/login', 'a form post is never carried');
 });
 
 test('"This address works now": the owner\'s own form (same origin, CSRF) in the brand workspace only, and a one-line confirmation', async () => {
@@ -396,4 +402,18 @@ test('MhpEmailHealth.lift: lifts through the durable list with the owner session
   assert.equal((await health.lift('tok', 'none@example.invalid')).outcome, 'not_blocked');
   const old = new MhpEmailHealth({ bounces: { ...bounces, ownerLiftHardBounce: async () => null } as unknown as EmailBounceService, growth: { listRegistrants: async () => [], unsubscribe: async () => true } });
   assert.equal((await old.lift('tok', 'gone@example.invalid')).outcome, 'unavailable');
+});
+
+test('Open marketing workspace: from the email health page it lands back there; elsewhere the enquiry board, as before; nothing else is accepted', async () => {
+  const personal = routes({ selected: PERSONAL });
+  const open = (extra: Record<string, string> = {}) => personal.request('POST', '/hq/marketing/open',
+    new URLSearchParams({ csrf: portalCsrfToken(SESSION_SECRET, TOKEN), commandId: '12400000-0000-4000-8000-000000000099', ...extra }).toString(), { origin: ORIGIN });
+  const back = await open({ then: 'email-health' });
+  assert.deepEqual([back.status, back.headers.location], [303, '/hq/marketing/email-health']);
+  const normal = await open();
+  assert.deepEqual([normal.status, normal.headers.location], [303, '/portal/crm/opportunities']);
+  for (const then of ['/hq/marketing/email-health', 'https://evil.invalid', '//evil.invalid', 'email-health ', 'Email-Health', '']) {
+    assert.equal((await open({ then })).status, 400, JSON.stringify(then));
+  }
+  assert.deepEqual(personal.selects, ['open', 'open'], 'a refused value never opens anything');
 });

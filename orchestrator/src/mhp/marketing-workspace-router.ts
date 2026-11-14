@@ -9,7 +9,7 @@ import { MhpCommerceError } from './commerce-service.js';
 import type { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { marketingWorkspacePage } from './marketing-workspace-view.js';
 import type { MhpWebinarLeadService } from './webinar-leads-service.js';
-import { emailHealthPage, type MhpEmailHealth } from './email-health.js';
+import { emailHealthOutsidePage, emailHealthPage, type MhpEmailHealth } from './email-health.js';
 
 export interface MhpMarketingWorkspaceDependencies {
   portal: PostgresPortalDeps;
@@ -36,7 +36,7 @@ function redirect(res: ServerResponse, target: string, cookie?: string): void {
   if (cookie) res.setHeader('set-cookie', cookie);
   res.writeHead(303, { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end();
 }
-async function form(req: IncomingMessage, keys: readonly string[]): Promise<URLSearchParams> {
+async function form(req: IncomingMessage, keys: readonly string[], optional: readonly string[] = []): Promise<URLSearchParams> {
   if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/iu.test(String(req.headers['content-type'] ?? ''))) {
     throw new MhpCommerceError(415, 'Use the marketing workspace form.');
   }
@@ -48,8 +48,8 @@ async function form(req: IncomingMessage, keys: readonly string[]): Promise<URLS
     chunks.push(chunk);
   }
   const fields = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-  if ([...fields.keys()].some(key => !keys.includes(key) || fields.getAll(key).length !== 1)
-      || fields.size !== keys.length) throw new MhpCommerceError(400, 'Refresh the marketing workspace form.');
+  if ([...fields.keys()].some(key => !(keys.includes(key) || optional.includes(key)) || fields.getAll(key).length !== 1)
+      || keys.some(key => !fields.has(key))) throw new MhpCommerceError(400, 'Refresh the marketing workspace form.');
   return fields;
 }
 
@@ -79,13 +79,18 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     await reserve(sourceAbuseAdmission(context, routeClass, now));
     const token = parseCookies(req.headers.cookie)[MHP_SESSION_COOKIE] ?? '';
     const identity = token ? await portal.auth.resolve(token, now) : null;
-    if (!identity) { redirect(res, '/portal/login'); return true; }
+    if (!identity) {
+      // Only these two exact pages are carried through sign-in (the sign-in page checks the same exact list again).
+      redirect(res, method === 'GET' && (path === '/hq/marketing' || path === EMAIL_HEALTH) ? `/portal/login?next=${encodeURIComponent(path)}` : '/portal/login');
+      return true;
+    }
     await reserve(principalAbuseAdmission(context, routeClass, portal.abuseHashSecret, identity, now));
     const snapshot = await deps.marketingWorkspace.snapshot(identity);
     const emailHealth = health && snapshot.marketingSelected ? health.snapshot() : undefined;
     if (path === EMAIL_HEALTH) {
-      // Addresses appear on this page, so it is only shown inside the MHP brand workspace.
-      if (!emailHealth) throw new MhpCommerceError(403, 'Open the MHP marketing workspace to see bounced emails.');
+      // Addresses appear on this page, so it is only shown inside the MHP brand workspace. Outside it, the owner gets
+      // the same "Open marketing workspace" form as the marketing screen, which lands back here.
+      if (!emailHealth) { send(res, 200, emailHealthOutsidePage(portalCsrfToken(portal.sessionSecret, token), randomUUID()), true); return true; }
       send(res, 200, emailHealthPage(emailHealth, portalCsrfToken(portal.sessionSecret, token), undefined, { durable: health?.durable === true }), true);
       return true;
     }
@@ -99,7 +104,11 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
     const importing = path === '/hq/marketing/webinar-leads', checking = path === EMAIL_HEALTH_CHECK, lifting = path === EMAIL_HEALTH_LIFT;
-    const fields = await form(req, checking ? ['csrf'] : lifting ? ['csrf', 'email'] : importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
+    const opening = path === '/hq/marketing/open';
+    const fields = await form(req, checking ? ['csrf'] : lifting ? ['csrf', 'email'] : importing ? ['csrf', 'cursor'] : ['csrf', 'commandId'], opening ? ['then'] : []);
+    // Where opening the workspace lands: the enquiry board by default; the email health page only for this exact value.
+    const then = fields.get('then');
+    if (then !== null && then !== 'email-health') throw new MhpCommerceError(400, 'Refresh the marketing workspace form.');
     if (!verifyPortalCsrf(portal.sessionSecret, token, fields.get('csrf') ?? '')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
@@ -131,7 +140,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     if (action === 'return' && selected.workspaceId !== snapshot.personalWorkspaceId) {
       throw new MhpCommerceError(503, 'Personal Desk selection was not confirmed. Sign in again.');
     }
-    redirect(res, action === 'open' ? '/portal/crm/opportunities' : '/portal/investors',
+    redirect(res, action === 'open' ? (then === 'email-health' ? EMAIL_HEALTH : '/portal/crm/opportunities') : '/portal/investors',
       portalCookie(selected.sessionToken, true, Math.max(1, Math.floor((Date.parse(selected.expiresAt) - now) / 1000)), MHP_SESSION_COOKIE));
   } catch (error) {
     outcome = 'service_error';

@@ -27,6 +27,15 @@ function freshCsrfCookie(value: string | undefined, now: number): value is strin
     && issuedAt <= now + 60_000 && now - issuedAt <= TTL;
 }
 
+/**
+ * The only pages a password sign-in may return to. Exact strings, compared as given: never an absolute URL, never
+ * normalised, and the redirect target is always the constant from this set, not the submitted text.
+ */
+const RETURN_TARGETS: ReadonlySet<string> = new Set(['/hq/marketing', '/hq/marketing/email-health']);
+function returnTarget(values: readonly string[]): string | null {
+  return values.length === 1 && RETURN_TARGETS.has(values[0]!) ? [...RETURN_TARGETS].find(target => target === values[0])! : null;
+}
+
 function securityHeaders(res: ServerResponse, pathname: string): void {
   res.setHeader('cache-control', 'no-store');
   // Native form POSTs need their same-origin Origin; token-bearing redirects stay private.
@@ -112,13 +121,15 @@ export function createMhpAuthMount(deps: MhpAuthMountDeps): { handle(req: Incomi
     if (method !== 'GET' && method !== 'POST') { res.setHeader('allow', 'GET, POST'); page(res, 405, 'Try signing in again', '<p>That request is not supported.</p>'); return true; }
     const now = deps.now?.() ?? Date.now();
     const cookies = parseCookies(req.headers.cookie);
+    // A sign-in that started from an owner page goes back to it (password sign-in only; email links land on the Desk).
+    let next: string | null = method === 'GET' && url.pathname === '/portal/login' ? returnTarget(url.searchParams.getAll('next')) : null;
     const loginForm = (status = 200, notice = ''): void => {
       const nonce = `${randomBytes(32).toString('base64url')}.${now}`;
       const route = url.pathname === '/portal/auth/reset' ? 'reset' : url.pathname === '/portal/auth/magic' ? 'magic' : 'login';
       const title = route === 'reset' ? 'Set your password' : route === 'magic' ? 'A link to your workspace' : 'Welcome back.';
       const action = route === 'reset' ? '/portal/auth/reset' : route === 'magic' ? '/portal/auth/magic' : '/portal/login';
       const introduction = route === 'login' ? 'Sign in to your account and pick up where you left off.' : 'Enter the email address you used to join. We’ll send you a secure, one-time link.';
-      page(res, status, title, `<p class="intro">${introduction}</p>${notice ? `<div class="notice" role="status">${escape(notice)}</div>` : ''}<form method="post" action="${action}"><input type="hidden" name="_auth_csrf" value="${mac(deps.sessionSecret, 'csrf', nonce)}"><label for="email">Email address</label><input id="email" name="email" type="email" required maxlength="320" autocomplete="email">${route === 'login' ? '<label for="password">Password</label><input id="password" name="password" type="password" required maxlength="1024" autocomplete="current-password">' : ''}<button>${route === 'login' ? 'Sign in to Your Desk' : 'Email my secure link'}</button></form><nav class="links" aria-label="Sign-in options"><a href="/portal/login">Use a password</a><a href="/portal/auth/magic">Email me a sign-in link</a><a href="/portal/auth/reset">Set or reset password</a></nav>`, [cookie(CSRF_COOKIE, nonce, TTL / 1000)]);
+      page(res, status, title, `<p class="intro">${introduction}</p>${notice ? `<div class="notice" role="status">${escape(notice)}</div>` : ''}<form method="post" action="${action}"><input type="hidden" name="_auth_csrf" value="${mac(deps.sessionSecret, 'csrf', nonce)}">${route === 'login' && next ? `<input type="hidden" name="next" value="${escape(next)}">` : ''}<label for="email">Email address</label><input id="email" name="email" type="email" required maxlength="320" autocomplete="email">${route === 'login' ? '<label for="password">Password</label><input id="password" name="password" type="password" required maxlength="1024" autocomplete="current-password">' : ''}<button>${route === 'login' ? 'Sign in to Your Desk' : 'Email my secure link'}</button></form><nav class="links" aria-label="Sign-in options"><a href="/portal/login">Use a password</a><a href="/portal/auth/magic">Email me a sign-in link</a><a href="/portal/auth/reset">Set or reset password</a></nav>`, [cookie(CSRF_COOKIE, nonce, TTL / 1000)]);
     };
     const failure = (): void => page(res, 400, 'That link is no longer available', '<p>It may have expired or already been used. Request a new link to continue.</p><p><a href="/portal/auth/magic">Email me a fresh sign-in link</a></p>', [cookie(INTENT_COOKIE, '', 0)]);
     if (method === 'GET') {
@@ -153,10 +164,10 @@ export function createMhpAuthMount(deps: MhpAuthMountDeps): { handle(req: Incomi
       res.setHeader('retry-after', String(Math.max(1, Math.ceil(decision.retryAfterSeconds))));
       page(res, 429, 'Take a moment', '<p>There have been several attempts. Please try again shortly.</p>'); return false;
     };
-    const signIn = (session: PortalAuthenticatedSession): void => {
+    const signIn = (session: PortalAuthenticatedSession, target = '/portal'): void => {
       const ttl = Math.min(86_400, Math.max(1, Math.floor((Date.parse(session.expiresAt ?? '') - now) / 1000)));
       if (!Number.isFinite(ttl)) throw new Error('MHP session expiry unavailable');
-      redirect(res, '/portal', [cookie(MHP_SESSION_COOKIE, session.sessionToken, ttl), cookie(INTENT_COOKIE, '', 0), cookie(CSRF_COOKIE, '', 0)]);
+      redirect(res, target, [cookie(MHP_SESSION_COOKIE, session.sessionToken, ttl), cookie(INTENT_COOKIE, '', 0), cookie(CSRF_COOKIE, '', 0)]);
     };
     try {
       if (!await admit()) return true;
@@ -181,13 +192,14 @@ export function createMhpAuthMount(deps: MhpAuthMountDeps): { handle(req: Incomi
       if (!['/portal/login', '/portal/auth/magic', '/portal/auth/reset'].includes(url.pathname)) throw new FormError(405);
       const csrfCookie = cookies[CSRF_COOKIE];
       if (!freshCsrfCookie(csrfCookie, now) || !equal(form._auth_csrf ?? '', mac(deps.sessionSecret, 'csrf', csrfCookie))) throw new FormError(403);
+      if (url.pathname === '/portal/login') next = typeof form.next === 'string' ? returnTarget([form.next]) : null;
       const email = normalizeMhpEmail(form.email ?? '');
       if (!email) { loginForm(400, 'Enter a valid email address.'); return true; }
       if (!await admit(`email/${email}`)) return true;
       if (url.pathname === '/portal/login') {
         const session = await deps.auth.login(email, form.password ?? '', authContext);
         if (!session) { outcome = 'auth_failure'; loginForm(401, 'We could not sign you in with those details. You can also request an email sign-in link.'); return true; }
-        signIn(session); return true;
+        signIn(session, next ?? '/portal'); return true;
       }
       if (!deps.mail.configured) { page(res, 503, 'Email sign-in is not ready yet', '<p>Please try again shortly, or use your existing password.</p><p><a href="/portal/login">Sign in with a password</a></p>'); return true; }
       const purpose: MhpAuthPurpose = url.pathname === '/portal/auth/reset' ? 'reset' : 'magic';
