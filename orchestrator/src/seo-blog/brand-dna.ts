@@ -17,16 +17,45 @@
 import { createHash } from 'node:crypto';
 import type {
   BrandProfile, InventoryPage, Job, KnowledgeCategory, KnowledgeDocument, ProfileConflict, ProfileConflictOption,
-  ProfileFactSource, ProfileOffer,
+  ProfileFactSource, ProfileLeftOut, ProfileOffer,
 } from './types.js';
 import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
+
+/**
+ * Figures that need evidence, as the article checks read them, but hardened for the website door: full-width and other
+ * compatibility digits ("５００") are read as the digits they are, and a leading "500) " or "30. " is a figure here,
+ * not a list number (a brand fact is one line, never a numbered list).
+ */
+function figuresIn(text: string): string[] {
+  const normal = text.normalize('NFKC');
+  const leading = /^\s*(\d{2,})[.)]\s/.exec(normal);
+  return [...(leading ? [leading[1]!] : []), ...materialFigures(normal)];
+}
 
 export const BRAND_DNA_STAGE = 'brand_dna';
 /** Pages whose words are kept from one website read. */
 export const BRAND_PAGE_LIMIT = 12;
 /** Characters kept per page. */
 export const BRAND_PAGE_TEXT_LIMIT = 8000;
+/**
+ * What the owner is told when a read cannot end in a card. Each says what to do next in one sentence;
+ * the page puts the button for it right underneath.
+ */
+export const BRAND_DNA_MESSAGES = Object.freeze({
+  /** The address gave no readable words. Button: paste your details. */
+  noWords: 'We could not read enough words on that address. Check the address, or paste your details instead.',
+  /** The model answered from the website (and any documents), but nothing on its card could be confirmed. Button: paste. */
+  nothingClear: 'We read your website but could not find enough clear facts to make a card. Paste a short description of what you sell and who it is for, and we will use that.',
+  /** The same, when no website page could be used and the card was made from the owner's documents alone. Button: paste. */
+  nothingClearDocuments: 'We could not find enough clear facts in your documents to make a card. Paste a short description of what you sell and who it is for, and we will use that.',
+  /** The website read itself failed before any card was asked for. No writing call was made, so nothing was spent. Button: Read. */
+  ourSide: 'Something went wrong on our side. Nothing was spent. Press Read my website again.',
+  /** The writing call answered in a shape we could not use, or one we could not make true. Its usage is recorded. Button: Read. */
+  ourSideCard: 'Something went wrong on our side while making your card. Nothing was saved. Press Read my website again.',
+  /** Something failed after a card may already have been asked for: nothing is promised about the allowance. Button: Read. */
+  ourSideRetry: 'Something went wrong on our side. Press Read my website again.',
+});
 /** Fewer readable words than this across the whole read means the site could not really be read. */
 export const BRAND_DNA_MIN_WORDS = 60;
 
@@ -132,7 +161,8 @@ function plain(text: string): string {
 
 /** `needle` sits in `hay` without cutting a number in half: "£4" is not in "£49", "£49" is not in "£499", "£49.99" or "£49k". */
 function foundWhole(hay: string, needle: string): boolean {
-  const startsWithDigit = /^\d/.test(needle), endsWithDigit = /\d$/.test(needle);
+  // A needle ending "1," or "1." still ends inside a number when the text goes on with a digit: "£1," is not in "£1,500".
+  const startsWithDigit = /^\d/.test(needle), endsWithDigit = /\d[.,]?$/.test(needle);
   for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + 1)) {
     if (startsWithDigit && /(?:\d|\d[.,])$/.test(hay.slice(Math.max(0, at - 2), at))) continue;
     if (endsWithDigit && /^(?:\d|[.,]\d|\s?%|\s?(?:k|m|bn|thousand|million|billion)\b)/.test(hay.slice(at + needle.length, at + needle.length + 10))) continue;
@@ -174,7 +204,7 @@ function keyWords(text: string): string[] {
  */
 export function unsupportedBy(value: string, quote: string | null | undefined): string | null {
   if (!meaningfulQuote(quote)) return 'the quote is too short to support it (quote at least three words)';
-  for (const figure of materialFigures(value)) if (!appearsIn(quote, figure)) return `it states "${figure}", which the quote does not contain`;
+  for (const figure of figuresIn(value)) if (!appearsIn(quote, figure)) return `it states "${figure}", which the quote does not contain`;
   const keys = keyWords(value);
   if (!keys.length) return null;
   const quoted = wordsOf(quote ?? '');
@@ -236,8 +266,8 @@ export function withoutOtherPrices(description: string, keep: string | null): st
 }
 
 /**
- * Reasons a site-fed extraction must be rejected. Any entry sends the model's one correction pass;
- * a second failure stops the task with nothing saved.
+ * Reasons a site-fed extraction must be corrected. Any entry sends the model's one correction pass; what still
+ * fails after it is taken off the card by `repairProfileFacts`, and only a card with nothing verifiable left is refused.
  */
 export function strictProfileProblems(value: ProfileFacts, documents: readonly SourceText[]): string[] {
   const byId = new Map(documents.map((d) => [d.id, d]));
@@ -247,8 +277,8 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     if (!doc) { problems.push(`offer "${o.name}" must name the supplied document it came from in sourceDocumentId`); continue; }
     if (o.price && !appearsIn(doc.text, o.price)) problems.push(`offer "${o.name}": the price "${o.price}" does not appear character for character in document ${doc.id}. Copy it exactly as written there, or set price to null and add the gap to missingFacts`);
-    for (const figure of materialFigures(o.name)) if (!appearsIn(doc.text, figure)) problems.push(`the name of offer "${o.name}" states "${figure}", which is not in document ${doc.id}. Name the offer as that document does`);
-    for (const figure of materialFigures(o.description ?? '')) if (!appearsIn(doc.text, figure)) problems.push(`the description of "${o.name}" states "${figure}", which is not in document ${doc.id}. Remove the figure or copy one exactly as that document writes it`);
+    for (const figure of figuresIn(o.name)) if (!appearsIn(doc.text, figure)) problems.push(`the name of offer "${o.name}" states "${figure}", which is not in document ${doc.id}. Name the offer as that document does`);
+    for (const figure of figuresIn(o.description ?? '')) if (!appearsIn(doc.text, figure)) problems.push(`the description of "${o.name}" states "${figure}", which is not in document ${doc.id}. Remove the figure or copy one exactly as that document writes it`);
   }
   const sources = value.sources ?? [];
   for (const s of sources) {
@@ -278,7 +308,7 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
       else if (!appearsIn(doc.text, option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is not word for word in document ${doc.id}`);
       else if (!meaningfulQuote(option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is too short. Quote at least three words`);
       else if (!appearsIn(doc.text, option.value)) problems.push(`conflict "${c.field}": the ${answer} "${option.value}" does not appear character for character in document ${doc.id}. Copy it exactly as written there`);
-      else for (const figure of materialFigures(option.value)) if (!appearsIn(option.quote, figure)) problems.push(`conflict "${c.field}": the quote for "${option.value}" must contain "${figure}"`);
+      else for (const figure of figuresIn(option.value)) if (!appearsIn(option.quote, figure)) problems.push(`conflict "${c.field}": the quote for "${option.value}" must contain "${figure}"`);
     }
   }
   // The free-text parts (the summary, the positioning, voice lines and examples) carry no source line on the card,
@@ -286,7 +316,7 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
   const freeText: [string, string][] = [['summary', value.summary ?? ''], ['positioning', value.positioning ?? ''],
     ...(['tone', 'do', 'dont', 'examples'] as const).flatMap((part) => (value.voice?.[part] ?? []).map((line): [string, string] => [part === 'examples' ? 'voice example' : `voice "${part}" line`, line]))];
   for (const [where, text] of freeText) {
-    for (const figure of materialFigures(text)) {
+    for (const figure of figuresIn(text)) {
       if (!appearsIn(everywhere, figure)) problems.push(`the ${where} states "${figure}", which is in none of the supplied documents. Remove the figure or copy one exactly as a document writes it`);
     }
   }
@@ -294,6 +324,144 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
 }
 
 const clip = (text: unknown, max: number) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+// ─── Repair instead of reject ────────────────────────────────────────────────
+
+export interface ProfileRepair<T> {
+  readonly value: T;
+  /** Exactly what was taken off, in order. Empty when nothing needed removing. */
+  readonly leftOut: readonly ProfileLeftOut[];
+}
+
+/**
+ * Website door only, after the model's correction pass: take off exactly the lines that cannot be found word for word
+ * and keep everything that can. It never adds, rewrites or paraphrases anything; it only removes a line, empties a
+ * price or empties a whole free-text field. Each rule mirrors one in `strictProfileProblems`, so
+ * `strictProfileProblems(result.value, documents)` is [].
+ *
+ * Free text (an offer description, the summary, the positioning) is never cut down to the sentences that pass: taking
+ * one sentence away can turn the rest into a stronger statement nobody wrote ("Rent is guaranteed." without "This
+ * applies only for the first 18 months."). If any part fails, the whole field is emptied and listed as left out.
+ *
+ * Returns null when the answer cannot be repaired truthfully: a price question that is dropped but cannot be tied to
+ * one offer (its price could otherwise be shown as settled), or a question marked "other" that is really about a price.
+ */
+export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): ProfileRepair<T> | null {
+  const byId = new Map(documents.map((d) => [d.id, d]));
+  const everywhere = documents.map((d) => d.text ?? '').join('\n');
+  const leftOut: ProfileLeftOut[] = [];
+  const leave = (what: ProfileLeftOut['what'], text: string) => { if (!leftOut.some((l) => l.what === what && sameValue(l.text, text))) leftOut.push({ what, text: clip(text, 300) }); };
+
+  // A source line counts only when its quote is word for word in a supplied document.
+  const sources = (value.sources ?? []).filter((s) => s.documentId && byId.has(s.documentId) && appearsIn(byId.get(s.documentId)!.text, s.quote));
+
+  // Offers: no valid source, or a figure in the name the source does not state, drops the offer. A price not word for
+  // word in the source is emptied. A description stating any figure the source does not is emptied as a whole.
+  const offers: ProfileOffer[] = [];
+  for (const o of value.offers) {
+    const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
+    if (!doc || figuresIn(o.name).some((f) => !appearsIn(doc.text, f))) { leave('offer', o.name); continue; }
+    let next: ProfileOffer = o;
+    if (o.price && !appearsIn(doc.text, o.price)) { next = { ...next, price: null }; leave('price', o.name); }
+    if (figuresIn(o.description ?? '').some((f) => !appearsIn(doc.text, f))) { next = { ...next, description: '' }; leave('offer_detail', o.name); }
+    offers.push(next);
+  }
+
+  // Audiences and claims: kept only with a word-for-word quote that carries their key words and figures.
+  const supported = (field: 'audience' | 'claim', item: string) => sources.some((s) => s.field === field && sameValue(s.value, item) && unsupportedBy(item, s.quote) === null);
+  const audiences = value.audiences.filter((a) => supported('audience', a) || (leave('audience', a), false));
+  const approvedClaims = value.approvedClaims.filter((c) => supported('claim', c) || (leave('claim', c), false));
+  const keptSources = sources.filter((s) => s.field === 'audience' ? audiences.some((a) => sameValue(a, s.value)) : s.field === 'claim' ? approvedClaims.some((c) => sameValue(c, s.value)) : true);
+
+  // Questions: unverifiable answers are dropped; a question left with fewer than two answers, a malformed one, or a price
+  // question about an offer no longer on the card is dropped. A price it held stays empty: nothing is chosen.
+  const noPrice = new Set<ProfileOffer>();
+  const conflicts: ProfileConflict[] = [];
+  for (const c of value.conflicts) {
+    const named = typeof c.offer === 'string' && c.offer.trim() ? offers.find((o) => sameValue(o.name, c.offer!)) ?? null : undefined;
+    const options = (c.options ?? []).filter((option) => {
+      const doc = byId.get(option.documentId);
+      return doc && appearsIn(doc.text, option.quote) && meaningfulQuote(option.quote) && appearsIn(doc.text, option.value)
+        && figuresIn(option.value).every((f) => appearsIn(option.quote, f));
+    });
+    const malformed = (c.kind !== 'price' && c.kind !== 'other') || (c.kind === 'price' && !named);
+    const thinned = options.length < (c.options ?? []).length && options.length < 2;
+    if (malformed || thinned) {
+      const statesMoney = (c.options ?? []).some((o) => moneyAmounts(`${o.value} ${o.quote}`).length > 0);
+      const aboutPrice = c.kind === 'price' || PRICE_WORDS.test(`${c.field} ${c.detail} ${c.offer ?? ''}`) || statesMoney;
+      if (aboutPrice) {
+        // A price question marked "other" could leave its offer's price looking settled: refuse rather than guess.
+        if (c.kind === 'other') return null;
+        const about = named ?? conflictOffer(c, offers);
+        if (about) noPrice.add(about);
+        // Still unrepairable unless the offer it was about is off the card altogether.
+        else if (!conflictOffer(c, value.offers) || offers.some((o) => sameValue(o.name, conflictOffer(c, value.offers)!.name))) return null;
+      }
+      leave('question', c.field);
+      continue;
+    }
+    const { offer: _offer, options: _options, ...rest } = c;
+    conflicts.push({ ...rest, documentIds: c.documentIds.filter((id) => byId.has(id)),
+      // An offer name that is not on the card is emptied (only allowed for a question that is not about a price).
+      ...(c.offer !== undefined ? { offer: named ? c.offer : null } : {}), ...(c.options !== undefined ? { options } : {}) });
+  }
+
+  // An offer whose price the repair emptied keeps no price in its description, exactly as a held price question does.
+  const priceEmptied = new Set(leftOut.filter((l) => l.what === 'price').map((l) => l.text));
+  const pricedOffers = offers.map((o) => {
+    let next = o;
+    if (noPrice.has(o) && o.price) { leave('price', o.name); next = { ...next, price: null }; }
+    if (noPrice.has(o) || priceEmptied.has(clip(o.name, 300))) {
+      const description = withoutOtherPrices(next.description ?? '', null);
+      if (description !== (next.description ?? '')) { leave('offer_detail', o.name); next = { ...next, description }; }
+    }
+    return next;
+  });
+
+  // Free text carries no source line, so a field stating a figure in no document is emptied whole; a voice line is dropped.
+  const anywhere = (f: string) => appearsIn(everywhere, f);
+  const freeText = (what: 'summary' | 'positioning', text: string | undefined): string | undefined => {
+    if (text === undefined || figuresIn(text).every(anywhere)) return text;
+    leave(what, text);
+    return '';
+  };
+  const lines = (what: 'voice' | 'voice_dont', items: readonly string[]) => items.filter((line) => figuresIn(line).every(anywhere) || (leave(what, line), false));
+  const voice = value.voice ? { ...value.voice, tone: lines('voice', value.voice.tone), do: lines('voice', value.voice.do), dont: lines('voice_dont', value.voice.dont), examples: lines('voice', value.voice.examples) } : undefined;
+  const summary = freeText('summary', value.summary), positioning = freeText('positioning', value.positioning);
+
+  const repaired: T = { ...value, offers: pricedOffers, audiences, approvedClaims, conflicts,
+    ...(value.sources !== undefined ? { sources: keptSources } : {}),
+    ...(summary !== undefined ? { summary } : {}), ...(positioning !== undefined ? { positioning } : {}), ...(voice ? { voice } : {}) };
+  return { value: repaired, leftOut };
+}
+
+/**
+ * The left-out lines that are still true after the owner changed the card by hand. A line goes as soon as the thing it
+ * names is on the card again (the same audience or claim, a summary or positioning, the same "avoid" line, a price on
+ * that offer). Matching is exact (case and spacing aside); a line re-added in different words stays listed.
+ */
+export function leftOutAfterEdit(leftOut: readonly ProfileLeftOut[] | undefined, card: Pick<BrandProfile, 'summary' | 'positioning' | 'audiences' | 'approvedClaims' | 'offers' | 'voice'>): ProfileLeftOut[] | undefined {
+  if (!leftOut) return undefined;
+  const has = (items: readonly string[], text: string) => items.some((i) => sameValue(i, text));
+  const offer = (name: string) => card.offers.find((o) => sameValue(o.name, name));
+  return leftOut.filter((l) => {
+    switch (l.what) {
+      case 'audience': return !has(card.audiences, l.text);
+      case 'claim': return !has(card.approvedClaims, l.text);
+      case 'summary': return !card.summary.trim();
+      case 'positioning': return !card.positioning.trim();
+      case 'voice_dont': return !has(card.voice.dont, l.text);
+      case 'price': return !offer(l.text)?.price;
+      case 'offer': return !offer(l.text);
+      default: return true;
+    }
+  });
+}
+
+/** True when nothing a reader could rely on is left: no offer, no audience and no claim. */
+export function nothingVerifiable(value: Pick<ProfileFacts, 'offers' | 'audiences' | 'approvedClaims'>): boolean {
+  return value.offers.length === 0 && value.audiences.length === 0 && value.approvedClaims.length === 0;
+}
 
 /**
  * Keep only provenance that can be shown truthfully. Used on every extraction: on the older
@@ -467,6 +635,11 @@ export interface DnaConflict {
   readonly detail: string;
   readonly options: readonly { readonly index: number; readonly value: string; readonly source: DnaSource }[];
 }
+/**
+ * One line taken off the card because it could not be found word for word. `fix` says where the owner can add it:
+ * the card's own correction form, Brand setup's profile form, or their documents (then read again).
+ */
+export interface DnaLeftOut { readonly label: string; readonly fix: 'card' | 'setup' | 'documents' }
 export interface BrandDnaCard {
   readonly summary: string;
   readonly positioning: string;
@@ -482,6 +655,27 @@ export interface BrandDnaCard {
   readonly unsourced: number;
   /** True only for a card made by the website door, where every price, audience and claim was checked word for word. */
   readonly checked: boolean;
+  /** What was left off this card because it could not be found word for word. Never used in writing. */
+  readonly leftOut: readonly DnaLeftOut[];
+}
+
+const LEFT_OUT_LABEL: Record<ProfileLeftOut['what'], [string, DnaLeftOut['fix'], boolean]> = {
+  price: ['The price of', 'documents', true], offer: ['The offer', 'documents', true], offer_detail: ['The description of', 'documents', true],
+  audience: ['Who it is for:', 'card', true], claim: ['The claim', 'card', true], question: ['The question about', 'documents', true],
+  // The summary and positioning were the model's own words with a figure in them: they are named, not repeated.
+  summary: ['The summary', 'card', false], positioning: ['The positioning line', 'setup', false],
+  voice: ['The style note', 'documents', true], voice_dont: ['The “avoid” line', 'card', true], link: ['The link', 'documents', true],
+};
+
+/** "The price of “Mentoring programme”". Plain words; the quoted part is the model's and is escaped wherever it is shown. */
+export function leftOutLines(items: readonly ProfileLeftOut[] | undefined): DnaLeftOut[] {
+  return (items ?? []).flatMap((item) => {
+    const known = LEFT_OUT_LABEL[item.what];
+    if (!known) return [];
+    if (!known[2]) return [{ label: known[0], fix: known[1] }];
+    const whole = clip(item.text, 2000), text = whole.slice(0, 120).trim();
+    return [{ label: `${known[0]} “${text}${whole.length > 120 ? '…' : ''}”`, fix: known[1] }];
+  });
 }
 
 export function documentLabel(doc: Pick<KnowledgeDocument, 'title' | 'origin'> | null | undefined): string {
@@ -522,7 +716,7 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
       index, title: c.field, detail: c.detail,
       options: (c.options ?? []).map((o, i) => ({ index: i, value: o.value, source: from(o.documentId, o.quote)! })),
     })),
-    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true,
+    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true, leftOut: leftOutLines(profile.leftOut),
   };
 }
 

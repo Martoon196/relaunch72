@@ -15,10 +15,10 @@ import { extractJson } from '../llm/json.js';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt, type LoadedPrompt } from '../stages/prompt.js';
 import type {
-  ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ResearchSource,
+  ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
 import { SeoBlogError } from './types.js';
-import { cleanProvenance, holdConflictedPrices, strictProfileProblems } from './brand-dna.js';
+import { cleanProvenance, holdConflictedPrices, nothingVerifiable, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
 import {decodeArticleOutput} from './article-output.js';
@@ -39,7 +39,9 @@ export class GenerationUnavailableError extends SeoBlogError {
 
 /** A response arrived but failed validation; its known usage is not a transport uncertainty. */
 export class GenerationRejectedError extends SeoBlogError {
-  constructor(message: string, readonly record: GenerationRecord, readonly reason: 'schema'|'method'|'content') {
+  constructor(message: string, readonly record: GenerationRecord, readonly reason: 'schema'|'method'|'content',
+    /** Brand DNA only: why a website-door card was refused, so the owner is told the true next step. */
+    readonly outcome?: 'nothing_clear' | 'unrepairable') {
     super(422, message, record.methodReceiptId ? 'method_generation_rejected' : 'generation_rejected');
   }
 }
@@ -61,17 +63,29 @@ export async function callJson<T>(llm: LlmClient, input: {
   readonly validate?: (value: T) => string[];
   /** Campaign proposals never silently pay for a format-correction call. */
   readonly singleAttempt?: boolean;
+  /**
+   * Last resort after the final correction pass, for content problems only: return the answer with exactly the
+   * failing parts removed, or null when nothing usable would be left. The result must pass the schema and `validate`
+   * in full, or the call is rejected as before. Never used with a production method run.
+   */
+  readonly repair?: (value: T) => T | null;
+  /** The shape a repaired answer must meet, when removal can lawfully leave a field emptier than the model may send it. */
+  readonly repairSchema?: AnySchema;
 }): Promise<JsonCallResult<T>> {
   const methodRun = methodRunFor(llm);
   const model = stageModel(input.prompt.header.stage, input.prompt.header.model);
   const validate = validatorFor(input.schema);
+  // The latest answer that met the shape and failed only on content. A later answer that fails the shape never hides it,
+  // and an answer that never met the shape is never repaired.
+  let repairable: { value: T } | null = null;
   let tokensIn = 0;
   let tokensOut = 0;
   let critique = '';
   let previous = '';
   let rejection: 'schema'|'method'|'content' = 'schema';
   let responseModel = model;
-  for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : Math.min(2, (methodRun?.maxPasses ?? 1) + 1)); attempt++) {
+  const attempts = input.singleAttempt ? 1 : Math.min(2, (methodRun?.maxPasses ?? 1) + 1);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     const structuredRevision=Boolean(critique&&(methodRun?.structuredPlanning||methodRun?.structuredArticle)&&input.correctionUser);
     const messages: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: structuredRevision?input.correctionUser!:input.user }];
     if (critique) {
@@ -129,13 +143,19 @@ export async function callJson<T>(llm: LlmClient, input: {
       continue;
     }
     const problems = input.validate?.(output as T) ?? [];
-    if (problems.length > 0) { rejection='content'; critique = problems.slice(0, 12).join('\n'); continue; }
+    if (problems.length > 0) { rejection='content'; critique = problems.slice(0, 12).join('\n'); repairable = { value: output as T }; continue; }
     }
     let record: GenerationRecord = { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut };
     if (methodRun) record = await methodRun.finish(record, "accepted");
     return {value: output as T, record};
   }
   let record:GenerationRecord={mode:llm.mode==='live'?'live':'simulated',model:responseModel,promptVersion:`${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0,12)}`,tokensIn,tokensOut};
+  // Last resort, after every correction pass: remove exactly what still fails from the latest answer that met the shape.
+  // The repaired value must meet the (repair) shape and every content check in full, or the call is refused as before.
+  if (repairable && input.repair && !methodRun) {
+    const repaired = input.repair(repairable.value);
+    if (repaired && validatorFor(input.repairSchema ?? input.schema)(repaired) && (input.validate?.(repaired) ?? []).length === 0) return { value: repaired, record };
+  }
   if(methodRun) record=await methodRun.finish(record,'rejected');
   const message=methodRun?'The assigned production methods could not produce a valid draft. '+critique.slice(0,250)
     :`The model did not return a usable result ${input.singleAttempt ? 'after one attempt' : 'after a retry'}. ${critique.split('\n')[0] ?? ''}`.trim();
@@ -233,15 +253,36 @@ export const PROFILE_SCHEMA: AnySchema = {
   },
 };
 
-export type ExtractedProfile = Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts' | 'sources'>;
+/**
+ * The shape a website-door answer may have after the repair: the same as the model's, except that a summary emptied
+ * because it stated a figure in no document may be empty (the card then asks the owner for one before confirming).
+ */
+export const PROFILE_REPAIRED_SCHEMA: AnySchema = {
+  ...(PROFILE_SCHEMA as Record<string, unknown>),
+  properties: { ...(PROFILE_SCHEMA as { properties: Record<string, unknown> }).properties, summary: { type: 'string', maxLength: 1200, anyOf: [{ maxLength: 0 }, { minLength: 10 }] } },
+};
+
+/** Only the fields an extraction may set. A field the model adds on its own (`strict`, `confirmedAt`, `leftOut`…) is dropped. */
+function knownProfileFields(v: ExtractedProfile): ExtractedProfile {
+  const voice = v.voice ?? { tone: [], do: [], dont: [], examples: [] };
+  return {
+    summary: v.summary, audiences: v.audiences, positioning: v.positioning, offers: v.offers, conversionPages: v.conversionPages,
+    voice: { tone: voice.tone, do: voice.do, dont: voice.dont, examples: voice.examples },
+    approvedClaims: v.approvedClaims, exclusions: v.exclusions, conflicts: v.conflicts, missingFacts: v.missingFacts,
+    ...(v.sources !== undefined ? { sources: v.sources } : {}),
+  };
+}
+
+export type ExtractedProfile = Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts' | 'sources' | 'leftOut'>;
 
 export async function extractProfile(llm: LlmClient, input: {
   readonly brandName: string;
   readonly website: string | null;
   readonly documents: readonly KnowledgeDocument[];
   /**
-   * Brand DNA (site-fed) extraction. Rejects any price that is not word for word in its cited source and any
-   * audience or claim without a quoted source, then holds every offer whose sources disagree on price.
+   * Brand DNA (site-fed) extraction. Asks for a correction of any price that is not word for word in its cited source
+   * and any audience or claim without a quoted source; what still fails is taken off the card (recorded in `leftOut`),
+   * and only an answer with nothing verifiable left is refused. Then holds every offer whose sources disagree on price.
    * The documents-only Setup path leaves this off and rejects nothing it did not reject before.
    */
   readonly strict?: boolean;
@@ -253,20 +294,45 @@ export async function extractProfile(llm: LlmClient, input: {
   // extraction is sent exactly the prompt it always was and returns what it always did.
   const prompt = loadPrompt(input.strict ? 'seo-blog-profile-site.md' : 'seo-blog-profile.md');
   const ids = new Set(readable.map((d) => d.id));
-  const result = await callJson<ExtractedProfile>(llm, {
-    prompt,
-    schema: PROFILE_SCHEMA,
-    // A quoted source per fact roughly doubles the answer; the larger ceiling keeps a full card from being cut short.
-    maxTokens: input.strict ? 16000 : 8000,
-    user: [`Brand name: ${input.brandName}`, `Website: ${input.website ?? '(not supplied)'}`, dataBlock('knowledge_documents', docs)].join('\n\n'),
-    validate: (v) => [
-      ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),
-      ...v.conversionPages.filter((p) => !/^https:\/\//.test(p.url)).map((p) => `conversion page ${p.url} is not an absolute https URL`),
-      ...(input.strict ? strictProfileProblems(v, docs) : []),
-    ],
-  });
-  const cleaned = cleanProvenance(result.value, docs);
-  return { ...result, value: input.strict ? holdConflictedPrices(cleaned, docs) : cleaned };
+  // Website door only: what the last-resort repair took off the card. Set by the repair alone, never by the model.
+  let leftOut: readonly ProfileLeftOut[] = [];
+  let refusal: 'nothing_clear' | 'unrepairable' | null = null;
+  const repair = (v: ExtractedProfile): ExtractedProfile | null => {
+    const fixed = repairProfileFacts(knownProfileFields(v), docs);
+    if (!fixed) { refusal = 'unrepairable'; return null; }
+    const pages = fixed.value.conversionPages.filter((p) => /^https:\/\//.test(p.url));
+    const links = fixed.value.conversionPages.filter((p) => !pages.includes(p)).map((p): ProfileLeftOut => ({ what: 'link', text: String(p.url ?? '').slice(0, 300) }));
+    // Nothing a reader could rely on survived: that is a card with nothing on it, not a card. Refuse it.
+    if (nothingVerifiable(fixed.value)) { refusal = 'nothing_clear'; return null; }
+    refusal = null; leftOut = [...fixed.leftOut, ...links];
+    return { ...fixed.value, conversionPages: pages };
+  };
+  let result: JsonCallResult<ExtractedProfile>;
+  try {
+    result = await callJson<ExtractedProfile>(llm, {
+      prompt,
+      schema: PROFILE_SCHEMA,
+      // A quoted source per fact roughly doubles the answer; the larger ceiling keeps a full card from being cut short.
+      maxTokens: input.strict ? 16000 : 8000,
+      user: [`Brand name: ${input.brandName}`, `Website: ${input.website ?? '(not supplied)'}`, dataBlock('knowledge_documents', docs)].join('\n\n'),
+      validate: (v) => [
+        ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),
+        ...v.conversionPages.filter((p) => !/^https:\/\//.test(p.url)).map((p) => `conversion page ${p.url} is not an absolute https URL`),
+        ...(input.strict ? strictProfileProblems(v, docs) : []),
+      ],
+      ...(input.strict ? { repair, repairSchema: PROFILE_REPAIRED_SCHEMA } : {}),
+    });
+  } catch (error) {
+    if (error instanceof GenerationRejectedError && refusal) throw new GenerationRejectedError(error.message, error.record, error.reason, refusal);
+    throw error;
+  }
+  // Only known fields are kept on either path: a `leftOut` or `strict` the model wrote itself is never trusted.
+  const cleaned = cleanProvenance(knownProfileFields(result.value), docs);
+  if (!input.strict) return { ...result, value: cleaned };
+  const held = holdConflictedPrices(cleaned, docs);
+  // An answer with nothing verifiable on it is not a card, whether or not anything had to be removed.
+  if (nothingVerifiable(held)) throw new GenerationRejectedError('The answer held no offer, audience or claim that could be found word for word.', result.record, 'content', 'nothing_clear');
+  return { ...result, value: leftOut.length ? { ...held, leftOut } : held };
 }
 
 // â”€â”€â”€ Planning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
