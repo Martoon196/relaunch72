@@ -117,8 +117,9 @@ export class EmailBounceService {
   }
 
   /**
-   * The durable decision. The ledger is asked first where it covers the workspace; anything this process alone knows
-   * (a repeated soft bounce, a block the ledger could not take yet) still counts. A ledger unsubscribe the person has
+   * The durable decision. The ledger is asked first where it covers the workspace. Of what this process alone holds,
+   * only a repeated soft bounce and a webhook-reported block newer than the ledger's cleared time for that reason
+   * still count; copies made from list reads or ledger rows do not. A ledger unsubscribe the person has
    * signed up again since lets marketing go, so this process's own copy of that unsubscribe is set aside.
    */
   async check(workspaceId: string, email: string, purpose: EmailPurpose): Promise<EmailSendDecision> {
@@ -135,7 +136,7 @@ export class EmailBounceService {
     }
     // 0153 not applied (or a workspace the ledger does not keep): the in-process list alone, exactly as before.
     if (!durable) return this.registry.decide(workspaceId, to, purpose);
-    const memory = this.registry.decide(workspaceId, to, purpose, { durableAfter: durable.clearedAt ?? -Infinity });
+    const memory = this.registry.decide(workspaceId, to, purpose, { durableCleared: durable.cleared });
     if (!durable.blocked) return memory;
     const reason = strongestReason([durable.reason, ...(memory.blocked ? [memory.reason] : [])])!;
     return { blocked: true, reason };
@@ -163,7 +164,7 @@ export class EmailBounceService {
       if (!this.ledger.covers(id)) continue;
       try {
         const rows = await this.ledger.rows(id);
-        if (rows) this.registry.hydrate(id, rows);
+        if (rows) this.registry.hydrate(id, rows.current, rows.lifted);
       } catch { this.log(JSON.stringify({ event: 'email.bounces.ledger_refresh_failed', level: 'warn' })); }
     }
   }
@@ -230,7 +231,10 @@ export class EmailBounceService {
       try {
         const result = await this.sweepWorkspace(null);
         failed = result.failed; streams = result.streams;
-        // A durable write that failed, or rows the ledger refused, is a warning too: the in-process list holds them for now.
+        // A durable write that failed, or rows the ledger refused, is a warning too. Those rows are NOT refused by our own
+        // guard meanwhile wherever the ledger answers: the guard then trusts the ledger, and this process's copies made
+        // from a list read only show on the owner page. Postmark itself still refuses them on their own stream, and the
+        // next read (or a retried webhook) writes them.
         const durableTrouble = (result.ledgerFailed ?? 0) + (result.ledgerSkipped ?? 0) > 0;
         if (streams > 0) this.log(JSON.stringify({ event: failed ? 'email.bounces.sweep_incomplete' : durableTrouble ? 'email.bounces.sweep_ledger_incomplete' : 'email.bounces.sweep',
           level: failed || durableTrouble ? 'warn' : 'info', ...result }));

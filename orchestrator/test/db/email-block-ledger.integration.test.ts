@@ -41,12 +41,12 @@ test('email block ledger on real roles: pinned, idempotent, scoped by reason, ne
     assert.deepEqual((await row('spam')).map(r => [r.reason, r.scope]), [['spam_complaint', 'all']]);
     assert.deepEqual((await row('left')).map(r => [r.reason, r.scope]), [['unsubscribe', 'marketing']]);
     for (const purpose of ['marketing', 'service'] as const) {
-      assert.deepEqual(await ledger.decide(MHP, address('DEAD').replace('DEAD', 'dead').toUpperCase(), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false, clearedAt: null }, 'addresses compare case-blind');
-      assert.deepEqual(await ledger.decide(MHP, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false, clearedAt: null });
+      assert.deepEqual(await ledger.decide(MHP, address('DEAD').replace('DEAD', 'dead').toUpperCase(), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false, cleared: {} }, 'addresses compare case-blind');
+      assert.deepEqual(await ledger.decide(MHP, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false, cleared: {} });
     }
-    assert.deepEqual(await ledger.decide(MHP, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false, clearedAt: null });
-    assert.deepEqual(await ledger.decide(MHP, address('left'), 'service'), { blocked: false, reallowed: false, clearedAt: null });
-    assert.deepEqual(await ledger.decide(PP, address('dead'), 'service'), { blocked: false, reallowed: false, clearedAt: null }, 'one brand never blocks another');
+    assert.deepEqual(await ledger.decide(MHP, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false, cleared: {} });
+    assert.deepEqual(await ledger.decide(MHP, address('left'), 'service'), { blocked: false, reallowed: false, cleared: {} });
+    assert.deepEqual(await ledger.decide(PP, address('dead'), 'service'), { blocked: false, reallowed: false, cleared: {} }, 'one brand never blocks another');
 
     // A provider re-subscribe lifts only an unsubscribe; nothing lifts a hard bounce or spam report, not even the owner role by hand.
     assert.equal(await ledger.lift({ workspaceId: MHP, sourceKey: 'mhp', email: address('dead'), eventId: null, at: Date.now() }), 0);
@@ -65,7 +65,7 @@ test('email block ledger on real roles: pinned, idempotent, scoped by reason, ne
     const list = [{ email: address('l1'), reason: 'hard_bounce' as const, at }, { email: address('l2'), reason: 'unsubscribed' as const, at }];
     assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), { added: 2, skipped: 0 });
     assert.deepEqual(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'outbound', rows: list }), { added: 0, skipped: 0 });
-    const rows = (await ledger.rows(MHP))!.filter(r => r.email.endsWith(`-${run}@example.invalid`));
+    const rows = (await ledger.rows(MHP))!.current.filter(r => r.email.endsWith(`-${run}@example.invalid`));
     assert.deepEqual(rows.map(r => [r.email.split('-')[0], r.reason, r.scope]).sort(), [['dead', 'hard_bounce', 'all'], ['l1', 'hard_bounce', 'all'], ['l2', 'unsubscribed', 'marketing'],
       ['left', 'unsubscribed', 'marketing'], ['spam', 'spam_complaint', 'all']]);
 
@@ -178,22 +178,22 @@ test('review fixes on real roles: owner undo of a wrong hard bounce (session-che
     await expectPostgresError(ledger.ownerLift({ sessionToken: strangerToken, workspaceId: MHP, email: address('dead'), note: 'Owner confirmed' }), '42501');
     await expectPostgresError(ledger.ownerLift({ sessionToken: 'not-a-session', workspaceId: MHP, email: address('dead'), note: 'Owner confirmed' }), '42501');
     await expectPostgresError(ledger.ownerLift({ sessionToken: token, workspaceId: PP, email: address('dead'), note: 'Owner confirmed' }), '42501');
-    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('DEAD').toLowerCase(), note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false });
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('DEAD').toLowerCase(), note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false, alreadyLifted: false });
     const lifted = (await ownerQuery<{ lifted_at: Date; lifted_by_user_id: string; lift_note: string }>(admin,
       "SELECT lifted_at,lifted_by_user_id,lift_note FROM app_private.email_address_blocks WHERE email=$1 AND reason='hard_bounce'", [address('dead')]))[0]!;
     assert.equal(lifted.lifted_by_user_id, owner); assert.equal(lifted.lift_note, 'Owner confirmed'); assert.ok(lifted.lifted_at instanceof Date);
-    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: false, reallowed: false, clearedAt: lifted.lifted_at.getTime() });
+    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: false, reallowed: false, cleared: { hard_bounce: lifted.lifted_at.getTime() } });
     // The old bounce, replayed or re-listed with its old time, does not block again; a bounce after the lift does.
     assert.equal(await put('dead', 'hard_bounce', `bounce:d1-${run}`, t0), 'exists');
     assert.equal(await put('dead', 'hard_bounce', `bounce:d0-${run}`, t0 - hour), 'exists');
     assert.equal(await ledger.recordList({ workspaceId: MHP, sourceKey: 'mhp', stream: 'broadcast', rows: [{ email: address('dead'), reason: 'hard_bounce', at: null }] }).then(r => r!.added), 0);
     assert.equal((await ledger.decide(MHP, address('dead'), 'service'))!.blocked, false);
     assert.equal(await put('dead', 'hard_bounce', `bounce:d2-${run}`, Date.now()), 'renewed');
-    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: true, reason: 'hard_bounce', reallowed: false, clearedAt: null });
+    assert.deepEqual(await ledger.decide(MHP, address('dead'), 'service'), { blocked: true, reason: 'hard_bounce', reallowed: false, cleared: {} });
     assert.deepEqual((await ownerQuery<{ lifted_by_user_id: string | null; lift_note: string | null }>(admin,
       "SELECT lifted_by_user_id,lift_note FROM app_private.email_address_blocks WHERE email=$1 AND reason='hard_bounce'", [address('dead')])), [{ lifted_by_user_id: null, lift_note: null }]);
     // A spam complaint is never lifted, by the owner or by hand.
-    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('spam'), note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true });
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: MHP, email: address('spam'), note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true, alreadyLifted: false });
     assert.equal((await ledger.decide(MHP, address('spam'), 'service'))!.blocked, true);
     await expectPostgresError(ownerQuery(admin, "UPDATE app_private.email_address_blocks SET lifted_at=now(),lifted_by_user_id=$2,lift_note='x y z' WHERE email=$1", [address('spam'), owner]), '23514');
     await expectPostgresError(ownerQuery(admin, "UPDATE app_private.email_address_blocks SET lifted_at=now() WHERE email=$1", [address('dead')]), '23514'); // a hard bounce lift needs who and why
@@ -204,7 +204,7 @@ test('review fixes on real roles: owner undo of a wrong hard bounce (session-che
     assert.equal(await unsub('inorder', t0), 'recorded'); assert.equal(await resub('inorder', t0 + hour), 1);
     assert.equal(await resub('late', t0 + hour), 0); assert.equal(await unsub('late', t0), 'exists', 'the late older unsubscribe finds the marker');
     for (const name of ['inorder', 'late']) {
-      assert.deepEqual(await ledger.decide(MHP, address(name), 'marketing'), { blocked: false, reallowed: false, clearedAt: t0 + hour }, name);
+      assert.deepEqual(await ledger.decide(MHP, address(name), 'marketing'), { blocked: false, reallowed: false, cleared: { unsubscribed: t0 + hour } }, name);
       assert.equal(await unsub(name, t0 + 2 * hour), 'renewed', `${name}: a genuinely newer unsubscribe blocks again`);
       assert.equal((await ledger.decide(MHP, address(name), 'marketing'))!.blocked, true);
     }

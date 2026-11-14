@@ -32,7 +32,12 @@ export interface EmailFact {
   readonly sourceKey: string; readonly stream: string; readonly id: string;
   readonly kind: EmailFactKind; readonly email: string; readonly at: number;
 }
-interface BlockRecord { reason: EmailBlockReason; since: number; sourceKey: string; stream: string; recordedAt: number; origin: 'webhook' | 'list' | 'ledger' }
+/**
+ * since: the earliest time known for this block (shown to the owner). webhookAt: the latest event time a WEBHOOK
+ * reported for it, kept separately so a later list read or ledger copy can neither move it back nor change where it
+ * came from; it is what the durable check compares with the ledger's cleared time.
+ */
+interface BlockRecord { reason: EmailBlockReason; since: number; sourceKey: string; stream: string; recordedAt: number; origin: 'webhook' | 'list' | 'ledger'; webhookAt: number | null }
 export interface StreamReading {
   readonly sourceKey: string; readonly stream: string; readonly kind: EmailStreamKind;
   /** Provider's own totals for the window; null when it could not be read. */
@@ -44,6 +49,8 @@ interface WorkspaceState {
   facts: Map<string, EmailFact>;
   factsByEmail: Map<string, Set<string>>;
   streams: Map<string, StreamReading>;
+  /** From the ledger: (address, reason) the owner or the provider lifted, and when. Hides copies at or before then. */
+  lifted: Map<string, number>;
 }
 
 export interface BlockedAddress {
@@ -70,6 +77,7 @@ export interface EmailHealthSnapshot {
 const blockKey = (sourceKey: string, stream: string, reason: EmailBlockReason): string => `${sourceKey}\u0000${stream}\u0000${reason}`;
 const streamKey = (sourceKey: string, stream: string): string => `${sourceKey}\u0000${stream}`;
 const factKey = (sourceKey: string, id: string): string => `${sourceKey}\u0000${id}`;
+const liftKey = (email: string, reason: EmailBlockReason): string => `${email}\u0000${reason}`;
 const releaseKey = (workspaceId: string, sourceKey: string, stream: string, email: string): string => `${workspaceId.toLowerCase()}\u0000${sourceKey}\u0000${stream}\u0000${email}`;
 const rate = (part: number | null, whole: number | null): number | null => part !== null && whole !== null && whole > 0 ? part / whole : null;
 
@@ -104,7 +112,7 @@ export class EmailBlockRegistry implements EmailSendGuard {
   private state(workspaceId: string): WorkspaceState {
     const key = workspaceId.toLowerCase();
     let state = this.workspaces.get(key);
-    if (!state) { state = { blocks: new Map(), facts: new Map(), factsByEmail: new Map(), streams: new Map() }; this.workspaces.set(key, state); }
+    if (!state) { state = { blocks: new Map(), facts: new Map(), factsByEmail: new Map(), streams: new Map(), lifted: new Map() }; this.workspaces.set(key, state); }
     return state;
   }
 
@@ -147,28 +155,36 @@ export class EmailBlockRegistry implements EmailSendGuard {
     }
     return count;
   }
+  /** A copy the ledger has lifted for this (address, reason): only a webhook event after the lift still counts. */
+  private masked(state: WorkspaceState, email: string, block: BlockRecord): boolean {
+    const liftedAt = state.lifted.get(liftKey(email, block.reason));
+    return liftedAt !== undefined && !(block.webhookAt !== null && block.webhookAt > liftedAt);
+  }
   private reasons(state: WorkspaceState, email: string, now: number): EmailBlockReason[] {
     const reasons = new Set<EmailBlockReason>();
-    for (const block of state.blocks.get(email)?.values() ?? []) reasons.add(block.reason);
+    for (const block of state.blocks.get(email)?.values() ?? []) if (!this.masked(state, email, block)) reasons.add(block.reason);
     if (this.softCount(state, email, now) >= SOFT_BOUNCE_LIMIT) reasons.add('repeated_soft_bounce');
     return [...reasons];
   }
 
   /**
-   * durableAfter: the durable ledger has just answered for this address and is the record for every lasting reason.
+   * durableCleared: the durable ledger has just answered for this address and is the record for every lasting reason.
    * This process then adds only what the ledger cannot know: a repeated soft bounce, and a block a webhook reported
-   * here that happened AFTER the ledger's clearedAt for the address (a newer event whose durable write is still being
-   * retried). Copies of list reads and of ledger rows, and anything at or before clearedAt, are left to the ledger.
+   * here whose event time is AFTER the ledger's cleared time for that same reason (a newer event whose durable write is
+   * still being retried). Copies made only from list reads or ledger rows, and webhook events at or before that
+   * reason's cleared time, are left to the ledger. One reason's cleared time never affects another reason.
    */
-  decide(workspaceId: string, email: string, purpose: EmailPurpose, options: { durableAfter?: number } = {}): EmailSendDecision {
+  decide(workspaceId: string, email: string, purpose: EmailPurpose, options: { durableCleared?: Partial<Record<EmailBlockReason, number>> } = {}): EmailSendDecision {
     const state = this.workspaces.get(workspaceId.toLowerCase());
     if (!state) return { blocked: false };
     const address = email.trim().toLowerCase(), now = this.now();
     let reasons: EmailBlockReason[];
-    if (options.durableAfter === undefined) reasons = this.reasons(state, address, now);
+    if (options.durableCleared === undefined) reasons = this.reasons(state, address, now);
     else {
-      const set = new Set<EmailBlockReason>();
-      for (const block of state.blocks.get(address)?.values() ?? []) if (block.origin === 'webhook' && block.since > options.durableAfter) set.add(block.reason);
+      const set = new Set<EmailBlockReason>(), cleared = options.durableCleared;
+      for (const block of state.blocks.get(address)?.values() ?? []) {
+        if (block.webhookAt !== null && block.webhookAt > (cleared[block.reason] ?? -Infinity)) set.add(block.reason);
+      }
       if (this.softCount(state, address, now) >= SOFT_BOUNCE_LIMIT) set.add('repeated_soft_bounce');
       reasons = [...set];
     }
@@ -202,7 +218,12 @@ export class EmailBlockRegistry implements EmailSendGuard {
     let blocks = state.blocks.get(email);
     if (!blocks) { blocks = new Map(); state.blocks.set(email, blocks); }
     const key = blockKey(block.sourceKey, block.stream, block.reason), existing = blocks.get(key);
-    blocks.set(key, existing ? { ...block, since: Math.min(existing.since, block.since) } : block);
+    if (!existing) { blocks.set(key, block); return; }
+    // The earliest time is kept for the owner's view; the latest webhook time and a webhook origin are never lost to
+    // an older copy or a later list read.
+    const webhookAt = existing.webhookAt === null ? block.webhookAt : block.webhookAt === null ? existing.webhookAt : Math.max(existing.webhookAt, block.webhookAt);
+    blocks.set(key, { ...block, since: Math.min(existing.since, block.since), webhookAt,
+      origin: existing.origin === 'webhook' || block.origin === 'webhook' ? 'webhook' : block.origin });
   }
 
   /**
@@ -214,7 +235,7 @@ export class EmailBlockRegistry implements EmailSendGuard {
     const state = this.state(workspaceId), now = this.now();
     const added = counts && this.addFact(state, fact);
     const reason = factBlockReason(fact.kind);
-    if (reason) this.setBlock(state, fact.email, { reason, since: fact.at, sourceKey: fact.sourceKey, stream: fact.stream, recordedAt: now, origin: 'webhook' });
+    if (reason) this.setBlock(state, fact.email, { reason, since: fact.at, sourceKey: fact.sourceKey, stream: fact.stream, recordedAt: now, origin: 'webhook', webhookAt: fact.at });
     if (state.facts.size > MAX_FACTS_PER_WORKSPACE) this.prune(state, now);
     return { added, marketingBlock: strongestReason(this.reasons(state, fact.email, now)) };
   }
@@ -235,11 +256,15 @@ export class EmailBlockRegistry implements EmailSendGuard {
     if (blocks.size === 0) state.blocks.delete(email);
   }
 
-  /** The owner confirmed a hard-bounced address works: forget this process's copies of that hard bounce. */
-  clearHardBounce(workspaceId: string, email: string): void {
+  /**
+   * The ledger has no unlifted hard bounce for this address (the owner confirmed it works): forget this process's
+   * copies and hide any provider-list copy that arrives later with an older or unknown time.
+   */
+  clearHardBounce(workspaceId: string, email: string, liftedAt = this.now()): void {
     const state = this.state(workspaceId), address = email.trim().toLowerCase(), blocks = state.blocks.get(address);
+    state.lifted.set(liftKey(address, 'hard_bounce'), Math.max(state.lifted.get(liftKey(address, 'hard_bounce')) ?? -Infinity, liftedAt));
     if (!blocks) return;
-    for (const [key, block] of blocks) if (block.reason === 'hard_bounce') blocks.delete(key);
+    for (const [key, block] of blocks) if (block.reason === 'hard_bounce' && !(block.webhookAt !== null && block.webhookAt > liftedAt)) blocks.delete(key);
     if (blocks.size === 0) state.blocks.delete(address);
   }
 
@@ -247,15 +272,21 @@ export class EmailBlockRegistry implements EmailSendGuard {
    * Replaces this workspace's durable blocks with a fresh read of the ledger. An unsubscribe the person has signed up
    * again since is left out: it no longer blocks anything the ledger answers for.
    */
-  hydrate(workspaceId: string, rows: readonly { email: string; reason: EmailBlockReason; sourceKey: string; stream: string | null; since: number; reallowed: boolean }[]): void {
+  hydrate(workspaceId: string, rows: readonly { email: string; reason: EmailBlockReason; sourceKey: string; stream: string | null; since: number; reallowed: boolean }[],
+    lifted: readonly { email: string; reason: EmailBlockReason; liftedAt: number }[] = []): void {
     const state = this.state(workspaceId), now = this.now();
     for (const [email, blocks] of state.blocks) {
       for (const [key, block] of blocks) if (block.origin === 'ledger') blocks.delete(key);
       if (blocks.size === 0) state.blocks.delete(email);
     }
+    state.lifted.clear();
+    for (const item of lifted) {
+      const key = liftKey(item.email, item.reason);
+      state.lifted.set(key, Math.max(state.lifted.get(key) ?? -Infinity, item.liftedAt));
+    }
     for (const row of rows) {
       if (row.reallowed) continue;
-      this.setBlock(state, row.email, { reason: row.reason, since: row.since, sourceKey: row.sourceKey, stream: row.stream ?? 'ledger', recordedAt: now, origin: 'ledger' });
+      this.setBlock(state, row.email, { reason: row.reason, since: row.since, sourceKey: row.sourceKey, stream: row.stream ?? 'ledger', recordedAt: now, origin: 'ledger', webhookAt: null });
     }
   }
 
@@ -284,7 +315,7 @@ export class EmailBlockRegistry implements EmailSendGuard {
       // The list was fetched before the provider told us the address was reactivated: the newer word wins, the next read confirms it.
       const releasedAt = this.released.get(releaseKey(workspaceId, input.sourceKey, input.stream, row.email));
       if (releasedAt !== undefined && releasedAt >= input.startedAt) continue;
-      this.setBlock(state, row.email, { reason: row.kind, since: row.at ?? input.startedAt, sourceKey: input.sourceKey, stream: input.stream, recordedAt: now, origin: 'list' });
+      this.setBlock(state, row.email, { reason: row.kind, since: row.at ?? input.startedAt, sourceKey: input.sourceKey, stream: input.stream, recordedAt: now, origin: 'list', webhookAt: null });
     }
     for (const [key, releasedAt] of this.released) if (releasedAt < input.startedAt - FRESH_BLOCK_GRACE_MS) this.released.delete(key);
     for (const row of input.bounces) this.addFact(state, { sourceKey: input.sourceKey, stream: input.stream, id: `bounce:${row.id}`, kind: row.kind, email: row.email, at: row.at });

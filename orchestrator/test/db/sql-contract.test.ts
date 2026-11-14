@@ -981,7 +981,12 @@ test('0153 makes a STOP per channel and keeps the email block ledger pinned, add
   // Additive: nothing deleted, truncated or dropped; no existing table altered; no trigger added.
   assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b/u);
   assert.doesNotMatch(sql, /ALTER TABLE app\./u);
-  assert.equal((sql.match(/ALTER TABLE/g) ?? []).length, 2, 'only the new table enables and forces RLS');
+  assert.equal((sql.match(/ALTER TABLE/g) ?? []).length, 4, 'only the two new tables enable and force RLS');
+  // The owner-lift audit trail is append-only: insert and read for the definer, nothing else, for nobody else.
+  assert.match(sql, /CREATE TABLE app_private\.email_address_block_lifts\(/u);
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_address_block_lifts TO r72_email_block_definer;/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*(?:UPDATE|DELETE|ALL)[^;]*email_address_block_lifts/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*email_address_block_lifts[^;]* TO r72_(?:web|identity_command)/u);
   assert.doesNotMatch(sql, /CREATE TRIGGER/u);
   assert.doesNotMatch(sql, /UPDATE app\.|UPDATE app_private\.(?!email_address_blocks)/u, 'no existing row is rewritten');
   // A. The only replaced object: the owner one-to-one origin check, same signature, WhatsApp suppressions only.

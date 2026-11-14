@@ -9,7 +9,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   createPostmarkBounceWebhook, decideRecipient, EmailBlockRegistry, EmailBounceService, ledgerEventId, PgEmailBlockLedger,
-  type EmailBlockLedger, type EmailBounceSource, type LedgerDecision, type LedgerRow, type PostmarkBounceApi,
+  type EmailBlockLedger, type EmailBounceSource, type LedgerCleared, type LedgerDecision, type LedgerLift, type LedgerRow, type PostmarkBounceApi,
 } from '../src/email-bounces/index.js';
 import { ppEmailBounceEffects } from '../src/pp-followup/bounces.js';
 import { PgPpFollowupRepository, type PpFollowupPrepared, type PpFollowupQueue } from '../src/pp-followup/repository.js';
@@ -46,17 +46,17 @@ class FakeLedger implements EmailBlockLedger {
     if (!this.covers(workspaceId)) return null;
     if (this.failDecide) throw new Error('connection reset');
     const mine = this.rows_.filter(r => r.workspaceId === workspaceId && r.email === email);
-    let clearedAt: number | null = null;
-    for (const r of mine) if (r.lifted && r.liftedAt !== undefined) clearedAt = Math.max(clearedAt ?? -Infinity, r.liftedAt);
+    const cleared: LedgerCleared = {};
+    for (const r of mine) if (r.lifted && r.liftedAt !== undefined) cleared[r.reason] = Math.max(cleared[r.reason] ?? -Infinity, r.liftedAt);
     const live = mine.filter(r => !r.lifted);
     const all = live.find(r => r.reason !== 'unsubscribed');
-    if (all) return { blocked: true, reason: all.reason, reallowed: false, clearedAt };
+    if (all) return { blocked: true, reason: all.reason, reallowed: false, cleared };
     let reallowed = false;
     if (purpose === 'marketing') for (const row of live) {
-      if (!((this.signedUp.get(email) ?? 0) > row.at)) return { blocked: true, reason: 'unsubscribed', reallowed: false, clearedAt };
-      reallowed = true; clearedAt = Math.max(clearedAt ?? -Infinity, row.at);
+      if (!((this.signedUp.get(email) ?? 0) > row.at)) return { blocked: true, reason: 'unsubscribed', reallowed: false, cleared };
+      reallowed = true; cleared.unsubscribed = Math.max(cleared.unsubscribed ?? -Infinity, row.at);
     }
-    return { blocked: false, reallowed, clearedAt };
+    return { blocked: false, reallowed, cleared };
   }
   async record(input: { workspaceId: string; sourceKey: string; email: string; reason: 'hard_bounce' | 'spam_complaint' | 'unsubscribed'; eventId: string | null; stream: string | null; at: number }) {
     if (this.fail) throw new Error('database unavailable');
@@ -93,12 +93,15 @@ class FakeLedger implements EmailBlockLedger {
   async ownerLift(input: { sessionToken: string; workspaceId: string; email: string; note: string }) {
     this.lifts.push(`${input.workspaceId} ${input.email} ${input.note}`);
     let lifted = 0;
+    const already = this.rows_.some(row => row.workspaceId === input.workspaceId && row.email === input.email && row.reason === 'hard_bounce' && row.lifted);
     for (const row of this.rows_) if (row.workspaceId === input.workspaceId && row.email === input.email && row.reason === 'hard_bounce' && !row.lifted) { row.lifted = true; row.liftedAt = NOW - 30 * 60_000; lifted++; }
-    return { lifted, released: 0, spamComplaint: this.rows_.some(r => r.workspaceId === input.workspaceId && r.email === input.email && r.reason === 'spam_complaint' && !r.lifted) };
+    return { lifted, released: 0, alreadyLifted: already && lifted === 0,
+      spamComplaint: this.rows_.some(r => r.workspaceId === input.workspaceId && r.email === input.email && r.reason === 'spam_complaint' && !r.lifted) };
   }
-  async rows(workspaceId: string): Promise<readonly LedgerRow[]> {
-    return this.rows_.filter(r => r.workspaceId === workspaceId && !r.lifted).map(r => ({ email: r.email, reason: r.reason, scope: r.reason === 'unsubscribed' ? 'marketing' as const : 'all' as const,
-      sourceKey: r.sourceKey, stream: 'broadcast', since: r.at, reallowed: r.reason === 'unsubscribed' && (this.signedUp.get(r.email) ?? 0) > r.at }));
+  async rows(workspaceId: string): Promise<{ current: readonly LedgerRow[]; lifted: readonly LedgerLift[] }> {
+    return { current: this.rows_.filter(r => r.workspaceId === workspaceId && !r.lifted).map(r => ({ email: r.email, reason: r.reason, scope: r.reason === 'unsubscribed' ? 'marketing' as const : 'all' as const,
+      sourceKey: r.sourceKey, stream: 'broadcast', since: r.at, reallowed: r.reason === 'unsubscribed' && (this.signedUp.get(r.email) ?? 0) > r.at })),
+      lifted: this.rows_.filter(r => r.workspaceId === workspaceId && r.lifted && r.liftedAt !== undefined).map(r => ({ email: r.email, reason: r.reason, liftedAt: r.liftedAt! })) };
   }
 }
 
@@ -259,7 +262,7 @@ test('the sweep writes each stream\'s list to the ledger, a failed write never f
   // An unsubscribe re-allowed by a sign-up is not loaded as a block.
   ledger.signedUp.set('left@example.invalid', NOW + 1);
   const reloaded = new EmailBlockRegistry(() => NOW);
-  reloaded.hydrate(MHP, (await ledger.rows(MHP)));
+  const read = (await ledger.rows(MHP)); reloaded.hydrate(MHP, read.current, read.lifted);
   assert.equal(reloaded.decide(MHP, 'left@example.invalid', 'marketing').blocked, false);
   assert.equal(reloaded.decide(MHP, 'gone@example.invalid', 'service').blocked, true);
 });
@@ -355,13 +358,13 @@ test('a ledger read error with an empty cache: marketing fails closed as a retry
 test('a missing ledger function after the ledger has answered in this process is a fault: thrown and warned every time, never "not applied yet"', async () => {
   let answered = 0;
   const pool = { query: async () => {
-    if (answered++ === 0) return { rows: [{ value: { blocked: false, reallowed: false, clearedAt: null } }] };
+    if (answered++ === 0) return { rows: [{ value: { blocked: false, reallowed: false, cleared: {} } }] };
     throw Object.assign(new Error('function app_private.email_block_decide(uuid, text, text) does not exist'), { code: '42883' });
   } };
   const logs: string[] = [];
   const ledger = new PgEmailBlockLedger(pool as never, { log: line => logs.push(line) });
   assert.equal(ledger.status(), 'unknown');
-  assert.deepEqual(await ledger.decide(MHP, 'a@example.invalid', 'marketing'), { blocked: false, reallowed: false, clearedAt: null });
+  assert.deepEqual(await ledger.decide(MHP, 'a@example.invalid', 'marketing'), { blocked: false, reallowed: false, cleared: {} });
   assert.equal(ledger.status(), 'available');
   for (let i = 0; i < 2; i++) await assert.rejects(ledger.decide(MHP, 'a@example.invalid', 'marketing'), /does not exist/u);
   assert.equal(logs.filter(line => line.includes('ledger_missing_after_use') && line.includes('"level":"warn"')).length, 2, 'warned every time');
@@ -428,7 +431,7 @@ test('undo of a wrong hard bounce: the ledger lifts it, the process forgets its 
   const f = webhookFixture(ledger);
   assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).status, 200);
   assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' });
-  assert.deepEqual(await f.service.ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false });
+  assert.deepEqual(await f.service.ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false, alreadyLifted: false });
   assert.equal(f.service.registry.decide(MHP, 'gone@example.invalid', 'service').blocked, false, 'the process copy is forgotten');
   assert.deepEqual(await decideRecipient(f.service.guard, MHP, 'gone@example.invalid', 'marketing'), { blocked: false });
   // The same old bounce replayed later by Postmark changes nothing; a new bounce after the lift blocks again.

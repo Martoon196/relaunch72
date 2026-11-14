@@ -15,7 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
-import type { EmailPurpose, EmailSendDecision, LastingBlockReason } from './policy.js';
+import type { EmailBlockReason, EmailPurpose, EmailSendDecision, LastingBlockReason } from './policy.js';
 
 export const EMAIL_LEDGER_WORKSPACES: ReadonlySet<string> = new Set([
   '2789228d-55a6-4688-b1e8-2f70abca990b', // Martin Howard Property
@@ -28,12 +28,15 @@ export const toLedgerReason = (reason: LastingBlockReason): LedgerReason => reas
 const fromLedgerReason = (reason: LedgerReason): 'hard_bounce' | 'spam_complaint' | 'manual' | 'unsubscribed' => reason === 'unsubscribe' ? 'unsubscribed' : reason;
 
 /**
- * A durable answer. reallowed: an unsubscribe exists but a sign-up since lets marketing go again. clearedAt: the
- * latest event time up to which the ledger has cleared this address (a lift, or a re-allowed unsubscribe); a block
- * this process holds from a webhook AFTER that time still counts.
+ * A durable answer. reallowed: an unsubscribe exists but a sign-up since lets marketing go again. cleared: per
+ * reason, the latest event time up to which the ledger has cleared this address for that reason (a lift, or a
+ * re-allowed unsubscribe); a block this process holds from a webhook AFTER that time, for that reason, still counts.
  */
-export type LedgerDecision = EmailSendDecision & { readonly reallowed: boolean; readonly clearedAt: number | null };
-export interface OwnerLiftResult { readonly lifted: number; readonly released: number; readonly spamComplaint: boolean }
+export type LedgerCleared = Partial<Record<EmailBlockReason, number>>;
+export type LedgerDecision = EmailSendDecision & { readonly reallowed: boolean; readonly cleared: LedgerCleared };
+/** alreadyLifted: nothing was lifted by this press because an owner had already lifted the hard bounce. */
+export interface OwnerLiftResult { readonly lifted: number; readonly released: number; readonly spamComplaint: boolean; readonly alreadyLifted: boolean }
+export interface LedgerLift { readonly email: string; readonly reason: EmailBlockReason; readonly liftedAt: number }
 export type LedgerStatus = 'unknown' | 'available' | 'absent';
 export interface LedgerRow {
   readonly email: string; readonly reason: 'hard_bounce' | 'spam_complaint' | 'manual' | 'unsubscribed'; readonly scope: 'all' | 'marketing';
@@ -57,8 +60,8 @@ export interface EmailBlockLedger {
   recordList(input: { workspaceId: string; sourceKey: string; stream: string; rows: readonly { email: string; reason: LastingBlockReason; at: number | null }[] }): Promise<{ added: number; skipped: number } | null>;
   /** An explicit provider re-subscribe: lifts that source's unsubscribe for the address, nothing else. */
   lift(input: { workspaceId: string; sourceKey: string; email: string; eventId: string | null; at: number }): Promise<number | null>;
-  /** Current rows for the owner page and the process cache, or null when unavailable. */
-  rows(workspaceId: string, limit?: number): Promise<readonly LedgerRow[] | null>;
+  /** Current rows, and lifted (address, reason) pairs, for the owner page and the process cache; null when unavailable. */
+  rows(workspaceId: string, limit?: number): Promise<{ readonly current: readonly LedgerRow[]; readonly lifted: readonly LedgerLift[] } | null>;
   /**
    * The brand owner says a hard-bounced address works now (their own portal session token is checked in SQL). Lifts
    * the hard bounce with who, when and why; never a spam complaint. null when 0153 is not applied.
@@ -133,12 +136,16 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
     }
     if (answer === 'absent') return null;
     const value = answer.value;
-    const clearedAt = record(value) && typeof value.clearedAt === 'string' ? Date.parse(value.clearedAt) : null;
-    if (!record(value) || typeof value.blocked !== 'boolean' || typeof value.reallowed !== 'boolean'
-        || (value.clearedAt !== null && value.clearedAt !== undefined && !Number.isFinite(clearedAt))) throw new Error('Invalid email block ledger answer');
-    if (!value.blocked) return { blocked: false, reallowed: value.reallowed, clearedAt };
+    if (!record(value) || typeof value.blocked !== 'boolean' || typeof value.reallowed !== 'boolean' || !record(value.cleared)) throw new Error('Invalid email block ledger answer');
+    const cleared: Partial<Record<EmailBlockReason, number>> = {};
+    for (const [reason, at] of Object.entries(value.cleared)) {
+      const time = typeof at === 'string' ? Date.parse(at) : NaN;
+      if (!LEDGER_REASONS.has(reason) || !Number.isFinite(time)) throw new Error('Invalid email block ledger answer');
+      cleared[fromLedgerReason(reason as LedgerReason)] = time;
+    }
+    if (!value.blocked) return { blocked: false, reallowed: value.reallowed, cleared };
     if (typeof value.reason !== 'string' || !LEDGER_REASONS.has(value.reason)) throw new Error('Invalid email block ledger answer');
-    return { blocked: true, reason: fromLedgerReason(value.reason as LedgerReason), reallowed: false, clearedAt };
+    return { blocked: true, reason: fromLedgerReason(value.reason as LedgerReason), reallowed: false, cleared };
   }
 
   async record(input: { workspaceId: string; sourceKey: string; email: string; reason: LastingBlockReason; eventId: string | null; stream: string | null; at: number }): Promise<LedgerWrite> {
@@ -168,14 +175,15 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
 
   async ownerLift(input: { sessionToken: string; workspaceId: string; email: string; note: string }): Promise<OwnerLiftResult | null> {
     if (!this.covers(input.workspaceId)) return null;
-    const answer = await this.call<{ lifted?: unknown; released?: unknown; spamComplaint?: unknown }>('SELECT app_private.email_block_owner_lift($1,$2,$3,$4) AS value',
+    const answer = await this.call<{ lifted?: unknown; released?: unknown; spamComplaint?: unknown; alreadyLifted?: unknown }>('SELECT app_private.email_block_owner_lift($1,$2,$3,$4) AS value',
       [createHash('sha256').update(input.sessionToken).digest(), input.workspaceId.toLowerCase(), input.email.trim().toLowerCase(), input.note]);
     if (answer === 'absent') return null;
     const value = answer.value;
-    if (!record(value) || !Number.isSafeInteger(value.lifted) || !Number.isSafeInteger(value.released) || typeof value.spamComplaint !== 'boolean') {
+    if (!record(value) || !Number.isSafeInteger(value.lifted) || !Number.isSafeInteger(value.released) || typeof value.spamComplaint !== 'boolean'
+        || typeof value.alreadyLifted !== 'boolean') {
       throw new Error('Invalid email block ledger answer');
     }
-    return { lifted: Number(value.lifted), released: Number(value.released), spamComplaint: value.spamComplaint };
+    return { lifted: Number(value.lifted), released: Number(value.released), spamComplaint: value.spamComplaint, alreadyLifted: value.alreadyLifted };
   }
 
   async lift(input: { workspaceId: string; sourceKey: string; email: string; eventId: string | null; at: number }): Promise<number | null> {
@@ -185,13 +193,20 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
     return answer === 'absent' ? null : Number(answer.value) || 0;
   }
 
-  async rows(workspaceId: string, limit = 20_000): Promise<readonly LedgerRow[] | null> {
+  async rows(workspaceId: string, limit = 20_000): Promise<{ readonly current: readonly LedgerRow[]; readonly lifted: readonly LedgerLift[] } | null> {
     if (!this.covers(workspaceId)) return null;
     const answer = await this.call<unknown>('SELECT app_private.email_block_rows($1,$2) AS value', [workspaceId.toLowerCase(), limit]);
     if (answer === 'absent') return null;
-    if (!Array.isArray(answer.value)) throw new Error('Invalid email block ledger rows');
+    const value = answer.value;
+    if (!record(value) || !Array.isArray(value.current) || !Array.isArray(value.lifted)) throw new Error('Invalid email block ledger rows');
+    const lifted: LedgerLift[] = [];
+    for (const item of value.lifted) {
+      if (!record(item) || typeof item.email !== 'string' || typeof item.reason !== 'string' || !LEDGER_REASONS.has(item.reason) || typeof item.liftedAt !== 'string') continue;
+      const at = Date.parse(item.liftedAt);
+      if (Number.isFinite(at)) lifted.push(Object.freeze({ email: item.email, reason: fromLedgerReason(item.reason as LedgerReason), liftedAt: at }));
+    }
     const rows: LedgerRow[] = [];
-    for (const row of answer.value) {
+    for (const row of value.current) {
       if (!record(row) || typeof row.email !== 'string' || typeof row.reason !== 'string' || !LEDGER_REASONS.has(row.reason)
           || (row.scope !== 'all' && row.scope !== 'marketing') || typeof row.source !== 'string' || typeof row.since !== 'string'
           || typeof row.reallowed !== 'boolean' || !(row.stream === null || typeof row.stream === 'string')) continue;
@@ -200,6 +215,6 @@ export class PgEmailBlockLedger implements EmailBlockLedger {
       rows.push(Object.freeze({ email: row.email, reason: fromLedgerReason(row.reason as LedgerReason), scope: row.scope, sourceKey: row.source,
         stream: row.stream as string | null, since, reallowed: row.reallowed }));
     }
-    return rows;
+    return { current: rows, lifted };
   }
 }

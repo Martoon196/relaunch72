@@ -271,7 +271,7 @@ END $f$;
 CREATE FUNCTION app_private.email_block_owner_lift(p_session bytea,p_workspace uuid,p_email text,p_note text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; selected uuid; allowed boolean; v_email text:=lower(btrim(p_email)); lifted integer:=0; released integer:=0; spam boolean;
- already boolean; r record;
+ already boolean;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email block boundary required' USING ERRCODE='42501'; END IF;
  IF p_session IS NULL OR octet_length(p_session)<>32 OR p_workspace IS NULL OR v_email IS NULL OR length(v_email) NOT BETWEEN 3 AND 320
@@ -288,10 +288,9 @@ BEGIN
  spam:=EXISTS(SELECT 1 FROM app_private.email_address_blocks WHERE workspace_id=p_workspace AND email=v_email AND reason='spam_complaint' AND lifted_at IS NULL);
  already:=EXISTS(SELECT 1 FROM app_private.email_address_blocks WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce'
   AND lifted_at IS NOT NULL AND lifted_by_user_id IS NOT NULL);
- FOR r IN UPDATE app_private.email_address_blocks SET lifted_at=statement_timestamp(),lifted_by_user_id=actor,lift_note=btrim(p_note),updated_at=clock_timestamp()
-  WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce' AND lifted_at IS NULL RETURNING id LOOP
-  lifted:=lifted+1;
- END LOOP;
+ UPDATE app_private.email_address_blocks SET lifted_at=statement_timestamp(),lifted_by_user_id=actor,lift_note=btrim(p_note),updated_at=clock_timestamp()
+ WHERE workspace_id=p_workspace AND email=v_email AND reason='hard_bounce' AND lifted_at IS NULL;
+ GET DIAGNOSTICS lifted=ROW_COUNT;
  -- The PP CRM stop is released when this press lifted the bounce, and again when the bounce was already owner-lifted
  -- (a replay of the original bounce may have re-stopped the person in between): a second press repairs it.
  IF (lifted>0 OR already) AND NOT spam AND p_workspace='d975ff66-336a-46c2-b36b-d7095a11af97' THEN
