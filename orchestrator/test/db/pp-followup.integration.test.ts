@@ -19,6 +19,12 @@ import { verifyPpUnsubscribeToken } from '../../src/pp-followup/content.js';
 import type { PortalSessionIdentity } from '../../src/portal/auth-service.js';
 import { EmailBlockRegistry } from '../../src/email-bounces/registry.js';
 import { ppEmailBounceEffects } from '../../src/pp-followup/bounces.js';
+import { EmailBounceService } from '../../src/email-bounces/service.js';
+import { PgEmailBlockLedger } from '../../src/email-bounces/ledger.js';
+import { decideRecipient } from '../../src/email-bounces/policy.js';
+import { createPostmarkBounceWebhook } from '../../src/email-bounces/webhook.js';
+import { Readable } from 'node:stream';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const skip = testDatabaseSkipReason();
 const WS = PP_FOLLOWUP_WORKSPACE_ID, SECRET = 'synthetic-pp-followup-unsubscribe-secret-0152';
@@ -276,7 +282,7 @@ async function world() {
     for (const flow of published) await act(flow, 'stop').catch(() => undefined);
     await Promise.allSettled([web.end(), identityPool.end(), adapter.end(), command.end(), crm.end()]); await admin.end();
   };
-  return { admin, ownerId, request, service, flows, repo, queue, person, consent, publish, act, run, send, sweep, productPermission, close };
+  return { admin, identityPool, ownerId, request, service, flows, repo, queue, person, consent, publish, act, run, send, sweep, productPermission, close };
 }
 const SENDER: PpMarketingConfig = { mode: 'live', token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', from: 'hello@propertypredator.com', fromName: 'Property Predator',
   replyTo: 'office@propertypredator.com', stream: 'broadcast', testRecipients: null, link: 'https://propertypredator.com/', unsubscribeOrigin: 'https://hq.propertypredator.com' };
@@ -479,19 +485,241 @@ test('PP follow-up bounces: a blocked address is refused before any proof, and a
     assert.equal(Number((await w.admin.query('SELECT count(*) AS n FROM app_private.pp_followup_dispatch_proofs WHERE send_id=$1', [(await w.send(gone)).id])).rows[0].n), 0, 'no proof was spent');
     assert.equal((await w.run(fine)).state, 'active');
 
-    // Postmark then reports a bounce for the email we did send: the existing capability records the stop.
-    const suppressions = async (point: string) => (await w.admin.query<{ channel: string; purpose: string; state: string }>(
-      'SELECT channel,purpose,state FROM app.communication_suppression_events WHERE workspace_id=$1 AND contact_point_id=$2 ORDER BY purpose', [WS, point])).rows;
+    // Postmark then reports a bounce for the email we did send: 0153 records the stop with its true reason, purpose-free (all PP email).
+    const suppressions = async (point: string) => (await w.admin.query<{ channel: string; purpose: string; state: string; reason: string; source: string }>(
+      'SELECT channel,purpose,state,reason,source FROM app.communication_suppression_events WHERE workspace_id=$1 AND contact_point_id=$2 ORDER BY purpose NULLS FIRST', [WS, point])).rows;
     assert.deepEqual(await suppressions(fine.point), []);
     const effects = ppEmailBounceEffects(w.repo);
     await effects.onMarketingBlock({ email: fine.email, reason: 'hard_bounce', metadata: bodies[0]!.Metadata });
-    assert.deepEqual(await suppressions(fine.point), [{ channel: 'email', purpose: 'marketing', state: 'suppressed' }, { channel: 'email', purpose: 'property_predator_marketing', state: 'suppressed' }],
-      'email only, both Property Predator marketing purposes');
-    assert.deepEqual([(await w.run(fine)).state, (await w.run(fine)).reason], ['stopped', 'unsubscribed'], 'the remaining step will never be sent');
+    assert.deepEqual(await suppressions(fine.point), [{ channel: 'email', purpose: null, state: 'suppressed', reason: 'hard_bounce', source: 'pp.postmark.bounce' }],
+      'email only, the true reason, every PP email purpose');
+    assert.deepEqual([(await w.run(fine)).state, (await w.run(fine)).reason], ['stopped', 'delivery_failed'], 'the remaining step will never be sent');
     await effects.onMarketingBlock({ email: fine.email, reason: 'hard_bounce', metadata: bodies[0]!.Metadata });
-    assert.equal((await suppressions(fine.point)).length, 2, 'a repeated report writes nothing new');
+    assert.equal((await suppressions(fine.point)).length, 1, 'a repeated report writes nothing new');
     assert.equal((await w.act(flow, 'enrol', { point: fine.point })).reason, 'not_permitted', 'and the address cannot be started again');
     await effects.onMarketingBlock({ email: gone.email, reason: 'hard_bounce', metadata: { send: 'x' } });
-    assert.deepEqual(await suppressions(gone.point), [], 'without our contact point in the metadata the stop stays in the process (0153 makes it durable)');
+    assert.deepEqual(await suppressions(gone.point), [], 'without our contact point in the metadata the CRM is not touched; the durable ledger refuses the address instead');
+  } finally { await w.close(); }
+});
+
+test('PP true reasons (0153): a bounce, a spam report and an unsubscribe reported for our email each write their own reason; historic rows are untouched', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(2, 24);
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); assert.equal((await w.act(flow, 'enrol', { point: who.point })).changed, 1); return who; };
+    const dead = await start('Dead'), spam = await start('Spam'), left = await start('Left');
+    const rows = async (point: string) => (await w.admin.query<{ purpose: string | null; reason: string; source: string }>(
+      "SELECT purpose,reason,source FROM app.communication_suppression_events WHERE workspace_id=$1 AND contact_point_id=$2 AND channel='email' AND state='suppressed' ORDER BY purpose NULLS FIRST", [WS, point])).rows;
+    const historic = (await w.admin.query("SELECT count(*)::int AS n FROM app.communication_suppression_events WHERE source='pp.followup.unsubscribe'")).rows[0].n;
+    assert.deepEqual(await w.repo.blockEmail(dead.point, 'hard_bounce'), { known: true, recorded: true, stopped: 1, durable: true });
+    assert.deepEqual(await w.repo.blockEmail(spam.point, 'spam_complaint'), { known: true, recorded: true, stopped: 1, durable: true });
+    assert.deepEqual(await w.repo.blockEmail(left.point, 'unsubscribe'), { known: true, recorded: true, stopped: 1, durable: true });
+    assert.deepEqual(await rows(dead.point), [{ purpose: null, reason: 'hard_bounce', source: 'pp.postmark.bounce' }]);
+    assert.deepEqual(await rows(spam.point), [{ purpose: null, reason: 'spam_complaint', source: 'pp.postmark.bounce' }]);
+    assert.deepEqual(await rows(left.point), [{ purpose: 'marketing', reason: 'recipient_unsubscribe', source: 'pp.postmark.bounce' },
+      { purpose: 'property_predator_marketing', reason: 'recipient_unsubscribe', source: 'pp.postmark.bounce' }]);
+    assert.deepEqual([(await w.run(dead)).state, (await w.run(dead)).reason], ['stopped', 'delivery_failed']);
+    assert.deepEqual([(await w.run(spam)).state, (await w.run(spam)).reason], ['stopped', 'unsubscribed']);
+    assert.deepEqual([(await w.run(left)).state, (await w.run(left)).reason], ['stopped', 'unsubscribed']);
+    assert.deepEqual(await w.repo.blockEmail(dead.point, 'hard_bounce'), { known: true, recorded: false, stopped: 0, durable: true }, 'a replay writes nothing new');
+    assert.equal((await rows(dead.point)).length, 1);
+    for (const who of [dead, spam, left]) assert.equal((await w.act(flow, 'enrol', { point: who.point })).reason, 'not_permitted');
+    assert.equal((await w.admin.query("SELECT count(*)::int AS n FROM app.communication_suppression_events WHERE source='pp.followup.unsubscribe'")).rows[0].n, historic,
+      'the old rows labelled as unsubscribes are neither rewritten nor added to');
+    await assert.rejects(w.repo.blockEmail(dead.point, 'manual' as never), /Invalid email block subject/u);
+    await assert.rejects(w.identityPool.query("SELECT app_private.pp_followup_block_email($1,'manual')", [dead.point]), /Invalid email block/u);
+    assert.deepEqual(await w.repo.blockEmail(randomUUID(), 'hard_bounce'), { known: false, recorded: false, stopped: 0, durable: true });
+  } finally { await w.close(); }
+});
+
+test('PP scope rule on the durable ledger (0153): a hard bounce or spam report stops every PP email; an unsubscribe stops marketing until newer permission; a restart forgets nothing', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(1, 24);
+    const ledger = new PgEmailBlockLedger(w.identityPool);
+    const run = randomUUID().slice(0, 8), address = (name: string) => `${name}-${run}@example.test`;
+    const at = Date.now() - 3_600_000;
+    for (const [name, reason] of [['dead', 'hard_bounce'], ['spam', 'spam_complaint'], ['left', 'unsubscribed']] as const) {
+      assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: address(name), reason, eventId: `bounce:${name}-${run}`, stream: 'broadcast', at }), 'recorded');
+    }
+    for (const purpose of ['marketing', 'service'] as const) {
+      assert.deepEqual(await ledger.decide(WS, address('dead'), purpose), { blocked: true, reason: 'hard_bounce', reallowed: false, cleared: {} });
+      assert.deepEqual(await ledger.decide(WS, address('spam'), purpose), { blocked: true, reason: 'spam_complaint', reallowed: false, cleared: {} });
+    }
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: true, reason: 'unsubscribed', reallowed: false, cleared: {} });
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'service'), { blocked: false, reallowed: false, cleared: {} }, 'email the person asked for may still go');
+    // Newer marketing permission on that address re-allows marketing after an unsubscribe; never after a bounce or a spam report.
+    const back = await w.person('Back', `left-${run}`); await w.admin.query('UPDATE app.contact_points SET value=$2,normalized_value=$2 WHERE id=$1', [back.point, address('left')]);
+    const deadAgain = await w.person('Gone', `dead-${run}`); await w.admin.query('UPDATE app.contact_points SET value=$2,normalized_value=$2 WHERE id=$1', [deadAgain.point, address('dead')]);
+    await w.consent({ ...back, email: address('left') }, 'marketing', 'granted', '1 minute');
+    await w.consent({ ...deadAgain, email: address('dead') }, 'marketing', 'granted', '1 minute');
+    assert.deepEqual(await ledger.decide(WS, address('left'), 'marketing'), { blocked: false, reallowed: true, cleared: { unsubscribed: at } });
+    assert.equal((await ledger.decide(WS, address('dead'), 'marketing'))!.blocked, true);
+    // A permission older than the unsubscribe does not count.
+    const old = randomUUID().slice(0, 8);
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: `old-${old}@example.test`, reason: 'unsubscribed', eventId: null, stream: 'broadcast', at }), 'recorded');
+    const oldPerson = await w.person('Old', `old-${old}`); await w.admin.query('UPDATE app.contact_points SET value=$2,normalized_value=$2 WHERE id=$1', [oldPerson.point, `old-${old}@example.test`]);
+    await w.consent({ ...oldPerson, email: `old-${old}@example.test` }, 'marketing', 'granted', '2 hours');
+    assert.equal((await ledger.decide(WS, `old-${old}@example.test`, 'marketing'))!.blocked, true);
+
+    // A fresh process (nothing in memory) refuses the bounced address before any proof: the dispatcher's guard asks the ledger.
+    const gone = await w.person('Gone2'); await w.consent(gone, 'marketing', 'granted');
+    assert.equal((await w.act(flow, 'enrol', { point: gone.point })).changed, 1);
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: gone.email, reason: 'hard_bounce', eventId: `bounce:g-${run}`, stream: 'broadcast', at }), 'recorded');
+    const service = new EmailBounceService({ config: { blockers: [], sources: [{ key: 'pp', workspaceId: WS, token: null, webhookSecret: null, serverId: null, streams: new Map([['broadcast', 'marketing']]) }] }, ledger });
+    assert.equal(service.registry.decide(WS, gone.email, 'marketing').blocked, false, 'nothing in this process knows the address');
+    const recipients = { guard: service.guard, workspaceId: WS };
+    const to: string[] = [];
+    const sender = createPpPostmarkSender(SENDER, (async (_u: string, init: RequestInit) => { to.push(JSON.parse(String(init.body)).To); return accepted(); }) as unknown as typeof fetch, recipients);
+    assert.deepEqual(await dispatchPpFollowupEmails({ queue: w.queue, sender, unsubscribeSecret: SECRET, recipients, config: { ...CONFIG, testRecipients: [gone.email] } }), { sent: 0, failed: 1, unknown: 0 });
+    assert.deepEqual(to, []);
+    assert.equal((await w.send(gone)).last_failure, 'recipient_refused');
+    await service.refreshLedger(WS);
+    assert.ok(service.registry.snapshot(WS).blocked.some(b => b.email === gone.email && b.reason === 'hard_bounce' && b.allEmail), 'the owner view shows the durable row');
+    assert.deepEqual(await decideRecipient(service.guard, WS, address('spam'), 'service'), { blocked: true, reason: 'spam_complaint' });
+  } finally { await w.close(); }
+});
+
+test('PP with the database still at 0152: the true-reason function and the ledger are missing, and everything falls back to today\'s behaviour without errors', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  // The 0153 functions are hidden by renaming them, so the real roles see exactly what a 0152 database offers them.
+  const hidden = ['pp_followup_block_email(uuid,text)', 'email_block_decide(uuid,text,text)', 'email_block_record(uuid,text,text,text,text,text,timestamptz)',
+    'email_block_record_list(uuid,text,text,jsonb)', 'email_block_lift(uuid,text,text,text,timestamptz)', 'email_block_rows(uuid,integer)'];
+  const owner = async (sql: string) => { const client = await w.admin.connect(); try { await client.query('BEGIN'); await client.query('SET LOCAL ROLE r72_owner'); await client.query(sql); await client.query('COMMIT'); }
+    catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); } };
+  const rename = async (hide: boolean) => { for (const fn of hidden) { const name = fn.slice(0, fn.indexOf('('));
+    await owner(hide ? `ALTER FUNCTION app_private.${fn} RENAME TO ${name}_hidden_0152` : `ALTER FUNCTION app_private.${name}_hidden_0152${fn.slice(fn.indexOf('('))} RENAME TO ${name}`); } };
+  await rename(true);
+  try {
+    const flow = await w.publish(2, 24);
+    const who = await w.person('Fallback'); await w.consent(who, 'marketing', 'granted');
+    assert.equal((await w.act(flow, 'enrol', { point: who.point })).changed, 1);
+    // The bounce effect: today's unsubscribe capability, today's label, both PP marketing purposes, the run stopped.
+    const effects = ppEmailBounceEffects(w.repo);
+    await effects.onMarketingBlock({ email: who.email, reason: 'hard_bounce', metadata: { send: 'x', point: who.point } });
+    assert.deepEqual((await w.admin.query("SELECT purpose,reason,source FROM app.communication_suppression_events WHERE contact_point_id=$1 ORDER BY purpose", [who.point])).rows,
+      [{ purpose: 'marketing', reason: 'recipient_unsubscribe', source: 'pp.followup.unsubscribe' }, { purpose: 'property_predator_marketing', reason: 'recipient_unsubscribe', source: 'pp.followup.unsubscribe' }]);
+    assert.deepEqual([(await w.run(who)).state, (await w.run(who)).reason], ['stopped', 'unsubscribed']);
+    // The ledger is unavailable; the guard is the in-process list alone, as before 0153.
+    const logs: string[] = [];
+    const ledger = new PgEmailBlockLedger(w.identityPool, { log: line => logs.push(line) });
+    assert.equal(await ledger.decide(WS, who.email, 'marketing'), null);
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: who.email, reason: 'hard_bounce', eventId: 'bounce:fallback', stream: 'broadcast', at: Date.now() }), 'unavailable');
+    const service = new EmailBounceService({ config: { blockers: [], sources: [{ key: 'pp', workspaceId: WS, token: null, webhookSecret: null, serverId: null, streams: new Map([['broadcast', 'marketing']]) }] },
+      ledger: new PgEmailBlockLedger(w.identityPool) });
+    service.registry.record(WS, { sourceKey: 'pp', stream: 'broadcast', id: 'bounce:mem', kind: 'unsubscribed', email: 'mem@example.test', at: Date.now() - 1000 });
+    assert.deepEqual(await decideRecipient(service.guard, WS, 'mem@example.test', 'marketing'), { blocked: true, reason: 'unsubscribed' });
+    assert.deepEqual(await decideRecipient(service.guard, WS, 'mem@example.test', 'service'), { blocked: false });
+    assert.deepEqual(await decideRecipient(service.guard, WS, who.email, 'service'), { blocked: false }, 'nothing durable is invented');
+    await service.refreshLedger(WS);
+    assert.ok(logs.some(line => line.includes('ledger_absent')) && !logs.some(line => line.includes('@')));
+  } finally { await rename(false); await w.close(); }
+});
+
+test('PP owner undo of a wrong hard bounce (0153): the ledger lift and a released CRM event re-allow the PP send gate; a spam report stays; a later bounce blocks again', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(1, 24);
+    const ledger = new PgEmailBlockLedger(w.identityPool);
+    const token = (w.ownerId as { sessionToken: string }).sessionToken;
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); return who; };
+    const dead = await start('Undo'), spam = await start('Spammy');
+    const at = Date.now() - 3_600_000;
+    for (const [who, reason] of [[dead, 'hard_bounce'], [spam, 'spam_complaint']] as const) {
+      assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: who.email, reason, eventId: `bounce:${who.point}`, stream: 'broadcast', at }), 'recorded');
+      assert.equal((await w.repo.blockEmail(who.point, reason)).recorded, true);
+      assert.equal((await w.act(flow, 'enrol', { point: who.point })).reason, 'not_permitted', `${reason}: the PP send gate refuses`);
+    }
+    // Only a manager of PP with PP selected; the wrong session changes nothing.
+    await assert.rejects(ledger.ownerLift({ sessionToken: 'not-a-session', workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), /Brand owner required/u);
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), { lifted: 1, released: 1, spamComplaint: false, alreadyLifted: false });
+    const released = (await w.admin.query("SELECT purpose,state,reason,source,actor_kind,actor_user_id,evidence FROM app.communication_suppression_events WHERE contact_point_id=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1", [dead.point])).rows[0];
+    assert.deepEqual({ ...released, evidence: released.evidence }, { purpose: null, state: 'released', reason: 'owner_confirmed_working', source: 'pp.owner.email_health', actor_kind: 'user',
+      actor_user_id: w.ownerId.userId, evidence: { route: 'owner_email_health', note: 'Owner confirmed' } });
+    assert.equal((await ledger.decide(WS, dead.email, 'marketing'))!.blocked, false);
+    assert.equal((await w.act(flow, 'enrol', { point: dead.point })).changed, 1, 'the PP send gate allows the address again');
+    // A second press changes nothing; a spam report is never lifted and its CRM stop stays.
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: dead.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: false, alreadyLifted: true });
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: spam.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true, alreadyLifted: false });
+    assert.equal((await w.act(flow, 'enrol', { point: spam.point })).reason, 'not_permitted');
+    // A genuine bounce after the lift blocks again, in the ledger and (through the effect) in the CRM.
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: dead.email, reason: 'hard_bounce', eventId: `bounce:again-${dead.point}`, stream: 'broadcast', at: Date.now() }), 'renewed');
+    assert.equal((await ledger.decide(WS, dead.email, 'service'))!.blocked, true);
+    assert.equal((await w.repo.blockEmail(dead.point, 'hard_bounce')).recorded, true, 'the released CRM stop is written again');
+    assert.deepEqual([(await w.run(dead)).state, (await w.run(dead)).reason], ['stopped', 'delivery_failed']);
+  } finally { await w.close(); }
+});
+
+test('PP second review (0153): a spam report on the same point is never released by an owner lift; a replayed old bounce after a lift does not re-stop the person, a new one does', { skip, timeout: 300_000 }, async () => {
+  const w = await world();
+  try {
+    const flow = await w.publish(1, 24);
+    const ledger = new PgEmailBlockLedger(w.identityPool);
+    const token = (w.ownerId as { sessionToken: string }).sessionToken;
+    const start = async (name: string) => { const who = await w.person(name); await w.consent(who, 'marketing', 'granted'); return who; };
+    // 1. Hard bounce, then a spam report, on the same point: the lift releases nothing in the CRM; the gate still refuses.
+    const both = await start('Both');
+    const at = Date.now() - 3_600_000;
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: both.email, reason: 'hard_bounce', eventId: `bounce:h-${both.point}`, stream: 'broadcast', at }), 'recorded');
+    await w.repo.blockEmail(both.point, 'hard_bounce');
+    assert.equal(await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: both.email, reason: 'spam_complaint', eventId: `bounce:s-${both.point}`, stream: 'broadcast', at: at + 1000 }), 'recorded');
+    await w.repo.blockEmail(both.point, 'spam_complaint');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: both.email, note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: true, alreadyLifted: false });
+    assert.equal((await w.admin.query("SELECT count(*)::int AS n FROM app.communication_suppression_events WHERE contact_point_id=$1 AND state='released'", [both.point])).rows[0].n, 0);
+    assert.equal((await w.act(flow, 'enrol', { point: both.point })).reason, 'not_permitted');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: both.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: true, alreadyLifted: true }, 'a second press releases nothing either');
+
+    // 2. Replay after a lift: first delivery fails after the ledger write, the owner lifts, Postmark retries.
+    const back = await start('Replay');
+    assert.equal((await w.act(flow, 'enrol', { point: back.point })).changed, 1);
+    const source = { key: 'pp', workspaceId: WS, token: null, webhookSecret: 'pp-webhook-secret-synthetic-0123456789', serverId: null, streams: new Map([['broadcast', 'marketing' as const]]) };
+    const service = new EmailBounceService({ config: { blockers: [], sources: [source] }, ledger });
+    const effects = ppEmailBounceEffects(w.repo);
+    let failOnce = true;
+    service.setEffects(WS, { onMarketingBlock: async input => { if (failOnce) { failOnce = false; throw new Error('database unavailable'); } await effects.onMarketingBlock(input); } });
+    const webhook = createPostmarkBounceWebhook({ service });
+    const post = async (body: unknown) => {
+      const captured = { status: 0 };
+      const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: '/api/provider-webhooks/postmark/pp',
+        headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`pp:${source.webhookSecret}`).toString('base64')}` }, socket: { remoteAddress: '127.0.0.1' } }) as unknown as IncomingMessage;
+      const res = { writeHead(status: number) { captured.status = status; }, end() {} } as unknown as ServerResponse;
+      await webhook.handle(req, res, new URL(req.url!, 'https://hq.propertypredator.com'));
+      return captured.status;
+    };
+    const stops = async () => (await w.admin.query("SELECT state,reason FROM app.communication_suppression_events WHERE contact_point_id=$1 AND channel='email' ORDER BY recorded_at,id", [back.point])).rows;
+    const original = { RecordType: 'Bounce', MessageStream: 'broadcast', ID: Number(`92${Date.now() % 1e9}`), Type: 'HardBounce', TypeCode: 1, Email: back.email,
+      BouncedAt: new Date(Date.now() - 60_000).toISOString(), Inactive: true, ServerID: 1, Metadata: { send: 's', point: back.point } };
+    assert.equal(await post(original), 503);
+    assert.deepEqual(await stops(), [], 'the CRM stop did not land');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: back.email, note: 'Owner confirmed' }), { lifted: 1, released: 0, spamComplaint: false, alreadyLifted: false });
+    assert.equal(await post(original), 200, 'Postmark retries the same bounce');
+    assert.deepEqual(await stops(), [], 'the person is not re-stopped');
+    assert.equal((await w.run(back)).state, 'active', 'their run keeps going');
+    assert.equal(await post({ ...original, ID: original.ID + 1, BouncedAt: new Date().toISOString() }), 200, 'a genuinely new bounce');
+    assert.deepEqual(await stops(), [{ state: 'suppressed', reason: 'hard_bounce' }]);
+    assert.deepEqual([(await w.run(back)).state, (await w.run(back)).reason], ['stopped', 'delivery_failed']);
+    // A spam complaint for an address that still has an unlifted hard bounce: its stop failed the first time, and the
+    // retry runs it (the ledger's strongest reason, the bounce, never hides the spam report's own stop).
+    const calls: string[] = [];
+    let failSpam = true;
+    service.setEffects(WS, { onMarketingBlock: async input => { calls.push(input.reason);
+      if (input.reason === 'spam_complaint' && failSpam) { failSpam = false; throw new Error('database unavailable'); } await effects.onMarketingBlock(input); } });
+    const spamEvent = { ...original, ID: original.ID + 2, RecordType: 'SpamComplaint', Type: 'SpamComplaint', BouncedAt: new Date().toISOString() };
+    assert.equal(await post(spamEvent), 503);
+    assert.equal(await post(spamEvent), 200);
+    assert.deepEqual(calls, ['spam_complaint', 'spam_complaint'], 'the retry ran the stop');
+    // If a re-stop ever landed after a lift, a second press repairs it (the release runs again for an owner-lifted bounce).
+    const repaired = await start('Repair');
+    await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: repaired.email, reason: 'hard_bounce', eventId: `bounce:r-${repaired.point}`, stream: 'broadcast', at });
+    await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' });
+    await w.repo.blockEmail(repaired.point, 'hard_bounce');
+    assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).reason, 'not_permitted');
+    const audit = async () => (await w.admin.query('SELECT crm_released,lifted_by_user_id FROM app_private.email_address_block_lifts WHERE email=$1 ORDER BY lifted_at,id', [repaired.email])).rows;
+    assert.deepEqual(await audit(), [{ crm_released: 0, lifted_by_user_id: w.ownerId.userId }], 'the real lift wrote exactly one trace');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' }), { lifted: 0, released: 1, spamComplaint: false, alreadyLifted: true });
+    assert.deepEqual(await audit(), [{ crm_released: 0, lifted_by_user_id: w.ownerId.userId }, { crm_released: 1, lifted_by_user_id: w.ownerId.userId }], 'the repair press leaves its own trace with the release count');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: false, alreadyLifted: true });
+    assert.equal((await audit()).length, 2, 'a press that changes nothing adds no trace');
+    assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).changed, 1);
   } finally { await w.close(); }
 });

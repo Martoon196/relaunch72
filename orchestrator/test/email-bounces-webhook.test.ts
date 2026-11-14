@@ -80,12 +80,12 @@ test('a hard bounce blocks the exact address in the sending workspace, stops tha
   assert.doesNotMatch(f.logs.join('\n'), /example\.invalid/u, 'no address reaches the log');
 });
 
-test('a spam complaint blocks every marketing purpose for that address but not an event email the person asked for', async () => {
+test('a spam complaint blocks every email from the brand to that address, event emails included', async () => {
   const f = fixture();
   const result = await f.post('mhp', bounce({ RecordType: 'SpamComplaint', Type: 'SpamComplaint', TypeCode: 100001, ID: 43, MessageStream: 'outbound', Email: 'cross@example.invalid', CanActivate: false }), f.auth);
   assert.deepEqual([result.status, result.body.outcome, result.body.blocked], [200, 'spam_complaint', true]);
   assert.deepEqual(f.service.registry.decide(MHP, 'cross@example.invalid', 'marketing'), { blocked: true, reason: 'spam_complaint' });
-  assert.equal(f.service.registry.decide(MHP, 'cross@example.invalid', 'service').blocked, false);
+  assert.deepEqual(f.service.registry.decide(MHP, 'cross@example.invalid', 'service'), { blocked: true, reason: 'spam_complaint' });
   assert.equal(f.effects[0]?.reason, 'spam_complaint');
   assert.equal(f.service.registry.snapshot(MHP).month.complained, 1);
 });

@@ -11,16 +11,18 @@ const WS = '2789228d-55a6-4688-b1e8-2f70abca990b', OTHER = 'd975ff66-336a-46c2-b
 const NOW = Date.parse('2026-11-12T10:00:00Z'), DAY = 86_400_000;
 const fact = (over: Partial<EmailFact> = {}): EmailFact => ({ sourceKey: 'mhp', stream: 'broadcast', id: 'bounce:1', kind: 'hard_bounce', email: 'gone@example.invalid', at: NOW - DAY, ...over });
 
-test('policy: a hard bounce stops all email, everything else stops marketing only', () => {
-  assert.equal(blocksPurpose('hard_bounce', 'marketing'), true); assert.equal(blocksPurpose('hard_bounce', 'service'), true);
-  for (const reason of ['spam_complaint', 'unsubscribed', 'repeated_soft_bounce'] as const) {
+test('policy: a hard bounce, a spam complaint or an owner block stops all email; an unsubscribe or soft bounces stop marketing only', () => {
+  for (const reason of ['hard_bounce', 'spam_complaint', 'manual'] as const) {
+    assert.equal(blocksPurpose(reason, 'marketing'), true); assert.equal(blocksPurpose(reason, 'service'), true);
+  }
+  for (const reason of ['unsubscribed', 'repeated_soft_bounce'] as const) {
     assert.equal(blocksPurpose(reason, 'marketing'), true); assert.equal(blocksPurpose(reason, 'service'), false);
   }
 });
 
-test('policy: only a dead address stops the person from a send path, and a soft bounce is never final in itself', () => {
-  assert.equal(refusalStopsPerson('hard_bounce'), true);
-  for (const reason of ['spam_complaint', 'unsubscribed', 'repeated_soft_bounce'] as const) assert.equal(refusalStopsPerson(reason), false);
+test('policy: a dead address or a spam report stops the person from a send path, and a soft bounce is never final in itself', () => {
+  assert.equal(refusalStopsPerson('hard_bounce'), true); assert.equal(refusalStopsPerson('spam_complaint'), true);
+  for (const reason of ['manual', 'unsubscribed', 'repeated_soft_bounce'] as const) assert.equal(refusalStopsPerson(reason), false);
   assert.equal(factBlockReason('soft_bounce'), null);
   assert.deepEqual((['hard_bounce', 'spam_complaint', 'unsubscribed'] as const).map(factBlockReason), ['hard_bounce', 'spam_complaint', 'unsubscribed']);
 });
@@ -67,8 +69,11 @@ test('registry: one fact is applied once, blocks every stream of the same worksp
   assert.deepEqual(registry.decide(OTHER, 'gone@example.invalid', 'marketing'), { blocked: false }, 'another brand is untouched');
   registry.record(WS, fact({ id: 'bounce:2', kind: 'spam_complaint', email: 'cross@example.invalid' }));
   assert.equal(registry.decide(WS, 'cross@example.invalid', 'marketing').blocked, true);
-  assert.equal(registry.decide(WS, 'cross@example.invalid', 'service').blocked, false, 'a requested event email still goes after a complaint');
-  assert.equal(registry.snapshot(WS).blocked.length, 2);
+  assert.deepEqual(registry.decide(WS, 'cross@example.invalid', 'service'), { blocked: true, reason: 'spam_complaint' }, 'a spam complaint stops even a requested event email');
+  registry.record(WS, fact({ id: 'subscription:x', kind: 'unsubscribed', email: 'left@example.invalid' }), false);
+  assert.equal(registry.decide(WS, 'left@example.invalid', 'marketing').blocked, true);
+  assert.equal(registry.decide(WS, 'left@example.invalid', 'service').blocked, false, 'a requested event email still goes after an unsubscribe');
+  assert.equal(registry.snapshot(WS).blocked.length, 3);
 });
 
 test('registry: soft bounces only block after the stated number inside the stated window', () => {
@@ -143,7 +148,7 @@ test('registry: the owner snapshot counts people this month and uses the provide
   assert.deepEqual(snapshot.month, { bounced: 1, complained: 1, unsubscribed: 0 }, 'old@ bounced in an earlier month; a@ bounced twice but is one person');
   assert.deepEqual(snapshot.window, { days: 30, sent: 100, bounced: 3, complaints: 1, bounceRate: 0.03, complaintRate: 0.01 });
   assert.deepEqual(snapshot.streams.map(s => [s.kind, s.stream, s.sent, s.bounceRate]), [['marketing', 'broadcast', 40, 0.075], ['service', 'outbound', 60, 0]]);
-  assert.deepEqual(snapshot.blocked.map(b => [b.email, b.reason, b.allEmail]), [['a@example.invalid', 'hard_bounce', true], ['c@example.invalid', 'spam_complaint', false], ['old@example.invalid', 'hard_bounce', true]]);
+  assert.deepEqual(snapshot.blocked.map(b => [b.email, b.reason, b.allEmail]), [['a@example.invalid', 'hard_bounce', true], ['c@example.invalid', 'spam_complaint', true], ['old@example.invalid', 'hard_bounce', true]]);
   assert.equal(snapshot.incomplete, false);
   registry.readFailed(WS, 'mhp', 'outbound', 'service');
   assert.equal(registry.snapshot(WS).incomplete, true); assert.equal(registry.snapshot(WS).window.sent, 100, 'the last good totals are kept');

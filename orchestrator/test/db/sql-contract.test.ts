@@ -3,6 +3,7 @@ import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-sche
 import { GROUP_HQ_SSO_CHECKSUM, GROUP_HQ_SSO_MIGRATION } from '../../src/db/group-hq-sso-schema.js';
 import { OPERATOR_OAUTH_CHECKSUM, OPERATOR_OAUTH_MIGRATION } from '../../src/db/operator-oauth-schema.js';
 import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-followup-schema.js';
+import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -162,6 +163,7 @@ const migration149Url = new URL('../../src/db/migrations/0149_mhp_kits.sql', imp
 const migration150Url = new URL('../../src/db/migrations/0150_mhp_kit_course_credit.sql', import.meta.url);
 const migration151Url = new URL('../../src/db/migrations/0151_mhp_whatsapp_owner_one_to_one.sql', import.meta.url);
 const migration152Url = new URL('../../src/db/migrations/0152_pp_followup_email_sequences.sql', import.meta.url);
+const migration153Url = new URL('../../src/db/migrations/0153_stop_per_channel_and_email_block_ledger.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -753,6 +755,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0150_mhp_kit_course_credit.sql', version: 150 },
     { filename: '0151_mhp_whatsapp_owner_one_to_one.sql', version: 151 },
     { filename: PP_FOLLOWUP_MIGRATION, version: 152 },
+    { filename: EMAIL_BLOCK_MIGRATION, version: 153 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -901,6 +904,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration150Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration151Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration152Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration153Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -921,6 +925,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===147)?.checksum, GROUP_HQ_SSO_CHECKSUM);
   assert.equal(tail.find(m=>m.version===148)?.checksum, OPERATOR_OAUTH_CHECKSUM);
   assert.equal(tail.find(m=>m.version===152)?.checksum, PP_FOLLOWUP_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===153)?.checksum, EMAIL_BLOCK_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
@@ -968,6 +973,59 @@ test('0152 keeps PP follow-up email runs pinned, additive and behind definer fun
   assert.match(sql, /CREATE INDEX pp_followup_runs_contact_point ON app_private\.pp_followup_runs\(contact_point_id\);/u);
   assert.match(sql, /app_private\.pp_followup_settle\(uuid,uuid,text,text\)/u);
   assert.match(sql, /app_private\.pp_followup_command\(bytea,text,uuid,uuid,uuid,uuid,uuid,text,text\[\]\)/u);
+});
+
+test('0153 makes a STOP per channel and keeps the email block ledger pinned, additive and behind definer functions', async () => {
+  const sql = normalise(await readFile(migration153Url, 'utf8'));
+  assert.match(sql, /SET LOCAL lock_timeout='5s';/u);
+  // Additive: nothing deleted, truncated or dropped; no existing table altered; no trigger added.
+  assert.doesNotMatch(sql, /\bDELETE FROM\b|\bTRUNCATE\b|\bDROP\b/u);
+  assert.doesNotMatch(sql, /ALTER TABLE app\./u);
+  assert.equal((sql.match(/ALTER TABLE/g) ?? []).length, 4, 'only the two new tables enable and force RLS');
+  // The owner-lift audit trail is append-only: insert and read for the definer, nothing else, for nobody else.
+  assert.match(sql, /CREATE TABLE app_private\.email_address_block_lifts\(/u);
+  assert.match(sql, /GRANT SELECT,INSERT ON app_private\.email_address_block_lifts TO r72_email_block_definer;/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*(?:UPDATE|DELETE|ALL)[^;]*email_address_block_lifts/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*email_address_block_lifts[^;]* TO r72_(?:web|identity_command)/u);
+  assert.doesNotMatch(sql, /CREATE TRIGGER/u);
+  assert.doesNotMatch(sql, /UPDATE app\.|UPDATE app_private\.(?!email_address_blocks)/u, 'no existing row is rewritten');
+  // A. The only replaced object: the owner one-to-one origin check, same signature, WhatsApp suppressions only.
+  assert.equal((sql.match(/CREATE OR REPLACE/g) ?? []).length, 1);
+  const origin = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION app_private.mhp_wa_owner_origin_blocked('), sql.indexOf('ALTER POLICY'));
+  assert.match(origin, /mhp_wa_owner_origin_blocked\(p_origin_workspace uuid,p_origin_contact uuid,p_origin_point uuid,p_number text\) RETURNS text/u);
+  assert.match(origin, /s\.channel='whatsapp'/u);
+  assert.doesNotMatch(origin, /sms/u);
+  assert.match(origin, /p\.consent_status='opted_out'/u, 'the whole-number opt-out on the contact point still blocks');
+  assert.match(origin, /THEN 'number_not_found'/u, 'a removed picked point still blocks');
+  const policy = sql.slice(sql.indexOf('ALTER POLICY'), sql.indexOf('CREATE TABLE'));
+  assert.match(policy, /ALTER POLICY mhp_wa_owner_origin_suppressions_worker ON app\.communication_suppression_events/u);
+  assert.match(policy, /channel='whatsapp'/u); assert.doesNotMatch(policy, /sms/u);
+  // B. One pinned private table with forced RLS; only the definer and the owner touch it.
+  assert.match(sql, /CREATE TABLE app_private\.email_address_blocks\(/u);
+  assert.match(sql, /CHECK\(workspace_id IN\('2789228d-55a6-4688-b1e8-2f70abca990b','d975ff66-336a-46c2-b36b-d7095a11af97'\)\)/u);
+  assert.match(sql, /UNIQUE\(workspace_id,source_key,email,reason\)/u);
+  assert.match(sql, /CHECK\(scope=CASE reason WHEN 'unsubscribe' THEN 'marketing' ELSE 'all' END\)/u);
+  assert.match(sql, /CHECK\(lifted_at IS NULL OR reason IN\('unsubscribe','manual'\) OR \(reason='hard_bounce' AND lifted_by_user_id IS NOT NULL AND lift_note IS NOT NULL AND lifted_event_id IS NULL\)\)/u,
+    'a spam complaint is never lifted; a hard bounce only by a named owner with a reason');
+  assert.match(sql, /ALTER TABLE app_private\.email_address_blocks FORCE ROW LEVEL SECURITY/u);
+  assert.match(sql, /CREATE ROLE r72_email_block_definer NOLOGIN NOINHERIT/u);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_email_block_definer,r72_pp_followup_definer/u);
+  assert.doesNotMatch(sql, /GRANT [^;]*email_address_blocks[^;]* TO r72_(?:web|identity_command)/u);
+  const definers = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  assert.equal(definers, 10);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path=pg_catalog/g) ?? []).length, definers);
+  assert.equal((sql.match(/IF session_user<>'r72_identity_command'/g) ?? []).length, 6, 'every granted ledger entry point checks its caller');
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.email_block_record\(uuid,text,text,text,text,text,timestamptz\),app_private\.email_block_record_list\(uuid,text,text,jsonb\), app_private\.email_block_lift\(uuid,text,text,text,timestamptz\),app_private\.email_block_decide\(uuid,text,text\),app_private\.email_block_rows\(uuid,integer\), app_private\.email_block_owner_lift\(bytea,uuid,text,text\) TO r72_identity_command;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_release_bounce\(text,uuid,text\) TO r72_email_block_definer;/u, 'the PP release is reachable only through the owner lift');
+  assert.match(sql, /state='released' AND purpose IS NULL AND reason='owner_confirmed_working' AND source='pp\.owner\.email_health' AND actor_kind='user' AND actor_user_id IS NOT NULL/u);
+  assert.doesNotMatch(sql, /email_block_(?:put|signed_up_since)\([^)]*\)[^;]* TO r72_/u, 'inner helpers are never granted');
+  // C. PP's true-reason CRM stop: purpose-free for a dead address or spam report, the two marketing purposes for an unsubscribe.
+  assert.match(sql, /\(reason IN\('hard_bounce','spam_complaint'\) AND purpose IS NULL\) OR \(reason='recipient_unsubscribe' AND purpose IN\('marketing','property_predator_marketing'\)\)/u);
+  assert.match(sql, /source='pp\.postmark\.bounce' AND actor_kind='system' AND actor_user_id IS NULL/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_block_email\(uuid,text\) TO r72_identity_command;/u);
+  assert.doesNotMatch(sql, /GRANT (?:INSERT|UPDATE|DELETE|ALL)[^;]* ON app\./u, 'no new write grant on a shared table');
+  // Nothing about a message body or provider payload is stored.
+  assert.doesNotMatch(sql.slice(sql.indexOf('CREATE TABLE app_private.email_address_blocks('), sql.indexOf('CREATE INDEX email_address_blocks_address')), /body|payload|subject|metadata/iu);
 });
 
 test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {

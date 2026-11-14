@@ -2,7 +2,8 @@ import type { Pool } from 'pg';
 import { mhpUnsubscribeUrl } from './growth-service.js';
 import type { MhpRenderedMarketingSender } from './marketing-mail.js';
 import { MHP_OWNER_EMAIL_UUID, parseMhpOwnerEmailBrand, renderMhpOwnerEmail } from './owner-email-content.js';
-import { EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
+import { EmailGuardUnavailableError, EmailRecipientBlockedError, refusalStopsPerson } from '../email-bounces/policy.js';
+import { mhpRecipientsAvailable } from './marketing-mail.js';
 
 export interface MhpOwnerEmailLease { id: string; leaseId: string; leaseUntil: string }
 export interface MhpOwnerEmailPrepared extends MhpOwnerEmailLease {
@@ -55,10 +56,15 @@ export class PgMhpOwnerEmailDispatch implements MhpOwnerEmailDispatch {
 export async function dispatchMhpOwnerEmails(input: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender;
   unsubscribeSecret: string; testRecipients: readonly string[] | null; stopped?: () => boolean; now?: () => number;
   onBlocked?: (prospectId: string) => Promise<void> }): Promise<{ sent: number; failed: number }> {
-  let sent = 0, failed = 0;
-  for (let page = 0; page < 4 && !input.stopped?.(); page++) {
+  let sent = 0, failed = 0, unavailable = false;
+  // Claims spend attempts; while the durable block list cannot be read, claim nothing (tried again next sweep).
+  if (!await mhpRecipientsAvailable(input.sender)) return { sent, failed };
+  for (let page = 0; page < 4 && !input.stopped?.() && !unavailable; page++) {
     const batch = await input.queue.claim(25, 120, input.testRecipients);
     for (const lease of batch) {
+      // The block list went away after this sweep's probe: leave the rest of the claimed batch unsettled. Their attempts
+      // were counted at claim; their leases expire (2 minutes) and they are claimed again by a later sweep.
+      if (unavailable) break;
       let prospectId: string | null = null;
       try {
         const prepared = await input.queue.prepare(lease);
@@ -74,6 +80,7 @@ export async function dispatchMhpOwnerEmails(input: { queue: MhpOwnerEmailDispat
         await input.queue.settle(lease, true, reference); sent++;
       } catch (error) {
         failed++;
+        if (error instanceof EmailGuardUnavailableError) unavailable = true;
         // Refused before the provider was called. Every refusal is a definite non-send; only a dead address also
         // stops the person, because that stop cancels the event emails a marketing-only block must leave alone.
         if (error instanceof EmailRecipientBlockedError && refusalStopsPerson(error.reason) && prospectId) {

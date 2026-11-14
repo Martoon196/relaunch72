@@ -27,7 +27,7 @@ const skip = testDatabaseSkipReason();
 const SECRET = 'bounce-proof-webhook-secret-0123456789';
 const DAY = 86_400_000;
 
-test('MHP sign-up emails on real roles: a bounced or complained address is refused, a dead address stops the person by the existing unsubscribe capability, a marketing-only block leaves the reminders they asked for, and only email is touched', { skip, timeout: 120_000 }, async () => {
+test('MHP sign-up emails on real roles: a bounced or complained address is refused everything and stopped by the existing unsubscribe capability, a marketing-only block leaves the email they asked for, and only email is touched', { skip, timeout: 120_000 }, async () => {
   const admin = await openTestDatabase();
   const identity = await loginRole(admin, 'r72_identity_command');
   try {
@@ -38,6 +38,8 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       module: null, link: 'https://martinhowardproperty.co.uk/webinar/' }, null);
     const people = { gone: await signup(address('gone'), true), cross: await signup(address('cross'), true), fine: await signup(address('fine'), true),
       crossService: await signup(address('cross-service'), false), deadService: await signup(address('dead-service'), false),
+      // Unsubscribed at Postmark; signed up for this webinar without ticking the marketing box: the confirmation still goes.
+      leftService: await signup(address('left-service'), false),
       // Their mailbox was full three times this month; they have just signed up, box ticked, for this webinar.
       full: await signup(address('full'), true) };
     const before = async (table: string) => Number((await ownerQuery<{ n: string }>(admin, `SELECT count(*) AS n FROM ${table}`))[0]!.n);
@@ -51,6 +53,7 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       bounces.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id, kind, email, at: Date.now() - 60_000 });
     block(address('gone'), 'hard_bounce', 'bounce:1'); block(address('cross'), 'spam_complaint', 'bounce:2');
     block(address('cross-service'), 'spam_complaint', 'bounce:3'); block(address('dead-service'), 'hard_bounce', 'bounce:4');
+    bounces.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'subscription:left', kind: 'unsubscribed', email: address('left-service'), at: Date.now() - 60_000 }, false);
     for (const n of [5, 6, 7]) bounces.registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: `bounce:${n}`, kind: 'soft_bounce', email: address('full'), at: Date.now() - n * DAY });
     assert.deepEqual(bounces.registry.decide(MHP, address('full'), 'marketing'), { blocked: true, reason: 'repeated_soft_bounce' });
 
@@ -62,7 +65,7 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
     }) as typeof fetch, { guard: bounces.registry, workspaceId: MHP });
     const mine = Object.values(people).map(person => person.prospectId);
     // Only this run's rows: the disposable database may hold other proofs' prospects.
-    const scoped = { claim: async (limit: number, seconds: number) => growth.claim(limit, seconds, Object.keys(people).map(key => address(key === 'crossService' ? 'cross-service' : key === 'deadService' ? 'dead-service' : key))),
+    const scoped = { claim: async (limit: number, seconds: number) => growth.claim(limit, seconds, Object.keys(people).map(key => address(key.replace(/[A-Z]/gu, c => `-${c.toLowerCase()}`)))),
       settle: (id: string, accepted: boolean, reference: string | null) => growth.settle(id, accepted, reference) };
     // One pass of the real dispatcher. It reports nothing when there was nothing to do, so the pass is
     // followed through its own claim and settle calls instead of its telemetry.
@@ -75,9 +78,9 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
         settle: async (id: string, accepted: boolean, reference: string | null) => { await scoped.settle(id, accepted, reference); settled++; if (accepted) sent++; else failed++; finish(); },
       }, sender, { testRecipients: null }, { intervalMs: 3_600_000, onBlocked: health.onBlocked });
     });
-    assert.deepEqual(await sweep(), { sent: 2, failed: 4 });
-    assert.deepEqual(bodies.map(b => [b.To, b.MessageStream]).sort(), [[address('cross-service'), 'outbound'], [address('fine'), 'broadcast']],
-      'the healthy address got its email; a complainer still got the confirmation they asked for; the dead, complained and soft-bounced marketing addresses got nothing');
+    assert.deepEqual(await sweep(), { sent: 2, failed: 5 });
+    assert.deepEqual(bodies.map(b => [b.To, b.MessageStream]).sort(), [[address('fine'), 'broadcast'], [address('left-service'), 'outbound']],
+      'the healthy address got its email; an unsubscriber still got the confirmation they asked for; the dead and complained addresses got nothing at all, and the soft-bounced address no marketing');
     assert.equal(bodies.find(b => b.To === address('fine'))!.Metadata.prospect, people.fine.prospectId);
 
     const prospects = async () => new Map((await ownerQuery<{ id: string; unsubscribed: boolean; marketing_consent: boolean }>(admin,
@@ -86,14 +89,14 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       `SELECT template_key, sent_at IS NOT NULL AS sent, cancelled_at IS NOT NULL AS cancelled, builtin_purpose AS purpose
        FROM app_private.mhp_marketing_sends WHERE prospect_id = $1 AND delivery_channel = 'email' ORDER BY template_key`, [prospectId]);
     let state = await prospects();
-    for (const key of ['gone', 'deadService'] as const) {
+    for (const key of ['gone', 'deadService', 'cross', 'crossService'] as const) {
       assert.deepEqual([state.get(people[key].prospectId)!.unsubscribed, state.get(people[key].prospectId)!.marketing_consent], [true, false], `${key} is stopped in the contact list`);
       const rows = await sends(people[key].prospectId);
       assert.ok(rows.length >= 2 && rows.every(row => !row.sent && row.cancelled), `${key}: every queued email, including the later ones, is cancelled`);
     }
     // Blocked from marketing only. The stop is the unsubscribe capability, which would cancel the reminders queued beside
     // the refused confirmation; a refused marketing email must never set it off.
-    for (const key of ['cross', 'full'] as const) {
+    for (const key of ['full'] as const) {
       assert.deepEqual([state.get(people[key].prospectId)!.unsubscribed, state.get(people[key].prospectId)!.marketing_consent], [false, true], `${key} is not stopped by a refused marketing email`);
       const rows = await sends(people[key].prospectId);
       assert.ok(rows.every(row => !row.sent), `${key}: nothing marketing was sent`);
@@ -101,7 +104,7 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
       assert.ok(reminders.length >= 1 && reminders.every(row => !row.cancelled), `${key}: the webinar reminders they asked for are still queued`);
     }
     assert.equal(state.get(people.fine.prospectId)!.unsubscribed, false);
-    assert.equal(state.get(people.crossService.prospectId)!.unsubscribed, false, 'a complaint alone never cancels an event email the person asked for');
+    assert.equal(state.get(people.leftService.prospectId)!.unsubscribed, false, 'an unsubscribe alone never cancels an event email the person asked for');
     assert.ok((await sends(people.fine.prospectId)).some(row => !row.sent && !row.cancelled), 'the healthy person keeps their later emails');
 
     // A fresh sign-up with a ticked box clears the old unsubscribe, but the address is still on Postmark's list: refused again, stopped again.
@@ -157,7 +160,7 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
   }
 });
 
-test('native webinar emails on real roles: a hard-bounced address is not emailed again, a complaint does not stop a requested event email, and another brand is untouched', { skip, timeout: 120_000 }, async () => {
+test('native webinar emails on real roles: a hard-bounced or complained address is not emailed again, an unsubscribe does not stop a requested event email, and another brand is untouched', { skip, timeout: 120_000 }, async () => {
   const admin = await openTestDatabase();
   const content = await loginRole(admin, 'r72_content_command');
   try {
@@ -172,6 +175,7 @@ test('native webinar emails on real roles: a hard-bounced address is not emailed
     const registry = new EmailBlockRegistry(() => clock); registry.markReady();
     registry.record(a.ws, { sourceKey: 'alpha', stream: 'broadcast', id: 'bounce:1', kind: 'hard_bounce', email: 'gone@example.test', at: clock - DAY });
     registry.record(a.ws, { sourceKey: 'alpha', stream: 'broadcast', id: 'bounce:2', kind: 'spam_complaint', email: 'cross@example.test', at: clock - DAY });
+    registry.record(a.ws, { sourceKey: 'alpha', stream: 'broadcast', id: 'subscription:3', kind: 'unsubscribed', email: 'left@example.test', at: clock - DAY }, false);
     const worker = new WebinarWorker({ pool: content, config, stream: null, mailer, recipients: registry, now: () => clock });
     const consent = { serviceNotice: 'x', marketing: false, version: 'webinar-1' };
     const publish = async (brand: typeof a) => {
@@ -181,7 +185,7 @@ test('native webinar emails on real roles: a hard-bounced address is not emailed
         settings: readSettings({ ...DEFAULT_SETTINGS, reminderOffsetsMinutes: [], crmAutoHandoff: false }) });
       await svc.setStatus(brand.owner, randomUUID(), id, 'publish');
       const key = (await svc.get(brand.owner, randomUUID(), id)).event.publicKey;
-      for (const email of ['Gone@Example.test', 'cross@example.test', 'fine@example.test']) {
+      for (const email of ['Gone@Example.test', 'cross@example.test', 'fine@example.test', 'left@example.test']) {
         assert.equal((await svc.register(key, { email, name: 'Pat', answers: {}, marketing: false, consent, attribution: {} })).outcome, 'created');
       }
       return id;
@@ -189,12 +193,12 @@ test('native webinar emails on real roles: a hard-bounced address is not emailed
     const alpha = await publish(a), bravo = await publish(b);
     await worker.tick();
     const to = (from: string) => sent.filter(s => s.from.includes(from)).map(s => s.to).sort();
-    assert.deepEqual(to('alpha'), ['cross@example.test', 'fine@example.test'], 'the hard-bounced address is skipped; the complainer still gets the confirmation they asked for');
-    assert.deepEqual(to('bravo'), ['cross@example.test', 'fine@example.test', 'gone@example.test'], 'a block in one brand never touches another brand');
+    assert.deepEqual(to('alpha'), ['fine@example.test', 'left@example.test'], 'the hard-bounced and complained addresses are skipped; the unsubscriber still gets the confirmation they asked for');
+    assert.deepEqual(to('bravo'), ['cross@example.test', 'fine@example.test', 'gone@example.test', 'left@example.test'], 'a block in one brand never touches another brand');
     const jobs = async (event: string) => (await admin.query<{ email: string; state: string; detail: string | null }>(
       `SELECT r.email, j.state, j.detail FROM app.webinar_jobs j JOIN app.webinar_registrations r ON r.id = j.registration_id
        WHERE j.event_id = $1 AND j.kind = 'message' AND j.purpose = 'confirmation' ORDER BY r.email`, [event])).rows;
-    assert.deepEqual((await jobs(alpha)).map(j => [j.email, j.state]), [['cross@example.test', 'done'], ['fine@example.test', 'done'], ['gone@example.test', 'blocked']]);
+    assert.deepEqual((await jobs(alpha)).map(j => [j.email, j.state]), [['cross@example.test', 'blocked'], ['fine@example.test', 'done'], ['gone@example.test', 'blocked'], ['left@example.test', 'done']]);
     assert.match((await jobs(alpha))[2]!.detail!, /earlier email to this address bounced/u);
     assert.ok((await jobs(bravo)).every(j => j.state === 'done'));
     const before = sent.length; await worker.tick();

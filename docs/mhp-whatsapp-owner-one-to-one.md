@@ -23,8 +23,11 @@ outcome on the contact:
      trunk zero (`+4407700…`) is refused, never stored.
    - *The original brand can still say no.* Every phone/WhatsApp point of the original contact that
      carries the number counts, whether the owner picked the point or typed the number: an opt-out, or a
-     current WhatsApp or SMS suppression (a STOP) on any of them, refuses the link, the queue and the
+     current WhatsApp suppression (a WhatsApp STOP) on any of them, refuses the link, the queue and the
      send. It is read again at begin-call, so an opt-out recorded after queueing stops the send.
+     From 0153 (owner rule: "any stop message only applies to that channel") an SMS STOP in the original
+     brand no longer blocks a WhatsApp send; under 0151 it did. The point's own `consent_status='opted_out'`
+     still blocks whatever channel it came from.
 2. **Record permission** through the existing 0063 founder rail (purpose `mhp.owner-one-to-one`):
    lawful basis (`consent` or `legitimate_interests`), evidence kind and a short note. If the person has
    never messaged the MHP number, the owner must also confirm "this is their WhatsApp number" — recorded

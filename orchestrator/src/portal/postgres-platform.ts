@@ -202,6 +202,7 @@ import type { FinanceDraftsService } from './finance-drafts-service.js';
 import type { MhpKitCrmRecorder, MhpKitReplayRegistrar } from '../mhp/kit-service.js';
 import { emailBounceHandlingDisabled, loadEmailBounceConfig } from '../email-bounces/config.js';
 import { EmailBounceService } from '../email-bounces/service.js';
+import { PgEmailBlockLedger } from '../email-bounces/ledger.js';
 import { mhpEmailBounceSourceDefault } from '../mhp/email-health.js';
 import { ppEmailBounceEffects, ppEmailBounceSourceDefault } from '../pp-followup/bounces.js';
 
@@ -1346,7 +1347,11 @@ export async function buildPgPortalPlatform(
     // without it the pages show the exact missing settings instead of fake controls.
     const webinarConfig = loadWebinarConfig(env);
     // One bounce handler for every brand, chosen by configuration. EMAIL_BOUNCE_HANDLING=off leaves it with no sources.
-    const emailBounces = new EmailBounceService({ log: line => (line.includes('"level":"warn"') ? console.warn : console.info)(line), config: emailBounceHandlingDisabled(env)
+    // The durable ledger (0153) runs on the identity command role; before 0153 it answers "unavailable" and nothing
+    // changes. The kill switch turns it off too: with handling off nothing is refused, durable rows included.
+    const emailBounceLog = (line: string): void => (line.includes('"level":"warn"') ? console.warn : console.info)(line);
+    const emailBounces = new EmailBounceService({ log: emailBounceLog,
+      ledger: emailBounceHandlingDisabled(env) ? null : new PgEmailBlockLedger(identityPool, { log: emailBounceLog }), config: emailBounceHandlingDisabled(env)
       ? { sources: [], blockers: [] }
       : loadEmailBounceConfig(env, { webinarSenders: webinarConfig.senders.values(),
         // Each brand's own source exists only while that brand's sending is composed: PP's needs delivery switched on and ready.
@@ -1370,7 +1375,7 @@ export async function buildPgPortalPlatform(
           webinars = new PgWebinarService({ pool: contentCommandPool, config: webinarConfig, stream,
             crm: { commands: new WebinarCrmCommands({ transactionRunner: webinarCrmRunner(commandPool) }), pool: commandPool } });
           webinarWorker = new WebinarWorker({ pool: contentCommandPool, config: webinarConfig, stream, mailer: createPostmarkMailer(),
-            recipients: emailBounces.registry,
+            recipients: emailBounces.guard,
             ...(groupHqHandoffReady ? { webinars } : {}), log: (line) => console.warn(line) });
           // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
           webinarStudio = new StudioRelay({ ...webinarConfig.studio });

@@ -245,3 +245,28 @@ test('Detached MHP mail has a hard in-flight cap and releases capacity after del
   const after = mailer.sendAuthLink(ROW.user_email, url, 'magic');
   assert.equal(releases.length, 9); releases[8]!(new Response('{}', { status: 201 })); await after;
 });
+
+test('MHP password sign-in returns only to the two exact owner pages it was sent from; anything else lands on the Desk', async () => {
+  const h = harness();
+  for (const target of ['/hq/marketing', '/hq/marketing/email-health']) {
+    const first = (await h.run('GET', `/portal/login?next=${encodeURIComponent(target)}`)).res;
+    assert.match(first.body, new RegExp(`<input type="hidden" name="next" value="${target.replace(/\//gu, '\\/')}">`, 'u'));
+    const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email, password: 'password', next: target }).toString();
+    const { res } = await h.run('POST', '/portal/login', body, { cookie: cookieHeader(first) });
+    assert.deepEqual([res.statusCode, res.headers.location], [303, target]);
+  }
+  // Hostile or near-miss values: never carried into the form, never followed after sign-in.
+  const hostile = ['https://evil.invalid/hq/marketing', '//evil.invalid', '/\\evil.invalid', '\\\\evil.invalid', '/hq/marketing/', '/HQ/marketing', '/hq/marketing/email-health?x=1',
+    '/hq/marketing/email-health#x', '/hq/marketing/../portal', ' /hq/marketing', '/hq/marketing%2F', 'hq/marketing', '/portal/crm', ''];
+  for (const value of hostile) {
+    const first = (await h.run('GET', `/portal/login?next=${encodeURIComponent(value)}`)).res;
+    assert.doesNotMatch(first.body, /name="next"/u, `GET ${JSON.stringify(value)}`);
+    const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email, password: 'password', next: value }).toString();
+    const { res } = await h.run('POST', '/portal/login', body, { cookie: cookieHeader(first) });
+    assert.deepEqual([res.statusCode, res.headers.location], [303, '/portal'], `POST ${JSON.stringify(value)}`);
+  }
+  const twice = (await h.run('GET', '/portal/login?next=%2Fhq%2Fmarketing&next=%2Fhq%2Fmarketing')).res;
+  assert.doesNotMatch(twice.body, /name="next"/u, 'a repeated parameter is refused');
+  // Only the password form carries it; the email-link form does not.
+  assert.doesNotMatch((await h.run('GET', '/portal/auth/magic?next=%2Fhq%2Fmarketing')).res.body, /name="next"/u);
+});

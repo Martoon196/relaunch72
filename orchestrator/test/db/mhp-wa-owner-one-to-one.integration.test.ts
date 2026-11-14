@@ -389,11 +389,12 @@ test('MHP owner one-to-one WhatsApp safeguards: original-brand opt-out at link, 
   assert.equal((await link(erin.id,erin.points[0]!,null)).reason,'opted_out');
   assert.equal((await link(erin.id,null,'+44 7700 900130')).reason,'opted_out','typing an opted-out number is refused like picking it');
   assert.equal((await link(erin.id,null,'+44 (0)7700 900131')).reason,'opted_out','an opted-out phone point in national form still matches');
+  // 0153, owner rule: a STOP applies only to its own channel. A current SMS STOP on that number in the original brand
+  // no longer blocks a WhatsApp send (it used to, under 0151); see the stop-per-channel test below for queue and begin-call.
   await suppress(erin.id,erin.points[2]!,'sms');
-  assert.equal((await link(erin.id,null,'+447700900132')).reason,'opted_out','a current SMS STOP on that number in the original brand blocks');
-  await suppress(erin.id,erin.points[2]!,'sms','released');
   const erinLink=await link(erin.id,null,'+447700900132');
-  assert.equal(erinLink.state,'linked','a released suppression no longer blocks');
+  assert.equal(erinLink.state,'linked','an SMS STOP does not block WhatsApp');
+  await suppress(erin.id,erin.points[2]!,'sms','released');
   assert.equal((await ownerQuery<Row>(owner,`SELECT count(*)::int AS n FROM app_private.mhp_wa_owner_links WHERE origin_contact_id=$1`,[erin.id]))[0]!.n,1);
 
   // --- An opt-out recorded in the original brand AFTER queueing stops the send at begin-call (typed number, another point).
@@ -495,6 +496,90 @@ test('MHP owner one-to-one WhatsApp safeguards: original-brand opt-out at link, 
   assert.equal((await ownerQuery<Row>(owner,'SELECT state FROM app.property_predator_whatsapp_live_jobs WHERE owner_send_id=$1',[next]))[0]!.state,'needs_attention');
   assert.equal((await state(second)).dailyCap.used,used,'an unconfirmed call still counts');
   await expectPostgresError(settle(c,'accepted','wamid.toolate','meta_whatsapp_accepted'),'40001');
+ } finally {
+  await Promise.all(pools.map(p=>p.end()));
+  try {for(const role of roles) await owner.query('ALTER ROLE '+role+' PASSWORD NULL');} finally {await owner.end();}
+ }
+});
+
+test('0153 stop per channel: an SMS STOP in the original brand no longer blocks a WhatsApp send; a WhatsApp STOP, an opted-out point and a signed STOP still do',
+ {skip:testDatabaseSkipReason(), timeout:180000}, async()=>{
+ const owner=await openTestDatabase();
+ const pools:Pool[]=[];
+ try {
+  const {call,link,state,permission,queue,preview,observe,claim,load,begin,settle,sendRow}=await rig(owner,pools);
+  const meta='1234567890123';
+  await observe(meta,'intro_v1','NAMED',['first_name','area'],'Hi {{first_name}}, Martin here about {{area}}.');
+  const vars=(n:string)=>({first_name:n,area:'Leeds'});
+  const grant=(l:string,contact:string)=>permission(l,randomUUID(),'granted','consent','written_consent','Signed the enquiry form',true,contact);
+  const person=async(name:string,kind:string,value:string,consent='unknown')=>{
+   const id=randomUUID(),point=randomUUID();
+   await ownerQuery(owner,`INSERT INTO app.contacts(id,workspace_id,display_name) VALUES($1,$2,$3)`,[id,pp,name]);
+   await ownerQuery(owner,`INSERT INTO app.contact_points(id,workspace_id,contact_id,kind,value,normalized_value,consent_status) VALUES($1,$2,$3,$4,$5,$5,$6)`,[point,pp,id,kind,value,consent]);
+   return {id,point};
+  };
+  const suppress=(contact:string,point:string,channel:string,state='suppressed')=>ownerQuery(owner,`INSERT INTO app.communication_suppression_events
+   (workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,source_event_id,actor_kind,endpoint_identity_sha256,occurred_at)
+   VALUES($1,$2,$3,$4,NULL,$5,'stop','synthetic.review',$6,'system',$7,clock_timestamp())`,[pp,contact,point,channel,state,'suppression:'+randomUUID(),digest('synthetic')]);
+
+  // The function and the worker's read policy are WhatsApp-only now; the whole-number opt-out stays.
+  const fn=(await ownerQuery<Row>(owner,`SELECT pg_get_functiondef('app_private.mhp_wa_owner_origin_blocked(uuid,uuid,uuid,text)'::regprocedure) AS d`))[0]!.d as string;
+  assert.match(fn,/s\.channel='whatsapp'/u); assert.doesNotMatch(fn,/'sms'/u); assert.match(fn,/consent_status='opted_out'/u);
+  const policy=(await ownerQuery<Row>(owner,`SELECT qual FROM pg_policies WHERE schemaname='app' AND tablename='communication_suppression_events' AND policyname='mhp_wa_owner_origin_suppressions_worker'`))[0]!.qual as string;
+  assert.match(policy,/channel = 'whatsapp'::text/u); assert.doesNotMatch(policy,/sms/u);
+
+  // 1. SMS STOP on the phone point (texted STOP to the original brand): the WhatsApp link, queue and begin-call all go ahead.
+  const fern=await person('Fern Example','phone','+447700900140');
+  await suppress(fern.id,fern.point,'sms');
+  const fernLink=await link(fern.id,fern.point,null);
+  assert.equal(fernLink.state,'linked','an SMS STOP does not block the WhatsApp link');
+  assert.equal((await grant(fernLink.linkId,fern.id)).state,'granted');
+  assert.equal((await state(fern.id)).numbers[0].gate.reason??null,null,'the owner view shows no block');
+  const fernPreview=await preview(meta,vars('Fern'));
+  const fernSend=randomUUID();
+  assert.equal((await queue(fernLink.linkId,fernSend,meta,vars('Fern'),fernPreview.sha256,fern.id)).state,'queued','an SMS STOP does not block the queue');
+  let c=(await claim())!;
+  assert.deepEqual((await load(c)).map(r=>[r.eligible,r.reason??null]),[[true,null]]);
+  assert.equal((await begin(c)).begun,true,'an SMS STOP does not block begin-call');
+  await settle(c,'accepted','wamid.stoppersms','meta_whatsapp_accepted');
+  assert.equal((await sendRow(fernSend)).state,'accepted');
+  // The SMS STOP itself is untouched: still the latest SMS fact on that point.
+  assert.deepEqual(await ownerQuery<Row>(owner,`SELECT channel,state FROM app.communication_suppression_events WHERE workspace_id=$1 AND contact_point_id=$2 ORDER BY occurred_at`,[pp,fern.point]),
+   [{channel:'sms',state:'suppressed'}]);
+
+  // 2. WhatsApp STOP on the original brand's point after queueing: refused at begin-call, at the next queue and at link.
+  const gale=await person('Gale Example','whatsapp','+447700900141');
+  const galeLink=await link(gale.id,gale.point,null);
+  await grant(galeLink.linkId,gale.id);
+  const galePreview=await preview(meta,vars('Gale'));
+  const galeSend=randomUUID();
+  assert.equal((await queue(galeLink.linkId,galeSend,meta,vars('Gale'),galePreview.sha256,gale.id)).state,'queued');
+  await suppress(gale.id,gale.point,'whatsapp');
+  c=(await claim())!;
+  assert.deepEqual((await load(c)).map(r=>[r.eligible,r.reason]),[[false,'opted_out']]);
+  assert.deepEqual(await begin(c),{begun:false,reason:'opted_out'},'a WhatsApp STOP still blocks');
+  assert.equal((await sendRow(galeSend)).state,'blocked');
+  assert.equal((await queue(galeLink.linkId,randomUUID(),meta,vars('Gale'),galePreview.sha256,gale.id)).reason,'opted_out');
+  assert.equal((await link(gale.id,gale.point,null)).reason,'opted_out');
+  // An SMS STOP AND a WhatsApp STOP: still blocked (the WhatsApp one counts).
+  await suppress(gale.id,gale.point,'sms');
+  assert.equal((await link(gale.id,null,'+447700900141')).reason,'opted_out');
+
+  // 3. An opted-out point (the whole number said no, whatever the channel) still blocks, picked or typed.
+  const hale=await person('Hale Example','phone','+447700900142','opted_out');
+  assert.equal((await link(hale.id,hale.point,null)).reason,'opted_out');
+  assert.equal((await link(hale.id,null,'+44 7700 900142')).reason,'opted_out');
+
+  // 4. A signed WhatsApp STOP from the number to MHP still blocks, with or without an SMS STOP in the original brand.
+  const ivy=await person('Ivy Example','phone','+447700900143');
+  const ivyLink=await link(ivy.id,ivy.point,null);
+  await grant(ivyLink.linkId,ivy.id);
+  const ivyPreview=await preview(meta,vars('Ivy'));
+  const payload=randomBytes(32),signature=randomBytes(32),wamid='wamid.'+randomUUID().replace(/-/g,''),ext='whatsapp-message:'+wamid;
+  const identity=digest([ext,wamid,digest('447700900143').toString('hex'),digest('STOP').toString('hex'),payload.toString('hex'),signature.toString('hex')].join('\x1f'));
+  await call(2,'SELECT * FROM app_private.mhp_record_event_whatsapp_inbound($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+   [mhp,binding,ext,wamid,'447700900143','STOP',digest('447700900143'),digest('STOP'),payload,signature,identity,new Date(Date.now()-2000)]);
+  assert.equal((await queue(ivyLink.linkId,randomUUID(),meta,vars('Ivy'),ivyPreview.sha256,ivy.id)).reason,'whatsapp_stop');
  } finally {
   await Promise.all(pools.map(p=>p.end()));
   try {for(const role of roles) await owner.query('ALTER ROLE '+role+' PASSWORD NULL');} finally {await owner.end();}

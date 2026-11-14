@@ -101,7 +101,7 @@ test('owner form denies member, foreign host/cookie, Origin, CSRF, duplicate and
   const f=fixture();const body=f.form();
   assert.equal((await fixture(false).request('GET','/hq/marketing')).status,403);
   assert.equal((await f.request('GET','/hq/marketing','',{host:'hq.propertypredator.com'})).status,421);
-  assert.equal((await f.request('GET','/hq/marketing','',{cookie:`r72_portal=${TOKEN}`})).headers.location,'/portal/login');
+  assert.equal((await f.request('GET','/hq/marketing','',{cookie:`r72_portal=${TOKEN}`})).headers.location,'/portal/login?next=%2Fhq%2Fmarketing','signed out: sign in, then back to this exact page');
   for(const origin of ['', 'null','https://hq.propertypredator.com'])assert.equal((await f.request('POST','/hq/marketing/open',body,{origin})).status,403);
   assert.equal((await f.request('POST','/hq/marketing/open',body,{origin:ORIGIN,'sec-fetch-site':'cross-site'})).status,403);
   assert.equal((await f.request('POST','/hq/marketing/open',body.replace(/csrf=[^&]+/,'csrf=wrong'),{origin:ORIGIN})).status,403);
@@ -113,7 +113,7 @@ test('owner form denies member, foreign host/cookie, Origin, CSRF, duplicate and
 test('rotated token and old CSRF fail; current brand session reaches shared stage/task commands only',async()=>{
   const f=fixture();const oldCsrf=portalCsrfToken(SECRET,TOKEN);
   await f.request('POST','/hq/marketing/open',f.form(),{origin:ORIGIN});
-  assert.equal((await f.request('GET','/hq/marketing','',{cookie:`__Host-mhp_session=${TOKEN}`})).headers.location,'/portal/login');
+  assert.equal((await f.request('GET','/hq/marketing','',{cookie:`__Host-mhp_session=${TOKEN}`})).headers.location,'/portal/login?next=%2Fhq%2Fmarketing');
   const common=new URLSearchParams({_csrf:portalCsrfToken(SECRET,NEXT),command_key:'synthetic-1',expected_version:'1',target_stage_id:STAGE}).toString();
   const path=`/portal/crm/opportunities/${COMMAND}/stage`;
   assert.equal((await f.request('POST',path,common.replace(/_csrf=[^&]+/,`_csrf=${oldCsrf}`),{origin:ORIGIN})).status,403);
