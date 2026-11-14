@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -187,7 +188,7 @@ test('sender routes application mail to the transactional stream and the owner, 
     bodies.push(JSON.parse(String(init.body)));
     return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 });
   }) as typeof fetch;
-  const sender = createMhpMarketingSender(config, 's'.repeat(48), fetcher);
+  const sender = createMhpMarketingSender(config, 's'.repeat(48), testTransport(fetcher));
   const item = (template: string): MhpClaimedSend => ({ id: 'i', prospectId: '0b5a3d52-3c6a-4f43-9c0e-0123456789ab', template, campaign: 'c', context: {},
     email: template === 'application_notify' ? config.notifyTo : 'sam@example.com', firstName: 'Sam', level: null, attempts: 1, expiresAt: '2026-12-01T00:00:00Z', application: applicationRecord });
   await sender.send(item('application_notify'));
@@ -197,7 +198,7 @@ test('sender routes application mail to the transactional stream and the owner, 
     ['martin.howard1984@gmail.com', 'outbound', false], ['sam@example.com', 'outbound', false], ['sam@example.com', 'broadcast', true]]);
   assert.match(String(bodies[1]!.HtmlBody), /Book your 20-minute call/);
   const strict = { ...config, testRecipients: ['sam@example.com'] };
-  await assert.rejects(createMhpMarketingSender(strict, 's'.repeat(48), fetcher).send(item('application_notify')), /test list/);
+  await assert.rejects(createMhpMarketingSender(strict, 's'.repeat(48), testTransport(fetcher)).send(item('application_notify')), /test list/);
 });
 
 test('HQ pages escape applicant text and show the funnel', () => {

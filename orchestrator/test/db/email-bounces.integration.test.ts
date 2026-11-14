@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../../src/email-bounces/undeliverable.js';
 /**
  * Bounce and complaint handling against a disposable PostgreSQL with the actual
  * login roles. Nothing here adds SQL: it proves the existing capabilities
@@ -59,10 +60,10 @@ test('MHP sign-up emails on real roles: a bounced or complained address is refus
 
     const bodies: { To: string; MessageStream: string; Metadata: Record<string, string> }[] = [];
     const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
-    const sender = createMhpMarketingSender(config, 'synthetic-unsubscribe-secret-at-least-32-characters', (async (_url: string, init: RequestInit) => {
+    const sender = createMhpMarketingSender(config, 'synthetic-unsubscribe-secret-at-least-32-characters', testTransport((async (_url: string, init: RequestInit) => {
       bodies.push(JSON.parse(String(init.body)));
       return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 });
-    }) as typeof fetch, { guard: bounces.registry, workspaceId: MHP });
+    }) as typeof fetch), { guard: bounces.registry, workspaceId: MHP });
     const mine = Object.values(people).map(person => person.prospectId);
     // Only this run's rows: the disposable database may hold other proofs' prospects.
     const scoped = { claim: async (limit: number, seconds: number) => growth.claim(limit, seconds, Object.keys(people).map(key => address(key.replace(/[A-Z]/gu, c => `-${c.toLowerCase()}`)))),

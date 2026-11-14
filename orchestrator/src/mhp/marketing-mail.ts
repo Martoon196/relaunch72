@@ -5,6 +5,7 @@ import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-emai
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
 import { decideRecipient, EmailGuardUnavailableError, EmailRecipientBlockedError, refusalStopsPerson, type EmailSendGuard } from '../email-bounces/policy.js';
+import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -135,6 +136,10 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
       const to = normalizeMhpEmail(item.email);
       if (!to) throw new Error('Invalid recipient');
       if (config.testRecipients && !config.testRecipients.includes(to)) throw new Error('Recipient is outside the test list');
+      // A reserved test address (example.com, .invalid, .test ...) can never receive email, and every send to one
+      // counts against the account's bounce rate at Postmark. Refused before any provider call, the owner's own test
+      // send included. A definite non-send: it never stops the person (refusalStopsPerson is false for it).
+      if (refusesReservedRecipient(fetcher, to)) throw new EmailRecipientBlockedError('reserved_address', 'Recipient is a reserved test address; nothing was sent');
       const email = item.rendered;
       const transactional = email.stream === 'outbound';
       // The single choke point for built-in emails, owner emails and sequences. The owner's own test send is exempt.

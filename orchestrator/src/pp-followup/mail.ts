@@ -1,13 +1,21 @@
 import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import type { PpFollowupRendered } from './content.js';
 import { decideRecipient, EmailGuardUnavailableError, type EmailSendGuard } from '../email-bounces/policy.js';
+import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
 
 /** contactPointId travels with the message so a later bounce or complaint can stop that exact address for good. */
 export interface PpRenderedSend { readonly id: string; readonly email: string; readonly tag: string; readonly rendered: PpFollowupRendered; readonly contactPointId?: string }
 /** Refuses addresses that bounced, complained or unsubscribed at Postmark, for one workspace, before any provider call. */
 export interface PpRecipientGuard { readonly guard: EmailSendGuard; readonly workspaceId: string }
 const POINT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-export interface PpFollowupSender { sendRendered(item: PpRenderedSend): Promise<string> }
+export interface PpFollowupSender {
+  sendRendered(item: PpRenderedSend): Promise<string>;
+  /**
+   * True when this sender will refuse the address outright because it is a reserved test address (example.com,
+   * .invalid, .test ...). The dispatcher asks before any dispatch proof, so nothing is spent; absent means never.
+   */
+  refusesAddress?(email: string): boolean;
+}
 
 /**
  * A definite non-send: the email certainly did not go out, so the dispatcher records a plain failure instead of
@@ -36,9 +44,12 @@ const scopeOf = (code: unknown): 'sender' | 'message' | 'recipient' =>
  */
 export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeof fetch = fetch, recipients?: PpRecipientGuard): PpFollowupSender {
   return {
+    refusesAddress: (email: string) => refusesReservedRecipient(fetcher, email),
     async sendRendered(item) {
       const to = normalizePpEmail(item.email);
       if (!to) throw new PpNotSentError('recipient', 'Invalid recipient');
+      // A reserved test address can never receive email and would count as a bounce: this address can never be sent to.
+      if (refusesReservedRecipient(fetcher, to)) throw new PpNotSentError('recipient', 'Recipient is a reserved test address');
       // Test mode is checked again at the final recipient, after the database claim filter.
       if (config.testRecipients && !config.testRecipients.includes(to)) throw new PpNotSentError('sender', 'Recipient is outside the test list');
       // Last check before the provider. The dispatcher already refuses these before a proof exists; a block that

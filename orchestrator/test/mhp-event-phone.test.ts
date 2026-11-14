@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
@@ -44,7 +45,7 @@ test('only UK mobiles normalise to E.164', () => {
 test('event link email is a separate transactional method bound to the exact reminder path', async () => {
   const sent: { url: string; body: Record<string, unknown> }[] = [];
   const mailer = createMhpTransactionalMailer({ MHP_TRANSACTIONAL_PROVIDER: 'postmark', MHP_POSTMARK_SERVER_TOKEN: 'synthetic', MHP_POSTMARK_FROM: 'martin@propinvestuk.co.uk' },
-    (async (url: string | URL | Request, init?: RequestInit) => { sent.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return new Response('{}', { status: 200 }); }) as typeof fetch);
+    testTransport((async (url: string | URL | Request, init?: RequestInit) => { sent.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return new Response('{}', { status: 200 }); }) as typeof fetch));
   const token = 'A'.repeat(43);
   await mailer.sendEventPhoneLink!('person@example.invalid', `${ORIGIN}${ROUTE}/open?t=${token}`, '2026-11-04T19:30:00Z');
   assert.equal(sent.length, 1); assert.equal(sent[0]!.body.Tag, 'mhp-event-reminder');

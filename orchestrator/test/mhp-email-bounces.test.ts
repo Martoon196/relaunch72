@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -29,7 +30,7 @@ function transport(registry?: EmailBlockRegistry, workspaceId: string = WS) {
   const bodies: Record<string, any>[] = [];
   const fetcher = (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
     return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 }); }) as typeof fetch;
-  return { bodies, sender: createMhpMarketingSender(config, secret, fetcher, registry ? { guard: registry, workspaceId } : undefined) };
+  return { bodies, sender: createMhpMarketingSender(config, secret, testTransport(fetcher), registry ? { guard: registry, workspaceId } : undefined) };
 }
 const claimed = (over: Partial<MhpClaimedSend> = {}): MhpClaimedSend => ({ id: ids.send, prospectId: ids.prospect, template: 'webinar_90days', campaign: 'webinar-proof',
   context: { label: 'Webinar', link: 'https://martinhowardproperty.co.uk/webinar/' }, email: 'gone@example.invalid', firstName: 'Sam', level: null, attempts: 1,
@@ -138,13 +139,13 @@ test('Postmark 406 (inactive recipient) in a sequence is a definite non-send, ne
   const queue: MhpSequenceDispatch = { claim: async () => [lease], prepare: async () => prepared,
     settle: async (_lease, accepted, reference) => { calls.push(`settle ${accepted} ${reference}`); }, unknown: async () => { calls.push('unknown'); } };
   const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
-  const sender = createMhpMarketingSender(config, secret, (async () => new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 })) as unknown as typeof fetch);
+  const sender = createMhpMarketingSender(config, secret, testTransport((async () => new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 })) as unknown as typeof fetch));
   const result = await dispatchMhpSequenceEmails({ queue, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now,
     onBlocked: async prospectId => { calls.push(`stop ${prospectId}`); } });
   assert.deepEqual(result, { sent: 0, failed: 1, unknown: 0 });
   assert.deepEqual(calls, ['settle false null']);
   // Before this fix any 4xx was a plain error: after the proof that is the unknown hold. A 500 still is.
-  const unsure = createMhpMarketingSender(config, secret, (async () => new Response('', { status: 500 })) as unknown as typeof fetch);
+  const unsure = createMhpMarketingSender(config, secret, testTransport((async () => new Response('', { status: 500 })) as unknown as typeof fetch));
   calls.length = 0;
   assert.deepEqual(await dispatchMhpSequenceEmails({ queue, sender: unsure, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 0, failed: 0, unknown: 1 });
 });
@@ -427,8 +428,8 @@ test('a ledger fault spends no MHP attempt: built-in, owner and sequence sweeps 
   const t = transport(); // the guard is replaced below with the durable one
   const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
   const bodies: unknown[] = [];
-  const sender = createMhpMarketingSender(config, secret, (async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
-    return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 }); }) as typeof fetch, { guard: bounces.guard, workspaceId: WS });
+  const sender = createMhpMarketingSender(config, secret, testTransport((async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 }); }) as typeof fetch), { guard: bounces.guard, workspaceId: WS });
   void t;
   // Owner emails and sequences.
   const calls: string[] = [];

@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 /**
  * The durable email block ledger (0153) in front of the in-process list, without a database: the ledger's SQL is
  * proved in test/db/email-block-ledger.integration.test.ts. Here: the fallback while the database still ends at 0152,
@@ -311,13 +312,13 @@ test('Postmark 406 after a re-allow: the guard lets marketing go, Postmark still
   assert.deepEqual(await decideRecipient(service.guard, MHP, 'back@example.invalid', 'marketing'), { blocked: false });
   let calls = 0;
   const fetcher = (async () => { calls++; return new Response(JSON.stringify({ ErrorCode: 406, Message: 'inactive' }), { status: 422 }); }) as unknown as typeof fetch;
-  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', fetcher, { guard: service.guard, workspaceId: MHP });
+  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', testTransport(fetcher), { guard: service.guard, workspaceId: MHP });
   await assert.rejects(sender.sendRendered({ id: 'a', email: 'back@example.invalid', tag: 'owner_sequence', rendered }),
     (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'provider_inactive');
   assert.equal(calls, 1, 'Postmark was asked once and said no');
   // Another 4xx without 406 stays a plain refusal, as before.
   const other = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters',
-    (async () => new Response(JSON.stringify({ ErrorCode: 300 }), { status: 422 })) as unknown as typeof fetch);
+    testTransport((async () => new Response(JSON.stringify({ ErrorCode: 300 }), { status: 422 })) as unknown as typeof fetch));
   await assert.rejects(other.sendRendered({ id: 'a', email: 'x@example.invalid', tag: 't', rendered }), (error: unknown) => !(error instanceof EmailRecipientBlockedError));
 });
 
@@ -330,7 +331,7 @@ test('a ledger read error with an empty cache: marketing fails closed as a retry
   // MHP: refused before any provider call, never stops the person.
   let calls = 0;
   const fetcher = (async () => { calls++; return new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-1' }), { status: 200 }); }) as unknown as typeof fetch;
-  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', fetcher, { guard: service.guard, workspaceId: MHP });
+  const sender = createMhpMarketingSender(mhpConfig(), 'synthetic-unsubscribe-secret-at-least-32-characters', testTransport(fetcher), { guard: service.guard, workspaceId: MHP });
   await assert.rejects(sender.sendRendered({ id: 'a', email: 'anyone@example.invalid', tag: 'owner_sequence', rendered }),
     (error: unknown) => error instanceof EmailRecipientBlockedError && error.reason === 'check_unavailable');
   assert.equal(calls, 0);
@@ -345,7 +346,7 @@ test('a ledger read error with an empty cache: marketing fails closed as a retry
   const pp = ppMarketingConfig({ PP_MARKETING_MODE: 'live', PP_POSTMARK_SERVER_TOKEN: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', PP_MARKETING_FROM: 'hello@propertypredator.com',
     PP_POSTMARK_BROADCAST_STREAM: 'pp-news', PORTAL_BASE_URL: 'https://hq.propertypredator.com', SESSION_SECRET: 'synthetic-pp-followup-secret-at-least-32-chars' }).config!;
   let ppCalls = 0;
-  const ppSender = createPpPostmarkSender(pp, (async () => { ppCalls++; return new Response('{}'); }) as unknown as typeof fetch, recipients);
+  const ppSender = createPpPostmarkSender(pp, testTransport((async () => { ppCalls++; return new Response('{}'); }) as unknown as typeof fetch), recipients);
   const result = await dispatchPpFollowupEmails({ queue, sender: ppSender, unsubscribeSecret: 'synthetic-pp-followup-secret-at-least-32-chars', recipients,
     config: { testRecipients: null, link: 'https://propertypredator.com/', unsubscribeOrigin: 'https://hq.propertypredator.com', fromName: 'Property Predator' } });
   assert.deepEqual(result, { sent: 0, failed: 1, unknown: 0 });

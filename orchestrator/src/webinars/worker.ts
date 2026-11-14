@@ -15,7 +15,7 @@ import { workerDatabaseContext } from '../db/rls.js';
 import { withTransaction } from '../db/transaction.js';
 import { issueAccessToken } from './access.js';
 import { playbackHosts, publicOriginFor, type WebinarConfig } from './config.js';
-import { composeMessage, deliveryDecision, type MessagePurpose, type WebinarMailer } from './messages.js';
+import { composeMessage, deliveryDecision, RESERVED_ADDRESS_BLOCK_REASON, type MessagePurpose, type WebinarMailer } from './messages.js';
 import { applyVideoState, readProfile, runProvisionJob, settleJob, type PgWebinarService } from './service.js';
 import type { CloudflareStreamClient } from './stream.js';
 import { decideRecipient, type EmailSendGuard } from '../email-bounces/policy.js';
@@ -203,6 +203,7 @@ export class WebinarWorker {
       const decision = deliveryDecision(config, workspaceId, String(r.email));
       if (decision.kind === 'hold') { await settleJob(tx, job.id, 'queued', decision.reason, {}, new Date(this.now() + 5 * 60_000).toISOString()); return null; }
       if (decision.kind === 'block') { await settleJob(tx, job.id, 'blocked', decision.reason, {}); return null; }
+      if (this.deps.mailer.refusesAddress?.(String(r.email))) { await settleJob(tx, job.id, 'blocked', RESERVED_ADDRESS_BLOCK_REASON, {}); return null; }
       if (this.deps.recipients && (await decideRecipient(this.deps.recipients, workspaceId, String(r.email).trim().toLowerCase(), 'service')).blocked) {
         await settleJob(tx, job.id, 'blocked', 'Not sent: an earlier email to this address bounced or was reported as spam, so it is not emailed again.', {});
         return null;

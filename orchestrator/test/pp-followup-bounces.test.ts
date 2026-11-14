@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -75,13 +76,13 @@ test('PP dispatch refuses a blocked address before any proof is written: a defin
 test('PP sender refuses a blocked address itself and marks each message with its contact point', async () => {
   const bodies: Record<string, any>[] = [];
   const fetcher = (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-1' }), { status: 200 }); }) as unknown as typeof fetch;
-  const guarded = createPpPostmarkSender(config(), fetcher, guardWith(PP, {}));
+  const guarded = createPpPostmarkSender(config(), testTransport(fetcher), guardWith(PP, {}));
   await assert.rejects(guarded.sendRendered({ id: 'send-1', email: 'Ann@Example.com', tag: 'pp_followup', rendered: rendered(), contactPointId: POINT }),
     (error: unknown) => error instanceof PpNotSentError && error.scope === 'recipient');
   assert.equal(bodies.length, 0, 'Postmark was never called');
   await guarded.sendRendered({ id: 'send-2', email: 'fine@example.com', tag: 'pp_followup', rendered: rendered(), contactPointId: POINT });
   assert.deepEqual(bodies[0]!.Metadata, { send: 'send-2', point: POINT }); assert.equal(bodies[0]!.MessageStream, 'pp-news');
-  await createPpPostmarkSender(config(), fetcher).sendRendered({ id: 'send-3', email: 'ann@example.com', tag: 'pp_followup', rendered: rendered(), contactPointId: 'not-a-uuid' });
+  await createPpPostmarkSender(config(), testTransport(fetcher)).sendRendered({ id: 'send-3', email: 'ann@example.com', tag: 'pp_followup', rendered: rendered(), contactPointId: 'not-a-uuid' });
   assert.deepEqual(bodies[1]!.Metadata, { send: 'send-3' });
   // The dispatcher maps the sender's own refusal to the same definite outcome.
   const late = queueFixture();

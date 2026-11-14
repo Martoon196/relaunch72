@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dispatchMhpPurchaseWelcome } from '../src/mhp/purchase-welcome.js';
@@ -50,7 +51,7 @@ for (const [status, body, outcome] of [
 ] as const) {
   test(`purchase provider receipt ${status}/${JSON.stringify(body)} is ${outcome}`, async () => {
     const mail = createMhpTransactionalMailer({ MHP_TRANSACTIONAL_PROVIDER: 'postmark', MHP_POSTMARK_SERVER_TOKEN: 'fixture', MHP_POSTMARK_FROM: 'mail@example.com' },
-      (async () => new Response(JSON.stringify(body), { status })) as typeof fetch);
+      testTransport((async () => new Response(JSON.stringify(body), { status })) as typeof fetch));
     const send = mail.sendPurchaseWelcome!(job.email, job.name, job.productName, job.kind);
     if (outcome === 'sent') await send;
     else await assert.rejects(send, (error: unknown) => error instanceof MhpWelcomeDeliveryError && error.outcome === outcome);

@@ -1,3 +1,4 @@
+import { allowReservedRecipientsForTestTransport as testTransport } from '../src/email-bounces/undeliverable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMhpMarketingSender, mhpMarketingConfig, renderMhpMarketingEmail, startMhpMarketingDispatcher } from '../src/mhp/marketing-mail.js';
@@ -35,7 +36,7 @@ test('PG dispatch capability rejects mismatched returned lease/proof and makes n
 });
 test('shared transport retains legacy payload and test list; owner test omits an audience unsubscribe token',async()=>{
   const config=mhpMarketingConfig({MHP_MARKETING_MODE:'test',MHP_POSTMARK_SERVER_TOKEN:'synthetic-secret',MHP_MARKETING_FROM:'owner@example.invalid',MHP_MARKETING_TEST_TO:'owner@example.invalid'})!;
-  const sent:any[]=[];const sender=createMhpMarketingSender(config,secret,async(url,init)=>{assert.equal(url,'https://api.postmarkapp.com/email');assert.equal(init?.redirect,'error');sent.push(JSON.parse(String(init?.body)));return new Response(JSON.stringify({MessageID:'synthetic-reference',ErrorCode:0}),{status:200});});
+  const sent:any[]=[];const sender=createMhpMarketingSender(config,secret,testTransport(async(url:Parameters<typeof fetch>[0],init?:RequestInit)=>{assert.equal(url,'https://api.postmarkapp.com/email');assert.equal(init?.redirect,'error');sent.push(JSON.parse(String(init?.body)));return new Response(JSON.stringify({MessageID:'synthetic-reference',ErrorCode:0}),{status:200});}));
   const legacy={id:ids.send,prospectId:ids.prospect,email:'owner@example.invalid',firstName:'Sam',level:null,attempts:1,expiresAt:new Date(now+86400_000).toISOString(),template:'webinar_confirm',campaign:'webinar-proof',context:{label:'Webinar',link:'https://martinhowardproperty.co.uk/webinar/'}};
   await sender.send(legacy);const rendered=renderMhpMarketingEmail(legacy,secret);assert.equal(sent[0].Subject,rendered.subject);assert.equal(sent[0].TextBody,rendered.text);assert.equal(sent[0].HtmlBody,rendered.html);assert.equal(sent[0].Headers.length,2);
   await sender.sendRendered({id:ids.request,email:'owner@example.invalid',tag:'owner_email_test',rendered,ownerTest:true});assert.deepEqual(sent[1].Headers,[]);
