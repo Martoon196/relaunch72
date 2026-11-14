@@ -698,13 +698,28 @@ test('PP second review (0153): a spam report on the same point is never released
     assert.equal(await post({ ...original, ID: original.ID + 1, BouncedAt: new Date().toISOString() }), 200, 'a genuinely new bounce');
     assert.deepEqual(await stops(), [{ state: 'suppressed', reason: 'hard_bounce' }]);
     assert.deepEqual([(await w.run(back)).state, (await w.run(back)).reason], ['stopped', 'delivery_failed']);
+    // A spam complaint for an address that still has an unlifted hard bounce: its stop failed the first time, and the
+    // retry runs it (the ledger's strongest reason, the bounce, never hides the spam report's own stop).
+    const calls: string[] = [];
+    let failSpam = true;
+    service.setEffects(WS, { onMarketingBlock: async input => { calls.push(input.reason);
+      if (input.reason === 'spam_complaint' && failSpam) { failSpam = false; throw new Error('database unavailable'); } await effects.onMarketingBlock(input); } });
+    const spamEvent = { ...original, ID: original.ID + 2, RecordType: 'SpamComplaint', Type: 'SpamComplaint', BouncedAt: new Date().toISOString() };
+    assert.equal(await post(spamEvent), 503);
+    assert.equal(await post(spamEvent), 200);
+    assert.deepEqual(calls, ['spam_complaint', 'spam_complaint'], 'the retry ran the stop');
     // If a re-stop ever landed after a lift, a second press repairs it (the release runs again for an owner-lifted bounce).
     const repaired = await start('Repair');
     await ledger.record({ workspaceId: WS, sourceKey: 'pp', email: repaired.email, reason: 'hard_bounce', eventId: `bounce:r-${repaired.point}`, stream: 'broadcast', at });
     await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' });
     await w.repo.blockEmail(repaired.point, 'hard_bounce');
     assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).reason, 'not_permitted');
+    const audit = async () => (await w.admin.query('SELECT crm_released,lifted_by_user_id FROM app_private.email_address_block_lifts WHERE email=$1 ORDER BY lifted_at,id', [repaired.email])).rows;
+    assert.deepEqual(await audit(), [{ crm_released: 0, lifted_by_user_id: w.ownerId.userId }], 'the real lift wrote exactly one trace');
     assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' }), { lifted: 0, released: 1, spamComplaint: false, alreadyLifted: true });
+    assert.deepEqual(await audit(), [{ crm_released: 0, lifted_by_user_id: w.ownerId.userId }, { crm_released: 1, lifted_by_user_id: w.ownerId.userId }], 'the repair press leaves its own trace with the release count');
+    assert.deepEqual(await ledger.ownerLift({ sessionToken: token, workspaceId: WS, email: repaired.email, note: 'Owner confirmed' }), { lifted: 0, released: 0, spamComplaint: false, alreadyLifted: true });
+    assert.equal((await audit()).length, 2, 'a press that changes nothing adds no trace');
     assert.equal((await w.act(flow, 'enrol', { point: repaired.point })).changed, 1);
   } finally { await w.close(); }
 });

@@ -170,13 +170,15 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           // Before 0153 the ledger answers 'unavailable' and the event is handled exactly as it was.
           const written = lasting ? await service.ledger?.record({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, reason: lasting,
             eventId: event.eventId, stream: event.stream, at: event.at }) : undefined;
-          // A replay (or a retry) of an event the ledger already holds, for an address the ledger no longer blocks for
-          // that reason (the owner lifted the bounce, or a newer re-subscribe lifted the unsubscribe): the brand's lasting
-          // stop is NOT run again, so a retried old bounce never re-stops a person the owner has just let back in.
+          // A replay (or a retry) of an event the ledger already holds is skipped ONLY when the ledger has cleared THIS
+          // event's reason at or after this event's own time (the owner lifted the bounce, a newer re-subscribe lifted the
+          // unsubscribe, a sign-up since re-allowed it), so a retried old bounce never re-stops a person the owner has
+          // just let back in. Every other retry runs the brand's stop again (it is idempotent); with no ledger it always runs.
           let stillBlocks = true;
           if (lasting && written === 'exists' && service.ledger) {
             const now = await service.ledger.decide(source.workspaceId, event.email, lasting === 'unsubscribed' ? 'marketing' : 'service');
-            stillBlocks = now !== null && now.blocked && now.reason === lasting;
+            const cleared = now?.cleared[lasting];
+            stillBlocks = !(cleared !== undefined && cleared >= event.at);
           }
           if (lasting && stillBlocks) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
         }

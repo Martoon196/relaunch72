@@ -298,8 +298,11 @@ BEGIN
  END IF;
  INSERT INTO app_private.email_address_block_lifts(workspace_id,block_id,email,reason,lifted_by_user_id,note,crm_released,lifted_at)
  SELECT p_workspace,x.id,v_email,'hard_bounce',actor,btrim(p_note),released,statement_timestamp() FROM app_private.email_address_blocks x
- WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.reason='hard_bounce' AND x.lifted_at=statement_timestamp() AND x.lifted_by_user_id=actor
-  AND (lifted>0 OR released>0);
+ WHERE x.workspace_id=p_workspace AND x.email=v_email AND x.reason='hard_bounce'
+  -- A real lift: the rows this press lifted. A repair press (nothing left to lift, a CRM stop released again): the
+  -- owner-lifted rows. A press that changes nothing writes no trace.
+  AND ((lifted>0 AND x.lifted_at=statement_timestamp() AND x.lifted_by_user_id=actor)
+   OR (lifted=0 AND released>0 AND x.lifted_at IS NOT NULL AND x.lifted_by_user_id IS NOT NULL));
  RETURN jsonb_build_object('lifted',lifted,'released',released,'spamComplaint',spam,'alreadyLifted',already AND lifted=0,'liftedAt',statement_timestamp());
 END $f$;
 

@@ -350,6 +350,15 @@ test('owner lift authorisation, re-arming by time, the re-subscribe race, lock-f
     assert.equal(await stopped(), false, 'the retried old bounce does not re-stop the person');
     assert.equal(await post({ ...original, ID: original.ID + 1, BouncedAt: new Date().toISOString() }), 200);
     assert.equal(await stopped(), true, 'a genuinely new bounce does');
+    // With that hard bounce in place, a spam report whose stop failed once runs its stop on the retry.
+    const calls: string[] = [];
+    let failSpam = true;
+    service.setEffects(MHP, { onMarketingBlock: async input => { calls.push(input.reason);
+      if (input.reason === 'spam_complaint' && failSpam) { failSpam = false; throw new Error('database unavailable'); } await effects.onMarketingBlock(input); } });
+    const spamEvent = { ...original, ID: original.ID + 2, RecordType: 'SpamComplaint', Type: 'SpamComplaint', BouncedAt: new Date().toISOString() };
+    assert.equal(await post(spamEvent), 503);
+    assert.equal(await post(spamEvent), 200);
+    assert.deepEqual(calls, ['spam_complaint', 'spam_complaint']);
   } finally {
     await identity.end(); await web.end(); await admin.end();
   }

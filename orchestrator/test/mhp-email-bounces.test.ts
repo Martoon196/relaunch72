@@ -288,7 +288,7 @@ test('the owner page is plain English: counts, the 30-day rate, each blocked add
   assert.match(emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome: 'lifted' } }),
     /We no longer block gone@example\.invalid for that bounce\. Now press Reactivate for this address in Postmark, or Postmark will still refuse it\. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that\./u);
   const say = (outcome: 'already_lifted' | 'spam' | 'not_blocked' | 'unavailable') => emailHealthPage(snapshot, 'c', undefined, { durable: true, lift: { email: 'gone@example.invalid', outcome } });
-  assert.match(say('already_lifted'), /We had already stopped blocking gone@example\.invalid for that bounce\. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark\./u);
+  assert.match(say('already_lifted'), /We had already stopped blocking gone@example\.invalid for that bounce\. Postmark may still refuse it: press Reactivate for this address in Postmark if you have not done so\./u);
   assert.match(say('spam'), /gone@example\.invalid stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page\./u);
   assert.match(say('not_blocked'), /has no bounce recorded in your own records, so nothing changed/u);
   for (const outcome of ['already_lifted', 'spam', 'not_blocked', 'unavailable'] as const) assert.doesNotMatch(say(outcome), /We no longer block|was not blocked by a bounce/u, outcome);

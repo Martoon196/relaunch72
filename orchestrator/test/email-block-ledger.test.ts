@@ -487,3 +487,39 @@ test('a replay of the original bounce after the owner lifted it does not re-stop
   // A replay that still blocks (no lift) still runs the stop, which is idempotent.
   assert.equal((await f.post(bounce({ ID: 77, BouncedAt: '2026-11-12T09:59:00Z' }))).body.replayed, true);
 });
+
+test('a retried spam complaint or unsubscribe whose stop failed runs its stop even with a hard bounce in place; only a reason the ledger cleared after the event is skipped', async () => {
+  const ledger = new FakeLedger();
+  const f = webhookFixture(ledger);
+  let failNext = false;
+  f.service.setEffects(MHP, { onMarketingBlock: async ({ reason, email }) => { if (failNext) { failNext = false; throw new Error('database unavailable'); } f.effects.push(`${reason} ${email}`); } });
+  assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).status, 200);
+  const spam = bounce({ ID: 43, RecordType: 'SpamComplaint', Type: 'SpamComplaint', BouncedAt: '2026-11-12T08:30:00Z' });
+  failNext = true;
+  assert.equal((await f.post(spam)).status, 503);
+  assert.equal((await f.post(spam)).status, 200);
+  failNext = true;
+  const unsubscribe = { ...subscription(true, '2026-11-12T08:40:00Z'), Recipient: 'gone@example.invalid' };
+  assert.equal((await f.post(unsubscribe)).status, 503);
+  assert.equal((await f.post(unsubscribe)).status, 200);
+  assert.deepEqual(f.effects, ['hard_bounce gone@example.invalid', 'spam_complaint gone@example.invalid', 'unsubscribed gone@example.invalid'],
+    'the strongest reason in the ledger (the bounce) never hides another reason\'s stop');
+
+  // The three cases that must still skip.
+  // (a) A replay of a lifted bounce (covered with a real lift above as well).
+  const g = webhookFixture(ledger);
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'lifted@example.invalid', reason: 'hard_bounce', at: NOW - 2 * DAY, eventId: 'bounce:l', lifted: true, liftedAt: NOW - DAY });
+  assert.equal((await g.post(bounce({ ID: 50, Email: 'lifted@example.invalid', BouncedAt: new Date(NOW - 2 * DAY).toISOString() }))).status, 200);
+  // (b) A replay of an unsubscribe that a sign-up since re-allowed.
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'left@example.invalid', reason: 'unsubscribed', at: Date.parse('2026-11-12T09:00:00Z'), eventId: null, lifted: false });
+  ledger.signedUp.set('left@example.invalid', NOW - 60_000);
+  assert.equal((await g.post(subscription(true, '2026-11-12T09:00:00Z'))).status, 200);
+  // (c) The tombstone: a re-subscribe arrived before this older unsubscribe.
+  const late = { ...subscription(false, '2026-11-12T09:30:00Z'), Recipient: 'tomb@example.invalid' };
+  assert.equal((await g.post(late)).status, 200);
+  assert.equal((await g.post({ ...subscription(true, '2026-11-12T09:10:00Z'), Recipient: 'tomb@example.invalid' })).status, 200);
+  assert.deepEqual(g.effects, [], 'no stop for any of the three');
+  // But the same reason with an event AFTER the clearing time still runs.
+  assert.equal((await g.post({ ...subscription(true, '2026-11-12T09:50:00Z'), Recipient: 'tomb@example.invalid' })).status, 200);
+  assert.deepEqual(g.effects, ['unsubscribed']);
+});

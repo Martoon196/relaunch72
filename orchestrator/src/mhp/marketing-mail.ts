@@ -215,6 +215,9 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
       for (let page = 0; page < 4 && !stopped && !unavailable; page++) {
         const batch = await growth.claim(25, 120, config.testRecipients);
         for (const item of batch) {
+      // The block list went away after this sweep's probe: leave the rest of the claimed batch unsettled. Their attempts
+      // were counted at claim; their leases expire (2 minutes) and they are claimed again by a later sweep.
+      if (unavailable) break;
           try {
             const reference = await sender.send(item);
             await growth.settle(item.id, true, reference); sent++;

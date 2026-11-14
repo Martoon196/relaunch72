@@ -205,7 +205,7 @@ export function emailHealthPage(snapshot: EmailHealthSnapshot, csrf: string, res
     durable && item.reason === 'hard_bounce' ? works(item.email) : ''}</td></tr>`).join('');
   const lifted = options.lift ? `<p role="status" class="status">${escapeHtml(({
     lifted: `We no longer block ${options.lift.email} for that bounce. Now press Reactivate for this address in Postmark, or Postmark will still refuse it. If we also stopped this person in your contacts, they stay stopped until they sign up again: we cannot tell whether the bounce caused that.`,
-    already_lifted: `We had already stopped blocking ${options.lift.email} for that bounce. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark.`,
+    already_lifted: `We had already stopped blocking ${options.lift.email} for that bounce. Postmark may still refuse it: press Reactivate for this address in Postmark if you have not done so.`,
     spam: `${options.lift.email} stays blocked: they marked one of your emails as spam, and a spam report cannot be undone from this page.`,
     not_blocked: `${options.lift.email} has no bounce recorded in your own records, so nothing changed. If it is still listed here, Postmark still lists it: press Reactivate for this address in Postmark.`,
     unavailable: `Nothing changed: this list is not kept in your own records yet, so reactivate ${options.lift.email} in Postmark instead.`,

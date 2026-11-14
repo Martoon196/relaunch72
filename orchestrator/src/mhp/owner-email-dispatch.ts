@@ -62,6 +62,9 @@ export async function dispatchMhpOwnerEmails(input: { queue: MhpOwnerEmailDispat
   for (let page = 0; page < 4 && !input.stopped?.() && !unavailable; page++) {
     const batch = await input.queue.claim(25, 120, input.testRecipients);
     for (const lease of batch) {
+      // The block list went away after this sweep's probe: leave the rest of the claimed batch unsettled. Their attempts
+      // were counted at claim; their leases expire (2 minutes) and they are claimed again by a later sweep.
+      if (unavailable) break;
       let prospectId: string | null = null;
       try {
         const prepared = await input.queue.prepare(lease);
