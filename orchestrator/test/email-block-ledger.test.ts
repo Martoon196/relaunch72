@@ -441,3 +441,49 @@ test('undo of a wrong hard bounce: the ledger lifts it, the process forgets its 
   // Without a durable ledger nothing is lifted and the caller is told so.
   assert.equal(await new EmailBounceService({ config: { sources: [source], blockers: [] } }).ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'x' }), null);
 });
+
+test('a non-fresh process: a new webhook block after the lift is neither masked by an old copy nor turned into a list copy, and one reason never clears another', async () => {
+  const ledger = new FakeLedger();
+  const service = new EmailBounceService({ config: { sources: [source], blockers: [] }, now: () => NOW, ledger });
+  const registry = service.registry;
+  // An old list copy of a hard bounce, then the owner lifted it in the ledger (30 minutes ago).
+  registry.reconcile(MHP, { sourceKey: 'mhp', stream: 'broadcast', kind: 'marketing', startedAt: NOW - 2 * DAY,
+    suppressions: [{ email: 'gone@example.invalid', kind: 'hard_bounce', at: NOW - 3 * DAY }], bounces: [], sent: null, bounced: null, complaints: null });
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'gone@example.invalid', reason: 'hard_bounce', at: NOW - 3 * DAY, eventId: 'bounce:1', lifted: true, liftedAt: NOW - 30 * 60_000 });
+  await service.refreshLedger(MHP);
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: false }, 'the old list copy does not block');
+  assert.equal(registry.snapshot(MHP).blocked.some(b => b.email === 'gone@example.invalid'), false, 'and the owner page stops showing it on every instance');
+  // A genuinely new bounce arrives by webhook while its durable write is still failing; it merges with the old copy.
+  registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'bounce:2', kind: 'hard_bounce', email: 'gone@example.invalid', at: NOW - 60_000 });
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' }, 'not masked by the old copy\'s earlier time');
+  // A later list read of the same stream keeps the webhook time and origin.
+  registry.reconcile(MHP, { sourceKey: 'mhp', stream: 'broadcast', kind: 'marketing', startedAt: NOW,
+    suppressions: [{ email: 'gone@example.invalid', kind: 'hard_bounce', at: NOW - 3 * DAY }], bounces: [], sent: null, bounced: null, complaints: null });
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'gone@example.invalid', 'service'), { blocked: true, reason: 'hard_bounce' }, 'a list read never flips it to a list copy');
+  assert.equal(registry.snapshot(MHP).blocked.find(b => b.email === 'gone@example.invalid')?.since, new Date(NOW - 3 * DAY).toISOString(), 'the owner still sees the first time');
+
+  // Per reason: an unsubscribe lift never clears a webhook spam copy the ledger has not stored yet.
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'mixed@example.invalid', reason: 'unsubscribed', at: NOW - 3 * DAY, eventId: null, lifted: true, liftedAt: NOW - 60_000 });
+  registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'bounce:3', kind: 'spam_complaint', email: 'mixed@example.invalid', at: NOW - DAY });
+  registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'subscription:old', kind: 'unsubscribed', email: 'mixed@example.invalid', at: NOW - 2 * DAY }, false);
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'mixed@example.invalid', 'service'), { blocked: true, reason: 'spam_complaint' });
+  ledger.rows_.push({ workspaceId: MHP, sourceKey: 'mhp', email: 'onlyunsub@example.invalid', reason: 'unsubscribed', at: NOW - 3 * DAY, eventId: null, lifted: true, liftedAt: NOW - 60_000 });
+  registry.record(MHP, { sourceKey: 'mhp', stream: 'broadcast', id: 'subscription:older', kind: 'unsubscribed', email: 'onlyunsub@example.invalid', at: NOW - 2 * DAY }, false);
+  assert.deepEqual(await decideRecipient(service.guard, MHP, 'onlyunsub@example.invalid', 'marketing'), { blocked: false }, 'the same reason, older than its lift, is cleared');
+});
+
+test('a replay of the original bounce after the owner lifted it does not re-stop the person; a new bounce does', async () => {
+  const ledger = new FakeLedger();
+  const f = webhookFixture(ledger);
+  let failOnce = true;
+  f.service.setEffects(MHP, { onMarketingBlock: async ({ reason }) => { if (failOnce) { failOnce = false; throw new Error('database unavailable'); } f.effects.push(reason); } });
+  assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).status, 503, 'the ledger write landed, the stop did not');
+  assert.equal(ledger.rows_.length, 1);
+  await f.service.ownerLiftHardBounce({ sessionToken: 't', workspaceId: MHP, email: 'gone@example.invalid', note: 'Owner confirmed' });
+  assert.equal((await f.post(bounce({ BouncedAt: '2026-11-12T08:00:00Z' }))).status, 200, 'Postmark retries the same event');
+  assert.deepEqual(f.effects, [], 'the person is not stopped again');
+  assert.equal((await f.post(bounce({ ID: 77, BouncedAt: '2026-11-12T09:59:00Z' }))).status, 200);
+  assert.deepEqual(f.effects, ['hard_bounce'], 'a genuinely new bounce still stops them');
+  // A replay that still blocks (no lift) still runs the stop, which is idempotent.
+  assert.equal((await f.post(bounce({ ID: 77, BouncedAt: '2026-11-12T09:59:00Z' }))).body.replayed, true);
+});

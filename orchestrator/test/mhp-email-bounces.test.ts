@@ -417,3 +417,45 @@ test('Open marketing workspace: from the email health page it lands back there; 
   }
   assert.deepEqual(personal.selects, ['open', 'open'], 'a refused value never opens anything');
 });
+
+test('a ledger fault spends no MHP attempt: built-in, owner and sequence sweeps claim nothing while the list cannot be read, and send after recovery', async () => {
+  let down = true;
+  const ledger = { covers: (ws: string) => ws === WS, status: () => 'available' as const,
+    decide: async () => { if (down) throw new Error('connection reset'); return { blocked: false as const, reallowed: false, cleared: {} }; },
+    record: async () => 'recorded' as const, recordList: async () => ({ added: 0, skipped: 0 }), lift: async () => 0, rows: async () => ({ current: [], lifted: [] }) };
+  const bounces = new EmailBounceService({ config: { blockers: [], sources: [] }, ledger });
+  const t = transport(); // the guard is replaced below with the durable one
+  const config = mhpMarketingConfig({ MHP_MARKETING_MODE: 'live', MHP_POSTMARK_SERVER_TOKEN: 'synthetic-token', MHP_MARKETING_FROM: 'owner@example.invalid' })!;
+  const bodies: unknown[] = [];
+  const sender = createMhpMarketingSender(config, secret, (async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ ErrorCode: 0, MessageID: `pm-${bodies.length}` }), { status: 200 }); }) as typeof fetch, { guard: bounces.guard, workspaceId: WS });
+  void t;
+  // Owner emails and sequences.
+  const calls: string[] = [];
+  const owner: MhpOwnerEmailDispatch = { claim: async () => { calls.push('owner claim'); return [lease]; }, prepare: async () => prepared,
+    settle: async (_l, accepted) => { calls.push(`owner settle ${accepted}`); } };
+  const sequence: MhpSequenceDispatch = { claim: async () => { calls.push('sequence claim'); return [lease]; }, prepare: async () => prepared,
+    settle: async (_l, accepted) => { calls.push(`sequence settle ${accepted}`); }, unknown: async () => { calls.push('unknown'); } };
+  assert.deepEqual(await dispatchMhpOwnerEmails({ queue: owner, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 0, failed: 0 });
+  assert.deepEqual(await dispatchMhpSequenceEmails({ queue: sequence, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 0, failed: 0, unknown: 0 });
+  // Built-in emails through the real dispatcher.
+  const logs: string[] = []; let claims = 0;
+  const growth = { claim: async () => { claims++; return down ? [] : claims === 1 ? [] : [claimed({ email: 'fine@example.invalid' })]; },
+    settle: async (_id: string, accepted: boolean) => { calls.push(`builtin settle ${accepted}`); } };
+  const stopDown = startMhpMarketingDispatcher(growth, sender, { testRecipients: null }, { intervalMs: 3_600_000, log: line => logs.push(line) });
+  for (let i = 0; i < 50 && logs.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  stopDown();
+  assert.deepEqual(calls, [], 'nothing was claimed, so no attempt was spent');
+  assert.equal(claims, 0);
+  assert.match(logs[0]!, /"event":"mhp\.marketing\.sweep_skipped","level":"warn"/u); assert.doesNotMatch(logs[0]!, /@/u);
+  // Recovery: the same work goes out.
+  down = false;
+  assert.deepEqual(await dispatchMhpOwnerEmails({ queue: owner, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 1, failed: 0 });
+  assert.deepEqual(await dispatchMhpSequenceEmails({ queue: sequence, sender, unsubscribeSecret: secret, testRecipients: null, now: () => now }), { sent: 1, failed: 0, unknown: 0 });
+  claims = 1;
+  const stopUp = startMhpMarketingDispatcher(growth, sender, { testRecipients: null }, { intervalMs: 3_600_000, log: line => logs.push(line) });
+  for (let i = 0; i < 50 && !(calls as string[]).includes('builtin settle true'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  stopUp();
+  assert.deepEqual(calls, ['owner claim', 'owner settle true', 'sequence claim', 'sequence settle true', 'builtin settle true']);
+  assert.equal(bodies.length, 3);
+});
