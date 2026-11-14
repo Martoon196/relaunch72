@@ -36,6 +36,11 @@ export interface EmailBounceSource {
   /** Optional Postmark ServerID pin: events from any other server are refused. */
   readonly serverId: string | null;
   readonly streams: ReadonlyMap<string, EmailStreamKind>;
+  /**
+   * True for a source loaded from a stored email connection (0155). Its webhook answers Postmark's set-up sample
+   * events (another ServerID, sample addresses) with 200 and records nothing; configured sources behave as before.
+   */
+  readonly connection?: boolean;
 }
 export interface EmailBounceSourceDefault {
   readonly key: string; readonly workspaceId: string; readonly tokenEnv: string; readonly webhookSecretEnv: string;

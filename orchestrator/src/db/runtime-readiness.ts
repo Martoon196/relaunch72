@@ -11,6 +11,7 @@ import { MHP_WA_OWNER_MIGRATION, MHP_WA_OWNER_CHECKSUM } from './mhp-wa-owner-sc
 import { PP_FOLLOWUP_MIGRATION, PP_FOLLOWUP_CHECKSUM } from './pp-followup-schema.js';
 import { EMAIL_BLOCK_MIGRATION, EMAIL_BLOCK_CHECKSUM } from './email-block-schema.js';
 import { SEO_BLOG_ATTACH_MIGRATION, SEO_BLOG_ATTACH_CHECKSUM } from './seo-blog-attach-schema.js';
+import { EMAIL_CONNECTION_MIGRATION, EMAIL_CONNECTION_CHECKSUM } from './email-connection-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -302,6 +303,12 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[152]?.checksum===EMAIL_BLOCK_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM
       && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM) applied.delete(SEO_BLOG_ATTACH_MIGRATION);
+  // Successor bridge, the same shape again: a build whose bundled migrations end exactly at 154 stays ready after the
+  // exact additive 155. It helps only a 154-file build that contains this code; the released 154 build does not have it.
+  if (migrations.length===154 && migrations[153]?.filename===SEO_BLOG_ATTACH_MIGRATION
+      && migrations[153]?.checksum===SEO_BLOG_ATTACH_CHECKSUM
+      && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM
+      && applied.get(EMAIL_CONNECTION_MIGRATION)===EMAIL_CONNECTION_CHECKSUM) applied.delete(EMAIL_CONNECTION_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -373,6 +380,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===SEO_BLOG_ATTACH_MIGRATION && pending[0]?.checksum===SEO_BLOG_ATTACH_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM
       && applied.get(PP_FOLLOWUP_MIGRATION)===PP_FOLLOWUP_CHECKSUM) return;
+  // "Connect email" 155 is capable only after the exact MHP content workspace attach 154 is applied. While 155 is
+  // pending, Connect email says it isn't switched on, no stored bounce source is loaded, and nothing else changes.
+  if (migrations.length===155 && migrations[154]?.filename===EMAIL_CONNECTION_MIGRATION
+      && migrations[153]?.filename===SEO_BLOG_ATTACH_MIGRATION && pending.length===1
+      && pending[0]?.filename===EMAIL_CONNECTION_MIGRATION && pending[0]?.checksum===EMAIL_CONNECTION_CHECKSUM
+      && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM
+      && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

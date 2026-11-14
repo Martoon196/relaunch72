@@ -40,6 +40,7 @@ const APP_ROLES = [
   'r72_external_event_definer',
   'r72_external_event_command',
   'r72_email_block_definer',
+  'r72_email_connection_definer',
   'r72_email_pilot_readiness_definer',
   'r72_founder_pilot_evidence_command',
   'r72_founder_pilot_evidence_definer',

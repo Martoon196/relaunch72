@@ -9,8 +9,18 @@
  * password Postmark's webhook form asks for or in the x-postmark-webhook-secret
  * header. A source with no secret configured is closed, never open.
  *
- * Postmark retries any non-2xx answer, so everything applied here is safe to
- * apply again, and an event is only remembered once its effects have succeeded.
+ * Postmark retries an answer of 5xx, 408 or 429 (several times, spaced out) and
+ * DROPS any other 4xx without retrying. So a temporary failure here (a database
+ * write, the connection store) answers 503 and is retried, everything applied is
+ * safe to apply again, and an event is only remembered once its effects have
+ * succeeded. A 4xx is kept for requests that will never be right.
+ *
+ * Stored email connections (0155) are sources too. Postmark checks a new webhook
+ * by posting one sample event per trigger, each of which must answer 200 or the
+ * webhook is not created; those samples carry another server's ServerID and
+ * sample addresses. For a stored connection, an event whose ServerID is not the
+ * connection's own, or that cannot be read, is therefore answered 200 and
+ * nothing is recorded. Configured sources behave exactly as before.
  */
 
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -116,7 +126,27 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
     async handle(req, res, url) {
       if (!url.pathname.startsWith(POSTMARK_BOUNCE_WEBHOOK_PREFIX)) return false;
       const key = url.pathname.slice(POSTMARK_BOUNCE_WEBHOOK_PREFIX.length).replace(/\/+$/u, '');
-      const source = /^[a-z0-9][a-z0-9-]{0,39}$/u.test(key) ? service.source(key) : undefined;
+      const validKey = /^[a-z0-9][a-z0-9-]{0,39}$/u.test(key);
+      let source = validKey ? service.source(key) : undefined;
+      const loader = service.sourceLoader;
+      if (!source && validKey && loader?.handles(key)) {
+        // A stored connection this process has not loaded yet (another instance has just created it): read the store
+        // now. If the store cannot be read, ask Postmark to retry (503); a 4xx would be dropped.
+        try { await loader.refreshNow(); }
+        catch {
+          req.resume();
+          log(JSON.stringify({ event: 'email.bounces.webhook_store_unavailable', source: key }));
+          send(res, 503, { error: 'temporarily_unavailable' }, { 'retry-after': '60' });
+          return true;
+        }
+        source = service.source(key);
+        if (!source && loader.unavailable?.(key)) {
+          // The connection exists but its secret cannot be opened here (the key is missing or changed): retried, not dropped.
+          req.resume();
+          send(res, 503, { error: 'temporarily_unavailable' }, { 'retry-after': '300' });
+          return true;
+        }
+      }
       if (!source) { send(res, 404, { error: 'not_found' }); return true; }
       // Nothing is read from an unauthenticated caller: the body is discarded unbuffered.
       const refuse = (status: number, body: Readonly<Record<string, unknown>>, extra: Record<string, string> = {}): true => {
@@ -133,16 +163,27 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       }
       const contentType = String(req.headers['content-type'] ?? '').split(';', 1)[0]!.trim().toLowerCase();
       if (contentType !== 'application/json') return refuse(415, { error: 'unsupported_media_type' });
-      let payload: unknown;
-      try { payload = parsePostmarkJson((await readBody(req, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES)).toString('utf8')); }
+      let payload: unknown, size = 0;
+      try { const body = await readBody(req, POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES); size = body.length; payload = parsePostmarkJson(body.toString('utf8')); }
       catch (error) {
         send(res, error instanceof BodyTooLarge ? 413 : 400, { error: error instanceof BodyTooLarge ? 'payload_too_large' : 'invalid_json' });
         return true;
       }
       const reading = readPostmarkWebhook(payload);
-      if (reading.outcome === 'invalid') { send(res, 400, { error: 'invalid_event' }); return true; }
+      // A stored connection answers a body it cannot read with 200 and records nothing: Postmark's set-up samples must
+      // pass, and a 400 would be dropped by Postmark anyway.
+      if (reading.outcome === 'invalid') {
+        if (source.connection) log(JSON.stringify({ event: 'email.bounces.webhook_unreadable_ignored', source: source.key, bytes: size }));
+        send(res, source.connection ? 200 : 400, source.connection ? { received: true, outcome: 'ignored' } : { error: 'invalid_event' }); return true;
+      }
       if (reading.outcome === 'ignored') { send(res, 200, { received: true, outcome: 'ignored' }); return true; }
       const event = reading.event;
+      if (source.connection && (!source.serverId || event.serverId !== source.serverId)) {
+        // Postmark's sample event (or another server's event on our address): answered 200, nothing recorded.
+        log(JSON.stringify({ event: 'email.bounces.webhook_other_server_ignored', source: source.key }));
+        send(res, 200, { received: true, outcome: 'ignored' });
+        return true;
+      }
       if (source.serverId && event.serverId !== source.serverId) {
         // The right secret on another server's webhook is a set-up mistake; refuse it loudly, apply nothing.
         log(JSON.stringify({ event: 'email.bounces.webhook_wrong_server', source: source.key }));

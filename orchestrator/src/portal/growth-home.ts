@@ -147,6 +147,8 @@ export function renderGrowthHomeBody(
     dailyOutreachAvailable?: boolean;
     followupFlowsAvailable?: boolean;
     approvalsAvailable?: boolean;
+    /** "Connect email" is switched on and the database has 0155 (never offered at 0154). */
+    emailConnectAvailable?: boolean;
   }> = {},
 ): string {
   const growth = suppliedGrowth ?? emptyGrowthIntelligence(snapshot.workspace.snapshotAt);
@@ -178,6 +180,7 @@ export function renderGrowthHomeBody(
   const heroActions = [
     ...(options.approvalsAvailable ? ['<a class="button" href="/portal/approvals">Approvals</a>'] : []),
     ...(options.followupFlowsAvailable && profile.id === 'property_predator_growth' ? ['<a class="button" href="/portal/follow-ups">Build follow-up flows</a>'] : []),
+    ...(options.emailConnectAvailable && profile.id === 'property_predator_growth' ? ['<a class="button secondary" href="/portal/email">Connect email</a>'] : []),
     actionCentreAvailable
       ? '<a class="button" href="/portal/actions">Open Action Centre</a>'
       : '<a class="button" href="#hot-list">Work the hot list</a>',

@@ -78,9 +78,31 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
     ...(ledgerFailed ? { ledgerFailed } : {}), ...(ledgerSkipped ? { ledgerSkipped } : {}) };
 }
 
+/**
+ * Stored email connections (0155) are bounce sources too, loaded from the database instead of configuration. The
+ * webhook asks the loader to read them again when Postmark posts to a connection's address this process has not
+ * loaded yet (another instance has just created it), so no restart and no env change is needed.
+ */
+export interface EmailBounceSourceLoader {
+  /** True when this webhook key is the address of a stored connection (loaded or not). */
+  handles(key: string): boolean;
+  /** Reads the stored connections now (joined and rate-limited). Throws when the store cannot be read. */
+  refreshNow(): Promise<void>;
+  /** True when this key's stored connection exists but cannot be opened right now (answered 503, so Postmark retries). */
+  unavailable?(key: string): boolean;
+}
+
+const SOURCE_KEY = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+const SOURCE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 export class EmailBounceService {
   readonly registry: EmailBlockRegistry;
-  readonly sources: readonly EmailBounceSource[];
+  /** The sources from configuration (EMAIL_BOUNCE_SOURCES and each brand's built-in default), fixed at start. */
+  readonly configuredSources: readonly EmailBounceSource[];
+  /** Sources added at run time (stored email connections), keyed by source key, with the configured key each replaces. */
+  private readonly dynamic = new Map<string, { readonly source: EmailBounceSource; readonly replaces: string | null }>();
+  private readonly replacedLogged = new Set<string>();
+  private loader: EmailBounceSourceLoader | null = null;
   readonly blockers: readonly string[];
   private readonly effects = new Map<string, EmailBounceEffects>();
   private readonly running = new Map<string, Promise<SweepResult>>();
@@ -100,7 +122,7 @@ export class EmailBounceService {
     registry?: EmailBlockRegistry; log?: (line: string) => void; ledger?: EmailBlockLedger | null }) {
     this.now = input.now ?? Date.now;
     this.registry = input.registry ?? new EmailBlockRegistry(this.now);
-    this.sources = input.config.sources;
+    this.configuredSources = input.config.sources;
     this.blockers = input.config.blockers;
     this.apiFor = input.apiFor ?? (source => source.token ? createPostmarkBounceApi(source.token) : null);
     this.log = input.log ?? (() => undefined);
@@ -112,10 +134,50 @@ export class EmailBounceService {
       check: (workspaceId: string, email: string, purpose: EmailPurpose) => this.check(workspaceId, email, purpose),
       available: (workspaceId: string) => this.available(workspaceId),
     });
-    for (const source of this.sources) for (const [stream, kind] of source.streams) this.registry.declareStream(source.workspaceId, source.key, stream, kind);
+    for (const source of this.configuredSources) for (const [stream, kind] of source.streams) this.registry.declareStream(source.workspaceId, source.key, stream, kind);
     // With nothing to read there is nothing to wait for.
-    if (!this.sources.some(source => source.token)) this.registry.markReady();
+    if (!this.configuredSources.some(source => source.token)) this.registry.markReady();
   }
+
+  /**
+   * Every source in force now: the stored connections, then each configured source that no stored connection
+   * replaces. When a stored connection and a configured source for the same brand both exist, the stored one wins.
+   */
+  get sources(): readonly EmailBounceSource[] {
+    const added = [...this.dynamic.values()];
+    const hidden = (source: EmailBounceSource) => added.some(entry => entry.replaces === source.key && entry.source.workspaceId === source.workspaceId);
+    return [...added.map(entry => entry.source), ...this.configuredSources.filter(source => !hidden(source))];
+  }
+
+  /**
+   * Adds or replaces one run-time source (a stored email connection). replaces names the configured source of the same
+   * brand that it supersedes; that is logged once, without any secret.
+   */
+  upsertSource(source: EmailBounceSource, options: { replaces?: string | null } = {}): void {
+    if (!SOURCE_KEY.test(source.key) || !SOURCE_UUID.test(source.workspaceId) || source.streams.size < 1
+        || this.configuredSources.some(configured => configured.key === source.key)) throw new Error('Invalid email bounce source');
+    const replaces = options.replaces ?? null;
+    this.dynamic.set(source.key, Object.freeze({ source: Object.freeze({ ...source, connection: true }), replaces }));
+    for (const [stream, kind] of source.streams) this.registry.declareStream(source.workspaceId, source.key, stream, kind);
+    const replaced = replaces ? this.configuredSources.find(configured => configured.key === replaces && configured.workspaceId === source.workspaceId) : undefined;
+    if (replaced && !this.replacedLogged.has(`${source.key}\u0000${replaced.key}`)) {
+      this.replacedLogged.add(`${source.key}\u0000${replaced.key}`);
+      this.log(JSON.stringify({ event: 'email.bounces.configured_source_replaced', level: 'warn', source: replaced.key, by: source.key,
+        message: 'A stored email connection and a configured bounce source exist for the same business; the stored connection is used.' }));
+    }
+  }
+
+  /** Removes a run-time source; configured sources are never removed. True when one was removed. */
+  removeSource(key: string): boolean {
+    this.lastSwept.delete(key);
+    return this.dynamic.delete(key);
+  }
+
+  /** Keys of the run-time sources currently held. */
+  dynamicSourceKeys(): readonly string[] { return [...this.dynamic.keys()]; }
+
+  setSourceLoader(loader: EmailBounceSourceLoader | null): void { this.loader = loader; }
+  get sourceLoader(): EmailBounceSourceLoader | null { return this.loader; }
 
   /**
    * The durable decision. The ledger is asked first where it covers the workspace. Of what this process alone holds,

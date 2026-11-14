@@ -664,6 +664,7 @@ async function main(): Promise<void> {
         companyContent: postgresPortal.companyContent,
         followupFlows: postgresPortal.followupFlows,
         seoBlog: postgresPortal.seoBlog,
+        emailConnections: postgresPortal.emailConnections,
         releasedSeoMedia: postgresPortal.releasedSeoMedia,
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
         webinars: postgresPortal.webinars,
@@ -1011,7 +1012,8 @@ async function main(): Promise<void> {
           : 'client portal dependencies did not compose'],
     onIntakeAccepted,
     propertyPredatorExternalEvents,
-    postmarkBounceWebhook: emailBounces && emailBounces.sources.length > 0
+    // Always mounted while bounce handling is on: a stored email connection (0155) can add a source at any time.
+    postmarkBounceWebhook: emailBounces && postgresPortal?.emailBounceHandling
       ? createPostmarkBounceWebhook({ service: emailBounces, log: line => console.info(line) }) : undefined,
     propertyPredatorMailgunWebhook,
     propertyPredatorMailgunInbound,
@@ -1052,7 +1054,10 @@ async function main(): Promise<void> {
   // Every MHP marketing, sequence and sign-up email passes this one sender, which refuses blocked addresses.
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret, fetch,
     emailBounces && mhpEmailHealth ? { guard: emailBounces.guard, workspaceId: mhpEmailHealth.workspaceId } : undefined) : undefined;
-  const stopEmailBounces = emailBounces && emailBounces.sources.length > 0 ? emailBounces.start() : () => {};
+  // Stored email connections (0155) are read now and then about every minute; each newly loaded one is swept as soon
+  // as it is loaded (not at the first hourly sweep below, which may start before that read has finished).
+  const stopEmailConnectionSources = postgresPortal?.emailConnectionSources?.start() ?? (() => {});
+  const stopEmailBounces = emailBounces && postgresPortal?.emailBounceHandling ? emailBounces.start() : () => {};
   // LeadRelay enquiries and call results into the brand CRM: reads and acknowledges only, sends nothing.
   // Does nothing unless LEADRELAY_CRM_FEED=enabled with complete settings.
   const stopLeadRelayFeed = postgresPortal?.leadrelayFeed?.start() ?? (() => {});
@@ -1114,6 +1119,7 @@ async function main(): Promise<void> {
     stopMhpKitJobs();
     stopMhpMarketing();
     stopEmailBounces();
+    stopEmailConnectionSources();
     stopLeadRelayFeed();
     stopPpFollowup();
     webinarWorker?.stop();
