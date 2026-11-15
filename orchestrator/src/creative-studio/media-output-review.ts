@@ -18,9 +18,10 @@ const SHA=/^[a-f0-9]{64}$/u;
 export type PrivateReviewDecision='reviewed_private'|'rejected_private'|'withdrawn_private';
 export interface PrivateOutputReview {
  readonly outputId:string;readonly revision:number;readonly sha256:string;
- readonly decision:PrivateReviewDecision;readonly reviewedBy:string;
+ readonly decision:PrivateReviewDecision|null;readonly reviewedBy:string|null;
  readonly technicalStatus:'verified_technical'|'rejected'|'awaiting_probe';
- readonly createdAt:string;
+ readonly durationMs:number|null;readonly width:number|null;readonly height:number|null;
+ readonly createdAt:string|null;
 }
 export interface PrivateReviewInput {
  readonly workspaceId:string;readonly outputId:string;readonly outputSha256:string;

@@ -176,14 +176,19 @@ BEGIN
  actor:=app_private.seo_media_owner(p_workspace,p_session);
  IF p_action='list' THEN
   RETURN coalesce((SELECT jsonb_agg(jsonb_build_object(
-    'outputId',r.output_id,'revision',r.revision,'sha256',r.output_sha256,
-    'decision',r.decision,'createdAt',r.created_at,
-    'reviewedBy',r.reviewed_by,'technicalStatus',coalesce(probe.status,'awaiting_probe'))
-    ORDER BY r.created_at DESC)
-    FROM (SELECT DISTINCT ON(output_id) * FROM app.creative_media_output_reviews
-      WHERE workspace_id=p_workspace ORDER BY output_id,revision DESC) r
+    'outputId',o.id,'revision',coalesce(r.revision,0),'sha256',o.sha256,
+    'decision',r.decision,'createdAt',r.created_at,'reviewedBy',r.reviewed_by,
+    'technicalStatus',coalesce(probe.status,'awaiting_probe'),
+    'durationMs',probe.duration_ms,'width',probe.width,'height',probe.height)
+    ORDER BY o.created_at DESC)
+    FROM app.creative_media_video_outputs o
+    LEFT JOIN LATERAL (SELECT revision,decision,created_at,reviewed_by
+      FROM app.creative_media_output_reviews
+      WHERE workspace_id=o.workspace_id AND output_id=o.id
+      ORDER BY revision DESC LIMIT 1) r ON true
     LEFT JOIN app.creative_media_output_probes probe
-      ON probe.workspace_id=r.workspace_id AND probe.output_id=r.output_id),'[]'::jsonb);
+      ON probe.workspace_id=o.workspace_id AND probe.output_id=o.id
+    WHERE o.workspace_id=p_workspace),'[]'::jsonb);
  END IF;
  IF p_action<>'review' OR p_input IS NULL OR jsonb_typeof(p_input)<>'object'
    OR octet_length(p_input::text)>2000

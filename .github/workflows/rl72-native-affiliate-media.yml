@@ -30,6 +30,12 @@ on:
       - 'orchestrator/src/portal/creative-media-video-sources-view.ts'
       - 'orchestrator/test/media-video-sources.test.ts'
       - 'orchestrator/test/media-work-executor.test.ts'
+      - 'orchestrator/src/creative-studio/media-output-review.ts'
+      - 'orchestrator/src/portal/creative-media-output-review-view.ts'
+      - 'orchestrator/test/media-output-review.test.ts'
+      - 'orchestrator/test/creative-media-output-review-view.test.ts'
+      - 'orchestrator/test/db/creative-media-output-review-pg.integration.test.ts'
+      - 'orchestrator/src/creative-studio/migration-drafts/output-private-review.sql'
       - 'orchestrator/test/media-reconciler.test.ts'
       - 'orchestrator/src/workers/creative-media/**'
       - 'orchestrator/package.json'
@@ -77,7 +83,7 @@ jobs:
         run: npm --prefix orchestrator run typecheck
       - name: Affiliate intake and Creative Studio regressions
         working-directory: orchestrator
-        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts test/media-video-output.test.ts test/media-reconciler.test.ts test/media-access.test.ts test/media-edit-plan.test.ts test/media-cut-editor.test.ts test/media-work-executor.test.ts test/media-admission.test.ts test/creative-media-reports-view.test.ts test/amazon-tracking-report.test.ts test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/affiliate-direct-link.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
+        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts test/media-video-output.test.ts test/media-reconciler.test.ts test/media-access.test.ts test/media-output-review.test.ts test/creative-media-output-review-view.test.ts test/media-edit-plan.test.ts test/media-cut-editor.test.ts test/media-work-executor.test.ts test/media-admission.test.ts test/creative-media-reports-view.test.ts test/amazon-tracking-report.test.ts test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/affiliate-direct-link.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
       - name: Bootstrap canonical migrations plus media drafts in disposable localhost PG
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
@@ -90,6 +96,6 @@ jobs:
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts test/db/creative-media-products-pg.integration.test.ts
+        run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts test/db/creative-media-products-pg.integration.test.ts test/db/creative-media-output-review-pg.integration.test.ts
       - name: Full canonical orchestrator test suite (all email protections and follow-up tests)
         run: npm --prefix orchestrator test
