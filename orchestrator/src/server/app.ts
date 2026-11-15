@@ -17,6 +17,7 @@ import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
+import { handleAffiliateRedirect } from '../media/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -84,6 +85,14 @@ export function createApp(deps: AppDeps) {
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       try { await handleAdmin(req, res, deps.cfg); }
       catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
+      return;
+    }
+
+    // Public affiliate clicks carry an HMAC bound to their real stored destination.
+    // A click is never described as an order or a commission.
+    if (url.pathname.startsWith('/go/')) {
+      if (!deps.portal?.media) { res.writeHead(404); res.end(); return; }
+      await handleAffiliateRedirect(req,res,deps.portal.media,deps.cfg.sessionSecret);
       return;
     }
 
