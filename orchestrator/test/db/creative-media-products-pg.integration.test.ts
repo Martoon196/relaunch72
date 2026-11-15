@@ -16,6 +16,7 @@ import { mediaRequestDigests } from '../../src/creative-studio/media-providers.j
 import { PgCreativeVideoSources } from '../../src/creative-studio/media-video-source-pg-store.js';
 import { PgMediaVideoOutputWorker } from '../../src/creative-studio/media-video-output-pg-store.js';
 import { PgMediaVideoOutputOwner } from '../../src/creative-studio/media-video-output-owner.js';
+import { PgMediaEditStore } from '../../src/creative-studio/media-edit-pg-store.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -223,6 +224,30 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       await assert.rejects(content.query('SELECT * FROM app.creative_media_video_outputs'),/permission denied/iu);
       // A captured preview is NOT a completed financial settlement or creative approval.
       assert.equal((await owner.list(a.brand.id)).find(j=>j.id===jobId)?.state,'submitted');
+    });
+    await t.test('owner timelines store immutable revisions against same-workspace uploaded sources',async()=>{
+      const sources=await new PgCreativeVideoSources(content,a.principal).list(a.brand.id);
+      assert.equal(sources.length,1);
+      const owner=new PgMediaEditStore(content,a.principal);
+      const other=new PgMediaEditStore(content,b.principal);
+      const projectId=randomUUID(),commandId=randomUUID();
+      const plan={canvas:'portrait' as const,disclosure:'#ad',clips:[
+        {startMs:0,endMs:5000,caption:'Private review only',transition:'cut' as const,speed:1 as const}]};
+      const input={workspaceId:a.brand.id,projectId,commandId,expectedRevision:0,
+        sourceId:sources[0]!.id,sourceSha256:sources[0]!.sha256,plan};
+      const first=await owner.save(input);
+      assert.equal(first.revision,1);assert.equal(first.replayed,false);
+      assert.equal((await owner.save(input)).replayed,true);
+      await assert.rejects(owner.save({...input,plan:{...plan,disclosure:'new'}}),/reused|changed/iu);
+      const version=await owner.get(a.brand.id,projectId);
+      assert.equal(version?.plan.clips[0]?.caption,'Private review only');
+      assert.equal(version?.planSha256.length,64);
+      assert.equal((await owner.list(a.brand.id)).length,1);
+      assert.deepEqual(await other.list(b.brand.id),[]);
+      await assert.rejects(other.get(a.brand.id,projectId),/owner|permission|session/iu);
+      await assert.rejects(content.query('SELECT * FROM app.creative_media_edit_projects'),/permission denied/iu);
+      assert.equal((await owner.save({...input,commandId:randomUUID(),expectedRevision:1,
+        plan:{...plan,clips:[{...plan.clips[0],caption:'Edited caption'}]}})).revision,2);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
