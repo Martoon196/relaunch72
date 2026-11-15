@@ -95,3 +95,13 @@ Canonical `codex/relaunch72-platform-foundation` independently added `0156_email
 This draft now includes that exact upstream migration unchanged and moves RL72 Media Engine's seven new migrations forward **one number** to `0157`–`0163`, preserving a contiguous sequence.
 The renamed media SQL bodies are semantically unchanged (the original comments may refer to the earlier working number).
 The PR branch includes a merge parent pointing at upstream commit `8eca59d3bfefa3c0fcc4d74d4cb02621768f5a71` and preserves upstream email protection settings. **Never overwrite upstream/Claude changes to make CI green.**
+
+
+## Repair handover: active migrations quarantined (November 15)
+
+Claude verified that production foundation and its email protection release expect migration `0156` as the current latest.
+The unchanged full `npm test` failed only three tests while 11 draft media migrations were discoverable under `src/db/migrations`: they enlarged the role allowlist and contradicted the expected live migration ledger.
+
+To preserve the foundation's unchanged tests and comply with Claude's control over migration numbering, **all 11 media SQL files were copied byte-for-byte** to `orchestrator/src/creative-studio/migration-drafts/` and removed from the active migration scan. They are NOT applied by the production migrator. Claude should consolidate/renumber them when the media suite is reviewed.
+
+For media-specific PG integration proof, our new GitHub Actions workflow first bootstraps the existing canonical schema and then applies these drafts in sequence to a disposable localhost test database using `apply-to-disposable.mjs`. The script rejects remote or production database URLs. The normal `npm test` sees only the foundation's active migrations, ending at `0156`. No existing test, DB runtime, live Render service or foundation file was changed.

@@ -18,13 +18,13 @@ on:
       - 'orchestrator/src/creative-studio/amazon-report-pg-store.ts'
       - 'orchestrator/src/portal/creative-media-reports-view.ts'
       - 'orchestrator/test/creative-media-reports-view.test.ts'
-      - 'orchestrator/src/db/migrations/0158_creative_media_reports.sql'
-      - 'orchestrator/src/db/migrations/0159_creative_media_video_jobs.sql'
+      - 'orchestrator/src/creative-studio/migration-drafts/0158_creative_media_reports.sql'
+      - 'orchestrator/src/creative-studio/migration-drafts/0159_creative_media_video_jobs.sql'
       - 'orchestrator/src/creative-studio/media-admission-pg-store.ts'
       - 'orchestrator/src/creative-studio/media-work-executor.ts'
       - 'orchestrator/src/creative-studio/media-video-source-pg-store.ts'
-      - 'orchestrator/src/db/migrations/0160_creative_media_source_videos.sql'
-      - 'orchestrator/src/db/migrations/0161_creative_source_video_private_preview.sql'
+      - 'orchestrator/src/creative-studio/migration-drafts/0160_creative_media_source_videos.sql'
+      - 'orchestrator/src/creative-studio/migration-drafts/0161_creative_source_video_private_preview.sql'
       - 'orchestrator/src/portal/media-video-byte-range.ts'
       - 'orchestrator/test/media-video-byte-range.test.ts'
       - 'orchestrator/src/portal/creative-media-video-sources-view.ts'
@@ -43,7 +43,7 @@ on:
       - 'orchestrator/test/affiliate-direct-link.test.ts'
       - 'orchestrator/test/media-providers.test.ts'
       - 'orchestrator/test/db/creative-media-products-pg.integration.test.ts'
-      - 'orchestrator/src/db/migrations/0157_creative_media_products.sql'
+      - 'orchestrator/src/creative-studio/migration-drafts/0157_creative_media_products.sql'
       - 'orchestrator/test/creative-studio*.test.ts'
       - '.github/workflows/rl72-native-affiliate-media.yml'
 permissions:
@@ -80,11 +80,13 @@ jobs:
       - name: Affiliate intake and Creative Studio regressions
         working-directory: orchestrator
         run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts test/media-video-output.test.ts test/media-reconciler.test.ts test/media-access.test.ts test/media-edit-plan.test.ts test/media-cut-editor.test.ts test/media-work-executor.test.ts test/media-admission.test.ts test/creative-media-reports-view.test.ts test/amazon-tracking-report.test.ts test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/affiliate-direct-link.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
-      - name: Apply exact schema only to disposable localhost PG
+      - name: Bootstrap canonical migrations plus media drafts in disposable localhost PG
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+        run: |
+          node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+          node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
       - name: Check tenant, owner session and exact approval in real PG
         working-directory: orchestrator
         env:
