@@ -48,6 +48,7 @@ import { EmailConnectionAbsentError, EmailConnectionForbiddenError, type DomainO
   type EmailConnectionStore, type RunLock, type StepOutcome } from './store.js';
 import { EMAIL_TERMS_VERSION } from './terms.js';
 import type { EmailBounceSource } from '../email-bounces/index.js';
+import { confirmBounceWebhook, webhookCheckLine } from './webhook-check.js';
 
 export const BROADCAST_STREAM = 'broadcast';
 const LOCK_WAIT_MS = 20_000;
@@ -87,6 +88,13 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   checkNone: 'Not found yet. This can take up to 48 hours; press Check again later.',
   checkMismatch: (kind: 'TXT' | 'CNAME') => `The ${kind} record's value doesn't match. Copy it again from this page.`,
   started: 'Nearly there. Add the 2 records below where your domain is managed, then press Check.',
+  startedFound: 'Nearly there. Both records are already in place for your domain, so press Check below to finish.',
+  webhookUnreachable: 'The email service couldn\'t reach our bounce address while setting up. Press Continue in a minute.',
+  bounceWorking: 'Bounce reporting is working. Press Go live again.',
+  bounceRepaired: 'Bounce reporting is working again. Press Go live again.',
+  bounceWorkingCheck: 'Bounce reporting is working. Press Check below to finish connecting.',
+  bounceRemade: 'Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself and press Go live.',
+  bounceStillFailing: 'The email service still can\'t reach our bounce address. Press Repair bounce reporting again in a few minutes; if it keeps failing, contact support.',
   connectedNext: 'Connected. Sending is switched on in the next step.',
   disconnected: 'Email is disconnected. You can connect again at any time.',
   nothingToCheck: 'There is nothing to check yet.',
@@ -103,7 +111,11 @@ export type EmailConnectionView =
       /** A connected business whose saved secrets cannot be opened (the key changed): Continue repairs it. */
       readonly repair?: boolean };
 
-export interface EmailConnectionResult { readonly ok: boolean; readonly message: string }
+export interface EmailConnectionResult {
+  readonly ok: boolean; readonly message: string;
+  /** Bounce reporting is still not confirmed: the page keeps offering "Repair bounce reporting". */
+  readonly bounceRepair?: boolean;
+}
 
 export interface EmailConnectionBounceHook {
   apply(source: EmailBounceSource): void;
@@ -135,7 +147,8 @@ function failureOf(error: unknown, domain = 'that domain'): StepFailure {
     if (error.errorCode === POSTMARK_CODES.pendingApproval || error.errorCode === POSTMARK_CODES.notApproved) return new StepFailure('awaiting_approval', EMAIL_CONNECTION_MESSAGES.awaitingApproval);
     if (error.errorCode === POSTMARK_CODES.limitReached) return new StepFailure('plan_limit', EMAIL_CONNECTION_MESSAGES.planLimit, 409, true);
     if (error.errorCode === POSTMARK_CODES.publicDomain) return new StepFailure('public_domain', EMAIL_CONNECTION_MESSAGES.freeMailbox(domain), 400);
-    if (error.errorCode === POSTMARK_CODES.webhookVerificationFailed) return new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.unfinished);
+    // Postmark tested our endpoint during the create and a trigger failed: nothing was saved there; Continue tries again.
+    if (error.errorCode === POSTMARK_CODES.webhookVerificationFailed) return new StepFailure('webhook_unreachable', EMAIL_CONNECTION_MESSAGES.webhookUnreachable);
     return new StepFailure('refused', EMAIL_CONNECTION_MESSAGES.needsHand, 409, true);
   }
   return new StepFailure('failed', EMAIL_CONNECTION_MESSAGES.unfinished);
@@ -450,7 +463,7 @@ export class EmailConnectionService {
       if (lock.lost()) throw new StepFailure('failed', EMAIL_CONNECTION_MESSAGES.interrupted);
       await store.record(token, ws, 'domain', domainOutcome, { domainId: domain.id, dns: recordsOf(domain, origin) });
       this.log(JSON.stringify({ event: 'email.connections.records_waiting', workspace: ws.slice(0, 8) }));
-      return { ok: true, message: EMAIL_CONNECTION_MESSAGES.started };
+      return { ok: true, message: domain.dkimVerified && domain.returnPathVerified ? EMAIL_CONNECTION_MESSAGES.startedFound : EMAIL_CONNECTION_MESSAGES.started };
     } catch (error) {
       if (error instanceof EmailConnectionError) throw error;
       if (error instanceof EmailConnectionForbiddenError) throw this.storeError(error);
@@ -458,6 +471,11 @@ export class EmailConnectionService {
       // Logged with the step and the Postmark status and code only; never a token, a secret or Postmark's text.
       this.log(JSON.stringify({ event: 'email.connections.step_failed', level: 'warn', step, outcome: failure.outcome,
         ...(error instanceof PostmarkAccountError ? { status: error.status, code: error.errorCode } : {}) }));
+      if (failure.outcome === 'webhook_unreachable' && error instanceof PostmarkAccountError) {
+        // Which of our triggers Postmark could not get a 200 from, and what it got (type names and numbers only).
+        this.log(JSON.stringify({ event: 'email.connections.webhook_verification_failed', level: 'warn', workspace: ws.slice(0, 8), reason: 'verify_failed',
+          failing: error.failingTriggers.map(item => ({ trigger: item.trigger, status: item.status })) }));
+      }
       if (failure.outcome === 'unauthorized') this.log(JSON.stringify({ event: 'email.connections.account_token_refused', level: 'warn',
         message: 'Postmark refused POSTMARK_ACCOUNT_TOKEN; Connect email cannot work until it is corrected.' }));
       const recorded = await store.record(token, ws, step, failure.outcome).then(() => true, () => { this.log(JSON.stringify({ event: 'email.connections.record_failed', level: 'warn', step })); return false; });
@@ -483,12 +501,14 @@ export class EmailConnectionService {
    * server, stream and domain are adopted by id; nothing is deleted except our old webhook), then the steps run again:
    * one webhook at our address afterwards, with a new secret. Postmark's verified flags are read again by Check.
    */
-  private async repair(identity: PortalSessionIdentity, business: EmailConnectBusiness, state: EmailConnectionState, lock: RunLock): Promise<EmailConnectionResult> {
+  private async repair(identity: PortalSessionIdentity, business: EmailConnectBusiness, state: EmailConnectionState, lock: RunLock,
+    why: 'secrets' | 'bounce_webhook' = 'secrets'): Promise<EmailConnectionResult> {
     const { store } = this.input, token = identity.sessionToken, ws = business.workspaceId;
     if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
     if (!state.domain || !state.fromName || !state.fromAddress) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.nothingToContinue, 'no_details');
-    this.log(JSON.stringify({ event: 'email.connections.repair', level: 'warn', workspace: ws.slice(0, 8),
-      message: 'Saved email connection secrets could not be opened with EMAIL_CONNECTION_KEY; the webhook secret and webhook are being remade.' }));
+    this.log(JSON.stringify({ event: 'email.connections.repair', level: 'warn', workspace: ws.slice(0, 8), why,
+      message: why === 'secrets' ? 'Saved email connection secrets could not be opened with EMAIL_CONNECTION_KEY; the webhook secret and webhook are being remade.'
+        : 'The owner pressed Repair bounce reporting and the saved bounce webhook is not listed; the webhook secret and webhook are being remade.' }));
     try {
       await store.disconnect(token, ws);
       const begun = await store.begin(token, ws, { domain: state.domain, fromName: state.fromName, fromAddress: state.fromAddress, replyTo: state.replyTo }, EMAIL_TERMS_VERSION);
@@ -497,6 +517,58 @@ export class EmailConnectionService {
     // The stale webhook (secret we can no longer read) is found at our address and replaced by run().
     await this.run(identity, business, false, lock);
     return { ok: true, message: EMAIL_CONNECTION_MESSAGES.repaired };
+  }
+
+  /**
+   * "Repair bounce reporting" (offered after Go live could not confirm the bounce webhook). Under the run lock:
+   *   - secrets that no longer open: the existing repair (above);
+   *   - the saved webhook listed on our stream at our address: verified at Postmark if it is not shown as verified
+   *     (nothing is created, edited or deleted);
+   *   - otherwise (no saved id, not listed, or listed at another address): the existing repair, which keeps the server,
+   *     stream and domain, deletes only our own stale webhook at our address and creates one (secret saved and in force
+   *     first), so there is never a second webhook at our address. 0155 saves a webhook id only while setting up, so the
+   *     connection then waits for Check (and a fresh test) again.
+   * Every outcome is logged as one 'email.connections.bounce_repair' line.
+   */
+  async repairBounceReporting(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
+    return this.locked(identity, async (business, lock) => {
+      const config = this.input.config;
+      if (!config.enabled) throw new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
+      const state = await this.read(identity, business), ws = business.workspaceId;
+      if (state.status !== 'verified' && state.status !== 'dns_pending') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToCheck };
+      const line = (fields: Record<string, unknown>) => this.log(JSON.stringify({ event: 'email.connections.bounce_repair', level: 'warn', workspace: ws.slice(0, 8), ...fields }));
+      if (await this.repairNeeded(identity, business, state)) {
+        line({ outcome: 'remade', reason: 'secrets_unreadable' });
+        await this.repair(identity, business, state, lock);
+        return { ok: true, message: EMAIL_CONNECTION_MESSAGES.bounceRemade };
+      }
+      const sealed = await this.input.store.sealed(identity.sessionToken, ws);
+      const serverToken = config.vault.open(ws, 'server_token', sealed.serverToken!);
+      const url = connectionWebhookUrl(config.webhookOrigin, business), stream = state.stream ?? BROADCAST_STREAM;
+      let listed;
+      try { listed = state.webhookId ? (await this.serverApi(serverToken).listWebhooks(stream)).find(hook => hook.id === state.webhookId) ?? null : null; }
+      catch (error) {
+        line({ outcome: 'not_repaired', reason: 'list_failed', ...(error instanceof PostmarkAccountError ? { category: error.category, httpStatus: error.status } : {}) });
+        throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
+      }
+      if (listed && listed.url === url) {
+        const check = await confirmBounceWebhook({ webhookId: state.webhookId, stream, token: async () => serverToken, api: this.serverApi });
+        this.log(webhookCheckLine('email.connections.bounce_repair', ws, check));
+        // Each message names a button the page shows in that state: Go live once connected, Check while waiting for it.
+        if (check.confirmed) return { ok: true, message: state.status === 'dns_pending' ? EMAIL_CONNECTION_MESSAGES.bounceWorkingCheck
+          : check.reason === 'listed_verified' ? EMAIL_CONNECTION_MESSAGES.bounceWorking : EMAIL_CONNECTION_MESSAGES.bounceRepaired };
+        if (check.reason === 'verify_failed') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.bounceStillFailing, bounceRepair: true };
+        throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
+      }
+      line({ outcome: 'remade', reason: !state.webhookId ? 'no_webhook_id' : listed ? 'other_address' : 'not_listed' });
+      // Our own saved webhook, but pointing at another address: removed, so only the new one at our address remains.
+      if (listed) {
+        try { await this.serverApi(serverToken).deleteWebhook(listed.id).catch(error => { if (!missing(error)) throw error; }); }
+        catch { throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy'); }
+      }
+      await this.repair(identity, business, state, lock, 'bounce_webhook');
+      return { ok: true, message: EMAIL_CONNECTION_MESSAGES.bounceRemade };
+    });
   }
 
   /** "Check": Postmark verifies both records; its answer is stored; our look-ups only choose the message. */

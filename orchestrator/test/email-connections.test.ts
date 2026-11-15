@@ -278,6 +278,55 @@ test('Connect creates the server, the Broadcast stream, the webhook (secret save
   for (const value of [token, SECRET, ACCOUNT_TOKEN, KEY, 'reader@readers-test.co.uk', 'john@example.com']) assert.equal(all.includes(value), false, 'no secret or address in the logs');
 });
 
+test('webhook creation order: the secret is saved, and readable by every instance, before Postmark tests the new webhook during the create call', async () => {
+  const h = harness();
+  const timeline: string[] = [];
+  const realSave = h.store.saveSealed.bind(h.store);
+  h.store.saveSealed = async (...args: Parameters<typeof realSave>) => { await realSave(...args); timeline.push(`saved:${args[2]}`); };
+  // Another instance that never loaded this connection answers Postmark's samples from the store alone.
+  const other = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
+  other.setSourceLoader(new EmailConnectionBounceSources({ store: h.store, vault: h.config.vault!, service: other }));
+  const otherHook = createPostmarkBounceWebhook({ service: other });
+  const postOther = async (body: unknown, auth: string, path: string) => {
+    const captured = { status: 0 };
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: path,
+      headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from(auth).toString('base64')}` }, socket: { remoteAddress: '127.0.0.9' } }) as unknown as IncomingMessage;
+    await otherHook.handle(req, { writeHead(status: number) { captured.status = status; }, end() {} } as unknown as ServerResponse, new URL(path, ORIGIN));
+    return captured.status;
+  };
+  const thisInstance = h.postmark.verify;
+  const answers: number[] = [];
+  h.postmark.verify = async hook => {
+    timeline.push('postmark_tests_webhook');
+    for (const sample of [...h.samples(), ...h.samples(hook.stream)]) answers.push(await postOther(sample, `${hook.username}:${hook.password}`, new URL(hook.url).pathname));
+    return thisInstance(hook);
+  };
+  assert.equal((await h.service.connect(owner, FORM)).ok, true);
+  assert.deepEqual(timeline, ['saved:server_token', 'saved:webhook_secret', 'postmark_tests_webhook'], 'token and secret saved before the create call');
+  assert.deepEqual(answers, [200, 200, 200, 200, 200, 200], 'every sample answered 200 by the other instance too');
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 1);
+  assert.equal(other.registry.snapshot(PP_WS).blocked.length, 0, 'the samples recorded nothing');
+  assert.deepEqual(h.effects, []);
+});
+
+test('a webhook Postmark could not verify on create is its own step failure, logged with the failing triggers; Continue then creates it', async () => {
+  const h = harness();
+  h.postmark.verify = async () => false;
+  await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.code === 'webhook_unreachable'
+    && e.message === 'The email service couldn\'t reach our bounce address while setting up. Press Continue in a minute.');
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 0, 'Postmark saved nothing');
+  assert.equal(h.store.row!.status, 'needs_attention');
+  assert.ok(h.store.events.some(e => e.step === 'webhook' && e.outcome === 'webhook_unreachable'));
+  const line = h.lines.map(l => JSON.parse(l) as Record<string, unknown>).find(l => l.event === 'email.connections.webhook_verification_failed')!;
+  assert.deepEqual(line, { event: 'email.connections.webhook_verification_failed', level: 'warn', workspace: PP_WS.slice(0, 8), reason: 'verify_failed',
+    failing: [{ trigger: 'Bounce', status: 401 }] });
+  assert.equal(h.lines.join('\n').includes('Remote server'), false, 'no Postmark text in the log');
+  assert.equal(h.lines.join('\n').includes(SECRET), false);
+  h.postmark.verify = async () => true;
+  assert.equal((await h.service.continue(owner)).ok, true);
+  assert.equal(h.postmark.servers[0]!.webhooks.length, 1);
+});
+
 test('a failure after EVERY step leaves the connection to Continue, and Continue adopts everything without creating anything twice', async () => {
   type Inject = { name: string; match: (call: { method: string; path: string }) => boolean; after?: boolean; status?: number; code?: number };
   const injections: Inject[] = [
@@ -296,7 +345,7 @@ test('a failure after EVERY step leaves the connection to Continue, and Continue
     const h = harness();
     h.postmark.failOn(inject.match, inject.status ?? 500, inject.code ?? null, inject.after ?? false);
     await assert.rejects(h.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError
-      && ([EMAIL_CONNECTION_MESSAGES.busy, EMAIL_CONNECTION_MESSAGES.unfinished] as string[]).includes(e.message), inject.name);
+      && ([EMAIL_CONNECTION_MESSAGES.busy, EMAIL_CONNECTION_MESSAGES.unfinished, EMAIL_CONNECTION_MESSAGES.webhookUnreachable] as string[]).includes(e.message), inject.name);
     assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).status, 'needs_attention', inject.name);
     const result = await h.service.continue(owner);
     assert.equal(result.ok, true, inject.name);
@@ -613,7 +662,7 @@ test('permanent failures say what is true, never "Press Continue"', async () => 
   const cases: [string, (c: { method: string; path: string }) => boolean, number, number | null, string][] = [
     ['plan limit', c => c.method === 'POST' && c.path === '/servers', 422, 614, 'Our email account has reached its limit for new businesses. We have logged this and will sort it out.'],
     ['refused', c => c.method === 'POST' && c.path === '/servers', 422, 608, 'Part of the email set-up needs a hand from us. We have logged this and will sort it out.'],
-    ['webhook verification', c => c.method === 'POST' && c.path === '/webhooks', 422, 1364, EMAIL_CONNECTION_MESSAGES.unfinished],
+    ['webhook verification', c => c.method === 'POST' && c.path === '/webhooks', 422, 1364, EMAIL_CONNECTION_MESSAGES.webhookUnreachable],
   ];
   for (const [name, match, status, code, message] of cases) {
     const h = harness();

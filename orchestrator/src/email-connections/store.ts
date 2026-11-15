@@ -51,7 +51,7 @@ export interface StoredConnectionSource {
 }
 export type BeginOutcome = 'started' | 'terms_required' | 'already_connected' | 'domain_taken';
 export type TermsOutcome = 'accepted' | 'already';
-export type StepOutcome = 'created' | 'adopted' | 'busy' | 'unauthorized' | 'refused' | 'failed' | 'plan_limit' | 'domain_taken' | 'public_domain' | 'awaiting_approval'
+export type StepOutcome = 'created' | 'adopted' | 'busy' | 'unauthorized' | 'refused' | 'failed' | 'webhook_unreachable' | 'plan_limit' | 'domain_taken' | 'public_domain' | 'awaiting_approval'
   | 'founder_takeover' | 'domain_removed' | 'domain_kept' | 'domain_gone' | 'domain_remove_failed';
 export type CheckOutcome = 'verified' | 'partial' | 'pending';
 export interface StepValues { readonly serverId?: number; readonly stream?: string; readonly webhookId?: number; readonly domainId?: number; readonly dns?: EmailConnectionDns }

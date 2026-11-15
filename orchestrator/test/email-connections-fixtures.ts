@@ -30,8 +30,18 @@ export class FakePostmark {
   readonly calls: FakeCall[] = [];
   private nextId = 1000;
   private failures: { match: (call: FakeCall) => boolean; status: number; code: number | null; after: boolean }[] = [];
-  /** Called when a webhook is created; resolve false to make Postmark's verification fail (422 / 1364). */
+  /** Called when a webhook is created (and by POST /webhooks/{id}/verify); resolve false to make Postmark's verification fail. */
   verify: (hook: { url: string; username: string; password: string; stream: string; serverId: number }) => Promise<boolean> = async () => true;
+  /** How the webhook list shows Status: as stored, absent (as in Postmark's own example list), or in capitals. */
+  statusField: 'normal' | 'absent' | 'upper' = 'normal';
+  /** How a failing POST /webhooks/{id}/verify answers: 422 / 1364, or 200 with Success false (both shapes are documented). */
+  verifyFailsAs: '422' | '200' = '422';
+  /** The per-trigger results Postmark reports for a failing verification (Bounce answered 401 here). */
+  private results(ok: boolean) {
+    return [{ TriggerType: 'Bounce', Success: ok, StatusCode: ok ? 200 : 401, Message: `Remote server returned an HTTP status code of ${ok ? 200 : 401}. https://hook.example/secret-ish` },
+      { TriggerType: 'SpamComplaint', Success: true, StatusCode: 200, Message: 'Remote server returned an HTTP status code of 200.' },
+      { TriggerType: 'SubscriptionChange', Success: true, StatusCode: 200, Message: 'Remote server returned an HTTP status code of 200.' }];
+  }
 
   failOn(match: (call: FakeCall) => boolean, status = 500, code: number | null = null, after = false): void { this.failures.push({ match, status, code, after }); }
   /** The error code only in the X-PM-ApiErrorCode header, with an empty body. */
@@ -123,13 +133,23 @@ export class FakePostmark {
       const stream = url.searchParams.get('MessageStream');
       if (!server.streams.some(s => s.id === stream)) return this.json(422, { ErrorCode: 1226, Message: 'no stream' });
       return this.json(200, { Webhooks: server.webhooks.filter(hook => hook.stream === stream).map(hook => ({ ID: hook.id, Url: hook.url, MessageStream: hook.stream,
-        HttpAuth: { Username: hook.username, Password: hook.password }, Status: hook.status, Triggers: {} })) });
+        HttpAuth: { Username: hook.username, Password: hook.password }, ...(this.statusField === 'absent' ? {} : { Status: this.statusField === 'upper' ? hook.status.toUpperCase() : hook.status }),
+        Triggers: {} })) });
     }
     if (method === 'POST' && path === '/webhooks') {
       const hook = { id: this.nextId++, url: body!.Url, stream: body!.MessageStream, username: body!.HttpAuth.Username, password: body!.HttpAuth.Password, status: 'verified' as const };
-      if (!(await this.verify({ ...hook, serverId: server.id }))) return this.json(422, { ErrorCode: 1364, Message: '2/3 triggers verified successfully' });
+      if (!(await this.verify({ ...hook, serverId: server.id }))) return this.json(422, { Id: hook.id, Url: hook.url, Success: false, Results: this.results(false), ErrorCode: 1364, Message: '2/3 triggers verified successfully' });
       server.webhooks.push(hook);
       return this.json(200, { ID: hook.id, Url: hook.url, MessageStream: hook.stream, HttpAuth: { Username: hook.username, Password: hook.password } });
+    }
+    const v = /^\/webhooks\/(\d+)\/verify$/u.exec(path);
+    if (method === 'POST' && v) {
+      const hook = server.webhooks.find(item => item.id === Number(v[1]));
+      if (!hook) return this.json(422, { ErrorCode: 1352, Message: 'no' });
+      const ok = await this.verify({ ...hook, serverId: server.id });
+      hook.status = ok ? 'verified' : 'unverified';
+      if (!ok && this.verifyFailsAs === '422') return this.json(422, { Id: hook.id, Url: hook.url, Success: false, Results: this.results(false), ErrorCode: 1364, Message: '2/3 triggers verified successfully' });
+      return this.json(200, { Id: hook.id, Url: hook.url, Success: ok, Results: this.results(ok), Message: ok ? '3/3 triggers verified successfully' : '2/3 triggers verified successfully' });
     }
     const m = /^\/webhooks\/(\d+)$/u.exec(path);
     if (method === 'DELETE' && m) {

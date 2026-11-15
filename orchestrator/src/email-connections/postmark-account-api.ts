@@ -34,13 +34,28 @@ export type PostmarkErrorCategory =
   /** The answer was not the JSON shape the docs describe, or was too large. */
   | 'invalid_response';
 
+/**
+ * One webhook trigger Postmark tested and found failing: the trigger type (from a fixed list; anything else reads
+ * 'Other') and the HTTP status Postmark says our endpoint answered (a number, or null when Postmark gave none).
+ */
+export interface WebhookTriggerFailure { readonly trigger: string; readonly status: number | null }
+
 export class PostmarkAccountError extends Error {
   override readonly name = 'PostmarkAccountError';
-  constructor(readonly category: PostmarkErrorCategory, readonly status: number | null = null, readonly errorCode: number | null = null) {
+  constructor(readonly category: PostmarkErrorCategory, readonly status: number | null = null, readonly errorCode: number | null = null,
+    /** Only on a webhook verification failure (ErrorCode 1364): the failing triggers, types and numbers only. */
+    readonly failingTriggers: readonly WebhookTriggerFailure[] = []) {
     super(`Postmark request failed (${category}${status === null ? '' : ` ${status}`}${errorCode === null ? '' : ` code ${errorCode}`})`);
   }
-  toJSON(): Readonly<Record<string, unknown>> { return { category: this.category, status: this.status, errorCode: this.errorCode }; }
+  toJSON(): Readonly<Record<string, unknown>> {
+    return { category: this.category, status: this.status, errorCode: this.errorCode, ...(this.failingTriggers.length ? { failingTriggers: this.failingTriggers } : {}) };
+  }
 }
+
+/** What "verify a webhook" answered: verified, or the triggers that failed (possibly none named). */
+export type WebhookVerification =
+  | { readonly verified: true }
+  | { readonly verified: false; readonly failing: readonly WebhookTriggerFailure[] };
 
 /** Postmark ErrorCodes this feature reacts to (from the API overview's error code table). */
 export const POSTMARK_CODES = Object.freeze({
@@ -66,8 +81,10 @@ export interface PostmarkServer {
 export interface PostmarkStream { readonly id: string; readonly type: string; readonly archived: boolean }
 export interface PostmarkWebhook {
   readonly id: number; readonly url: string; readonly stream: string; readonly username: string | null;
-  /** Postmark's verification status: only a 'verified' webhook receives events. */
+  /** Postmark's verification status (read in any letter case): only a 'verified' webhook receives events. null: absent or unrecognised. */
   readonly status: 'verified' | 'unverified' | null;
+  /** Whether the answer carried a Status field at all (Postmark's own example list shows a webhook without one). */
+  readonly statusPresent?: boolean;
   /** The HTTP Basic password stored on the webhook (non-enumerable), compared with ours and then dropped. */
   readonly password: string | null;
 }
@@ -86,6 +103,12 @@ export interface PostmarkServerApi {
   listWebhooks(stream: string): Promise<readonly PostmarkWebhook[]>;
   createWebhook(input: { url: string; stream: string; username: string; password: string }): Promise<PostmarkWebhook>;
   deleteWebhook(id: number): Promise<void>;
+  /**
+   * POST /webhooks/{id}/verify: Postmark tests our endpoint for each enabled trigger and marks the webhook verified or
+   * unverified. A 2xx whose body says Success false (or lists a failing trigger), or a 422 with ErrorCode 1364, is
+   * { verified: false } with the failing triggers; any other failure throws PostmarkAccountError.
+   */
+  verifyWebhook(id: number): Promise<WebhookVerification>;
 }
 export interface PostmarkAccountApi {
   listServers(name: string): Promise<readonly PostmarkServer[]>;
@@ -149,8 +172,25 @@ function readWebhook(value: unknown): PostmarkWebhook | null {
   if (id === null || url === null || stream === null) return null;
   const auth = record(value.HttpAuth) ? value.HttpAuth : {};
   const username = text(auth.Username, 400);
-  const status = value.Status === 'verified' || value.Status === 'unverified' ? value.Status : null;
-  return Object.freeze(hidden({ id, url, stream, username, status } as PostmarkWebhook, 'password', text(auth.Password, 400)));
+  const statusPresent = Object.prototype.hasOwnProperty.call(value, 'Status') && value.Status !== null && value.Status !== undefined;
+  const raw = typeof value.Status === 'string' ? value.Status.trim().toLowerCase() : null;
+  const status = raw === 'verified' || raw === 'unverified' ? raw : null;
+  return Object.freeze(hidden({ id, url, stream, username, status, statusPresent } as PostmarkWebhook, 'password', text(auth.Password, 400)));
+}
+
+const TRIGGER_TYPES = new Set(['Open', 'Click', 'Delivery', 'Bounce', 'SpamComplaint', 'SubscriptionChange', 'Inbound']);
+/** The failing triggers of a verification answer (Results[].Success false): known type names and numbers only, at most 10. */
+function failingTriggersOf(body: unknown): WebhookTriggerFailure[] {
+  if (!record(body) || !Array.isArray(body.Results)) return [];
+  const out: WebhookTriggerFailure[] = [];
+  for (const item of body.Results) {
+    if (!record(item) || item.Success !== false) continue;
+    const trigger = typeof item.TriggerType === 'string' && TRIGGER_TYPES.has(item.TriggerType) ? item.TriggerType : 'Other';
+    const status = typeof item.StatusCode === 'number' && Number.isSafeInteger(item.StatusCode) && item.StatusCode >= 0 && item.StatusCode <= 999 ? item.StatusCode : null;
+    out.push(Object.freeze({ trigger, status }));
+    if (out.length >= 10) break;
+  }
+  return out;
 }
 function readDomain(value: unknown): PostmarkDomain {
   if (!record(value)) throw new PostmarkAccountError('invalid_response');
@@ -189,14 +229,16 @@ function requester(header: 'X-Postmark-Account-Token' | 'X-Postmark-Server-Token
       // Postmark's message text is never carried.
       const header = response.headers.get('x-pm-apierrorcode');
       let errorCode: number | null = header && /^[0-9]{1,6}$/u.test(header.trim()) ? Number(header.trim()) : null;
+      let parsed: unknown = null;
       try {
-        const parsed: unknown = JSON.parse(await readCapped(response, MAX_ERROR_BYTES));
+        parsed = JSON.parse(await readCapped(response, MAX_ERROR_BYTES));
         if (record(parsed) && typeof parsed.ErrorCode === 'number' && Number.isSafeInteger(parsed.ErrorCode)) errorCode = parsed.ErrorCode;
       } catch { await response.body?.cancel().catch(() => undefined); }
       const status = response.status;
       const category: PostmarkErrorCategory = status === 401 ? 'unauthorized' : status === 404 ? 'not_found'
         : status === 429 || status >= 500 || status === 408 ? 'busy' : 'rejected';
-      throw new PostmarkAccountError(category, status, errorCode);
+      // A webhook verification failure keeps which triggers failed and the status codes Postmark saw (numbers only).
+      throw new PostmarkAccountError(category, status, errorCode, errorCode === POSTMARK_CODES.webhookVerificationFailed ? failingTriggersOf(parsed) : []);
     }
     let raw: string;
     try { raw = await readCapped(response, MAX_RESPONSE_BYTES); } catch { throw new PostmarkAccountError('invalid_response', response.status); }
@@ -285,6 +327,21 @@ export function createPostmarkServerApi(input: { serverToken: string; fetch?: Fe
     async deleteWebhook(webhookId) {
       if (!Number.isSafeInteger(webhookId) || webhookId <= 0) throw new PostmarkAccountError('invalid_response');
       await call('DELETE', `/webhooks/${webhookId}`);
+    },
+    async verifyWebhook(webhookId) {
+      if (!Number.isSafeInteger(webhookId) || webhookId <= 0) throw new PostmarkAccountError('invalid_response');
+      let body: unknown;
+      try { body = await call('POST', `/webhooks/${webhookId}/verify`); }
+      catch (error) {
+        if (error instanceof PostmarkAccountError && error.status === 422 && error.errorCode === POSTMARK_CODES.webhookVerificationFailed) {
+          return Object.freeze({ verified: false as const, failing: error.failingTriggers });
+        }
+        throw error;
+      }
+      // "A 200 response means the verification check ran, not that it passed": Success and the per-trigger Results decide.
+      const failing = failingTriggersOf(body);
+      if ((record(body) && body.Success === false) || failing.length) return Object.freeze({ verified: false as const, failing: Object.freeze(failing) });
+      return Object.freeze({ verified: true as const });
     },
   };
   return Object.freeze({ ...api, toJSON: () => ({ postmark: '[REDACTED]' }) });
