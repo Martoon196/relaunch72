@@ -3,6 +3,7 @@
  * Usage:
  *   npm --prefix orchestrator run media:worker -- probe <workspace-uuid> <source-uuid>
  *   npm --prefix orchestrator run media:worker -- probe-output <workspace-uuid> <output-uuid>
+ *   npm --prefix orchestrator run media:worker -- render-local <workspace-uuid> <job-uuid>
  *   npm --prefix orchestrator run media:worker -- submit <workspace-uuid> <job-uuid>
  *   npm --prefix orchestrator run media:worker -- reconcile <workspace-uuid> <job-uuid>
  * Default OFF. Every invocation is scoped to one workspace and one job.
@@ -13,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { createWorkerDatabasePool } from '../../db/pool.js';
 import { PgVideoSourceProbeWorker } from '../../creative-studio/media-source-probe.js';
 import { PgMediaOutputProbeWorker } from '../../creative-studio/media-output-review.js';
+import { PgLocalRenderWorker,runQueuedLocalRender,renderLocalVideo } from '../../creative-studio/media-local-render-pg-store.js';
 import { PgVideoAdmissionWorker } from '../../creative-studio/media-admission-pg-store.js';
 import { submitApprovedMediaJob } from '../../creative-studio/media-work-executor.js';
 import { VizardVideoProvider, ShotstackVideoProvider } from '../../creative-studio/media-providers.js';
@@ -38,6 +40,14 @@ async function main():Promise<void>{
       const result=await new PgMediaOutputProbeWorker(pool,requestId).probe(workspaceId!,id!);
       console.log('private provider output technical probe:',result.status,
         result.replayed?'existing receipt':'new receipt');
+      return;
+    }
+    if(action==='render-local'){
+      const result=await runQueuedLocalRender(workspaceId!,id!,{
+        ledger:new PgLocalRenderWorker(pool,requestId),
+        renderer:renderLocalVideo,
+      });
+      console.log('private native offline render:',result.state,'job:',result.jobId);
       return;
     }
     const vizard=new VizardVideoProvider(process.env.RL72_MEDIA_VIZARD_API_KEY??'',
