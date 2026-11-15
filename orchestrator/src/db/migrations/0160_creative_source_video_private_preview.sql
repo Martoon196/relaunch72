@@ -7,7 +7,7 @@ SET LOCAL ROLE r72_creative_studio_definer;
 CREATE FUNCTION app_private.creative_media_video_source_bytes(
   p_workspace uuid,p_session bytea,p_source uuid
 ) RETURNS TABLE(mime text,bytes bytea,sha256 text)
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid;
 BEGIN
   IF p_session IS NULL OR app_private.current_actor_kind()<>'user'
