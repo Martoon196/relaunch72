@@ -1,7 +1,5 @@
 name: RL72 native affiliate media review gate
 on:
-  push:
-    branches: ['feat/rl72-native-affiliate-creative-*']
   pull_request:
     branches: ['codex/relaunch72-platform-foundation']
     paths:

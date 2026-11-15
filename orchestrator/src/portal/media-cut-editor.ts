@@ -1,41 +1,115 @@
-/** Native private clip editing; never submits a provider or posts online. */
+/**
+ * In-form HTML5 video timeline — no external editor dependency, no network
+ * requests other than the authenticated owner-only source preview route.
+ * Hidden JSON remains the canonical CSRF-backed versioned save payload.
+ */
 export const MEDIA_CUT_EDITOR_SCRIPT=String.raw`(()=>{
 'use strict';
 for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
  const textarea=form.querySelector('textarea[name="planJson"]');
  let edit;try{edit=JSON.parse(textarea.value);}catch{continue;}
- if(!Array.isArray(edit.clips))continue;
- const root=document.createElement('section');root.setAttribute('aria-label','Edit private video timeline');
- const heading=document.createElement('h3');heading.textContent='Video clip timeline';root.append(heading);
- const timeline=document.createElement('div');root.append(timeline);
- const toolbar=document.createElement('div');root.append(toolbar);
- const button=(host,label,callback)=>{
-  const b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',callback);host.append(b);
+ if(!edit||!Array.isArray(edit.clips))continue;
+ const node=(tag,text)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
+ const root=node('section');root.className='rl72-cut-editor';
+ root.setAttribute('aria-label','Private editable video timeline');
+ const header=node('h3','Video timeline editor');root.append(header);
+ root.append(node('p','Choose a private source, trim and reorder clips, caption them, and save an immutable edit. Saving never renders or publishes.'));
+ const preview=node('video');preview.controls=true;preview.preload='none';preview.playsInline=true;
+ preview.width=320;preview.setAttribute('aria-label','Private source clip preview');
+ root.append(preview);
+ const formSource=form.elements.namedItem('source');
+ function setPreview(){
+  const selected=formSource&&'value' in formSource?String(formSource.value).split(':')[0]:'';
+  if(!/^[0-9a-f-]{36}$/i.test(selected))return;
+  const base=form.getAttribute('data-rl72-preview-base')||'';
+  preview.src=base+'/sources/'+encodeURIComponent(selected)+'/stream';
+ }
+ if(formSource&&formSource.addEventListener)formSource.addEventListener('change',setPreview);
+ setPreview();
+ const details=node('div');details.className='rl72-cut-settings';root.append(details);
+ const makeControl=(host,labelText,kind,initial,onChange,options)=>{
+  const label=node('label',labelText);const field=node(kind);
+  field.setAttribute('aria-label',labelText);
+  if(kind==='select'){
+   for(const option of options){const el=node('option',option[1]);el.value=option[0];field.append(el);}
+  }else{field.type=kind==='textarea'?'text':kind;field.maxLength=labelText==='Caption'?240:280;}
+  field.value=String(initial??'');
+  field.addEventListener('change',()=>onChange(field.value));
+  field.addEventListener('input',()=>onChange(field.value));
+  label.append(field);host.append(label);return field;
  };
  const sync=()=>{textarea.value=JSON.stringify(edit);};
- function render(){
-  timeline.replaceChildren();
-  edit.clips.forEach((clip,i)=>{
-   const group=document.createElement('fieldset');const label=document.createElement('legend');
-   label.textContent='Clip '+(i+1);group.append(label);
-   for(const [name,description] of [['startMs','Start (milliseconds)'],['endMs','End (milliseconds)'],['caption','Caption']]){
-    const l=document.createElement('label');l.textContent=description;
-    const control=document.createElement('input');control.type=name==='caption'?'text':'number';
-    control.value=String(clip[name]??'');control.setAttribute('aria-label',description+' clip '+(i+1));
-    control.addEventListener('input',()=>{clip[name]=name==='caption'?control.value:Number(control.value);sync();});
-    l.append(control);group.append(l);
-   }
-   button(group,'Move earlier',()=>{if(i<1)return;[edit.clips[i-1],edit.clips[i]]=[edit.clips[i],edit.clips[i-1]];render();});
-   button(group,'Move later',()=>{if(i>=edit.clips.length-1)return;[edit.clips[i+1],edit.clips[i]]=[edit.clips[i],edit.clips[i+1]];render();});
-   button(group,'Remove',()=>{if(edit.clips.length<=1)return;edit.clips.splice(i,1);render();});
-   timeline.append(group);
-  });
+ const status=node('output');status.setAttribute('aria-live','polite');root.append(status);
+ const format=makeControl(details,'Output format','select',edit.canvas,
+  value=>{edit.canvas=value;sync();summarise();},
+  [['portrait','Portrait 9:16'],['square','Square 1:1'],['landscape','Landscape 16:9']]);
+ const disclose=makeControl(details,'Disclosure','textarea',edit.disclosure,
+  value=>{edit.disclosure=value;sync();},[]);
+ const timeline=node('div');timeline.className='rl72-cut-clips';
+ timeline.setAttribute('role','group');timeline.setAttribute('aria-label','Clip sequence');root.append(timeline);
+ const toolbar=node('div');toolbar.className='rl72-cut-tools';root.append(toolbar);
+ function button(host,label,action){
+  const b=node('button',label);b.type='button';b.addEventListener('click',action);host.append(b);return b;
+ }
+ function summarise(){
+  const secs=edit.clips.reduce((total,clip)=>total+
+   Math.max(0,Number(clip.endMs)-Number(clip.startMs))/Math.max(0.5,Number(clip.speed)||1),0)/1000;
+  status.textContent=edit.clips.length+' clips · '+secs.toFixed(1)+'s · '+edit.canvas;
   sync();
  }
- button(toolbar,'Add clip',()=>{if(edit.clips.length>=12)return;
-  const last=edit.clips[edit.clips.length-1];const start=last?.endMs??0;
-  edit.clips.push({startMs:start,endMs:start+3000,caption:'',transition:'cut',speed:1});render();});
- for(const canvas of ['portrait','square','landscape'])button(toolbar,canvas,()=>{edit.canvas=canvas;sync();});
- form.insertBefore(root,textarea.closest('label'));textarea.hidden=true;render();
+ function redraw(){
+  timeline.replaceChildren();
+  edit.clips.forEach((clip,i)=>{
+   const box=node('fieldset');box.className='rl72-cut-clip';
+   box.append(node('legend','Scene '+(i+1)));
+   const range=node('div');range.className='rl72-cut-range';box.append(range);
+   makeControl(range,'Start (ms)','number',clip.startMs,value=>{
+    clip.startMs=Number(value);summarise();},[]);
+   makeControl(range,'End (ms)','number',clip.endMs,value=>{
+    clip.endMs=Number(value);summarise();},[]);
+   makeControl(box,'Caption','text',clip.caption,value=>{clip.caption=value;sync();},[]);
+   makeControl(box,'Playback speed','select',clip.speed,value=>{
+    clip.speed=Number(value);summarise();},[['0.5','0.5×'],['1','1×'],['2','2×']]);
+   makeControl(box,'Transition','select',clip.transition,value=>{
+    clip.transition=value;sync();},[['cut','Direct cut'],['fade','Fade in/out']]);
+   const actions=node('div');actions.className='rl72-cut-actions';box.append(actions);
+   button(actions,'Preview clip',()=>{
+    const sec=Math.max(0,Number(clip.startMs)||0)/1000;
+    preview.currentTime=sec;
+    const started=preview.play();if(started&&started.catch)started.catch(()=>{});
+   });
+   button(actions,'Move earlier',()=>{
+    if(i===0)return;[edit.clips[i-1],edit.clips[i]]=[edit.clips[i],edit.clips[i-1]];redraw();
+   });
+   button(actions,'Move later',()=>{
+    if(i===edit.clips.length-1)return;
+    [edit.clips[i],edit.clips[i+1]]=[edit.clips[i+1],edit.clips[i]];redraw();
+   });
+   button(actions,'Remove',()=>{
+    if(edit.clips.length<=1)return;edit.clips.splice(i,1);redraw();
+   });
+   timeline.append(box);
+  });summarise();
+ }
+ button(toolbar,'Add clip',()=>{
+  if(edit.clips.length>=12)return;
+  const last=edit.clips[edit.clips.length-1];
+  const start=Math.max(0,Number(last?.endMs??0));
+  edit.clips.push({startMs:start,endMs:start+3000,caption:'',transition:'cut',speed:1});redraw();
+ });
+ form.addEventListener('submit',event=>{
+  const seconds=edit.clips.reduce((n,c)=>n+(Number(c.endMs)-Number(c.startMs))/Number(c.speed),0)/1000;
+  const invalid=edit.clips.length<1||edit.clips.length>12||!Number.isFinite(seconds)||seconds>300
+   ||edit.clips.some(c=>!Number.isSafeInteger(c.startMs)||!Number.isSafeInteger(c.endMs)
+    ||c.startMs<0||c.endMs<=c.startMs||c.endMs>36000000||c.caption.length>240
+    ||![0.5,1,2].includes(c.speed)||!['cut','fade'].includes(c.transition));
+  if(invalid){
+   event.preventDefault();
+   status.textContent='Check timing and speed; the output must be no longer than five minutes.';
+   status.focus();
+  }else sync();
+ });
+ form.insertBefore(root,textarea.closest('label'));textarea.hidden=true;
+ format.value=String(edit.canvas);disclose.value=String(edit.disclosure);redraw();
 }
 })();`;

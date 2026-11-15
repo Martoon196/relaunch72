@@ -9,7 +9,7 @@ export function creativeMediaEditorPage(shell:Shell,sources:readonly VideoSource
   projects:readonly VideoEditVersion[],newCommand:()=>string):string{
  const select='<label>Owned/private source<select name="source" required>'+sources.map(s=>
   '<option value="'+e(s.id+':'+s.sha256)+'">'+e(s.fileName)+'</option>').join('')+'</select></label>';
- const form=(p?:VideoEditVersion)=>'<form method="post" data-rl72-cut-editor action="'+base(shell)+'/edits">'
+ const form=(p?:VideoEditVersion)=>'<form method="post" data-rl72-cut-editor data-rl72-preview-base="'+base(shell)+'" action="'+base(shell)+'/edits">'
   +csrfField(shell.csrf)
   +'<input type="hidden" name="commandId" value="'+e(newCommand())+'">'
   +'<input type="hidden" name="projectId" value="'+e(p?.id??'')+'">'
@@ -20,7 +20,8 @@ export function creativeMediaEditorPage(shell:Shell,sources:readonly VideoSource
   +'<button type="submit">Save new private timeline version</button></form>';
  const items=projects.map(p=>'<details class="card"><summary>Timeline '+e(p.id.slice(0,8))
   +' · version '+p.revision+' · '+e(p.plan.canvas)+'</summary>'+form(p)+'</details>').join('');
- return layout(shell,'Video timeline editor',STYLE
+ const editorStyle='<style>.rl72-cut-editor{padding:14px;border:1px solid var(--line);border-radius:10px;margin:12px 0}.rl72-cut-settings,.rl72-cut-range,.rl72-cut-actions,.rl72-cut-tools{display:flex;flex-wrap:wrap;gap:8px}.rl72-cut-clip{margin:10px 0;min-width:220px}.rl72-cut-editor label{display:grid;gap:4px;min-width:140px}.rl72-cut-editor label input{min-width:90px}.rl72-cut-editor video{max-width:100%;margin:8px 0}.rl72-cut-editor output{display:block;margin:8px 0}</style>';
+ return layout(shell,'Video timeline editor',STYLE+editorStyle
   +'<section class="card"><h1>Video timeline editor</h1>'
   +'<p>Trim source clips, reorder scenes, caption and select output format. Each save is a new private, immutable revision.</p>'
   +'<p class="notice">Saving is not rendering or approval. No external provider, affiliate promotion or social post is triggered.</p>'
