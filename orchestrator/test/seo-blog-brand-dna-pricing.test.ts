@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import {
   brandDnaCard, brandPageText, BRAND_DNA_RULES_VERSION, cleanProvenance, holdConflictedPrices, pricingAfterEdit, pricingEditText, repairProfileFacts, settleConflict, strictProfileProblems, type ProfileFacts,
 } from '../src/seo-blog/brand-dna.js';
-import { checkPricing, keyOf, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
+import { actionLineIndexes, checkAllPricing, checkPricing, keyOf, proposedLines, withoutActionMarkers, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
 import { brandPageHtmlLines } from '../src/seo-blog/html.js';
 import { extractProfile, profileForPrompt } from '../src/seo-blog/generation.js';
 import { brandDnaPage } from '../src/portal/brand-dna-view.js';
@@ -75,6 +75,8 @@ const R7_ACCEPTED: Record<string, string> = {
   'O2 same, for written without "once"': 'Course: price="£1,497 once" {plan:3 x £525 for £1,497 ; special:[Webinar price] £997 ; plan:3 x £349 for £997}',
   'O4 label given with its colon / different case / trailing words': 'Course: price="£1,497" {special:[Webinar price:] £997}',
   'O8 plan total omitted though the page writes it': 'Mentoring: price="£3,997" {plan:6 x £699 for £3,997}',
+  // Round 4 (change A): the labelled line sits in the offer's own section past where the 8eca59d run stops.
+  'M9d unlisted add-on written "Label: £x" as other': 'Boiler service: price="£85" {other:[Carbon monoxide alarm] £25}',
 };
 test('the review\'s r7 cases (98: paragraph anchors, runs and action text, mistaken and honest proposals): plain path exact; proposals refused unless honest', async () => {
   const cases = jsonl<Case>('brand-dna-review-r7-8eca59d.jsonl');
@@ -140,21 +142,51 @@ async function mhp(given: (id: Record<string, string>) => Record<string, unknown
 }
 const linesOf = (o: ProfileOffer | undefined) => (o?.pricing?.lines ?? []).map((l) => [l.role, ...(l.label ? [l.label] : []), l.text, ...(l.total ? [l.total] : []), ...(l.for ? [`for ${l.for}`] : [])]);
 
-test('MHP, honest structured answer: what the check can confirm is shown; the rest asks exactly as 8eca59d', async () => {
+const MHP_NAMES = ['Free cheat sheets', 'The Deal Desk', 'Property Done Properly', "The Members' Room", 'One Lane Mentoring', 'One Lane Private'];
+function mhpDocs() {
+  return Object.values(MHP_PAGES).map((html, i) => { const t = brandPageText(brandPageHtmlLines(html)); return { id: `doc${i + 1}`, text: withoutActionMarkers(t), actionLines: actionLineIndexes(t) }; });
+}
+
+test('MHP, honest structured answer: the structure check accepts every proposed structure, in any order of offers', () => {
+  const docs = mhpDocs();
+  const given = (mhpStructuredAnswer({ '/': 'doc1', '/join/': 'doc2', '/mentoring/': 'doc3' }) as { offers: { name: string; price: string | null; pricing?: unknown; sourceDocumentId: string }[] }).offers;
+  const run = (order: number[]) => {
+    const names = order.map((k) => given[k]!.name);
+    const r = checkAllPricing(docs, names, order.map((k, i) => ({ self: i, price: given[k]!.price, proposed: proposedLines(given[k]!.pricing), citedId: given[k]!.sourceDocumentId })));
+    return Object.fromEntries(order.map((k, i) => [given[k]!.name, r[i] ? r[i]!.lines.map((l) => `${l.role}:${l.label ? `[${l.label}] ` : ''}${l.text}`) : null]));
+  };
+  const want = { 'Free cheat sheets': [], 'The Deal Desk': null, 'Property Done Properly': ['plan:3 x £525', 'special:[Webinar price] £997', 'plan:3 x £349'],
+    "The Members' Room": ['other:£670 a year', "special:[founders' price] £47 a month", 'special:[for the first 100] £47'], 'One Lane Mentoring': ['plan:6 x £699'], 'One Lane Private': ['plan:12 x £2,250'] };
+  assert.deepEqual(run([0, 1, 2, 3, 4, 5]), want);
+  assert.deepEqual(run([5, 4, 3, 2, 1, 0]), want);
+  assert.deepEqual(run([4, 0, 3, 5, 2, 1]), want);
+  // Without One Lane Mentoring's accepted claim, the Mentoring page's "The Members' Room is included for a year." paragraph
+  // leaves £3,997 and 6 x £699 unaccounted for The Members' Room (as at round 3): refused.
+  const noMentoring = given.map((o) => (o.name === 'One Lane Mentoring' ? { ...o, pricing: { lines: [{ kind: 'plan', text: '6 x £699', for: '£3,997', total: '£4,999 in total' }] } } : o));
+  const r = checkAllPricing(docs, MHP_NAMES, noMentoring.map((o, i) => ({ self: i, price: o.price, proposed: proposedLines(o.pricing), citedId: o.sourceDocumentId })));
+  assert.equal(r[4], null); assert.equal(r[3], null, "The Members' Room: nothing is excused when the claiming offer's check fails");
+});
+
+test('MHP, honest structured answer: every structure accepted; the one question left is the unchanged cross-source backstop', async () => {
   const { profile, documents } = await mhp(mhpStructuredAnswer);
   const by = (n: string) => profile.offers.find((o) => o.name === n);
+  // The Members' Room is held by priceConflicts (8eca59d's cross-source backstop, not the structure check): its window on
+  // the Mentoring page ("The Members' Room is included for a year." then "£3,997, or 6 x £699") shares no amount with the
+  // Home page's (£1,497, £997, £67, £47), and £1,497, £25,000 … are not amounts of its structure.
+  assert.deepEqual(profile.conflicts.map((c) => [c.offer, c.options?.map((o) => o.value)]), [["The Members' Room", ['£1,497,', '£997', '£67 a month', '£47', '£25,000', '£2,250']]]);
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', null], ['Property Done Properly', '£1,497'], ["The Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000']]);
+  // Property Done Properly: its Join section runs past the "Webinar price:" line where the 8eca59d run stops (change A).
+  assert.deepEqual(linesOf(by('Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'Webinar price', '£997'], ['plan', '3 x £349', 'for £997']]);
+  // (The Members' Room's structure is accepted by the check, test above; held by the backstop, it shows none.)
+  assert.deepEqual(linesOf(by("The Members' Room")), []);
   assert.deepEqual(linesOf(by('One Lane Mentoring')), [['plan', '6 x £699', '£4,194 in total', 'for £3,997']]);
   assert.deepEqual(linesOf(by('One Lane Private')), [['plan', '12 x £2,250', '£27,000 in total', 'for £25,000']]);
-  assert.equal(by('Free cheat sheets')!.price, 'Free');
-  // Property Done Properly: the Join card's "Webinar price:" line ends its card at 8eca59d, so the proposed webinar lines
-  // are not in the run: refused, and asked as before. The Members' Room: the Mentoring page's "The Members' Room is
-  // included…" paragraph starts a card for it (8eca59d), holding £3,997: refused, and asked as before.
-  assert.equal(by('Property Done Properly')!.price, null); assert.equal(by("The Members' Room")!.price, null);
-  assert.deepEqual(profile.conflicts.map((c) => c.offer), ['Property Done Properly', "The Members' Room"]);
   assert.equal(by('The Deal Desk')!.price, null, 'the model left it empty: nothing is filled');
   // The card: each checked price shows where it was found, with its line.
   const shown = brandDnaCard(profile, documents);
-  for (const n of ['One Lane Mentoring', 'One Lane Private', 'Free cheat sheets']) { const o = shown.offers.find((x) => x.name === n)!; assert.ok(o.priceSource?.quote, n); }
+  assert.deepEqual(shown.offers.map((o) => o.priceSource?.quote ?? null), [
+    'Free cheat sheets | Five one-page guides to the numbers | Available free with an email address | None needed', null, '£1,497 once, or 3 x £525',
+    null, '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)']);
   assert.equal(shown.offers.find((x) => x.name === 'Free cheat sheets')!.priceSource!.quote, 'Free cheat sheets | Five one-page guides to the numbers | Available free with an email address | None needed');
   const page = brandDnaPage(inputs.SHELL, { ...inputs.STATE, profile, card: shown, status: 'proposed' } as never, 'cmd');
   assert.match(page, /Or pay in instalments: 6 x £699 \(£4,194 in total\) for £3,997<\/span><span class="from"><a[^>]*>From your Join page<\/a>: <q>£3,997 or 6 x £699 \(£4,194 in total\)<\/q>/);
@@ -163,6 +195,12 @@ test('MHP, honest structured answer: what the check can confirm is shown; the re
   assert.ok(!JSON.stringify(sent).includes('pricing') && !JSON.stringify(sent).includes('6 x £699'));
   for (const o of sent.offers as Record<string, unknown>[]) assert.deepEqual(Object.keys(o), ['name', 'description', 'price', 'url', 'sourceDocumentId']);
   assert.ok(!JSON.stringify(resolveCreativeContext({ brand: { id: 'b', name: 'MHP', website: MHP_SITE }, profile: { ...profile, confirmedAt: 'x' } as BrandProfile, knowledge: [], kit: null })).includes('pricing'));
+});
+
+test('MHP: the Home row\'s "for seven days after a webinar" as the special\'s label is accepted too', async () => {
+  const { profile } = await mhp((id) => { const a = mhpStructuredAnswer(id) as { offers: Record<string, unknown>[] }; return { ...a, offers: a.offers.map((o) => (o.name === 'Property Done Properly'
+    ? { ...o, pricing: { lines: [{ kind: 'plan', text: '3 x £525', for: '£1,497' }, { kind: 'special', text: '£997', label: 'for seven days after a webinar' }, { kind: 'plan', text: '3 x £349', for: '£997' }] } } : o)) }; });
+  assert.deepEqual(linesOf(profile.offers.find((o) => o.name === 'Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'for seven days after a webinar', '£997'], ['plan', '3 x £349', 'for £997']]);
 });
 
 test('MHP, the owner\'s real (unstructured) answer: handled exactly as at 8eca59d', async () => {
@@ -234,6 +272,58 @@ test('B8, reader: a button inside a sentence stays inline; whole-line controls a
   assert.equal(tagged('<section><h3>Pro</h3><p>£49</p><a class="btn btn-primary">Start Pro: £49</a></section>'), '### Pro\n£49\n▸ Start Pro: £49');
   assert.equal(tagged('<p>(£1,575 in total)<span>Or 3 payments</span></p>'), '(£1,575 in total)Or 3 payments', 'no new spacing rule: the stored words are as at 8eca59d');
   assert.doesNotThrow(() => brandPageHtmlLines(`<html><body><main><p class="${'a '.repeat(130000)}">x</p></main></body></html>`));
+});
+
+// ─── The review's P1, P1d, P2, P2e, P3, R22, R23 (round 4) ─────────────────
+
+const PR_PAGES = {
+  P1: '<h2>Our services</h2><div class="card"><h3>Boiler service</h3><p>A full annual service by a Gas Safe engineer.</p><p>£75</p></div><div class="card"><h3>Gas safety check</h3><p>For landlords.</p></div><h2>Price list</h2><p>Boiler service £85</p><p>Gas safety check £70</p>',
+  P1d: '<div class="card"><h3>Full Management</h3><p>12% of monthly rent</p></div><h2>Landlord offer</h2><p>Full Management is 10% of monthly rent for portfolio landlords.</p>',
+  P2: '<div class="card"><h3>Wedding photography</h3><p>Packages to suit every couple. Ask for our brochure.</p><p>Engagement shoot: £150</p></div>',
+  P2e: '<h3>Website care plan</h3><p>Hosting, updates and backups.</p><p>Set-up fee: £199</p>',
+  P3: "<h3>One Lane Mentoring</h3><p>Ninety days in a group.</p><p>The Members' Room: £67 a month</p>",
+  R22: '<div class="plan"><h3>Pro</h3><p>£29 per month</p><a class="btn" href="/signup">Choose Pro</a><p>Billed monthly.</p><p>Or pay yearly:</p><p>£290 per year</p></div>',
+  R23: '<div class="plan"><h3>Pro</h3><p>£29 per month</p><a class="btn" href="/signup">Choose Pro</a><ul><li>Everything in Starter</li><li>Priority support</li></ul><p>Pro is £35 per month from January.</p></div>',
+} as const;
+/** What 8eca59d made of each page (recorded from the export of 8eca59d, the review's both.mts harness). */
+const PR_BASE: Record<keyof typeof PR_PAGES, string> = {
+  P1: 'Boiler service: price=null || Gas safety check: price="£70" ?? [£75 / £85]',
+  P1d: 'Full Management: price=null ?? [12% of monthly rent / 10% of monthly rent]',
+  P2: 'Wedding photography: price=null leftOut ["price:Wedding photography"]',
+  P2e: 'Website care plan: price=null leftOut ["price:Website care plan"]',
+  P3: 'One Lane Mentoring: price=null || The Members\' Room: price="£67 a month" leftOut ["price:One Lane Mentoring"]',
+  R22: 'Pro: price=null ?? [£29 per month / £290 per year]',
+  R23: 'Pro: price=null ?? [£29 per month / £35 per month]',
+};
+type PrCase = [keyof typeof PR_PAGES, string, ([string, string | null] | [string, string | null, Lines | undefined])[], string | null];
+const PR_CASES: PrCase[] = [
+  // (i) the structure ignores the second amount: refused, exactly 8eca59d.
+  ['P1', 'i', [['Boiler service', '£75', []], ['Gas safety check', '£70', []]], null],
+  ['P1d', 'i', [['Full Management', '12% of monthly rent', []]], null],
+  ['P2', 'i', [['Wedding photography', '£150', []]], null],
+  ['P2e', 'i', [['Website care plan', '£199', []]], null],
+  ['P3', 'i', [['One Lane Mentoring', '£67 a month', []], ["The Members' Room", '£67 a month']], null],
+  ['R22', 'i', [['Pro', '£29 per month', []]], null],
+  ['R23', 'i', [['Pro', '£29 per month', []]], null],
+  // (ii) the second amount proposed: accepted only when honest and labelled.
+  ['P1', 'ii: £85 as an other line, no label', [['Boiler service', '£75', [{ kind: 'other', text: '£85' }]], ['Gas safety check', '£70', []]], null],
+  ['P1', 'ii: £85 labelled by the "Price list" heading (a heading is never a label)', [['Boiler service', '£75', [{ kind: 'other', text: '£85', label: 'Price list' }]], ['Gas safety check', '£70', []]], null],
+  ['P1', 'ii: £85 as the price', [['Boiler service', '£85', [{ kind: 'other', text: '£75' }]], ['Gas safety check', '£70', []]], null],
+  ['P1d', 'ii: special "for portfolio landlords"', [['Full Management', '12% of monthly rent', [{ kind: 'special', text: '10% of monthly rent', label: 'for portfolio landlords' }]]], null],
+  ['P1d', 'ii: other, no label', [['Full Management', '12% of monthly rent', [{ kind: 'other', text: '10% of monthly rent' }]]], null],
+  ['P2', 'ii: "Engagement shoot" with £150 also as the price', [['Wedding photography', '£150', [{ kind: 'other', text: '£150', label: 'Engagement shoot' }]]], null],
+  ['P2e', 'ii: "Set-up fee" with £199 also as the price', [['Website care plan', '£199', [{ kind: 'other', text: '£199', label: 'Set-up fee' }]]], null],
+  ['P3', 'ii: Mentoring\'s line labelled with another offer\'s name', [['One Lane Mentoring', '£67 a month', [{ kind: 'other', text: '£67 a month', label: "The Members' Room" }]], ["The Members' Room", '£67 a month']], null],
+  ['R22', 'ii: £290 per year as an other line (differs by period only)', [['Pro', '£29 per month', [{ kind: 'other', text: '£290 per year' }]]], 'Pro: price="£29 per month" {other:£290 per year}'],
+  ['R22', 'ii: £290 per year labelled "pay yearly"', [['Pro', '£29 per month', [{ kind: 'other', text: '£290 per year', label: 'pay yearly' }]]], 'Pro: price="£29 per month" {other:[pay yearly] £290 per year}'],
+  ['R23', 'ii: £35 per month as an other line, no label (same period)', [['Pro', '£29 per month', [{ kind: 'other', text: '£35 per month' }]]], null],
+  ['R23', 'ii: £35 per month as a special labelled "from January"', [['Pro', '£29 per month', [{ kind: 'special', text: '£35 per month', label: 'from January' }]]], 'Pro: price="£29 per month" {special:[from January] £35 per month}'],
+];
+test('the review\'s P1, P1d, P2, P2e, P3, R22, R23: a structure ignoring the second amount is refused (8eca59d); an honest labelled one is accepted', async () => {
+  for (const [k, what, offers, accepted] of PR_CASES) {
+    assert.equal(fmt(await quick({ html: PR_PAGES[k] }, offers, {}, true), true), PR_BASE[k], `${k} without pricing`);
+    assert.equal(fmt(await quick({ html: PR_PAGES[k] }, offers), true), accepted ?? PR_BASE[k], `${k} ${what}`);
+  }
 });
 
 // ─── Ten honest sites, with honest structured answers ────────────────────────

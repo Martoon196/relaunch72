@@ -31,7 +31,7 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  checkPricing, priceCandidates, withoutActionMarkers, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
+  checkAllPricing, priceCandidates, withoutActionMarkers, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
   type CheckedPricing, type CheckDocument, type LinkContext, type PriceStatus,
 } from './brand-dna-rules.js';
 
@@ -313,6 +313,13 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
   const names = value.offerNames ?? value.offers.map((o) => o.name);
   const numbers = sourceNumbers(documents);
   const links = linkContext(documents, context);
+  // Every proposed structure is checked together (one offer's accepted check may excuse its own amounts for another).
+  const checks = checkAllPricing(documents, names, value.offers.map((o, index) => {
+    const self = names.findIndex((n) => sameValue(n, o.name));
+    const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
+    const usable = index < OFFER_LIMIT && Boolean(doc) && !offerNameProblem(o.name, doc!);
+    return { self: self < 0 ? names.length : self, price: usable ? o.price : null, proposed: proposedLines((o as { pricing?: unknown }).pricing), citedId: o.sourceDocumentId };
+  }));
   const offers = value.offers.map((o, index): OfferDecision => {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     const description = cutDescription(o.description ?? '', numbers, DESCRIPTION_MAX);
@@ -325,7 +332,7 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
     const at = self < 0 ? names.length : self;
     // A proposed price structure is checked line by line; accepted whole, it ties the price. Otherwise the plain rule.
     const proposal = proposedLines((o as { pricing?: unknown }).pricing);
-    const checked = proposal ? checkPricing(documents, names, at, o.price, proposal, o.sourceDocumentId) : null;
+    const checked = proposal ? checks[index] ?? null : null;
     const read = checked ? { status: 'tied' as const, hint: null } : priceStatus(o.price ?? '', doc, names, at);
     const lines = o.price && read.status === 'tied' && !checked ? priceLines(doc, names, at, o.price) : null;
     return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.hint, priceLines: lines, checked, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
@@ -745,10 +752,7 @@ export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents
   const byId = new Map(documents.map((d) => [d.id, d]));
   const names = value.offers.map((o) => o.name);
   // Website door, rules v3: each offer's proposed price structure, accepted only when the check accepts every line of it.
-  const checked = value.offers.map((o, i) => {
-    const proposal = proposedLines((o as { pricing?: unknown }).pricing);
-    return proposal && o.price ? checkPricing(documents, names, i, o.price, proposal, o.sourceDocumentId) : null;
-  });
+  const checked = checkAllPricing(documents, names, value.offers.map((o, i) => ({ self: i, price: o.price, proposed: proposedLines((o as { pricing?: unknown }).pricing), citedId: o.sourceDocumentId })));
   const amountsOf = (i: number) => new Set([value.offers[i]!.price, ...(checked[i]?.lines ?? []).flatMap((l) => [l.text, l.total ?? ''])].flatMap((t) => (t ? moneyAmounts(t) : [])));
   /** Every answer of a question is an amount of the offer's accepted structure (so the structure answers it). */
   const answered = (c: ProfileConflict, i: number) => checked[i] !== null && (c.options ?? []).length > 0 && (c.options ?? []).every((o) => { const a = moneyAmounts(o.value); return a.length > 0 && a.every((n) => amountsOf(i).has(n)); });
