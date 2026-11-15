@@ -10,6 +10,9 @@ import { PORTAL_COOKIE, signTenant, verifyTenant, portalCookie, clearPortalCooki
 import { loginPage, dashboardPage, billingPage } from './views.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
+import type { MediaEngine } from '../media/engine.js';
+import { handleMediaApi, mediaCsrf } from '../media/router.js';
+import { mediaStudioHtml } from '../media/ui.js';
 
 export interface PortalDeps {
   sessionSecret: string;
@@ -28,6 +31,8 @@ export interface PortalDeps {
   manageUrl?(customerId: string): Promise<string>;
   /** When true, "Run this week" requires an active subscription. Default false (£0 demo runs). */
   billingEnforced?: boolean;
+  /** Shared media engine for embedded and standalone entrypoints. */
+  media?: MediaEngine;
   now?: () => number;
 }
 
@@ -81,6 +86,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // ── everything below requires a tenant session ──
   if (!tenantId) return redirect(res, '/portal/login');
+
+  // A single authenticated, tenant-scoped product serves RL72 and standalone sellers.
+  if ((p === '/studio' || p === '/portal/studio') && method === 'GET') {
+    if (!deps.media) return sendHtml(res, 503, '<h1>Media studio is not configured</h1>');
+    const raw = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
+    return sendHtml(res, 200, mediaStudioHtml(mediaCsrf(deps.sessionSecret, raw)));
+  }
+  if (p.startsWith('/portal/api/media')) {
+    if (!deps.media) return sendHtml(res, 503, '<h1>Media studio is not configured</h1>');
+    const raw = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
+    return handleMediaApi(req, res, deps.media, tenantId, mediaCsrf(deps.sessionSecret, raw), deps.sessionSecret);
+  }
 
   if (p === '/portal' && method === 'GET') {
     const data = await deps.dashboard(tenantId);

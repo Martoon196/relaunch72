@@ -17,6 +17,7 @@ import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
+import { handleAffiliateRedirect } from '../media/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -87,9 +88,17 @@ export function createApp(deps: AppDeps) {
       return;
     }
 
+    // Public affiliate clicks carry an HMAC bound to their real stored destination.
+    // A click is never described as an order or a commission.
+    if (url.pathname.startsWith('/go/')) {
+      if (!deps.portal?.media) { res.writeHead(404); res.end(); return; }
+      await handleAffiliateRedirect(req,res,deps.portal.media,deps.cfg.sessionSecret);
+      return;
+    }
+
     // The client portal — same-origin, browser-navigated HTML, its own tenant
     // auth gate. Only mounted when portal deps are provided.
-    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/')) {
+    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/') || url.pathname === '/studio') {
       if (!deps.portal) { send(res, 404, { error: 'portal not enabled' }); return; }
       try { await handlePortal(req, res, deps.portal); }
       catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }

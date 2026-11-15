@@ -1,0 +1,26 @@
+name: RL72 Media Engine checks
+on:
+  pull_request:
+    paths:
+      - 'orchestrator/src/media/**'
+      - 'orchestrator/src/portal/**'
+      - 'orchestrator/src/server/**'
+      - 'orchestrator/src/social/**'
+      - 'orchestrator/test/media.test.ts'
+      - 'orchestrator/package.json'
+      - '.github/workflows/media-engine-ci.yml'
+  workflow_dispatch:
+jobs:
+  media-and-regression:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

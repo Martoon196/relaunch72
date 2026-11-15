@@ -17,6 +17,8 @@ import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
+import { MediaStore } from '../media/store.js';
+import { MediaEngine } from '../media/engine.js';
 
 export interface ProvisionArgs {
   email: string;
@@ -144,6 +146,7 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     subscribeUrl: cfg.subscribeUrl,
     manageUrl: cfg.manageUrl,
     billingEnforced: cfg.billingEnforced,
+    media: new MediaEngine(new MediaStore(path.join(cfg.dataDir, 'media'))),
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);
