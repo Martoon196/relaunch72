@@ -42,6 +42,7 @@ import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { creativeMediaReportsPage } from './creative-media-reports-view.js';
+import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
@@ -173,6 +174,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const method = req.method ?? 'GET';
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/creative-job-status.js`) return send(res, 200, CREATIVE_JOB_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/media-scene-timeline.js`) return send(res, 200, MEDIA_SCENE_TIMELINE_SCRIPT, 'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
