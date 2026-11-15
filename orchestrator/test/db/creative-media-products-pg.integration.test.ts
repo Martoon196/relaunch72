@@ -14,6 +14,8 @@ import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report
 import { PgVideoAdmissionOwner, PgVideoAdmissionWorker } from '../../src/creative-studio/media-admission-pg-store.js';
 import { mediaRequestDigests } from '../../src/creative-studio/media-providers.js';
 import { PgCreativeVideoSources } from '../../src/creative-studio/media-video-source-pg-store.js';
+import { PgMediaVideoOutputWorker } from '../../src/creative-studio/media-video-output-pg-store.js';
+import { PgMediaVideoOutputOwner } from '../../src/creative-studio/media-video-output-owner.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -184,6 +186,43 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       assert.deepEqual(await foreign.list(b.brand.id),[]);
       await assert.rejects(foreign.list(a.brand.id),/owner|session|permission/iu);
       await assert.rejects(content.query('SELECT * FROM app.creative_media_source_videos'),/permission denied/iu);
+    });
+    await t.test('provider outputs are privately captured once and cross-tenant playback stays forbidden',async()=>{
+      // Create a new bounded job after the first one entered terminal unknown.
+      await admin.query('UPDATE app.creative_media_video_policy SET monthly_microusd=3000000,max_pending=3 WHERE workspace_id=$1',[a.brand.id]);
+      const owner=new PgVideoAdmissionOwner(content,a.principal);
+      const worker=new PgVideoAdmissionWorker(admin,'media-output-pg-test');
+      const commandId=randomUUID(),jobId=randomUUID();
+      const source={workspaceId:a.brand.id,commandId,rights:{rights:'owned' as const,evidenceRef:'verified-test-owned-video'},
+        sourceUrl:'https://www.youtube.com/watch?v=fixture-test-source',projectName:'Private result capture',
+        durationSeconds:120};
+      const reserved=await owner.reserve({workspaceId:a.brand.id,commandId,jobId,
+        kind:'vizard_clip',request:source,estimatedMicrousd:400000,consent:true});
+      assert.equal(reserved.state,'reserved');
+      const claim=await worker.claim(a.brand.id,jobId);
+      await worker.submitted(a.brand.id,jobId,claim.claimToken,'provider-project-999');
+      const bytes=Buffer.alloc(1024);bytes.writeUInt32BE(24,0);bytes.write('ftyp',4,'ascii');
+      const sha256=createHash('sha256').update(bytes).digest('hex');
+      const capture=new PgMediaVideoOutputWorker(admin,'media-output-pg-capture');
+      const payload={workspaceId:a.brand.id,jobId,claimToken:claim.claimToken,
+        providerId:'provider-project-999',slot:0,providerAssetId:'clip-001',
+        media:{mime:'video/mp4' as const,bytes,sha256}};
+      const first=await capture.capture(payload);
+      assert.equal(first.replayed,false);assert.equal(first.state,'captured_unverified');
+      assert.equal((await capture.capture(payload)).replayed,true);
+      await assert.rejects(capture.capture({...payload,providerAssetId:'different-clip'}),/replay changed/iu);
+      await assert.rejects(capture.capture({...payload,workspaceId:b.brand.id}),/submitted|permission|denied/iu);
+      const local=new PgMediaVideoOutputOwner(content,a.principal);
+      const foreign=new PgMediaVideoOutputOwner(content,b.principal);
+      const listing=await local.list(a.brand.id);
+      assert.equal(listing.length,1);assert.equal(listing[0]!.state,'captured_unverified');
+      assert.deepEqual((await local.load(a.brand.id,first.id)).bytes,bytes);
+      assert.deepEqual(await foreign.list(b.brand.id),[]);
+      await assert.rejects(foreign.load(b.brand.id,first.id),/not found/iu);
+      await assert.rejects(foreign.list(a.brand.id),/permission|owner|session/iu);
+      await assert.rejects(content.query('SELECT * FROM app.creative_media_video_outputs'),/permission denied/iu);
+      // A captured preview is NOT a completed financial settlement or creative approval.
+      assert.equal((await owner.list(a.brand.id)).find(j=>j.id===jobId)?.state,'submitted');
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
