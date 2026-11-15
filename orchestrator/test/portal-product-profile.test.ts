@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   PROPERTY_PREDATOR_GROWTH_PROFILE,
   RELAUNCH72_PRODUCT_PROFILE,
+  AFFILIATE_STUDIO_PROFILE,
   resolvePortalProductProfile,
 } from '../src/portal/product-profile.js';
 import {
@@ -103,4 +104,19 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   assert.doesNotMatch(genericHtml, /fonts\.googleapis\.com/);
   assert.doesNotMatch(html, /Content drafts|Social · planned|WhatsApp · planned|Listening · planned/);
   assert.doesNotMatch(html, /makes sure the right conversation actually becomes a sale/);
+});
+
+test('standalone Affiliate Studio is a presentation skin, not a second tenant or entitlement system', () => {
+  const profile = resolvePortalProductProfile('affiliate_studio');
+  assert.equal(profile, AFFILIATE_STUDIO_PROFILE);
+  assert.equal(profile.id, 'affiliate_studio');
+  assert.equal(profile.productName, 'RL72 Affiliate Studio');
+  assert.ok(Object.isFrozen(profile));
+  assert.ok(Object.isFrozen(profile.theme));
+  assert.deepEqual(profile.visibleNavigation, ['overview','content','analytics','settings']);
+  assert.equal('permissions' in profile, false);
+  assert.equal('auth' in profile, true); // Copy only, no tokens or authorisation.
+  const html = loginPage(undefined, '', 'csrf', profile);
+  assert.match(html, /affiliate creator workspace/);
+  assert.doesNotMatch(html, /fake sales|guaranteed income/iu);
 });
