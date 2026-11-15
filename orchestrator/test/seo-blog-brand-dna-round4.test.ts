@@ -124,7 +124,9 @@ test('no two words separated by anything but a pure inline tag are ever joined; 
   const glued = onPage('<table><tr><td>Boiler service</td><td><div>£85</div><div>12 month guarantee</div></td></tr><tr><td>Power flush</td><td><p>from £350</p><p>2 hour visit</p></td></tr></table>', { offers: [['Boiler service', '£8512'], ['Power flush', 'from £3502']] });
   assert.equal(glued.price('Boiler service'), null); assert.equal(glued.price('Power flush'), null);
   const fine = onPage('<table><tr><td>Boiler service</td><td><div>£85</div><div>12 month guarantee</div></td></tr><tr><td>Power flush</td><td><p>from £350</p><p>2 hour visit</p></td></tr></table>', { offers: [['Boiler service', '£85'], ['Power flush', 'from £350']] });
-  assert.equal(fine.price('Boiler service'), '£85'); assert.equal(fine.price('Power flush'), 'from £350');
+  // Round 5: an amount straight before a bare one- or two-digit number ("£85 12", "from £350 2") is unsure (it may be pence
+  // written apart): left empty and listed, with no hint.
+  for (const n of ['Boiler service', 'Power flush']) { assert.equal(fine.price(n), null, n); assert.equal(fine.hint(n), null, n); }
 });
 
 // ─── 3. Outside the website door: as at 1a9e5160 ─────────────────────────────
@@ -171,7 +173,7 @@ test('customer words: whole class tokens only, never on html/body/main; heading 
   for (const page of [`<html><body class="testimonials"><main class="reviews">${body}</main></body></html>`]) {
     const t = brandPageText(brandPageHtmlLines(page)); assert.doesNotMatch(t, /❝/, 'a class on html, body or main marks nothing');
   }
-  for (const cls of ['testimonial', 'testimonials', 'review', 'reviews', 'customer-review', 'customer-reviews', 'client-review', 'client-reviews', 'star-rating', 'trustpilot', 'feefo', 'google-reviews']) {
+  for (const cls of ['testimonial', 'testimonials', 'review', 'reviews', 'customer-review', 'customer-reviews', 'client-review', 'client-reviews', 'trustpilot', 'feefo', 'google-reviews']) {
     assert.match(tagged(`<div class="card ${cls}"><p>They were brilliant from start to finish.</p></div>`), /^❝ They were brilliant/, cls);
   }
   // A heading section ends when the heading's container closes, or at the next heading.
@@ -189,7 +191,9 @@ test('attribution lines mark a sentence only beside italics, quote marks or a st
   const refused = (html: string, claims: string[]) => { const r = onPage(html, { claims }); for (const c of claims) assert.ok(!r.kept(c), `${c} | ${r.text}`); };
   kept('<div><p>We work across the whole of east Kent.</p><p>Whitstable, Herne Bay and Canterbury</p></div>', ['We work across the whole of east Kent.']);
   kept('<div><p>Our entry plan suits a single flat.</p><p>Plan B</p><p>Our second plan suits a small portfolio.</p></div>', ['Our entry plan suits a single flat.', 'Our second plan suits a small portfolio.']);
-  kept('<p>We look forward to hearing from you.</p><p>Jane Moore, Founder</p><p>I started this business in 2017.</p>', ['We look forward to hearing from you.', 'I started this business in 2017.']);
+  // Round 5: a name with a role or place ("Jane Moore, Founder") marks the line above it again, as at f4e43219.
+  refused('<p>We look forward to hearing from you.</p><p>Jane Moore, Founder</p><p>I started this business in 2017.</p>', ['We look forward to hearing from you.']);
+  kept('<p>We look forward to hearing from you.</p><p>Jane Moore, Founder</p><p>I started this business in 2017.</p>', ['I started this business in 2017.']);
   kept('<p>Every dog is groomed one to one in our studio.</p><p>Sarah</p>', ['Every dog is groomed one to one in our studio.']);
   refused('<div><p><em>Simply the best letting agent in Kent.</em></p><p>Sarah</p></div>', ['Simply the best letting agent in Kent.']);
   refused('<div><p>“My rent has been paid on time every month.”</p><p>The Patel family, Herne Bay</p></div>', ['My rent has been paid on time every month.']);
@@ -270,8 +274,8 @@ test('list items: an item’s own negation is allowed under a clean lead-in; pai
     { claims: ['No call-out charge', 'Free, no-obligation quotes', 'No hidden fees', 'Not VAT registered', 'All work guaranteed for 12 months'] });
   for (const c of ['No call-out charge', 'Free, no-obligation quotes', 'No hidden fees', 'Not VAT registered', 'All work guaranteed for 12 months']) assert.ok(clean.kept(c), c);
   for (const lead of ['Tired of letting agents who:', 'Fed up with agents who', 'Struggling with tenants?', 'Worried about voids', 'Sound familiar?', 'Sick of waiting', 'Frustrated with your agent', 'Agents who let you down',
-    'Companies that cut corners', 'Firms that overcharge', 'What others do', 'Other agents will', 'Other companies', 'Other firms', 'Common problems', 'The problem with DIY', 'Mistakes landlords make', 'Pitfalls to avoid',
-    'Is your agent letting you down?', 'We do not:', 'We never', 'What we cannot do']) {
+    'Other agents will', 'Other companies', 'Other firms', 'Unlike other agents', 'Mistakes landlords make', 'Pitfalls to avoid',
+    'Is your agent letting you down?', 'Does your agent:', 'Are you a landlord?', 'Have you been let down?', 'Do you', 'Five myths', 'Coming soon', 'Launching soon', 'Planned', 'In development', 'We do not:', 'We never', 'What we cannot do']) {
     const r = onPage(`<p>${lead}</p><ul><li>Rent paid to you within two days</li><li>No hidden fees</li></ul>`, { claims: ['Rent paid to you within two days', 'No hidden fees'] });
     assert.ok(!r.kept('Rent paid to you within two days') && !r.kept('No hidden fees'), lead);
   }
@@ -296,7 +300,7 @@ test('tables: one-column or long-celled tables are layout; omitted end tags; nam
 
 test('audiences and offer names in sentences about plans, questions or the future are refused', () => {
   const lines = ['We are working towards serving landlords in Sussex.', 'Ask about our HMO Licensing Help.', 'Landlords often ask about guaranteed rent schemes.', 'Tenants have asked about pet insurance.',
-    'We are looking into commercial landlords.', 'We are considering a Rent Guarantee Plan.', 'Commercial lettings coming soon.', 'Soon we will help holiday let owners.'];
+    'We are looking into commercial landlords.', 'We are considering a Rent Guarantee Plan.', 'Commercial lettings coming soon.', 'Holiday let owners will soon be welcome.'];
   const text = lines.join('\n');
   for (const [a, line] of [['landlords in Sussex', 0], ['guaranteed rent schemes', 2], ['pet insurance', 3], ['commercial landlords', 4], ['holiday let owners', 7]] as const) assert.equal(audienceUnit(a, { text }), null, lines[line]);
   for (const name of ['HMO Licensing Help', 'Rent Guarantee Plan', 'Commercial lettings']) assert.ok(offerNameProblem(name, { text }), name);

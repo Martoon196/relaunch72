@@ -72,14 +72,24 @@ const NEGATION = /(?<![\p{L}\p{N}'’-])(?:not|no|never|nor|neither|without|unli
 /** Words that say a sentence is not a plain statement of fact: myths, mistakes, hopes and plans. */
 const NOT_FACT = /\b(?:myths?|misconceptions?|lies?|false|untrue|wrong|mistakes?)\b|\bhope to\b|\baim(?:ing)? to\b|\b(?:aim|goal|ambition|mission|vision|dream) is to\b|\bplan to\b|\bwant to become\b|\bwill be\b|\bwould be\b|\bsome (?:\w+ ){0,2}(?:think|thinks|believe|believes|say|says)\b/u;
 /** Not yet, or only asked about: never who the business serves or what it sells. */
-const NOT_YET = /\bworking towards\b|\bask(?:ed)? about\b|\boften ask\b|\blooking into\b|\bconsidering\b|\bcoming soon\b|\bsoon\b/u;
-/** A list's introduction that says the list is about problems, or other people. */
-const PAIN = /\?|\btired of\b|\bfed up\b|\bstruggling\b|\bworried\b|\bsound(?:s)? familiar\b|\bsick of\b|\bfrustrated\b|\bagents who\b|\bcompanies that\b|\bfirms that\b|\bothers\b|\bother (?:agents|companies|firms|businesses)\b|\bproblems?\b|\bmistakes\b|\bpitfalls\b/u;
+const NOT_YET = /\bworking towards\b|\bask(?:ed)? about\b|\boften ask\b|\blooking into\b|\bconsidering\b|\bcoming soon\b|\blaunching soon\b/u;
+/** "will soon": only in the clause that holds the audience or offer name ("…landlords in Kent and will soon open in Sussex"). */
+const WILL_SOON = /\bwill soon\b/u;
+/** A list's introduction that says the list is about the reader's problems, other people, or what is not here yet. */
+const PAIN = /\bdo you\b|\bdoes your\b|\bare you\b|\bis your\b|\bhave you\b|\btired of\b|\bfed up\b|\bstruggling\b|\bworried\b|\bsound(?:s)? familiar\b|\bsick of\b|\bfrustrated\b|\bagents who\b|\bother (?:agents|companies|firms|businesses)\b|\bunlike\b|\bmistakes\b|\bpitfalls\b|\bmyths?\b|\bcoming soon\b|\blaunching soon\b|\bplanned\b|\bin development\b/u;
 const lowerBasis = (text: string) => basisText(text).toLowerCase();
 /** True when a piece of text holds a negation or an unreliability word (the lists above, "not yet" words included). */
 export const unreliable = (text: string) => { const t = lowerBasis(text); return NEGATION.test(t) || NOT_FACT.test(t) || NOT_YET.test(t); };
 const leadInBad = (text: string) => { const t = lowerBasis(text); return NEGATION.test(t) || NOT_FACT.test(t) || PAIN.test(t); };
 const itemBad = (text: string) => CROSS.test(text) || NOT_FACT.test(lowerBasis(text));
+/** True when the clause of `text` that holds `key` (a keyOf) says "will soon". Clauses split at , ; : dashes and "and"/"but". */
+const soonInClause = (text: string, key: string) => {
+  const t = lowerBasis(text);
+  if (!WILL_SOON.test(t)) return false;
+  const clauses = t.split(/[,;:—–]|\s-\s|\b(?:and|but)\b/u);
+  const holding = clauses.filter((c) => ` ${keyOf(c)} `.includes(` ${key} `));
+  return holding.length ? holding.some((c) => WILL_SOON.test(c)) : true;
+};
 const QUOTE_MARKS = /["“”„«»]/u;
 const CROSS = /[✗✘❌✕×]/u;
 /** Sentences that are about someone else's product. */
@@ -137,7 +147,11 @@ function sentences(line: string, from: number): { s: number; e: number }[] {
 /** A short line naming who said the line above: "Sarah T, landlord", "— Tom", "John D.", "The Smith family", "Ann, 34, nurse". */
 const NAME_LINE = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
 const nameLike = (text: string) => text.length <= 60 && text.trim().split(/\s+/).length <= 6 && !/[!?:;]/.test(text) && NAME_LINE.test(text.trim());
-/** Only a line that is itself in quotation marks is attributed by a short name line under it (the page reader also uses italics and star ratings). */
+/** A name line as a page writes it under a quote, "Sarah T, landlord", "Mark, Whitstable", "Mrs K": it marks the line above
+ * whatever that line looks like (as at f4e43219). Not a place list (two commas or an "and"), a typed bullet or a label. */
+const NAMED_BY = /^(?:[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}\s*,\s*[\p{L}][\p{L}'’-]*(?:\s+[\p{L}][\p{L}'’-]*){0,3}|(?:Mr|Mrs|Ms|Miss|Mx|Dr)\.?\s+[\p{Lu}]\.?)$/u;
+const namedBy = (raw: string) => { const text = raw.trim(); return text.length <= 60 && text.split(/\s+/).length <= 6 && !/\p{N}/u.test(text) && !/\band\b|&/u.test(text) && (text.match(/,/g)?.length ?? 0) <= 1 && NAMED_BY.test(text); };
+/** Otherwise only a line that is itself in quotation marks is attributed by a short name line under it (the page reader also uses italics and star ratings). */
 const inQuoteMarks = (text: string) => /^["“«„]/u.test(text.trim()) || /["”»]$/u.test(text.trim());
 
 export interface Structure { readonly basis: string; readonly lines: readonly Line[]; readonly units: readonly Unit[]; readonly tokens: readonly Tok[]; readonly key: string; readonly tokenLine: Int32Array }
@@ -159,8 +173,8 @@ export function structureOf(text: string | null | undefined): Structure {
     // A paragraph followed by a short name-like line is a quote; so is the name line.
     const nextPara = kinds[li + 1]?.kind === 'para' ? raw[li + 1] ?? '' : '';
     const prevLine = li > 0 ? raw[li - 1]! : '';
-    const attributed = kind === 'para' && inQuoteMarks(line) && nameLike(nextPara);
-    const isAttribution = kind === 'para' && li > 0 && kinds[li - 1]!.kind === 'para' && nameLike(line) && inQuoteMarks(prevLine);
+    const attributed = kind === 'para' && ((inQuoteMarks(line) && nameLike(nextPara)) || namedBy(nextPara));
+    const isAttribution = kind === 'para' && li > 0 && kinds[li - 1]!.kind === 'para' && ((nameLike(line) && inQuoteMarks(prevLine)) || (namedBy(line) && prevLine.trim().length > 0));
     const tooLong = line.length - start > LINE_SPLIT_LIMIT;
     // Quoted spans: from an opening quote mark to its closing mark, across sentences, within the line.
     const spans: [number, number][] = [];
@@ -259,7 +273,7 @@ export function audienceUnit(audience: string, doc: { readonly text?: string | n
   const k = keyOf(audience);
   if (!k) return null;
   const st = structureOfDoc(doc);
-  return st.units.find((u) => !u.quoted && !u.unreliable && !u.tooLong && !QUOTE_MARKS.test(u.text) && ` ${u.key} `.includes(` ${k} `)
+  return st.units.find((u) => !u.quoted && !u.unreliable && !u.tooLong && !QUOTE_MARKS.test(u.text) && ` ${u.key} `.includes(` ${k} `) && !soonInClause(u.text, k)
     && (u.kind !== 'item' || !leadInUnreliable(st, u.line))) ?? null;
 }
 const leadInUnreliable = (st: Structure, line: number) => { const l = leadIn(st, line); return l ? leadInBad(withoutMarkers(l.text)) : false; };
@@ -313,11 +327,11 @@ export function offerNameProblem(name: string, doc: { readonly text?: string | n
   const ok = hits.some(([a]) => {
     const line = st.lines[st.tokenLine[a]!]!;
     if (line.kind === 'heading') return true;
-    if (line.kind === 'item') return !unreliable(line.text);
+    if (line.kind === 'item') return !unreliable(line.text) && !soonInClause(line.text, keyOf(name));
     if (line.kind === 'row') return /\|\s*$/.test(st.basis.slice(Math.max(line.s, st.tokens[a]!.s - 4), st.tokens[a]!.s)) || startsLine(st, a);
     if (line.kind === 'quoted') return false;
     const u = unitOfToken(st, a);
-    return Boolean(u && !u.quoted && !u.unreliable && !THIRD_PARTY.test(u.text));
+    return Boolean(u && !u.quoted && !u.unreliable && !THIRD_PARTY.test(u.text) && !soonInClause(u.text, keyOf(name)));
   });
   return ok ? null : 'is only written in a sentence that negates it, quotes a customer or is about someone else\'s product';
 }
@@ -341,7 +355,12 @@ const SAVING_BEFORE = new Set(['save', 'saving', 'savings', 'worth', 'discount',
 const SAVING_AFTER = new Set(['off', 'discount', 'cashback', 'saving', 'savings', 'voucher', 'credit']);
 const HOLD_WORDS = new Set(['deposit', 'minimum', 'min', 'spend', 'holding']);
 /** Words an expression never runs past. */
-const STOP_WORDS = new Set(['and', 'or', 'but', 'plus', '+', 'with', 'for', 'to', 'in', 'on', 'at', 'by', 'from', 'including', 'inc', 'incl', 'ex', 'excl', 'excluding', 'if', 'when', 'then', 'so', 'as', 'than', 'vat']);
+const STOP_WORDS = new Set(['and', 'or', 'but', 'plus', '+', 'with', 'for', 'to', 'in', 'on', 'at', 'by', 'from', 'including', 'inc', 'incl', 'ex', 'excl', 'excluding', 'if', 'when', 'then', 'so', 'as', 'than', 'vat',
+  'is', 'are', 'was', 'were', 'lasts', 'last', 'includes', 'include', 'covers', 'takes', 'gets', 'means']);
+/** A percentage base never ends on these. */
+const BASE_TAIL = new Set(['of', 'the', 'a', 'an']);
+/** "Price on request" and the like: the offer's own card says it has no written price. */
+const NO_PRICE = /\bprice on (?:request|application)\b|\bpoa\b|\bcall (?:us )?for (?:a )?(?:price|prices|quote)\b|\bcontact us for (?:a )?(?:price|quote)\b/iu;
 
 /** A full price expression: the amount (or range) with every qualifier written beside it, and why it may not be a price. */
 export interface PriceExpression {
@@ -354,18 +373,31 @@ export interface PriceExpression {
   readonly hold: string | null;
   /** The expression ends its sentence or meets punctuation: nothing unread trails it. */
   readonly endsClean: boolean;
+  /** Unsure what the amount is (pence written apart, "£49 99"; or "a"/"an" opening prose, "£85 a great price"): never a candidate. */
+  readonly unsure?: boolean;
 }
 
 const seq = (tokens: readonly Tok[], at: number, words: readonly string[]) => words.every((w, i) => tokens[at + i]?.w === w);
 
 interface PriceView { readonly expressions: readonly PriceExpression[]; readonly byLine: ReadonlyMap<number, PriceExpression[]>; readonly byUnit: ReadonlyMap<Unit, PriceExpression[]> }
-const priceCache = new WeakMap<Structure, PriceView>();
+const priceCache = new WeakMap<Structure, Map<string, PriceView>>();
 
-/** Every price expression in a document, once per document. */
-function priceView(st: Structure): PriceView {
-  const done = priceCache.get(st);
+/** Every price expression in a document, once per document and offer list (a unit never runs into a listed offer's name). */
+function priceView(st: Structure, names: readonly string[] = []): PriceView {
+  const id = JSON.stringify(names);
+  let byNames = priceCache.get(st);
+  if (!byNames) { byNames = new Map(); priceCache.set(st, byNames); }
+  const done = byNames.get(id);
   if (done) return done;
   const { tokens, basis } = st;
+  const nameKeys = names.filter(usableName).map((n) => keyOf(n).split(' ')).filter((k) => k[0]);
+  const nameAtTok = (k: number) => nameKeys.some((nk) => nk.every((w, j) => tokens[k + j]?.w === w));
+  const isUpper = (k: number) => /^\p{Lu}/u.test(tokens[k]!.raw), isLower = (k: number) => /^\p{Ll}/u.test(tokens[k]!.raw);
+  const bareNumber = (k: number) => /^\p{N}[\p{N},.]*$/u.test(tokens[k]!.w);
+  /** Where a unit or base stops: punctuation, another amount, a joining or verb word, a bare number (after its first word),
+   * a capitalised word after a lower-case one, or a listed offer's name. */
+  const stopsAt = (k: number, first: boolean) => STOP_WORDS.has(tokens[k]!.w) || amountStarts.has(k) || gapBreaks(k - 1, k) || (!first && bareNumber(k))
+    || (k > 0 && isUpper(k) && isLower(k - 1)) || nameAtTok(k);
   const firstTokenAt = (pos: number) => { let lo = 0, hi = tokens.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (tokens[mid]!.s < pos) lo = mid + 1; else hi = mid; } return lo; };
   interface Amount { ts: number; te: number; s: number; e: number; percent: boolean }
   const amounts: Amount[] = [];
@@ -390,6 +422,9 @@ function priceView(st: Structure): PriceView {
   for (const g of groups) {
     let ts = g[0]!.ts, te = g[g.length - 1]!.te;
     const percent = g.some((a) => a.percent);
+    // "£49 99 /mo": pence written apart (a bare one- or two-digit number straight after the amount): unsure.
+    const splitPence = Boolean(tokens[te]) && /^\p{N}{1,2}$/u.test(tokens[te]!.w) && basis.slice(tokens[te - 1]!.e, tokens[te]!.s) === ' ';
+    let unsureA = false;
     let based = false;
     for (let changed = true; changed;) {
       changed = false;
@@ -403,11 +438,16 @@ function priceView(st: Structure): PriceView {
       const cal = tokens[te + link]?.w === 'calendar' ? 1 : 0;
       const period = tokens[te + link + cal];
       if (period && PERIODS.has(period.w) && (link || /\//.test(basis.slice(tokens[te - 1]!.e, next.s)))) { te += link + cal + 1; changed = true; continue; }
-      // "per square metre", "per 1,000 words", "per walk": after per/a/an/each/every, the next one to three words,
-      // stopping at punctuation, another amount or a joining word.
+      // "per square metre", "per 1,000 words", "per walk": after per/each/every, the next one to three words (see `stopsAt`).
+      // "a"/"an" opens a unit only for a single lower-case word that ends the sentence ("£2 a window."); otherwise unsure.
       if (link && !gapBreaks(te - 1, te)) {
+        if (next.w === 'a' || next.w === 'an') {
+          const w = te + 1;
+          if (tokens[w] && isLower(w) && !stopsAt(w, false) && (!tokens[w + 1] || gapBreaks(w, w + 1) || st.tokenLine[w + 1] !== st.tokenLine[w])) { te = w + 1; changed = true; continue; }
+          unsureA = true; break;
+        }
         let k = te + 1, taken = 0;
-        while (taken < 3 && k < tokens.length && !STOP_WORDS.has(tokens[k]!.w) && !amountStarts.has(k) && !gapBreaks(k - 1, k) && /[\p{L}\p{N}]/u.test(tokens[k]!.w)) { k++; taken++; while (k < tokens.length && joined(k - 1, k)) k++; }
+        while (taken < 3 && k < tokens.length && !stopsAt(k, taken === 0) && /[\p{L}\p{N}]/u.test(tokens[k]!.w)) { k++; taken++; while (k < tokens.length && joined(k - 1, k)) k++; }
         if (taken) { te = k; changed = true; continue; }
       }
       if (next.w === 'for' && tokens[te + 1]?.w === 'your' && tokens[te + 2]?.w === 'first' && tokens[te + 4] && PERIODS.has(tokens[te + 4]!.w)) { te += 5; changed = true; continue; }
@@ -415,11 +455,12 @@ function priceView(st: Structure): PriceView {
       if (after) { te += after.length; changed = true; continue; }
       if (percent && !based && next.w === 'of') {
         // A percentage's base: up to four words after "of", one of them naming what it is a percentage of.
-        let k = te + 1, words = 0, hasBase = false;
-        while (words < 4 && k < tokens.length && !STOP_WORDS.has(tokens[k]!.w) && !amountStarts.has(k) && !gapBreaks(k - 1, k) && /\p{L}/u.test(tokens[k]!.w)) {
-          if (BASES.has(tokens[k]!.w)) hasBase = true;
-          k++; words++; while (k < tokens.length && joined(k - 1, k)) { if (BASES.has(tokens[k]!.w)) hasBase = true; k++; }
-        }
+        let k = te + 1, words = 0;
+        while (words < 4 && k < tokens.length && !stopsAt(k, false) && /\p{L}/u.test(tokens[k]!.w)) { k++; words++; while (k < tokens.length && joined(k - 1, k)) k++; }
+        // Never ending on "of", "the", "a": "2% of the purchase price of the property" is "2% of the purchase price".
+        while (k > te + 1 && BASE_TAIL.has(tokens[k - 1]!.w)) k--;
+        let hasBase = false;
+        for (let j = te + 1; j < k; j++) if (BASES.has(tokens[j]!.w)) hasBase = true;
         if (hasBase) { te = k; changed = true; based = true; continue; }
       }
       if (percent && !based && (next.w === 'commission' || next.w === 'fee' || next.w === 'fees' || next.w === 'management')) { te += 1; based = true; changed = true; }
@@ -449,14 +490,14 @@ function priceView(st: Structure): PriceView {
       }
     }
     const x: PriceExpression = { ts, te, s, e, key: tokens.slice(ts, te).map((t) => t.w).join(' '), text, line: st.tokenLine[g[0]!.ts]!, unit: u,
-      never: Boolean(competitor) || saving || (percent && !based) || Boolean(u?.quoted) || st.lines[st.tokenLine[g[0]!.ts]!]!.kind === 'quoted', subject, hold,
-      endsClean: !tokens[te] || (u ? tokens[te]!.s >= u.e : false) || /[.,;:!?()|\n]/.test(basis.slice(e, tokens[te]!.s)) };
+      never: Boolean(competitor) || saving || (percent && !based) || Boolean(u?.quoted) || st.lines[st.tokenLine[g[0]!.ts]!]!.kind === 'quoted' || splitPence || unsureA, subject, hold,
+      endsClean: !tokens[te] || (u ? tokens[te]!.s >= u.e : false) || /[.,;:!?()|\n]/.test(basis.slice(e, tokens[te]!.s)), ...(splitPence || unsureA ? { unsure: true } : {}) };
     expressions.push(x);
     const list = byLine.get(x.line); if (list) list.push(x); else byLine.set(x.line, [x]);
     if (u) { const ul = byUnit.get(u); if (ul) ul.push(x); else byUnit.set(u, [x]); }
   }
   const view = { expressions, byLine, byUnit };
-  priceCache.set(st, view);
+  byNames.set(id, view);
   return view;
 }
 
@@ -567,7 +608,7 @@ function anchorsFor(st: Structure, names: readonly string[]): Anchors {
   // Prices written above their names: the line just before the first offer's line is only a price.
   let first = -1;
   for (const i of isAnchor) if (first < 0 || i < first) first = i;
-  const view = priceView(st);
+  const view = priceView(st, names);
   let prev = first - 1; while (prev >= 0 && !st.lines[prev]!.text.trim()) prev--;
   const pricesAbove = first >= 0 && prev >= 0 && amountOnly(st, view, prev);
   // Which offers each sentence names, once, for the prose fallback.
@@ -611,7 +652,8 @@ export function priceCandidates(doc: { readonly text?: string | null }, names: r
 }
 
 function readPrices(st: Structure, anchors: Anchors, names: readonly string[], self: number): PriceReading {
-  const view = priceView(st), name = names[self]!;
+  const view = priceView(st, names), name = names[self]!;
+  let noPrice = false;
   const { nameKeys, isAnchor, unitOffers, hits, pricesAbove } = anchors;
   const selfKey = nameKeys[self] ?? keyOf(name);
   const found = new Map<string, PriceExpression>();
@@ -623,6 +665,7 @@ function readPrices(st: Structure, anchors: Anchors, names: readonly string[], s
     const start = st.lines[a.line]!;
     if (start.kind === 'row') {
       for (const x of view.byLine.get(a.line) ?? []) if (x.s >= a.s && x.s < a.end) { if (candidateFor(x, selfKey)) add(x, a.line); else setAside++; }
+      if (NO_PRICE.test(st.basis.slice(a.s, a.end))) noPrice = true;
       continue;
     }
     const level = start.kind === 'heading' ? lineKind(start.text).level : 0;
@@ -631,15 +674,21 @@ function readPrices(st: Structure, anchors: Anchors, names: readonly string[], s
       const l = st.lines[i]!;
       if (i > a.line) {
         if (i - a.line >= RUN_LINES || l.e - start.s > RUN_CHARS || isAnchor.has(i)) break;
-        if (l.kind === 'heading' && !(level && lineKind(l.text).level > level && !have)) break;
-        if (have && l.kind !== 'heading' && cardLabel(st, view, i)) break;
+        // A tagline or a deeper sub-heading is allowed only on the line straight under the name; after that a heading or the
+        // next card's label ends the run, whether or not a price was found.
+        const under = i === a.line + 1;
+        if (l.kind === 'heading' && !(under && level && lineKind(l.text).level > level && !have)) break;
+        if ((have || !under) && l.kind !== 'heading' && cardLabel(st, view, i)) break;
         // A line that is only a price, straight above a heading or another offer's line, belongs to what follows (a layout
         // with prices above names): it is tied to neither.
         if (pricesAbove && amountOnly(st, view, i) && nextIsCard(st, i, isAnchor)) continue;
       }
       for (const x of view.byLine.get(i) ?? []) if (x.s >= start.s) { if (candidateFor(x, selfKey)) { add(x, a.line); have = true; } else setAside++; }
+      if (NO_PRICE.test(st.basis.slice(Math.max(l.s, start.s), l.e))) noPrice = true;
     }
   }
+  // "Price on request" in the offer's own card: it has no written price.
+  if (mine.length && noPrice) return { candidates: [], via: 'none', pricesAbove, anchorLine: new Map(), onlyAmounts: false };
   if (mine.length) return { candidates: [...found.values()], via: found.size ? 'run' : 'none', pricesAbove, anchorLine, onlyAmounts: setAside === 0 };
   // Prose fallback.
   for (const [h] of hits[self] ?? []) {

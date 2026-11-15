@@ -210,12 +210,24 @@ const LINE_TAGS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
 const VOID_TAGS = new Set(['br', 'hr', 'img', 'input', 'meta', 'link', 'source', 'wbr', 'area', 'col', 'embed', 'track', 'param', 'base']);
 /** Elements that hold customer words. */
 const QUOTED_TAGS = new Set(['blockquote', 'q', 'cite']);
-/** Class or id tokens that mark customer words: whole tokens only, never on html, body or main. */
-const QUOTED_TOKENS = new Set(['testimonial', 'testimonials', 'review', 'reviews', 'customer-review', 'customer-reviews', 'client-review', 'client-reviews', 'star-rating', 'trustpilot', 'feefo', 'google-reviews']);
-const STAR_TOKENS = new Set(['stars', 'star-rating', 'rating', 'ratings']);
+/** Parts of a class or id name (split on "-" and "_") that mark customer words: whole parts only, never on html, body or main. */
+const QUOTED_PARTS = new Set(['testimonial', 'testimonials', 'review', 'reviews', 'trustpilot', 'feefo']);
+/** Class names that mark a star rating (never "rating" alone). */
+const STAR_TOKENS = new Set(['stars', 'star-rating']);
+/** True when a class or id marks customer words: a part from QUOTED_PARTS; "quote" only as `wp-block-quote` or `blockquote`, or a class that is exactly "quote" on a figure, blockquote or q. */
+function quotedByAttrs(tag: string, attrs: string, tokens: readonly string[]): boolean {
+  if (tokens.some((k) => k === 'wp-block-quote' || k === 'blockquote' || k.split(/[-_]+/).some((part) => QUOTED_PARTS.has(part)))) return true;
+  if (tag !== 'figure' && tag !== 'blockquote' && tag !== 'q') return false;
+  const cls = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+  return Boolean(cls && (cls[1] ?? cls[2] ?? cls[3] ?? '').trim().toLowerCase() === 'quote');
+}
 /** A heading that starts a section of customer words, up to the next heading or the end of its container. */
 const QUOTED_SECTION = /^(?:(?:our|customer|client|google|latest|recent|real|happy)\s+)*(?:reviews|testimonials|feedback)$|\bwhat (?:our |my )?(?:customers|clients|landlords|tenants|students|people|members|buyers|sellers|homeowners|users|patients|guests|families|owners|parents|learners) (?:say|think)\b|\bwhat people say\b|\bkind words\b|\bfeedback from\b|\bin their (?:own )?words\b|\b(?:client|customer|success) stories\b|\btestimonials\b|\bdon['’]t (?:just )?take our word for it\b|\bhappy (?:customers|clients)\b/i;
-/** A short line naming who said the line above it. */
+/** A short line naming who said the line above it, as a page writes it under a quote: "Sarah T, landlord", "Mark, Whitstable",
+ * "Mrs K". It marks the line above it whatever that line looks like. (Not a place list, which has two commas or an "and".) */
+const NAMED_BY = /^(?:[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}\s*,\s*[\p{L}][\p{L}'’-]*(?:\s+[\p{L}][\p{L}'’-]*){0,3}|(?:Mr|Mrs|Ms|Miss|Mx|Dr)\.?\s+[\p{Lu}]\.?)$/u;
+const namedBy = (text: string) => (text.includes(',') || /^M[rsx]|^Miss|^Dr/.test(text)) && text.length <= 60 && text.split(/\s+/).length <= 6 && !/\p{N}/u.test(text) && !/\band\b|&/u.test(text) && (text.match(/,/g)?.length ?? 0) <= 1 && NAMED_BY.test(text);
+/** A short line naming who said the line above it: marks it only beside italics, quote marks or a star rating. */
 const ATTRIBUTION = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
 
 interface Segment { kind: 'heading' | 'item' | 'para' | 'row'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
@@ -229,9 +241,16 @@ function classTokens(attrs: string): string[] {
   return out;
 }
 
+/** A page over the limit is cut at the last tag end before it: no part of a tag, and no cut-off word or number, is kept. */
+function capHtml(html: string): string {
+  if (html.length <= BRAND_HTML_LIMIT) return html;
+  const cut = html.slice(0, BRAND_HTML_LIMIT);
+  return cut.slice(0, cut.lastIndexOf('>') + 1);
+}
+
 /** The main content of an HTML page as Brand DNA lines (the same main-content choice as `parseHtmlPage`). */
 export function brandPageHtmlLines(html: string): string {
-  const capped = html.length > BRAND_HTML_LIMIT ? html.slice(0, BRAND_HTML_LIMIT) : html;
+  const capped = capHtml(html);
   const lower = capped.toLowerCase();
   const bodyAt = lower.indexOf('<body'), bodyEnd = lower.lastIndexOf('</body>');
   const body = bodyAt !== -1 && bodyEnd > bodyAt ? capped.slice(bodyAt, bodyEnd + 7) : capped;
@@ -249,7 +268,7 @@ export function brandPageHtmlLines(html: string): string {
  * does when a page has no main element.
  */
 export function brandPageLines(input: string, dropChrome = false): string {
-  const html = input.length > BRAND_HTML_LIMIT ? input.slice(0, BRAND_HTML_LIMIT) : input;
+  const html = capHtml(input);
   const lower = html.toLowerCase();
   const sink: string[][] = [[]];
   const stack: { tag: string; quoted: boolean; stars: boolean }[] = [];
@@ -259,6 +278,10 @@ export function brandPageLines(input: string, dropChrome = false): string {
   let itemDepth = 0;
   /** A heading that opens a section of customer words, and the stack depth of the container it sits in. */
   let quotedSection = false, quotedSectionDepth = -1;
+  /** Words seen in the section since its heading; and, for a heading alone in its container, the next sibling container it covers. */
+  let sectionText = false, sectionSibling = false, siblingOpened = false;
+  /** An inline tag was passed since the last text: a letter or digit on both sides gets a space between them. */
+  let inlineEdge = false;
   let buffer = '', bufferItalicOnly = true, bufferHasText = false;
   const tables: TableCtx[] = [];
   let lastSegment: Segment | null = null, containerSeq = 0;
@@ -291,15 +314,18 @@ export function brandPageLines(input: string, dropChrome = false): string {
     if (/^(?:#{1,6} |\| |❝ |• )/u.test(text)) text = `\u200B${text}`;
     // The section of customer words ends when the heading's own container closes (it is the element below the heading).
     // (The heading is still open here, so its container is the element below it; at the top level nothing closes it.)
-    if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; }
+    if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; sectionText = false; sectionSibling = false; siblingOpened = false; }
+    else if (quotedSection) sectionText = true;
     // The element that holds this line beside its siblings: a paragraph's (or list item's) parent, else the block itself.
     const container = currentContainer();
     if (/^[★☆⭐✩✪✭✮✯]{3,}/u.test(text)) starContainers.add(container);
     let quoted = quotedDepth > 0 || (quotedSection && kind !== 'heading');
     // A short name line straight after a quoted or italic line, or beside a star rating, is an attribution: both lines are customer words.
     const prev = lastSegment;
-    if (!quoted && kind === 'para' && prev && prev.kind === 'para' && text.split(/\s+/).length <= 6 && ATTRIBUTION.test(text) && !/[!?:;]/.test(text)
-      && (prev.italic || /^["“«„]|["”»]$/u.test(prev.text) || prev.stars || starsDepth > 0 || starContainers.has(container)) && prev.container === container) {
+    const named = !quoted && kind === 'para' && prev !== null && prev.kind === 'para' && !prev.quoted && namedBy(text);
+    if (named || (!quoted && kind === 'para' && prev && prev.kind === 'para' && prev.container === container
+      && (prev.italic || /^["“«„]|["”»]$/u.test(prev.text) || prev.stars || starsDepth > 0 || starContainers.has(container))
+      && text.length <= 80 && text.split(/\s+/).length <= 6 && !/[!?:;]/.test(text) && ATTRIBUTION.test(text))) {
       quoted = true;
       if (!prev.quoted) {
         prev.quoted = true;
@@ -313,6 +339,10 @@ export function brandPageLines(input: string, dropChrome = false): string {
   };
   const addText = (t: string) => {
     if (struckDepth > 0) return;
+    if (inlineEdge && t) {
+      inlineEdge = false;
+      if (/[\p{L}\p{N}]$/u.test(buffer) && /^[\p{L}\p{N}]/u.test(t)) buffer += ' ';
+    }
     if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; }
     buffer += t;
   };
@@ -337,13 +367,13 @@ export function brandPageLines(input: string, dropChrome = false): string {
     }
   };
   let nextGt = -1;
-  for (let i = 0; i < html.length;) {
-    const lt = html.indexOf('<', i);
+  // `i` is where the pending text starts; `from` where the next "<" is looked for (a "<" that opens no tag is text).
+  for (let i = 0, from = 0; i < html.length; from = i) {
+    let lt = html.indexOf('<', from);
+    while (lt !== -1 && !/[a-zA-Z/!?]/.test(html[lt + 1] ?? '')) lt = html.indexOf('<', lt + 1);
     if (lt === -1) { addText(html.slice(i)); break; }
     if (lt > i) addText(html.slice(i, lt));
     if (html.startsWith('<!--', lt)) { const end = html.indexOf('-->', lt + 4); i = end === -1 ? html.length : end + 3; continue; }
-    const c = html[lt + 1];
-    if (!c || !(/[a-zA-Z/!?]/.test(c))) { addText('<'); i = lt + 1; continue; }
     if (nextGt < lt + 1) { nextGt = html.indexOf('>', lt + 1); if (nextGt === -1) nextGt = html.length; }
     if (nextGt >= html.length) { addText(html.slice(lt)); break; }
     const raw = html.slice(lt + 1, nextGt);
@@ -370,14 +400,16 @@ export function brandPageLines(input: string, dropChrome = false): string {
       else if (t && (tag === 'td' || tag === 'th')) { closeCell(t); if (!t.row) t.row = []; flush(); t.cell = { segments: [], text: '' }; }
       else if (LINE_TAGS.has(tag)) flush();
       else if (!INLINE_TAGS.has(tag)) addText(' ');
+      else inlineEdge = true;
       if (tag === 'sup' || tag === 'sub') addText(' ');
       if (VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
       if (stack.length >= NEST_LIMIT) { overflow.set(tag, (overflow.get(tag) ?? 0) + 1); continue; }
       const tokens = tag === 'html' || tag === 'body' || tag === 'main' ? [] : classTokens(attrs);
-      const quoted = QUOTED_TAGS.has(tag) || tokens.some((k) => QUOTED_TOKENS.has(k));
+      const quoted = QUOTED_TAGS.has(tag) || quotedByAttrs(tag, attrs, tokens);
       const stars = tokens.some((k) => STAR_TOKENS.has(k));
       if (stars) starContainers.add(currentContainer());
       stack.push({ tag, quoted, stars });
+      if (quotedSection && sectionSibling && !siblingOpened && stack.length === quotedSectionDepth + 1) siblingOpened = true;
       open.set(tag, (open.get(tag) ?? 0) + 1);
       if (quoted) quotedDepth++;
       if (stars) starsDepth++;
@@ -389,7 +421,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
       continue;
     }
     // Any end tag but a pure inline one separates the words on either side, whether or not it closes anything.
-    if (!INLINE_TAGS.has(tag)) addText(' ');
+    if (!INLINE_TAGS.has(tag)) addText(' '); else inlineEdge = true;
     if ((overflow.get(tag) ?? 0) > 0) { overflow.set(tag, overflow.get(tag)! - 1); continue; }
     if (!(open.get(tag) ?? 0)) continue;
     if (t && (tag === 'td' || tag === 'th')) closeCell(t);
@@ -407,8 +439,15 @@ export function brandPageLines(input: string, dropChrome = false): string {
       if (x.tag === 'li') itemDepth--;
       if (LINE_TAGS.has(x.tag) && !/^h[1-6]$/.test(x.tag)) containers.pop();
       if (x.tag === 'table' && tables.length) closeTable();
-      // A section of customer words ends when the container that held its heading closes.
-      if (quotedSection && stack.length <= quotedSectionDepth) { flush(); quotedSection = false; }
+      // A section of customer words ends when the container that held its heading closes. A heading alone in its container
+      // (a page builder's heading widget) covers the next sibling container too.
+      if (quotedSection && !sectionSibling && stack.length <= quotedSectionDepth) {
+        flush();
+        if (sectionText) quotedSection = false; else { sectionSibling = true; siblingOpened = false; quotedSectionDepth = stack.length; }
+      } else if (quotedSection && sectionSibling) {
+        if (!siblingOpened && stack.length < quotedSectionDepth) quotedSectionDepth = stack.length;
+        else if (siblingOpened && stack.length <= quotedSectionDepth) { flush(); quotedSection = false; }
+      }
       if (x.tag === tag) break;
     }
   }
