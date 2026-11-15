@@ -32,7 +32,11 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
   field.setAttribute('aria-label',labelText);
   if(kind==='select'){
    for(const option of options){const el=node('option',option[1]);el.value=option[0];field.append(el);}
-  }else{field.type=kind==='textarea'?'text':kind;field.maxLength=labelText==='Caption'?240:280;}
+  }else{
+   if(kind==='input')field.type='text';
+   if(kind==='number'||kind==='text')field.type=kind;
+   field.maxLength=labelText==='Caption'?240:280;
+  }
   field.value=String(initial??'');
   field.addEventListener('change',()=>onChange(field.value));
   field.addEventListener('input',()=>onChange(field.value));
