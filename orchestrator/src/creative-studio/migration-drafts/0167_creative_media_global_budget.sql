@@ -53,7 +53,8 @@ END $tables$;
 CREATE TRIGGER creative_media_global_events_immutable
  BEFORE UPDATE OR DELETE ON app_private.creative_media_global_events
  FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
-GRANT SELECT ON app_private.creative_media_global_policy TO r72_media_global_definer;
+-- Row-level budget locking needs UPDATE as well as SELECT; only the private definer receives it.
+GRANT SELECT,UPDATE ON app_private.creative_media_global_policy TO r72_media_global_definer;
 GRANT SELECT,INSERT,UPDATE ON app_private.creative_media_global_usage TO r72_media_global_definer;
 GRANT SELECT,INSERT ON app_private.creative_media_global_events TO r72_media_global_definer;
 GRANT USAGE,CREATE ON SCHEMA app_private TO r72_media_global_definer;
