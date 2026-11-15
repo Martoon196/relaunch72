@@ -129,6 +129,8 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       assert.deepEqual(await owner.list(a.brand.id),[]);
       await assert.rejects(crossed.list(a.brand.id),/session|owner|permission/iu);
       await assert.rejects(content.query('SELECT * FROM app.creative_media_video_jobs'),/permission denied/iu);
+      // Disposable test-only operator authorisation: production policy remains disabled by default.
+      await admin.query("UPDATE app_private.creative_media_global_policy SET enabled=true,monthly_microusd=5000000 WHERE policy_id=1");
       // Operator provisioning proof: paid API is blocked without an active same-workspace grant.
       await admin.query(`INSERT INTO app.creative_media_access_grants
         (workspace_id,tier,source,valid_from,valid_until,max_job_microusd,monthly_video_microusd)

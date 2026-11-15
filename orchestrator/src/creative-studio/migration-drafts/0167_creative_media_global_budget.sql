@@ -56,7 +56,8 @@ CREATE TRIGGER creative_media_global_events_immutable
 GRANT SELECT ON app_private.creative_media_global_policy TO r72_media_global_definer;
 GRANT SELECT,INSERT,UPDATE ON app_private.creative_media_global_usage TO r72_media_global_definer;
 GRANT SELECT,INSERT ON app_private.creative_media_global_events TO r72_media_global_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_global_definer;
+GRANT USAGE,CREATE ON SCHEMA app_private TO r72_media_global_definer;
+GRANT EXECUTE ON FUNCTION app_private.current_workspace_id() TO r72_media_global_definer;
 SET LOCAL ROLE r72_media_global_definer;
 CREATE FUNCTION app_private.creative_media_global_budget_trigger()
 RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
