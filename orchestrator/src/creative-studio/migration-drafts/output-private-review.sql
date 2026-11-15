@@ -134,7 +134,7 @@ BEGIN
    RAISE EXCEPTION 'Unknown or ambiguous rejection' USING ERRCODE='22023'; END IF;
  ELSE RAISE EXCEPTION 'Unsupported technical probe status' USING ERRCODE='22023'; END IF;
  SELECT * INTO o FROM app.creative_media_video_outputs
-  WHERE workspace_id=p_workspace AND id=p_output FOR SHARE;
+  WHERE workspace_id=p_workspace AND id=p_output;
  IF o.id IS NULL OR o.state<>'captured_unverified' OR o.sha256 IS DISTINCT FROM p_sha THEN
   RAISE EXCEPTION 'Exact private output not found' USING ERRCODE='42501'; END IF;
  INSERT INTO app.creative_media_output_probes(workspace_id,output_id,output_sha256,status,
@@ -168,7 +168,7 @@ CREATE FUNCTION app_private.creative_media_output_review(
 ) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; target app.creative_media_video_outputs;
  previous app.creative_media_output_reviews; command app.creative_media_output_review_commands;
- current_rev integer; next_rev integer; id uuid; cmd uuid; status text; approved boolean;
+ current_rev integer; next_rev integer; output_uuid uuid; cmd uuid; status text; approved boolean;
  input_hash text;
 BEGIN
  IF p_session IS NULL OR app_private.current_actor_kind()<>'user' THEN
@@ -196,33 +196,33 @@ BEGIN
    OR jsonb_typeof(p_input->'claimsConfirmed')<>'boolean'
    OR jsonb_typeof(p_input->'disclosureConfirmed')<>'boolean' THEN
    RAISE EXCEPTION 'Invalid exact private review request' USING ERRCODE='22023'; END IF;
- id:=(p_input->>'outputId')::uuid;cmd:=(p_input->>'commandId')::uuid;
+ output_uuid:=(p_input->>'outputId')::uuid;cmd:=(p_input->>'commandId')::uuid;
  status:=p_input->>'decision';current_rev:=(p_input->>'expectedRevision')::integer;
  approved:=p_input->>'rightsConfirmed'='true' AND p_input->>'claimsConfirmed'='true'
   AND p_input->>'disclosureConfirmed'='true';
  input_hash:=encode(public.digest(p_input::text,'sha256'),'hex');
- PERFORM pg_advisory_xact_lock(hashtextextended('rl72-output-review:'||p_workspace::text||':'||id::text,0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-output-review:'||p_workspace::text||':'||output_uuid::text,0));
  SELECT * INTO command FROM app.creative_media_output_review_commands
    WHERE workspace_id=p_workspace AND command_id=cmd;
  IF command.command_id IS NOT NULL THEN
-  IF command.output_id IS DISTINCT FROM id OR command.input_sha256 IS DISTINCT FROM input_hash THEN
+  IF command.output_id IS DISTINCT FROM output_uuid OR command.input_sha256 IS DISTINCT FROM input_hash THEN
    RAISE EXCEPTION 'Review command changed content' USING ERRCODE='40001'; END IF;
-  RETURN jsonb_build_object('outputId',id,'revision',command.revision,'replayed',true,'decision',status);
+  RETURN jsonb_build_object('outputId',output_uuid,'revision',command.revision,'replayed',true,'decision',status);
  END IF;
  SELECT * INTO target FROM app.creative_media_video_outputs
-  WHERE workspace_id=p_workspace AND id=id;
+  WHERE workspace_id=p_workspace AND id=output_uuid;
  IF target.id IS NULL OR target.state<>'captured_unverified'
    OR target.sha256 IS DISTINCT FROM p_input->>'outputSha256' THEN
    RAISE EXCEPTION 'Original unmodified private output required' USING ERRCODE='42501'; END IF;
  SELECT * INTO previous FROM app.creative_media_output_reviews
-  WHERE workspace_id=p_workspace AND output_id=id ORDER BY revision DESC LIMIT 1;
+  WHERE workspace_id=p_workspace AND output_id=output_uuid ORDER BY revision DESC LIMIT 1;
  next_rev:=coalesce(previous.revision,0)+1;
  IF current_rev<>next_rev-1 OR next_rev>100 THEN
   RAISE EXCEPTION 'Review revision changed' USING ERRCODE='40001'; END IF;
  IF status='reviewed_private' THEN
   IF NOT approved OR coalesce(previous.decision,'')='reviewed_private'
     OR NOT EXISTS(SELECT 1 FROM app.creative_media_output_probes p
-      WHERE p.workspace_id=p_workspace AND p.output_id=id
+      WHERE p.workspace_id=p_workspace AND p.output_id=output_uuid
        AND p.output_sha256=target.sha256 AND p.status='verified_technical') THEN
     RAISE EXCEPTION 'Technical probe and all three owner attestations required for private acceptance' USING ERRCODE='55000'; END IF;
  ELSIF status='withdrawn_private' THEN
@@ -234,14 +234,14 @@ BEGIN
  END IF;
  INSERT INTO app.creative_media_output_reviews(workspace_id,output_id,revision,
    output_sha256,decision,rights_confirmed,claims_confirmed,disclosure_confirmed,reviewed_by)
- VALUES(p_workspace,id,next_rev,target.sha256,status,
+ VALUES(p_workspace,output_uuid,next_rev,target.sha256,status,
    p_input->>'rightsConfirmed'='true',
    p_input->>'claimsConfirmed'='true',
    p_input->>'disclosureConfirmed'='true',actor);
  INSERT INTO app.creative_media_output_review_commands
    (workspace_id,command_id,output_id,revision,input_sha256)
- VALUES(p_workspace,cmd,id,next_rev,input_hash);
- RETURN jsonb_build_object('outputId',id,'revision',next_rev,'replayed',false,'decision',status);
+ VALUES(p_workspace,cmd,output_uuid,next_rev,input_hash);
+ RETURN jsonb_build_object('outputId',output_uuid,'revision',next_rev,'replayed',false,'decision',status);
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_output_review(uuid,bytea,text,jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_output_review(uuid,bytea,text,jsonb)
