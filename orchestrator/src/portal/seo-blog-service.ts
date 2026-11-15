@@ -29,6 +29,7 @@ import { createCreativeStudio, engineSavedImages, type SavedImageWithPreview } f
 import type { CreativeStudioService } from '../creative-studio/service.js';
 import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
 import { PgCreativeMediaProductStore } from '../creative-studio/media-product-pg-store.js';
+import { PgAmazonTrackingReports } from '../creative-studio/amazon-report-pg-store.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
@@ -45,6 +46,8 @@ export interface PortalSeoBlogService {
   creativeFor?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine): CreativeStudioService | null;
   /** Immutable affiliate product proposals in the SAME canonical Creative Studio workspace. */
   mediaProductsFor?(identity: PortalSessionIdentity, requestId: string): PgCreativeMediaProductStore | null;
+  /** Actual user-uploaded merchant earnings, kept separate from link click estimates. */
+  mediaReportsFor?(identity: PortalSessionIdentity, requestId: string): PgAmazonTrackingReports | null;
   /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
   creativeSavedImages?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine, brandId: string): Promise<SavedImageWithPreview[]>;
   /** Public brand enquiry capture into the existing CRM (studio enabled and a CRM command pool composed). */
@@ -111,6 +114,13 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     mediaProductsFor(identity, requestId) {
       if (env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true' || env.RL72_MEDIA_PRODUCTS_ENABLED?.trim() !== 'true') return null;
       return new PgCreativeMediaProductStore(contentCommandPool, {
+        kind: 'user', userId: identity.userId, requestId,
+        sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
+      });
+    },
+    mediaReportsFor(identity, requestId) {
+      if (env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true' || env.RL72_MEDIA_REPORTS_ENABLED?.trim() !== 'true') return null;
+      return new PgAmazonTrackingReports(contentCommandPool, {
         kind: 'user', userId: identity.userId, requestId,
         sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
       });
