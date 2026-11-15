@@ -42,6 +42,7 @@ import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { creativeMediaReportsPage } from './creative-media-reports-view.js';
+import { creativeVideoSourcesPage } from './creative-media-video-sources-view.js';
 import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
@@ -307,6 +308,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      if(rest==='creative/sources') {
+        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
+        if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');
+        return send(res,200,creativeVideoSourcesPage(shell('creative'),await sources.list(brandId),randomUUID()));
+      }
       if (rest === 'creative/reports') {
         const importer=input.service.mediaReportsFor?.(identity,input.requestId);
         if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
@@ -349,7 +355,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
           ? await mediaCatalogue.get(brandId,productId) : null;
         return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview,
           productPrefill, commerceSummary, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
-          reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+          reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)),
+           videoSourcesEnabled:Boolean(input.service.mediaVideoSourcesFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
@@ -571,7 +578,16 @@ async function handlePost(
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
       const commandId = f('commandId') ?? '';
-      if (parts[1] === 'reports' && parts.length === 2) {
+      if (parts[1] === 'sources' && parts.length === 2) {
+         const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
+         if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');
+         if(!form.file?.data.length)throw new SeoBlogError(400,'Choose an MP4 or WebM source');
+         await sources.upload({workspaceId:brandId,commandId,bytes:form.file.data,
+           fileName:form.file.filename,rights:(f('rights')??'') as 'owned'|'licensed',
+           evidenceSha256:f('evidenceSha256')||null,rightsConfirmed:f('rightsConfirmed')==='1'});
+         return ok(home+'/sources','Video saved privately. Duration, playback and source rights still require review.');
+       }
+       if (parts[1] === 'reports' && parts.length === 2) {
         const importer=input.service.mediaReportsFor?.(identity,input.requestId);
         if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
         const file=form.file;

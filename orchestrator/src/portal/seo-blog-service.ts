@@ -30,6 +30,7 @@ import type { CreativeStudioService } from '../creative-studio/service.js';
 import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
 import { PgCreativeMediaProductStore } from '../creative-studio/media-product-pg-store.js';
 import { PgAmazonTrackingReports } from '../creative-studio/amazon-report-pg-store.js';
+import { PgCreativeVideoSources } from '../creative-studio/media-video-source-pg-store.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
@@ -48,6 +49,8 @@ export interface PortalSeoBlogService {
   mediaProductsFor?(identity: PortalSessionIdentity, requestId: string): PgCreativeMediaProductStore | null;
   /** Actual user-uploaded merchant earnings, kept separate from link click estimates. */
   mediaReportsFor?(identity: PortalSessionIdentity, requestId: string): PgAmazonTrackingReports | null;
+  /** Signed-in workspace owner only; stored footage is never provider-eligible until probed. */
+  mediaVideoSourcesFor?(identity: PortalSessionIdentity, requestId: string): PgCreativeVideoSources | null;
   /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
   creativeSavedImages?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine, brandId: string): Promise<SavedImageWithPreview[]>;
   /** Public brand enquiry capture into the existing CRM (studio enabled and a CRM command pool composed). */
@@ -116,6 +119,12 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       return new PgCreativeMediaProductStore(contentCommandPool, {
         kind: 'user', userId: identity.userId, requestId,
         sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
+      });
+    },
+    mediaVideoSourcesFor(identity,requestId) {
+      if(env.CREATIVE_STUDIO_ENABLED?.trim()!=='true'||env.RL72_MEDIA_VIDEO_SOURCES_ENABLED?.trim()!=='true')return null;
+      return new PgCreativeVideoSources(contentCommandPool,{
+        kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId,
       });
     },
     mediaReportsFor(identity, requestId) {

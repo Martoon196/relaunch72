@@ -13,6 +13,7 @@ import { fixtureBrand } from '../rl72-method-fixtures.js';
 import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report-pg-store.js';
 import { PgVideoAdmissionOwner, PgVideoAdmissionWorker } from '../../src/creative-studio/media-admission-pg-store.js';
 import { mediaRequestDigests } from '../../src/creative-studio/media-providers.js';
+import { PgCreativeVideoSources } from '../../src/creative-studio/media-video-source-pg-store.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -155,6 +156,24 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const unknown=await worker.unknown(a.brand.id,jobId,claim.claimToken);
       assert.equal(unknown.state,'outcome_unknown');
       await assert.rejects(worker.submitted(a.brand.id,jobId,claim.claimToken,'vizard-job-1234'),/lease required/iu);
+    });
+    await t.test('workspace-scoped video source bytes are private and never provider-ready',async()=>{
+      const store=new PgCreativeVideoSources(content,a.principal);
+      const foreign=new PgCreativeVideoSources(content,b.principal);
+      const bytes=Buffer.alloc(1024);bytes.writeUInt32BE(24,0);bytes.write('ftyp',4,'ascii');
+      const input={workspaceId:a.brand.id,commandId:randomUUID(),bytes,fileName:'owner-footage.mp4',
+        rights:'owned' as const,evidenceSha256:null,rightsConfirmed:true};
+      const saved=await store.upload(input);
+      assert.equal(saved.replayed,false);assert.equal(saved.state,'awaiting_probe');
+      assert.equal((await store.upload(input)).replayed,true);
+      await assert.rejects(store.upload({...input,fileName:'different.mp4'}),/replay|changed/u);
+      const list=await store.list(a.brand.id);
+      assert.equal(list.length,1);
+      assert.equal(list[0]?.sha256,saved.sha256);
+      assert.equal((await admin.query("SELECT encode(b.sha256,'hex') AS digest FROM app.creative_media_source_videos s JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id WHERE s.workspace_id=$1",[a.brand.id])).rows[0].digest,saved.sha256);
+      assert.deepEqual(await foreign.list(b.brand.id),[]);
+      await assert.rejects(foreign.list(a.brand.id),/owner|session|permission/iu);
+      await assert.rejects(content.query('SELECT * FROM app.creative_media_source_videos'),/permission denied/iu);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",

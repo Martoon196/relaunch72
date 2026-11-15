@@ -17,3 +17,13 @@ test('worker principal cannot use source owner store',async()=>{
   const s=new PgCreativeVideoSources(dummy,{kind:'worker',requestId:'test'} as never);
   await assert.rejects(s.list('11111111-1111-4111-8111-111111111111'),/Signed-in/iu);
 });
+
+test('source page is signed-in CSRF form and promises no external effects',async()=>{
+  const {creativeVideoSourcesPage}=await import('../src/portal/creative-media-video-sources-view.js');
+  const shell={csrf:'test-csrf',brand:{id:'11111111-1111-4111-8111-111111111111'},tab:'creative'} as never;
+  const html=creativeVideoSourcesPage(shell,[],'22222222-2222-4222-8222-222222222222');
+  assert.match(html,/multipart\/form-data/);
+  assert.match(html,/rightsConfirmed/);
+  assert.match(html,/not proof of playability/);
+  assert.doesNotMatch(html,/shotstack\.io|vizard\.ai/);
+});
