@@ -11,6 +11,7 @@ import type { SeoBlogStore } from '../seo-blog/store.js';
 import { SeoBlogError, type Article, type ArticleVersion, type Job } from '../seo-blog/types.js';
 import { essentialGaps, resolveCreativeContext, type ContextGap, type CreativeBrandContext } from './brand-context.js';
 import { clip, copyIssues, COPY_LIMITS, draftConcepts, factsCorpus, type ArticleSourceText } from './concepts.js';
+import { affiliateProductBrief } from './affiliate-product.js';
 import { verifyCreativeImage, CreativeImageError, type VerifiedImage } from './image-input.js';
 import { isPlacementId, PLACEMENTS, type PlacementId } from './placements.js';
 import { MOTIONS, parseHex, RendererUnavailableError, VIDEO_LIMITS, type ArtworkInput, type ArtworkRenderer, type MotionId } from './renderer.js';
@@ -287,7 +288,14 @@ export class CreativeStudioService {
       if (brief.length < 10) throw new SeoBlogError(400, 'Write a short brief of at least a sentence.');
       if (/https?:\/\/|www\./iu.test(brief)) throw new SeoBlogError(400, 'Leave links out of the brief; choose an approved destination instead.');
       source = { kind: 'brief', text: brief };
-    } else throw new SeoBlogError(400, 'Choose an offer, an article or a written brief.');
+    } else if (sourceKind === 'affiliate_product') {
+      if (purpose !== 'product_promotion') throw new SeoBlogError(400, 'Choose Product promotion for an affiliate product.');
+      source = { kind: 'brief', text: affiliateProductBrief(context, {
+        productName: one('affiliate_product_name'), merchantName: one('affiliate_merchant_name'),
+        network: one('affiliate_network'), productReviewed: one('affiliate_product_reviewed'),
+        channelEligible: one('affiliate_channel_eligible'), rightsConfirmed: one('affiliate_rights_confirmed'),
+      }) };
+    } else throw new SeoBlogError(400, 'Choose an offer, an article, a brief or an affiliate product.');
     const audienceChoice = one('audience');
     const audience = audienceChoice === '__custom' ? text(one('audience_custom'), 80) || null : context.audiences.includes(audienceChoice) ? audienceChoice : null;
     const destinationUrl = one('destination');
