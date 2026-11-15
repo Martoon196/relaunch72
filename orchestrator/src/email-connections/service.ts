@@ -94,6 +94,8 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   bounceRepaired: 'Bounce reporting is working again. Press Go live again.',
   bounceWorkingCheck: 'Bounce reporting is working. Press Check below to finish connecting.',
   bounceRemade: 'Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself and press Go live.',
+  bounceRemadeLive: 'Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself. Your marketing emails go out again once that test arrives.',
+  bounceUnclear: 'We couldn\'t tell whether bounce reporting works now. Press Repair bounce reporting again in a minute.',
   bounceStillFailing: 'The email service still can\'t reach our bounce address. Press Repair bounce reporting again in a few minutes; if it keeps failing, contact support.',
   connectedNext: 'Connected. Sending is switched on in the next step.',
   disconnected: 'Email is disconnected. You can connect again at any time.',
@@ -504,7 +506,8 @@ export class EmailConnectionService {
   private async repair(identity: PortalSessionIdentity, business: EmailConnectBusiness, state: EmailConnectionState, lock: RunLock,
     why: 'secrets' | 'bounce_webhook' = 'secrets'): Promise<EmailConnectionResult> {
     const { store } = this.input, token = identity.sessionToken, ws = business.workspaceId;
-    if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
+    this.repairAllowed(state);
+    // repairAllowed() refuses a missing domain or sender; this narrows the types for begin().
     if (!state.domain || !state.fromName || !state.fromAddress) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.nothingToContinue, 'no_details');
     this.log(JSON.stringify({ event: 'email.connections.repair', level: 'warn', workspace: ws.slice(0, 8), why,
       message: why === 'secrets' ? 'Saved email connection secrets could not be opened with EMAIL_CONNECTION_KEY; the webhook secret and webhook are being remade.'
@@ -528,7 +531,8 @@ export class EmailConnectionService {
    *     stream and domain, deletes only our own stale webhook at our address and creates one (secret saved and in force
    *     first), so there is never a second webhook at our address. 0155 saves a webhook id only while setting up, so the
    *     connection then waits for Check (and a fresh test) again.
-   * Every outcome is logged as one 'email.connections.bounce_repair' line.
+   * The repair's own checks (the current email rules, the saved details) run BEFORE anything at Postmark is touched.
+   * One 'email.connections.bounce_repair' line is written after the work, with what really happened.
    */
   async repairBounceReporting(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
     return this.locked(identity, async (business, lock) => {
@@ -537,38 +541,62 @@ export class EmailConnectionService {
       const state = await this.read(identity, business), ws = business.workspaceId;
       if (state.status !== 'verified' && state.status !== 'dns_pending') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToCheck };
       const line = (fields: Record<string, unknown>) => this.log(JSON.stringify({ event: 'email.connections.bounce_repair', level: 'warn', workspace: ws.slice(0, 8), ...fields }));
-      if (await this.repairNeeded(identity, business, state)) {
-        line({ outcome: 'remade', reason: 'secrets_unreadable' });
-        await this.repair(identity, business, state, lock);
-        return { ok: true, message: EMAIL_CONNECTION_MESSAGES.bounceRemade };
-      }
+      const failure = (error: unknown) => error instanceof PostmarkAccountError ? { category: error.category, httpStatus: error.status }
+        : error instanceof EmailConnectionError ? { code: error.code } : { category: 'unexpected' };
+      // An approved business that was live goes on by itself once a fresh test arrives: no Go live button is shown then.
+      const remadeMessage = state.mode === 'live' && state.goLiveApprovedAt ? EMAIL_CONNECTION_MESSAGES.bounceRemadeLive : EMAIL_CONNECTION_MESSAGES.bounceRemade;
+      const remake = async (reason: string, first?: { webhookId: number; serverToken: string }): Promise<EmailConnectionResult> => {
+        // The repair's own refusals come first, so a refusal changes nothing at Postmark.
+        try { this.repairAllowed(state); }
+        catch (error) { line({ outcome: 'not_repaired', reason, failure: 'refused', ...failure(error) }); throw error; }
+        if (first) {
+          // Our own saved webhook, but pointing at another address: removed, so only the new one at our address remains.
+          try { await this.serverApi(first.serverToken).deleteWebhook(first.webhookId).catch(error => { if (!missing(error)) throw error; }); }
+          catch (error) {
+            line({ outcome: 'not_repaired', reason, failure: 'delete_failed', ...failure(error) });
+            throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
+          }
+        }
+        try { await this.repair(identity, business, state, lock, reason === 'secrets_unreadable' ? 'secrets' : 'bounce_webhook'); }
+        catch (error) { line({ outcome: 'not_repaired', reason, failure: 'remake_failed', ...failure(error) }); throw error; }
+        // "remade" only when the run finished (Postmark answered the create with the new webhook, after testing it) AND our
+        // row now holds a webhook id other than the one we started from.
+        const after = await this.read(identity, business).catch(() => null);
+        if (!after?.webhookId || (first && after.webhookId === first.webhookId)) {
+          line({ outcome: 'not_repaired', reason, failure: 'not_saved' });
+          return { ok: false, message: EMAIL_CONNECTION_MESSAGES.unfinished, bounceRepair: true };
+        }
+        line({ outcome: 'remade', reason });
+        return { ok: true, message: remadeMessage };
+      };
+      if (await this.repairNeeded(identity, business, state)) return remake('secrets_unreadable');
       const sealed = await this.input.store.sealed(identity.sessionToken, ws);
       const serverToken = config.vault.open(ws, 'server_token', sealed.serverToken!);
       const url = connectionWebhookUrl(config.webhookOrigin, business), stream = state.stream ?? BROADCAST_STREAM;
       let listed;
       try { listed = state.webhookId ? (await this.serverApi(serverToken).listWebhooks(stream)).find(hook => hook.id === state.webhookId) ?? null : null; }
       catch (error) {
-        line({ outcome: 'not_repaired', reason: 'list_failed', ...(error instanceof PostmarkAccountError ? { category: error.category, httpStatus: error.status } : {}) });
+        line({ outcome: 'not_repaired', reason: 'list_failed', ...failure(error) });
         throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
       }
       if (listed && listed.url === url) {
-        const check = await confirmBounceWebhook({ webhookId: state.webhookId, stream, token: async () => serverToken, api: this.serverApi });
+        const check = await confirmBounceWebhook({ webhookId: state.webhookId, stream, expectedUrl: url, token: async () => serverToken, api: this.serverApi });
         this.log(webhookCheckLine('email.connections.bounce_repair', ws, check));
         // Each message names a button the page shows in that state: Go live once connected, Check while waiting for it.
         if (check.confirmed) return { ok: true, message: state.status === 'dns_pending' ? EMAIL_CONNECTION_MESSAGES.bounceWorkingCheck
           : check.reason === 'listed_verified' ? EMAIL_CONNECTION_MESSAGES.bounceWorking : EMAIL_CONNECTION_MESSAGES.bounceRepaired };
         if (check.reason === 'verify_failed') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.bounceStillFailing, bounceRepair: true };
+        if (check.reason === 'verify_unrecognised') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.bounceUnclear, bounceRepair: true };
         throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
       }
-      line({ outcome: 'remade', reason: !state.webhookId ? 'no_webhook_id' : listed ? 'other_address' : 'not_listed' });
-      // Our own saved webhook, but pointing at another address: removed, so only the new one at our address remains.
-      if (listed) {
-        try { await this.serverApi(serverToken).deleteWebhook(listed.id).catch(error => { if (!missing(error)) throw error; }); }
-        catch { throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy'); }
-      }
-      await this.repair(identity, business, state, lock, 'bounce_webhook');
-      return { ok: true, message: EMAIL_CONNECTION_MESSAGES.bounceRemade };
+      return remake(!state.webhookId ? 'no_webhook_id' : listed ? 'other_address' : 'not_listed', listed ? { webhookId: listed.id, serverToken } : undefined);
     });
+  }
+
+  /** The checks repair() makes before it changes anything (the current email rules, and the saved details). */
+  private repairAllowed(state: EmailConnectionState): void {
+    if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
+    if (!state.domain || !state.fromName || !state.fromAddress) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.nothingToContinue, 'no_details');
   }
 
   /** "Check": Postmark verifies both records; its answer is stored; our look-ups only choose the message. */

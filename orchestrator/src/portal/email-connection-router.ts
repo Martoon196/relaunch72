@@ -168,7 +168,9 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       // A refusal is shown on the page itself, with what the owner typed kept in the form.
       if (error.status === 403 || error.code === 'off') throw new RouteError(error.status, error.message);
       send(res, error.status, await page({ message: { text: error.message, ok: false }, ...(typed ? { form: typed } : {}),
-        ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}) }));
+        ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}),
+        // A repair that failed (busy, refused, interrupted) leaves bounce reporting unconfirmed: the button stays.
+        ...(action === 'repair-bounces' ? { offerBounceRepair: true } : {}) }));
     }
     return true;
   } catch (error) {

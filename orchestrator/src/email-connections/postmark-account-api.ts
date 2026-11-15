@@ -55,7 +55,34 @@ export class PostmarkAccountError extends Error {
 /** What "verify a webhook" answered: verified, or the triggers that failed (possibly none named). */
 export type WebhookVerification =
   | { readonly verified: true }
-  | { readonly verified: false; readonly failing: readonly WebhookTriggerFailure[] };
+  /** A documented failure: 200 with Success false, or 422 with ErrorCode 1364 (in the body or only in the header). */
+  | { readonly verified: false; readonly reason: 'failed'; readonly failing: readonly WebhookTriggerFailure[] }
+  /**
+   * A 2xx that is neither a documented pass nor a documented failure: never a pass. Carries only the HTTP status and the
+   * sorted top-level key names of the body (never a value), so it can be logged.
+   */
+  | { readonly verified: false; readonly reason: 'unrecognised_answer'; readonly failing: readonly WebhookTriggerFailure[];
+      readonly httpStatus: number; readonly answerKeys: readonly string[] };
+
+/** The triggers Postmark must have tested, and passed, before we accept a verification: bounces and spam reports. */
+const REQUIRED_TRIGGERS = ['Bounce', 'SpamComplaint'] as const;
+
+/**
+ * Postmark's verify answer, read strictly. Verified ONLY when: HTTP 200, the body is an object with Success === true
+ * (the boolean), Results is a non-empty array, every Result is an object with Success === true, and Results include
+ * both Bounce and SpamComplaint. A 200 with Success === false is a documented failure. Anything else is unrecognised.
+ */
+export function readWebhookVerification(httpStatus: number, body: unknown): WebhookVerification {
+  if (httpStatus === 200 && record(body) && body.Success === false) return Object.freeze({ verified: false as const, reason: 'failed' as const, failing: Object.freeze(failingTriggersOf(body)) });
+  if (httpStatus === 200 && record(body) && body.Success === true && Array.isArray(body.Results) && body.Results.length > 0
+      && body.Results.every(item => record(item) && item.Success === true)
+      && REQUIRED_TRIGGERS.every(trigger => (body.Results as unknown[]).some(item => record(item) && item.TriggerType === trigger && item.Success === true))) {
+    return Object.freeze({ verified: true as const });
+  }
+  const answerKeys = record(body) ? Object.keys(body).map(key => /^[A-Za-z0-9_]{1,40}$/u.test(key) ? key : '?').sort().slice(0, 20) : [];
+  return Object.freeze({ verified: false as const, reason: 'unrecognised_answer' as const, failing: Object.freeze(failingTriggersOf(body)), httpStatus,
+    answerKeys: Object.freeze(answerKeys) });
+}
 
 /** Postmark ErrorCodes this feature reacts to (from the API overview's error code table). */
 export const POSTMARK_CODES = Object.freeze({
@@ -212,7 +239,7 @@ type Fetch = typeof fetch;
 
 function requester(header: 'X-Postmark-Account-Token' | 'X-Postmark-Server-Token', token: string, fetcher: Fetch, timeoutMs: number) {
   if (typeof token !== 'string' || !TOKEN.test(token)) throw new PostmarkAccountError('unauthorized');
-  return async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<unknown> => {
+  const exchange = async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<{ status: number; body: unknown }> => {
     let response: Response;
     try {
       response = await fetcher(`${POSTMARK_API_BASE}${path}`, {
@@ -242,9 +269,12 @@ function requester(header: 'X-Postmark-Account-Token' | 'X-Postmark-Server-Token
     }
     let raw: string;
     try { raw = await readCapped(response, MAX_RESPONSE_BYTES); } catch { throw new PostmarkAccountError('invalid_response', response.status); }
-    if (!raw.trim()) return null;
-    try { return JSON.parse(raw) as unknown; } catch { throw new PostmarkAccountError('invalid_response', response.status); }
+    if (!raw.trim()) return { status: response.status, body: null };
+    try { return { status: response.status, body: JSON.parse(raw) as unknown }; } catch { throw new PostmarkAccountError('invalid_response', response.status); }
   };
+  const call = async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<unknown> => (await exchange(method, path, body)).body;
+  /** The same call, also giving the HTTP status of a 2xx answer (only verify needs it). */
+  return Object.assign(call, { exchange });
 }
 
 export function createPostmarkAccountApi(input: { accountToken: string; fetch?: Fetch; timeoutMs?: number }): PostmarkAccountApi {
@@ -330,18 +360,17 @@ export function createPostmarkServerApi(input: { serverToken: string; fetch?: Fe
     },
     async verifyWebhook(webhookId) {
       if (!Number.isSafeInteger(webhookId) || webhookId <= 0) throw new PostmarkAccountError('invalid_response');
-      let body: unknown;
-      try { body = await call('POST', `/webhooks/${webhookId}/verify`); }
+      let answer: { status: number; body: unknown };
+      try { answer = await call.exchange('POST', `/webhooks/${webhookId}/verify`); }
       catch (error) {
+        // 422 with ErrorCode 1364, in the body or (with no ErrorCode in the body) only in the X-PM-ApiErrorCode header.
         if (error instanceof PostmarkAccountError && error.status === 422 && error.errorCode === POSTMARK_CODES.webhookVerificationFailed) {
-          return Object.freeze({ verified: false as const, failing: error.failingTriggers });
+          return Object.freeze({ verified: false as const, reason: 'failed' as const, failing: Object.freeze([...error.failingTriggers]) });
         }
         throw error;
       }
-      // "A 200 response means the verification check ran, not that it passed": Success and the per-trigger Results decide.
-      const failing = failingTriggersOf(body);
-      if ((record(body) && body.Success === false) || failing.length) return Object.freeze({ verified: false as const, failing: Object.freeze(failing) });
-      return Object.freeze({ verified: true as const });
+      // "A 200 response means the verification check ran, not that it passed": only positive evidence is a pass.
+      return readWebhookVerification(answer.status, answer.body);
     },
   };
   return Object.freeze({ ...api, toJSON: () => ({ postmark: '[REDACTED]' }) });

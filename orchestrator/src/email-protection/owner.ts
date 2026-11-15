@@ -12,6 +12,8 @@ import type { EmailConnectionStore, EmailConnectionState } from '../email-connec
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { createPostmarkServerApi, type PostmarkServerApi } from '../email-connections/postmark-account-api.js';
 import { confirmBounceWebhook, webhookCheckLine, type WebhookCheck } from '../email-connections/webhook-check.js';
+import { emailConnectBusiness } from '../email-connections/config.js';
+import { connectionWebhookUrl } from '../email-connections/service.js';
 import { EMAIL_TERMS_VERSION } from '../email-connections/terms.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
 import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
@@ -266,7 +268,10 @@ export class OwnerSendingService {
    * 'email.protection.go_live_webhook' line.
    */
   async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<WebhookCheck> {
-    const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', token: () => this.token(identity),
+    // Our bounce address for this business: the same value Connect gave Postmark (portal origin + the business's source key).
+    const business = emailConnectBusiness(identity.workspaceId);
+    const expectedUrl = business && this.input.portalOrigin ? connectionWebhookUrl(this.input.portalOrigin, business) : null;
+    const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', expectedUrl, token: () => this.token(identity),
       api: token => this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher }) });
     if (check.reason !== 'listed_verified') this.input.log?.(webhookCheckLine('email.protection.go_live_webhook', identity.workspaceId, check));
     return check;

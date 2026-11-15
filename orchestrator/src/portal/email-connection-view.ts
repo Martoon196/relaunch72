@@ -113,7 +113,7 @@ function recordsSection(page: EmailConnectionPageInput, state: EmailConnectionSt
 /** "Repair bounce reporting": only when Go live (or a repair) could not confirm the bounce webhook. */
 function bounceRepairBlock(page: EmailConnectionPageInput): string {
   if (!page.offerBounceRepair) return '';
-  return `<p class="small">If the email service can't reach our bounce address, this sets bounce reporting up again for this connection.</p>
+  return `<p class="small">If the email service can't reach our bounce address, this sets bounce reporting up again. You may be asked to press Check and send yourself a test again.</p>
     <form method="post" action="${EMAIL_CONNECTION_ROUTE}/repair-bounces">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit" class="secondary">Repair bounce reporting</button></form>`;
 }
 

@@ -34,8 +34,13 @@ export class FakePostmark {
   verify: (hook: { url: string; username: string; password: string; stream: string; serverId: number }) => Promise<boolean> = async () => true;
   /** How the webhook list shows Status: as stored, absent (as in Postmark's own example list), or in capitals. */
   statusField: 'normal' | 'absent' | 'upper' = 'normal';
-  /** How a failing POST /webhooks/{id}/verify answers: 422 / 1364, or 200 with Success false (both shapes are documented). */
-  verifyFailsAs: '422' | '200' = '422';
+  /**
+   * How a failing POST /webhooks/{id}/verify answers: 422 with ErrorCode 1364 in the body, 422 with 1364 only in the
+   * X-PM-ApiErrorCode header, or 200 with Success false (all documented shapes).
+   */
+  verifyFailsAs: '422' | '422-header' | '200' = '422';
+  /** Set to answer POST /webhooks/{id}/verify with exactly this (any shape), after the webhook's status is set to verifiedAs. */
+  verifyAnswer: { status: number; body: string; verifiedAs?: 'verified' | 'unverified' } | null = null;
   /** The per-trigger results Postmark reports for a failing verification (Bounce answered 401 here). */
   private results(ok: boolean) {
     return [{ TriggerType: 'Bounce', Success: ok, StatusCode: ok ? 200 : 401, Message: `Remote server returned an HTTP status code of ${ok ? 200 : 401}. https://hook.example/secret-ish` },
@@ -146,8 +151,16 @@ export class FakePostmark {
     if (method === 'POST' && v) {
       const hook = server.webhooks.find(item => item.id === Number(v[1]));
       if (!hook) return this.json(422, { ErrorCode: 1352, Message: 'no' });
+      if (this.verifyAnswer) {
+        if (this.verifyAnswer.verifiedAs) hook.status = this.verifyAnswer.verifiedAs;
+        return new Response(this.verifyAnswer.body === '' ? null : this.verifyAnswer.body, { status: this.verifyAnswer.status, headers: { 'content-type': 'application/json' } });
+      }
       const ok = await this.verify({ ...hook, serverId: server.id });
       hook.status = ok ? 'verified' : 'unverified';
+      if (!ok && this.verifyFailsAs === '422-header') {
+        return new Response(JSON.stringify({ Id: hook.id, Url: hook.url, Success: false, Results: this.results(false), Message: '2/3 triggers verified successfully' }),
+          { status: 422, headers: { 'content-type': 'application/json', 'x-pm-apierrorcode': '1364' } });
+      }
       if (!ok && this.verifyFailsAs === '422') return this.json(422, { Id: hook.id, Url: hook.url, Success: false, Results: this.results(false), ErrorCode: 1364, Message: '2/3 triggers verified successfully' });
       return this.json(200, { Id: hook.id, Url: hook.url, Success: ok, Results: this.results(ok), Message: ok ? '3/3 triggers verified successfully' : '2/3 triggers verified successfully' });
     }
