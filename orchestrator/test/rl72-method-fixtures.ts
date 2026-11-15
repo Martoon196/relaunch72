@@ -38,7 +38,7 @@ export class MethodFixtureModel implements LlmClient {
   failQuality=false;missingSidecar=false;badEvidence=false;duplicateSocial=false;
   async complete(request:LlmRequest){
     this.requests.push(request);const text=request.messages[0]!.content;
-    const profile=block(text,'brand_profile') as BrandProfile;const home=profile.summary.includes('Hearth');
+    const profile=block(text,'brand_profile') as BrandProfile&{descriptionNotFacts?:{summary:string}};const home=(profile.descriptionNotFacts?.summary??profile.summary).includes('Hearth');
     const topic=home?'maintenance condition':'appointment handoff';
     const action=profile.conversionPages[0]!.label;
     let output:Record<string,unknown>;

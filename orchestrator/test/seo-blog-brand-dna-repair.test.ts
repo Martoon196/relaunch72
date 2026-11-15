@@ -76,10 +76,10 @@ test('an offer with no valid source, or whose name states a figure its source do
   assert.deepEqual(result.leftOut, [{ what: 'offer', text: 'Mentoring programme' }, { what: 'offer', text: 'Mentoring programme (500 places)' }], 'the same left-out line is recorded once');
 });
 
-test('an offer description stating any figure its source does not is emptied whole; the offer and its price stay', () => {
+test('an offer description loses each sentence with money, a percentage or a number no source states; the offer and its price stay; the cut is listed', () => {
   const card = { ...verified(), offers: [{ ...plan, description: 'Monthly compliance support. Saves £2,000 a year.' }, { ...mentoring, description: 'Over 900 graduates.' }] };
   const result = repaired(card);
-  assert.equal(result.value.offers[0]!.description, '', 'never cut down to the sentences that pass'); assert.equal(result.value.offers[0]!.price, '£49 per month');
+  assert.equal(result.value.offers[0]!.description, 'Monthly compliance support.', 'only the sentence with a price goes'); assert.equal(result.value.offers[0]!.price, '£49 per month');
   assert.equal(result.value.offers[1]!.description, '');
   assert.deepEqual(result.leftOut, [{ what: 'offer_detail', text: 'Quay Compliance Plan' }, { what: 'offer_detail', text: 'Mentoring programme' }]);
 });
@@ -146,33 +146,36 @@ test('questions: unverifiable answers are dropped; one left with fewer than two 
   const fixedPro = repairProfileFacts(proCard, proDocs)!;
   assert.deepEqual(strictProfileProblems(fixedPro.value, proDocs), []);
   assert.deepEqual(fixedPro.value.offers, [{ ...pro, price: null, description: 'Cancel any time.' }]);
-  assert.deepEqual(fixedPro.leftOut, [{ what: 'question', text: 'Pro plan price' }, { what: 'price', text: 'Pro plan' }, { what: 'offer_detail', text: 'Pro plan' }]);
+  assert.deepEqual(fixedPro.leftOut, [{ what: 'offer_detail', text: 'Pro plan' }, { what: 'question', text: 'Pro plan price' }, { what: 'price', text: 'Pro plan' }, { what: 'voice', text: 'We help landlords in Kent.' }],
+    'a description never carries a price; the example is not a sentence of these documents');
 
   // Not repairable: a dropped price question that names no offer on the card or in the answer, and an "other" question about a price.
   assert.equal(repairProfileFacts({ ...proCard, conflicts: [{ ...proQuestion, offer: 'Platinum', field: 'Platinum price' }] }, proDocs), null);
   assert.equal(repairProfileFacts({ ...proCard, conflicts: [{ ...proQuestion, kind: 'other' as const, offer: null, field: 'Membership', detail: 'Two answers' }] }, proDocs), null);
 });
 
-test('free text is never cut down to a stronger statement: any failing sentence empties the whole field; a voice line goes alone', () => {
+test('description is our wording: a sentence with money, a percentage or an unstated number is cut and listed; a voice line with one goes; an example must be a whole sentence', () => {
   const card = verified();
   const result = repaired({ ...card, summary: 'Quay Lettings helps private landlords in Kent stay compliant. Trusted by 500 landlords with a 98% pass rate.',
     positioning: 'Over 20 years of experience.', voice: { tone: ['plain', '10x calmer'], do: ['Explain rules simply', 'Mention our 4.9 rating'], dont: ['Jargon', 'Never quote 95% yields'], examples: ['Trusted by 300 landlords.', 'Rated 4.8 by 1,000 clients.'] } });
-  assert.equal(result.value.summary, ''); assert.equal(result.value.positioning, '');
-  assert.deepEqual(result.value.voice, { tone: ['plain', '10x calmer'], do: ['Explain rules simply'], dont: ['Jargon'], examples: ['Trusted by 300 landlords.'] });
-  assert.deepEqual(result.leftOut.map((l) => l.what), ['voice', 'voice_dont', 'voice', 'summary', 'positioning']);
-  assert.deepEqual(leftOutLines(result.leftOut).map((l) => [l.label, l.fix]), [['The style note “Mention our 4.9 rating”', 'documents'], ['The “avoid” line “Never quote 95% yields”', 'card'],
+  assert.equal(result.value.summary, 'Quay Lettings helps private landlords in Kent stay compliant.', 'whole sentences are cut, never words'); assert.equal(result.value.positioning, '');
+  assert.deepEqual(result.value.voice, { tone: ['plain'], do: ['Explain rules simply'], dont: ['Jargon'], examples: ['Trusted by 300 landlords.'] });
+  assert.deepEqual(result.leftOut.map((l) => l.what), ['voice', 'voice', 'voice_dont', 'voice', 'summary', 'positioning']);
+  assert.deepEqual(leftOutLines(result.leftOut).map((l) => [l.label, l.fix]), [['The style note “10x calmer”', 'documents'], ['The style note “Mention our 4.9 rating”', 'documents'], ['The “avoid” line “Never quote 95% yields”', 'card'],
     ['The style note “Rated 4.8 by 1,000 clients.”', 'documents'], ['The summary', 'card'], ['The positioning line', 'setup']]);
 
-  // The reviewer's examples: what is left would say more than anyone wrote.
-  const docs = [{ id: 'pricing', text: 'We never charge upfront fees. Rent is guaranteed. Weekly calls with your adviser.' }];
+  // Cutting can leave description stronger than written ("Rent is guaranteed." without its limit): it is listed, and a
+  // description never reaches a writer as fact.
+  const docs = [{ id: 'pricing', text: 'Guaranteed Rent. We never charge upfront fees. Rent is guaranteed. Weekly calls with your adviser.' }];
   const offer = (description: string) => ({ ...verified(), sources: [], audiences: [], approvedClaims: [], voice: { tone: [], do: [], dont: [], examples: [] },
     summary: 'Quay Lettings helps landlords.', positioning: '', offers: [{ name: 'Guaranteed Rent', description, price: null, url: null, sourceDocumentId: 'pricing' }] });
-  for (const description of ['We never charge upfront fees. The only exception is a 15% setup charge on HMOs.', 'Rent is guaranteed. This applies only for the first 18 months.', 'Approx. 52 weekly calls.']) {
+  for (const [description, left] of [['We never charge upfront fees. The only exception is a 15% setup charge on HMOs.', 'We never charge upfront fees.'],
+    ['Rent is guaranteed. This applies only for the first 18 months.', 'Rent is guaranteed.'], ['Approx. 52 weekly calls.', '']] as const) {
     const fixed = repaired(offer(description), docs);
-    assert.equal(fixed.value.offers[0]!.description, '', description); assert.deepEqual(fixed.leftOut, [{ what: 'offer_detail', text: 'Guaranteed Rent' }]);
+    assert.equal(fixed.value.offers[0]!.description, left, description); assert.deepEqual(fixed.leftOut, [{ what: 'offer_detail', text: 'Guaranteed Rent' }]);
   }
   const positioned = repaired({ ...offer(''), positioning: 'Rent is guaranteed. This applies only for the first 18 months.' }, docs);
-  assert.equal(positioned.value.positioning, '');
+  assert.equal(positioned.value.positioning, 'Rent is guaranteed.'); assert.deepEqual(positioned.leftOut, [{ what: 'positioning', text: 'Rent is guaranteed. This applies only for the first 18 months.' }]);
 });
 
 test('nothing verifiable: no offer, audience or claim survives', () => {

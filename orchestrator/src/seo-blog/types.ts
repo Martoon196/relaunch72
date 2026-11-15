@@ -241,6 +241,12 @@ export interface BrandProfile {
    * against its source. Such a card cannot be confirmed with an open question or once it is out of date.
    */
   readonly strict?: true;
+  /**
+   * Website door only: the version of the Brand DNA rules this card was checked under (see BRAND_DNA_RULES_VERSION).
+   * Absent on cards checked before versions were recorded; such a card is re-filtered for writing and the card page asks
+   * for a fresh read.
+   */
+  readonly rulesVersion?: number;
   /** Hash over product facts and approved claims only — the factual invalidation key. */
   readonly factsSha: string;
   readonly source: 'extracted' | 'owner_edited';

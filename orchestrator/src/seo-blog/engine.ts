@@ -18,7 +18,7 @@ import {
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import {
-  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
+  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, BRAND_DNA_RULES_VERSION, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
   type BrandDnaCard, type BrandDnaJobPayload, type BrandDnaResult, type ConflictChoice,
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
@@ -552,7 +552,7 @@ export class SeoBlogEngine {
       const sameInputs = inputs.sha === p.inputSha && (s.profile?.version ?? 0) === p.baseVersion && sha256(s.profile) === p.baseProfileSha;
       if (!s.requesterAllowed || !sameInputs) return { job: this.profileHold(updated, !s.requesterAllowed ? 'requester_changed' : 'inputs_changed', !s.requesterAllowed ? 'The requesting owner no longer manages this brand. Result retained; no profile was replaced.' : 'Guidance or profile changed during extraction. Result retained; current edits were not replaced.', now), write: true, usage };
       const profile: BrandProfile = { ...actual.value, brandId: job.brandId, version: p.baseVersion + 1, knowledge: this.knowledgeRefs(inputs.documents),
-        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation, ...(strict ? { strict: true as const } : {}) };
+        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation, ...(strict ? { strict: true as const, rulesVersion: BRAND_DNA_RULES_VERSION } : {}) };
       // The website pages this card was built from become brand documents here, in the same write as the card, and not before.
       const { staged: _held, ...settled } = p;
       return { job: { ...updated, state: 'done', leaseOwner: null, leaseExpiresAt: null, payload: { ...settled, receipt: actual, resultVersion: profile.version }, error: null, progress: `Profile version ${profile.version} is ready. Review and confirm it.`, updatedAt: now }, write: true, profile, usage,
@@ -1215,7 +1215,7 @@ export class SeoBlogEngine {
     const planId = execution?.planId??randomUUID();
     const result = execution?.modelResult ?? await proposeCluster(await this.methodLlm(brand,profile,'planning','plan:'+planId,research.sources), {
       brandName: brand.name, profile, inventory: pages, sources: research.sources,
-      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
+      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl, website: brand.website,
     });
     if(execution) { if(!execution.modelResult) await execution.recordModel(result); }
     else await this.recordGeneration(brandId, result.record, 'plan');
@@ -1432,7 +1432,7 @@ export class SeoBlogEngine {
     const linkable = await this.linkable(brandId);
     let written;
     try {
-      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
+      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference, website: brand.website });
     } catch (error) {
       await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: (error as Error).message.slice(0, 300) }).catch(() => undefined);
       throw error;
@@ -1530,7 +1530,7 @@ export class SeoBlogEngine {
         if(!marker.receipt)throw new SeoBlogError(409,'Another worker started this copy call. Await its saved receipt.','campaign_copy_unknown');
       }else{
         let receipt:CampaignCopyReceipt;
-        try {const generated=await writeArticleCampaignPromotions(llm,profile,body);receipt={nonce:marker.nonce,at:this.now(),record:generated.record,result:{kind:'accepted',drafts:generated.value.posts}};}
+        try {const generated=await writeArticleCampaignPromotions(llm,profile,body,brand.website);receipt={nonce:marker.nonce,at:this.now(),record:generated.record,result:{kind:'accepted',drafts:generated.value.posts}};}
         catch(error){
           if(error instanceof SeoBlogError&&error.code.startsWith('method_'))throw error;
           if(!(error instanceof CampaignGenerationRejectedError))throw new SeoBlogError(409,'The social copy request has an uncertain outcome. The saved article is held; no automatic paid replay will occur.','campaign_copy_unknown');
@@ -1593,7 +1593,7 @@ export class SeoBlogEngine {
       if (skipPromotionGeneration) throw new GenerationUnavailableError('This edit retains article-text accompanying drafts; no model call was made.');
       await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
       {
-        const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId,url:c.url,title:c.title,retrievedAt:c.retrievedAt,passage:c.passage,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,primary:false,provider: "recorded",query: ""} as ResearchSource))), profile, body);
+        const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId,url:c.url,title:c.title,retrievedAt:c.retrievedAt,passage:c.passage,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,primary:false,provider: "recorded",query: ""} as ResearchSource))), profile, body, brand.website);
         await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
         posts = generated.value.posts; generationRecord = generated.record;
       }
@@ -2147,7 +2147,7 @@ export class SeoBlogEngine {
     const sources = await this.sourcesForBrief(brandId, brief);
     const result = await rewriteSection(await this.methodLlm(brand,profile,'revision','article:'+articleId,sources,version.generation?.methodReceiptId??null), {
       profile, outline: version.body.sections.map((s) => s.heading), section: version.body.sections[index]!,
-      instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId),
+      instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId), website: brand.website,
     });
     await this.recordGeneration(brandId, result.record, `section:${articleId}`);
     // Only the target section changes; every other section is carried over byte-for-byte.

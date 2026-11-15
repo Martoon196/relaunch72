@@ -37,7 +37,7 @@ export function currentKnowledge(documents:readonly KnowledgeDocument[]):Knowled
 }
 export function methodEvidenceContext(profile:BrandProfile,input:MethodEvidenceInputs={}) {
   const factReferences=[...profile.approvedClaims.map((text,i)=>({id:`profile:${profile.version}:claim:${i}`,text})),
-    ...writingOffers(profile).map((o,i)=>({id:`profile:${profile.version}:offer:${i}`,text:[o.name,o.description,o.price,o.url].filter(Boolean).join(' ')})),...(input.ownerFacts??[])];
+    ...writingOffers(profile).map((o,i)=>({id:`profile:${profile.version}:offer:${i}`,text:[o.name,o.price,o.url].filter(Boolean).join(' ')})),...(input.ownerFacts??[])];
   const research=(input.research??[]).map((s,i)=>({id:s.id,shortId:`S${i+1}`,url:s.url,title:s.title,passage:s.passage,retrievedAt:s.retrievedAt,
     publishedAt:s.publishedAt??null,observedPeriod:s.observedPeriod??null,confidence:s.confidence??'unknown',primary:s.primary}));
   return {factReferences,research,editorialFormat:input.editorialFormat??null,campaign:input.campaign??null,visual:input.visual??{placement:'article-hero',guidance:[],assets:[]},

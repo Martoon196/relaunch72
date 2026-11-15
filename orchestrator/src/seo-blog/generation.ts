@@ -168,10 +168,10 @@ export function dataBlock(tag: string, value: unknown): string {
   return `<${tag}>\n${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, 'gi'), '[removed tag]')}\n</${tag}>`;
 }
 
-export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: ArticlePromotionPack['posts'] }>> {
+export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody, website?: string | null): Promise<JsonCallResult<{ posts: ArticlePromotionPack['posts'] }>> {
   return callJson(llm, {
     prompt: loadPrompt('seo-blog-social.md'), maxTokens: 2400,
-    user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article)].join('\n\n'),
+    user: [dataBlock('brand_profile', profileForPrompt(profile, website)), dataBlock('blog_article', article)].join('\n\n'),
     schema: { type: 'object', additionalProperties: false, required: ['posts'], properties: { posts: {
       type: 'array', minItems: 2, maxItems: 2, items: { type: 'object', additionalProperties: false,
         required: ['network', 'title', 'copy', 'artworkInstructions'], properties: {
@@ -190,7 +190,7 @@ export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfi
 export class CampaignGenerationRejectedError extends SeoBlogError {
   constructor(readonly record: GenerationRecord) { super(422,'The social copy response was incomplete after one attempt. Labelled article-text drafts were retained.','campaign_generation_rejected'); }
 }
-export async function writeArticleCampaignPromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: readonly CampaignDraft[] }>> {
+export async function writeArticleCampaignPromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody, website?: string | null): Promise<JsonCallResult<{ posts: readonly CampaignDraft[] }>> {
   const prompt=loadPrompt('seo-blog-social.md');
   let knownRecord:GenerationRecord|null=null;
   const capture:LlmClient={mode:llm.mode,complete:async(request)=>{
@@ -201,7 +201,7 @@ export async function writeArticleCampaignPromotions(llm: LlmClient, profile: Br
   inheritMethodRun(capture,llm);
   try { const generated=await callJson<{posts:readonly CampaignDraft[]}>(capture, {
     prompt, maxTokens: 2400, singleAttempt: true,
-    user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article),
+    user: [dataBlock('brand_profile', profileForPrompt(profile, website)), dataBlock('blog_article', article),
       dataBlock('campaign_recipe', { mode: 'six_angle_campaign', recipe: 'r72-social-three-angle-v1', networks: CAMPAIGN_NETWORKS, angles: CAMPAIGN_ANGLES,
         brief: 'One launch summary, one specific practical takeaway and one later question/follow-up for EACH channel. Adapt the copy to the channel; no repeated post or invented claim.' })].join('\n\n'),
     schema: { type: 'object', additionalProperties: false, required: ['posts'], properties: { posts: { type: 'array', minItems: 6, maxItems: 6,
@@ -407,11 +407,12 @@ export function researchForPrompt(short:Map<string,ResearchSource>):unknown[] {
 }
 
 /**
- * The brand profile as every writing prompt receives it: exactly `writingProfile`'s allowlist, nothing else.
- * `missingFacts`, conflict wording, sources, what was left out and unchecked links never reach a writer.
+ * The brand profile as every writing prompt receives it: exactly `writingProfile`'s fields. Quoted facts at the top level,
+ * our description under `descriptionNotFacts`; `missingFacts`, question wording, sources and what was left out never.
+ * `website` is the brand's stored address, used to re-check links on cards made before today's rules.
  */
-export function profileForPrompt(profile: BrandProfile): Record<string, unknown> {
-  return writingProfile(profile);
+export function profileForPrompt(profile: BrandProfile, website?: string | null): Record<string, unknown> {
+  return { ...writingProfile(profile, website) };
 }
 
 export async function proposeCluster(llm: LlmClient, input: {
@@ -422,24 +423,25 @@ export async function proposeCluster(llm: LlmClient, input: {
   readonly focus: string | null;
   readonly excluded: readonly string[];
   readonly sourceArticleUrl: string | null;
+  readonly website?: string | null;
 }): Promise<JsonCallResult<PlannedCluster>> {
   const short = shortSourceIds(input.sources);
   const inventoryUrls = new Set(input.inventory.filter((p) => p.fetchStatus === 'ok').flatMap((p) => [p.url, p.canonical].filter((u): u is string => Boolean(u))));
   const conversion = new Set(input.profile.conversionPages.map((p) => p.url));
   const ownerInputs=dataBlock('owner_inputs', { focus: input.focus, excluded_subjects: input.excluded, source_article: input.sourceArticleUrl });
-  const {approvedClaims:_claims,offers:_offers,...correctionProfile}=profileForPrompt(input.profile);
+  const {approvedClaims:_claims,offers:_offers,...correctionProfile}=profileForPrompt(input.profile,input.website);
   return callJson<PlannedCluster>(llm, {
     prompt: loadPrompt('seo-blog-plan.md'),
     schema: PLAN_SCHEMA,
     maxTokens: 16000,
     ...(methodRunFor(llm)?.structuredPlanning?{correctionUser:[
       `Brand: ${input.brandName}`,
-      dataBlock('brand_profile',{...correctionProfile,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))}),
+      dataBlock('brand_profile',{...correctionProfile,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile,input.website).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))}),
       dataBlock('website_inventory',[...inventoryUrls].map(url=>({url}))),ownerInputs,
     ].join('\n\n')}:{}),
     user: [
       `Brand: ${input.brandName}`,
-      dataBlock('brand_profile', profileForPrompt(input.profile)),
+      dataBlock('brand_profile', profileForPrompt(input.profile, input.website)),
       dataBlock('website_inventory', input.inventory.filter((p) => p.fetchStatus === 'ok').slice(0, 120).map((p) => ({ url: p.canonical ?? p.url, title: p.title, headings: p.headings.slice(0, 6), editorial: p.editorial }))),
       ...(methodRunFor(llm)?.structuredPlanning?[]:[dataBlock('research_sources', researchForPrompt(short))]),
       ownerInputs,
@@ -514,6 +516,7 @@ export async function writeArticle(llm: LlmClient, input: {
   readonly sources: readonly ResearchSource[];
   readonly linkable: readonly { url: string; title: string | null }[];
   readonly length: LengthPreference;
+  readonly website?: string | null;
 }): Promise<JsonCallResult<WrittenArticle> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
   const prompt = loadPrompt('seo-blog-article.md');
@@ -524,14 +527,14 @@ export async function writeArticle(llm: LlmClient, input: {
   if(approvedCta&&!linkable.some(l=>l.url===approvedCta.url))linkable.push({url:approvedCta.url,title:approvedCta.label});
   const allowedLinks = new Set([...input.linkable.map((l) => l.url),...linkable.map(l=>l.url), ...input.sources.map((s) => s.url)]);
   const structured=methodRunFor(llm)?.structuredArticle;
-  const {approvedClaims:_claims,offers:_offers,...profileRest}=profileForPrompt(input.profile);
-  const referencedProfile={...profileRest,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))};
+  const {approvedClaims:_claims,offers:_offers,...profileRest}=profileForPrompt(input.profile,input.website);
+  const referencedProfile={...profileRest,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile,input.website).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))};
   const brief=dataBlock('brief',{
     role:input.brief.role,working_title:input.brief.workingTitle,target_query:input.brief.targetQuery,
     search_intent:input.brief.searchIntent,related_questions:input.brief.relatedQuestions,angle:input.brief.angle,
     outline:input.brief.outline,key_points:input.brief.keyPoints,call_to_action:input.brief.cta,editorial_format:input.brief.editorialFormat??null,
   });
-  const user=[dataBlock('brand_profile',structured?referencedProfile:profileForPrompt(input.profile)),brief,
+  const user=[dataBlock('brand_profile',structured?referencedProfile:profileForPrompt(input.profile,input.website)),brief,
     ...(structured?[]:[dataBlock('research_sources',researchForPrompt(short))]),
     dataBlock('linkable_pages',linkable),
   ].join('\n\n');
@@ -564,6 +567,7 @@ export async function rewriteSection(llm: LlmClient, input: {
   readonly instruction: string;
   readonly sources: readonly ResearchSource[];
   readonly linkable: readonly { url: string; title: string | null }[];
+  readonly website?: string | null;
 }): Promise<JsonCallResult<{ heading: string; body: string }> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
   const allowedLinks = new Set([...input.linkable.map((l) => l.url), ...input.sources.map((s) => s.url)]);
@@ -572,7 +576,7 @@ export async function rewriteSection(llm: LlmClient, input: {
     schema: { type: 'object', required: ['heading', 'body'], properties: { heading: { type: 'string', minLength: 3, maxLength: 140 }, body: { type: 'string', minLength: 40, maxLength: 12000 } } },
     maxTokens: 6000,
     user: [
-      dataBlock('brand_profile', profileForPrompt(input.profile)),
+      dataBlock('brand_profile', profileForPrompt(input.profile, input.website)),
       dataBlock('article_outline', input.outline),
       dataBlock('section', input.section),
       dataBlock('owner_instruction', input.instruction.slice(0, 1000) || 'Improve clarity and usefulness without changing the facts.'),

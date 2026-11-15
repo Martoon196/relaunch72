@@ -69,7 +69,7 @@ function cardSections(card: BrandDnaCard): string {
 <section class="card"><h2>How you sound</h2>${card.voice.tone.length ? `<p>${e(card.voice.tone.join(', '))}</p>` : '<p class="muted">Not enough of your own words to tell yet.</p>'}
 ${card.voice.do.length ? `<p><strong>Do</strong></p>${plainList(card.voice.do)}` : ''}${card.voice.dont.length ? `<p><strong>Avoid</strong></p>${plainList(card.voice.dont)}` : ''}
 <p class="muted">This is our reading of the words on your pages, not a fact about you. Change anything that is wrong.</p></section>
-${card.never.length ? `<section class="card"><h2>Never say</h2>${plainList(card.never)}</section>` : ''}
+${card.never.length ? `<section class="card"><h2>Never say</h2><p class="muted">Our suggestions from your pages. Remove any you do not want under “Something not right? Change it”.</p>${plainList(card.never)}</section>` : ''}
 ${card.missing.length ? `<section class="card"><h2>What we could not find</h2><p class="muted">We left these out rather than guess. Add them to your website or your documents if they matter.</p>${plainList(card.missing)}</section>` : ''}
 <section class="card"><h2>Where we looked</h2>${card.readFrom.length ? `<ul>${card.readFrom.map((r) => `<li>${r.url ? `<a href="${e(r.url)}" target="_blank" rel="noopener noreferrer">${e(r.label)}</a>` : e(r.label)}</li>`).join('')}</ul>` : '<p class="muted">The pages and documents this card was made from are no longer on record.</p>'}
 ${card.unsourced ? `<p class="notice">${card.unsourced} line${card.unsourced === 1 ? '' : 's'} on this card ${card.unsourced === 1 ? 'has' : 'have'} no recorded source. Check ${card.unsourced === 1 ? 'it' : 'them'} yourself before you rely on ${card.unsourced === 1 ? 'it' : 'them'}.</p>` : ''}</section>`;
@@ -229,6 +229,7 @@ ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: 
 
   return body('Your Brand DNA', `<h1>Your Brand DNA ${pill}</h1>
 <p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : card.checked ? 'Check each line. Every one says where we found it.' : 'Check each line before you confirm it.'}</p>
-${stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}${stopped.pasteInstead ? ` ${paste}.` : ''}</p>` : ''}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${leftOutSection(shell, card, !outOfDate)}${cardSections(card)}
+${stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}${stopped.pasteInstead ? ` ${paste}.` : ''}</p>` : ''}${card.rulesOutdated && !outOfDate ? `<section class="card" id="dna-recheck"><p>We have tightened our checks since this was read. Read your website again to re-check it.</p>
+${cannotStart || readForm(shell, state, { label: 'Read my website', main: false, again: confirmed, commandId })}</section>` : ''}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${leftOutSection(shell, card, !outOfDate)}${cardSections(card)}
 ${outOfDate ? '' : correctionForm(shell, state)}${look}${outOfDate ? '' : action}`);
 }

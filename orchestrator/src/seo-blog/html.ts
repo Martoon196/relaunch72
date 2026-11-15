@@ -34,7 +34,9 @@ export function stripTags(html: string): string {
       .replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/<(script|style|noscript|template|svg|iframe)\b[\s\S]*?<\/\1\s*>/gi, ' ')
       .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)>/gi, '\n')
+      // Block ends become line breaks, so a reader of the text can still tell a heading, list item or table cell apart.
+      .replace(/<\/(p|div|li|h[1-6]|section|article|tr|td|th|dt|dd|ul|ol|table|thead|tbody|blockquote|figcaption|header|footer|nav|main|aside|form|label|button|address)>/gi, '\n')
+      .replace(/<hr\b[^>]*>/gi, '\n')
       .replace(/<[^>]+>/g, ' '),
   )
     .replace(/[ \t\f\v\r]+/g, ' ')

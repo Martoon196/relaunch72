@@ -217,7 +217,7 @@ export class CampaignCreator {
     if(!begin.created)return begin.record;
     try{
       const generated=await callJson<CampaignContent>(llm,{prompt:loadPrompt(acquisition?'seo-acquisition-campaign.md':'seo-campaign-creator.md'),maxTokens:16000,
-        user:[dataBlock('brand_profile',profileForPrompt(profile)),dataBlock('campaign_brief',brief)].join('\n\n'),
+        user:[dataBlock('brand_profile',profileForPrompt(profile,brand.website)),dataBlock('campaign_brief',brief)].join('\n\n'),
         schema:brief.kind==='email'?EMAIL_CAMPAIGN_SCHEMA:brief.kind==='advocacy'?ADVOCACY_KIT_SCHEMA:ACQUISITION_PROPOSAL_SCHEMA,validate:v=>campaignProblems(brief,v,profile)});
       return await this.store.complete(brandId,commandId,generated.record.methodReceiptId!,generated.value,'Draft prepared for owner review.');
     }catch(error){
