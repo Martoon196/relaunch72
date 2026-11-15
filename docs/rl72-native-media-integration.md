@@ -65,3 +65,25 @@ The Amazon UK Tracking ID Summary is a user-uploaded merchant report, NOT a veri
 ### Not yet a sellable all-in-one creator
 
 Still blocking release: approved live product links and redirects, provider budget reservation/worker claims, owned video ingestion, embedded real editing SDK licensing and implementation, cloud render/output reconciliation, approved publishing through existing Zernio/social rails, standalone onboarding/subscriptions/credits, and E2E browser/live provider proofs. No merge, deployment, public publishing or external spending without operator review.
+
+
+## 15 November — private source-video intake (migration 0159)
+
+This branch now includes an **owner-session authenticated** `/creative/sources` page in the SAME Creative Studio and existing brand/workspace. The route is gated by both `CREATIVE_STUDIO_ENABLED=true` and `RL72_MEDIA_VIDEO_SOURCES_ENABLED=true` (default off). Enable only after migration 0159 has been reviewed and applied.
+
+- `orchestrator/src/creative-studio/media-video-source-pg-store.ts`: checks owner consent, .mp4/.webm extension and container magic, bounds raw bytes to 1 KB–20 MB, computes SHA256 and sends the exact bytes over the existing content-command transaction.
+- `0159_creative_media_source_videos.sql`: stores bytes in **existing** `app.seo_blog_blobs`, records append-only source metadata, requires owner session through `seo_media_owner`, enforces workspace-scoped RLS and SQL-side byte digest and container checks. No second object store or permissive runtime table access.
+- The page lists private source digests, MIME and declared rights, but provides no public URL or unchecked outgoing provider request.
+- `awaiting_probe` is the **only** source state. Signature matching is not video decoding, duration/fps/audio measurement, licence verification, nor permission to redistribute. No uploader is connected to the Vizard/Shotstack paid worker; a real trusted source-to-provider pipeline and result preservation must come before that.
+- CI covers TypeScript, MIME/attestation tests and real disposable PG tests for upload idempotency, blob-digest match, cross-tenant isolation and unprivileged direct-table rejection.
+
+### Next hard blockers (must be built before releasing video product)
+
+1. Source-media probe and permitted-source attestation: trusted decoding of every video stream, duration and dimensions; licence document and permitted destinations validated, server-side review states and an audit trail. Source assertions alone are not programme or copyright clearance.
+2. Resumable direct-to-private-object-storage upload for files larger than the existing 20 MB PostgreSQL blob ceiling, with server-side checksum confirmation, media scanning, signed temporary reads, expiry and tenant isolation.
+3. Paid worker scheduling that atomically reads the immutable source and edited timeline, reserves cost, claims once and hands exact bytes to providers. The submission runner exists, but no background-dispatch bridge is currently enabled.
+4. Provider result reconciliation, durable downloaded clip renders and non-public output artifacts; distinguish provider status, incurred credits, failed/unknown outcomes and retained costs. Avoid auto-retry when a paid outcome is uncertain.
+5. Owner-review UI for media version/rights/claim disclosures, exact-version approval and explicit social distribution through canonical Zernio controls. Never translate "stored" or "AI generated" into "approved" or "published".
+6. Merchant-authorised special links and verifiable click/commission analytics, plus standalone signup/entitlement/credit accounting built on the same tenant and account infrastructure. No invented sales or earnings.
+
+Source intake is a useful, tested slice, not a production-eligible ingestion-to-publishing chain. Keep PR draft; no provider charge, live publish, deployment or merge.
