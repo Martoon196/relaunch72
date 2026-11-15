@@ -192,7 +192,12 @@ export function offerForWriting<T extends ProfileOffer>(offer: T): Omit<T, 'pric
 }
 
 /** An offer's price structure, as the model proposed it and the website door checked it line by line. */
-export interface OfferPricing { readonly lines: readonly OfferPriceLine[] }
+export interface OfferPricing {
+  readonly lines: readonly OfferPriceLine[];
+  /** Where the check found the price itself: its document and line (shown beside the price on the card). */
+  readonly priceDocumentId?: string | null;
+  readonly priceQuote?: string | null;
+}
 export interface OfferPriceLine {
   /** 'other': another ordinary price of the offer (yearly beside monthly, a set-up fee…); 'plan': instalments; 'special': a time-limited, conditional or named price. */
   readonly role: 'other' | 'plan' | 'special';

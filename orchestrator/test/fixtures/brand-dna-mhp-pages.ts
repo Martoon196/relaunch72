@@ -60,12 +60,15 @@ export function mhpStructuredAnswer(id: Record<string, string>): Record<string, 
     "The Members' Room": [{ kind: 'other', text: '£670 a year' }, { kind: 'special', text: '£47 a month', label: "founders' price" }, { kind: 'special', text: '£47', label: 'for the first 100' }],
     'One Lane Mentoring': [{ kind: 'plan', text: '6 x £699', for: '£3,997', total: '£4,194 in total' }],
     'One Lane Private': [{ kind: 'plan', text: '12 x £2,250', for: '£25,000', total: '£27,000 in total' }],
+    // "Free" is checked as a structure of the price alone.
+    'Free cheat sheets': [],
   };
   // The Deal Desk's price is written only on the Join page, which heads it "Deal Desk": the model cites the Home row that
   // names it and leaves the price empty.
   const prices: Record<string, string> = { 'Free cheat sheets': 'Free', 'Property Done Properly': '£1,497', "The Members' Room": '£67 a month', 'One Lane Mentoring': '£3,997', 'One Lane Private': '£25,000' };
   return { ...owner, conflicts: [],
-    offers: owner.offers.map((o) => ({ ...o, price: prices[o.name as string] ?? null, sourceDocumentId: o.name === 'One Lane Private' ? join : home,
+    offers: owner.offers.map((o) => ({ ...o, price: prices[o.name as string] ?? null, // Each structured offer cites the Join card, where its price line holds no other offer's words.
+      sourceDocumentId: ['Property Done Properly', "The Members' Room", 'One Lane Mentoring', 'One Lane Private'].includes(o.name as string) ? join : home,
       ...(lines[o.name as string] ? { pricing: { lines: lines[o.name as string] } } : {}) })) };
 }
 

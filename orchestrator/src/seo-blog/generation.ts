@@ -18,7 +18,7 @@ import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
 import { offerForWriting, SeoBlogError } from './types.js';
-import { withoutMarkers } from './brand-dna-rules.js';
+import { ACTION_MARKER, actionLineIndexes, withoutActionMarkers, withoutMarkers } from './brand-dna-rules.js';
 import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSources, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
@@ -303,8 +303,16 @@ export async function extractProfile(llm: LlmClient, input: {
   const readable = input.documents.filter((d) => d.active && d.text);
   if (readable.length === 0) throw new SeoBlogError(409, 'Upload at least one readable guidance document or paste brand text first.', 'no_knowledge');
   // Setup's prompt does not explain Brand DNA's page markers, so a page Brand DNA read is sent to it without them.
-  const pageText = (d: KnowledgeDocument) => !input.strict && d.origin?.kind === 'website' ? withoutMarkers(d.text ?? '') : (d.text ?? '');
+  // The website door's model is told what "▸ " (action text) means; an uploaded document's own "▸ " bullets are escaped for it.
+  const pageText = (d: KnowledgeDocument) => d.origin?.kind === 'website'
+    ? (!input.strict ? withoutMarkers(withoutActionMarkers(d.text ?? '')) : (d.text ?? ''))
+    : (input.strict && (d.text ?? '').includes(ACTION_MARKER) ? (d.text ?? '').replace(/^▸ /gmu, '\u200B▸ ') : (d.text ?? ''));
   const docs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: pageText(d).slice(0, 60_000) }));
+  // Every rule reads the pages exactly as before action text was marked; the price-structure check also gets which lines it was.
+  const ruleDocs = readable.map((d) => {
+    const raw = (d.text ?? '').slice(0, 60_000), web = d.origin?.kind === 'website';
+    return { id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: web ? withoutActionMarkers(raw) : raw, ...(web ? { actionLines: actionLineIndexes(raw) } : {}) };
+  });
   // The website door has its own prompt (it asks for a quoted source for every fact), so Setup's documents-only
   // extraction is sent exactly the prompt it always was and returns what it always did.
   const prompt = loadPrompt(input.strict ? 'seo-blog-profile-site.md' : 'seo-blog-profile.md');
@@ -313,7 +321,7 @@ export async function extractProfile(llm: LlmClient, input: {
   let leftOut: readonly ProfileLeftOut[] = [];
   let refusal: 'nothing_clear' | 'unrepairable' | null = null;
   const repair = (v: ExtractedProfile): ExtractedProfile | null => {
-    const fixed = repairProfileFacts(knownProfileFields(v), docs, { website: input.website });
+    const fixed = repairProfileFacts(knownProfileFields(v), ruleDocs, { website: input.website });
     if (!fixed) { refusal = 'unrepairable'; return null; }
     const pages = fixed.value.conversionPages.filter((p) => /^https:\/\//.test(p.url));
     const links = fixed.value.conversionPages.filter((p) => !pages.includes(p)).map((p): ProfileLeftOut => ({ what: 'link', text: String(p.url ?? '').slice(0, 300) }));
@@ -333,7 +341,7 @@ export async function extractProfile(llm: LlmClient, input: {
       validate: (v) => [
         ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),
         ...v.conversionPages.filter((p) => !/^https:\/\//.test(p.url)).map((p) => `conversion page ${p.url} is not an absolute https URL`),
-        ...(input.strict ? strictProfileProblems(v, docs, { website: input.website }) : []),
+        ...(input.strict ? strictProfileProblems(v, ruleDocs, { website: input.website }) : []),
       ],
       ...(input.strict ? { repair, repairSchema: PROFILE_REPAIRED_SCHEMA } : {}),
     });
@@ -343,11 +351,11 @@ export async function extractProfile(llm: LlmClient, input: {
   }
   // Only known fields are kept on either path: a `leftOut` or `strict` the model wrote itself is never trusted.
   // The website door's provenance rule applies to its own cards only; Setup keeps the rule it always had.
-  const cleaned = cleanProvenance(knownProfileFields(result.value), docs, input.strict === true);
+  const cleaned = cleanProvenance(knownProfileFields(result.value), input.strict ? ruleDocs : docs, input.strict === true);
   if (!input.strict) return { ...result, value: cleaned };
-  const priced = holdConflictedPrices(cleaned, docs);
+  const priced = holdConflictedPrices(cleaned, ruleDocs);
   // The lines each tied price was read from, decided over the offer list the check used, for the card to show.
-  const lines = priceLineSources(result.value, docs, { website: input.website }).filter((s) => priced.offers.some((o) => o.name === s.value && o.price && o.sourceDocumentId === s.documentId));
+  const lines = priceLineSources(result.value, ruleDocs, { website: input.website }).filter((s) => priced.offers.some((o) => o.name === s.value && o.price && o.sourceDocumentId === s.documentId));
   const held = lines.length ? { ...priced, sources: [...(priced.sources ?? []), ...lines] } : priced;
   // An answer with nothing verifiable on it is not a card, whether or not anything had to be removed.
   if (nothingVerifiable(held)) throw new GenerationRejectedError('The answer held no offer, audience or claim that could be found word for word.', result.record, 'content', 'nothing_clear');

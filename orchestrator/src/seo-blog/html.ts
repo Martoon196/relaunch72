@@ -233,14 +233,15 @@ const ATTRIBUTION = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[
 /** Class or id name parts that make a link a button. */
 const BUTTON_PARTS = new Set(['btn', 'button', 'cta']);
 
-interface Segment { kind: 'heading' | 'item' | 'para' | 'row' | 'action'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
+interface Segment { kind: 'heading' | 'item' | 'para' | 'row'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
 interface Cell { segments: Segment[]; text: string }
 interface TableCtx { rows: Cell[][]; row: Cell[] | null; cell: Cell | null; quoted: boolean }
 
 function classTokens(attrs: string): string[] {
   const out: string[] = [];
   if (!attrs || !/class|id/i.test(attrs)) return out;
-  for (const m of attrs.matchAll(/\b(class|id)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi)) for (const k of String(m[3] ?? m[4] ?? m[5] ?? '').toLowerCase().split(/\s+/)) if (k && out.length < 64) out.push(k);
+  // (Pushed one by one: spreading a very long class list into push() overflows the call stack.)
+  for (const m of attrs.matchAll(/\b(class|id)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi)) for (const k of String(m[3] ?? m[4] ?? m[5] ?? '').toLowerCase().split(/\s+/)) if (k) out.push(k);
   return out;
 }
 
@@ -285,8 +286,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
   let sectionText = false, sectionSibling = false, siblingOpened = false;
   /** An inline tag was passed since the last text: a letter or digit on both sides gets a space between them. */
   let inlineEdge = false;
-  /** Action text: a button, a button-styled link, or a form control's label. A line made only of action text is marked "▸ ";
-   * a button inside a sentence stays inline and the sentence is not split. */
+  /** Action text: a button, a button-styled link, or a form control's label. A line made only of action text is marked "▸ "
+   * (the rules read the line without it); a button inside a sentence stays inline and nothing else changes. */
   let actionDepth = 0, formDepth = 0, lineAction = false, linePlain = false;
   let buffer = '', bufferItalicOnly = true, bufferHasText = false, bufferTail = '';
   const tables: TableCtx[] = [];
@@ -302,7 +303,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
   const emit = (seg: Segment) => {
     const t = tables[tables.length - 1];
     if (t?.cell) { t.cell.segments.push(seg); return; }
-    const marker = seg.quoted ? '❝ ' : seg.kind === 'action' ? '▸ ' : seg.kind === 'heading' ? `${'#'.repeat(Math.min(6, Math.max(1, seg.level)))} ` : seg.kind === 'item' ? '• ' : seg.kind === 'row' ? '| ' : '';
+    const marker = seg.quoted ? '❝ ' : seg.kind === 'heading' ? `${'#'.repeat(Math.min(6, Math.max(1, seg.level)))} ` : seg.kind === 'item' ? '• ' : seg.kind === 'row' ? '| ' : '';
     sink[sink.length - 1]!.push(marker + seg.text);
   };
   const flush = () => {
@@ -314,7 +315,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
     buffer = ''; bufferTail = ''; bufferItalicOnly = true; bufferHasText = false;
     if (!text) return;
     const level = headingLevels.length ? headingLevels[headingLevels.length - 1]! : 0;
-    let kind: Segment['kind'] = level ? 'heading' : actionLine ? 'action' : itemDepth > 0 ? 'item' : 'para';
+    let kind: Segment['kind'] = level ? 'heading' : itemDepth > 0 ? 'item' : 'para';
     // A typed bullet ("- Fixed prices", "• Insured") is a list item, never an attribution.
     const bullet = /^(?:[-–•*]|•)\s+(?=\S)/u.exec(text);
     if (kind === 'para' && bullet) { kind = 'item'; text = text.slice(bullet[0].length); }
@@ -338,21 +339,21 @@ export function brandPageLines(input: string, dropChrome = false): string {
       if (!prev.quoted) {
         prev.quoted = true;
         const lines = sink[sink.length - 1]!, t = tables[tables.length - 1];
-        if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) lines[lines.length - 1] = `❝ ${prev.text}`;
+        if (!t?.cell && lines.length && (lines[lines.length - 1] === prev.text || lines[lines.length - 1] === `▸ ${prev.text}`)) lines[lines.length - 1] = `❝ ${prev.text}`;
       }
     }
     const seg: Segment = { kind, level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
     lastSegment = seg;
     emit(seg);
+    // Wholly action text, outside a table: marked for the price-structure check (every rule reads it without the marker).
+    if (actionLine && kind === 'para' && !seg.quoted && !tables[tables.length - 1]?.cell) { const lines = sink[sink.length - 1]!; lines[lines.length - 1] = `▸ ${lines[lines.length - 1]}`; }
   };
   const addText = (t: string) => {
     if (struckDepth > 0) return;
     if (inlineEdge && t) {
       inlineEdge = false;
-      // A letter or digit on both sides, or a closing bracket before a letter ("(£1,575 in total)Or"), gets a space.
       // (The buffer's last two code units are kept aside: reading the end of a long concatenated buffer would flatten it.)
-      const tail = bufferTail;
-      if ((/[\p{L}\p{N}]$/u.test(tail) && /^[\p{L}\p{N}]/u.test(t)) || (tail.endsWith(')') && /^\p{L}/u.test(t))) { buffer += ' '; bufferTail = `${bufferTail.slice(-1)} `; }
+      if (/[\p{L}\p{N}]$/u.test(bufferTail) && /^[\p{L}\p{N}]/u.test(t)) { buffer += ' '; bufferTail = `${bufferTail.slice(-1)} `; }
     }
     bufferTail = t.length >= 2 ? t.slice(-2) : (bufferTail + t).slice(-2);
     if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; if (actionDepth > 0) lineAction = true; else linePlain = true; }

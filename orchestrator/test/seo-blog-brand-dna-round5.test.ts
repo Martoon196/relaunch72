@@ -188,6 +188,6 @@ test('the 2 MB cut keeps no part of a tag and no cut-off word or number; the sit
     assert.deepEqual(lines, tail.startsWith('<p>Boiler') ? ['Boiler service'] : [], tail);
   }
   const prompt = loadPrompt('seo-blog-profile-site.md');
-  assert.equal(prompt.header.version, '1.5.0'); assert.match(prompt.body, /"# " to "###### " a heading/);
+  assert.equal(prompt.header.version, '1.6.0'); assert.match(prompt.body, /"# " to "###### " a heading/);
   assert.equal(tagged('<h1>A</h1><h2>B</h2><h6>C</h6>'), '# A\n## B\n###### C');
 });
