@@ -87,7 +87,7 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       await assert.rejects(content.query('SELECT * FROM app.creative_media_product_commands'),/permission denied/iu);
     });
     await t.test('a signed-in owner cannot certify licensed rights without evidence',async()=>{
-      await assert.rejects(a.store.save({workspaceId:a.brand.id,expectedRevision:0,product:{
+      assert.throws(()=>a.store.save({workspaceId:a.brand.id,expectedRevision:0,product:{
         ...data,sourceRights:'licensed',mediaRightsConfirmed:true,evidenceSha256:null,
       }}),/evidence/iu);
     });
