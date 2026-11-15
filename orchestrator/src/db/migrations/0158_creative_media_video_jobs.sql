@@ -77,6 +77,7 @@ GRANT SELECT,INSERT ON app.creative_media_video_events TO r72_media_job_definer;
 CREATE TRIGGER creative_media_video_events_immutable BEFORE UPDATE OR DELETE ON app.creative_media_video_events
   FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
 
+GRANT USAGE ON SCHEMA app,app_private TO r72_media_job_definer;
 GRANT EXECUTE ON FUNCTION app_private.seo_media_owner(uuid,bytea),
   app_private.current_workspace_id(),app_private.current_actor_kind() TO r72_media_job_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
