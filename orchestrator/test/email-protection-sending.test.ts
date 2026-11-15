@@ -277,3 +277,57 @@ test('the follow-ups page never says "Email sending is on." while held', async (
   assert.doesNotMatch(page(true), /Email sending is on\./u);
   assert.match(page(false), /Email sending is on\. Publish a flow/u);
 });
+
+test('B-1: in test mode only the test list is claimed, so everyone else\'s retry window is restarted every sweep (none fails before go-live)', async () => {
+  let waited = 0;
+  const store = { reserve: async () => 'ok' as const, settle: async () => undefined, holdWait: async () => { waited++; return 0; } };
+  const fetcher = (async () => new Response(JSON.stringify({ ErrorCode: 0, MessageID: 'pm-t' }), { status: 200 })) as unknown as typeof fetch;
+  const plan = sendingPlan(sendingConfig({ mode: 'test', testRecipients: ['ann@pp-send-proof.co.uk'] }), vault);
+  assert.equal(plan.kind === 'connection' && plan.mode, 'test');
+  for (let sweep = 1; sweep <= 3; sweep++) {
+    const q = queue([LEASE]);
+    const result = await runPpFollowupDelivery({ queue: q.q, unsubscribeSecret: SECRET, connection: { plan: async () => plan, store, fetcher, link: 'https://propertypredator.com/', unsubscribeOrigin: ORIGIN } });
+    assert.equal(result.sender, 'connection');
+    assert.equal(waited, sweep, `sweep ${sweep}: the wait ran although nothing was refused`);
+  }
+  // Live with nothing refused: no wait (nobody is held).
+  const live = sendingPlan(sendingConfig(), vault);
+  await runPpFollowupDelivery({ queue: queue([LEASE]).q, unsubscribeSecret: SECRET, connection: { plan: async () => live, store, fetcher, link: 'https://propertypredator.com/', unsubscribeOrigin: ORIGIN } });
+  assert.equal(waited, 3);
+});
+
+test('S-4: a hold the protection banner has no words for still gets a plain one (the cap, the footer details, no test address, an unchecked store)', async () => {
+  const { holdBanner } = await import('../src/email-protection/owner.js');
+  const config = sendingConfig({ dailyCap: 50, hourlyCap: 13, liveDay: 50, liveHour: 3 });
+  assert.equal(holdBanner('cap', config).text, 'Today\'s limit of 50 emails has been reached. The rest go tomorrow.');
+  assert.equal(holdBanner('cap', sendingConfig({ dailyCap: 250, hourlyCap: 63, liveDay: 70, liveHour: 63 })).text, 'This hour\'s limit of 63 emails has been reached. The rest go next hour.');
+  assert.equal(holdBanner('needs_footer', config).text, 'Add your business name and postal address before marketing emails can go.');
+  assert.equal(holdBanner('not_live', sendingConfig({ mode: 'test', testRecipients: [] })).text, 'Add a test address to send tests.');
+  assert.equal(holdBanner('unavailable', null).title, 'We could not check email sending just now');
+  // The page itself is checked in pp-followup.test.ts (S-4: the note sentence and the held run line).
+});
+
+test('a store read error on the follow-ups page: "We could not check email sending just now", held, and enrol takes the hold path (never "Email sending is on")', async () => {
+  const { PortalFollowupFlowService, PP_DELIVERY_UNCHECKED } = await import('../src/portal/followup-flow-service.js');
+  const stub = {} as never;
+  const lists: unknown[] = [];
+  const repository = { snapshot: async () => { throw new Error('unused'); }, command: async (_i: unknown, input: { action: string; testRecipients?: readonly string[] | null }) => { lists.push(input.testRecipients);
+    return { action: input.action, changed: 1 } as never; } };
+  const service = new PortalFollowupFlowService({ context: stub, reader: stub, adapter: stub, approvals: stub, transactions: stub, local: stub, messages: stub,
+    delivery: { repository, status: { mode: 'live', ready: true, problems: [] }, testRecipients: null, current: async () => { throw new Error('database down'); } } });
+  await (service as unknown as { refreshDelivery(): Promise<void> }).refreshDelivery();
+  const now = (service as unknown as { now: unknown }).now;
+  assert.equal(now, PP_DELIVERY_UNCHECKED);
+  assert.equal(PP_DELIVERY_UNCHECKED.held, true);
+  assert.equal(PP_DELIVERY_UNCHECKED.banner!.title, 'We could not check email sending just now');
+  const { renderPortalFlowPage } = await import('../src/portal/followup-flow-view.js');
+  const html = renderPortalFlowPage({ snapshot: { brand: { productName: 'Property Predator' }, catalog: { items: [] }, messageChoices: [], readiness: service.readiness, executable: true,
+    delivery: { mode: 'live', problems: [], search: '', database: null, held: true, banner: PP_DELIVERY_UNCHECKED.banner } }, csrf: 'c', commandId: 'x' } as never);
+  assert.match(html, /We could not check email sending just now/u);
+  assert.doesNotMatch(html, /Email sending is on\./u);
+  const detail = { valid: true, blockers: [] as string[], review: { isLatest: true, approvalStatus: 'approved', approvalStale: false } };
+  Object.defineProperty(service, 'review', { value: async () => { await (service as unknown as { refreshDelivery(): Promise<void> }).refreshDelivery(); return detail; } });
+  await service.command({ sessionToken: 't', userId: POINT, workspaceId: PP } as never, 'r',
+    { action: 'enrol', commandId: '92c4f5a3-b08f-4de1-a4a2-8192a3b4c5d6', itemId: POINT, versionId: POINT, contactPointId: LEASE.id, runId: '', ackProofId: '' } as never);
+  assert.deepEqual(lists, [null], 'the person is added and waits; the sender holds on the same failure');
+});

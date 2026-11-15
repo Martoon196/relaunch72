@@ -93,7 +93,10 @@ function runCard(run: PpFollowupRun, page: PortalFlowPageInput, detail: PortalFl
   const progress = run.state === 'completed' ? 'all emails sent' : !sameVersion ? 'an earlier version of this flow' : current ? `email ${current} of ${emailPositions.length}` : '';
   const waiting = run.steps.find(step => step.position === run.position && !step.acceptedAt && !step.cancelled && !step.failed);
   const tooOld = open && !run.inFlight && Boolean(waiting && Date.parse(waiting.expiresAt) <= (page.now ?? Date.now()));
-  const timing = run.state === 'active' ? `<p>Next email: ${e(when(run.dueAt))} (UK time).</p>` : run.state === 'paused' ? '<p>Nothing goes out while paused.</p>' : '';
+  // While sending is held, a due email's time keeps moving (its window is restarted so it never fails): say it waits.
+  const held = Boolean(page.snapshot.delivery && 'held' in page.snapshot.delivery && page.snapshot.delivery.held);
+  const timing = run.state === 'active' && held && Date.parse(run.dueAt) <= (page.now ?? Date.now()) ? '<p>Waiting: email sending is on hold.</p>'
+    : run.state === 'active' ? `<p>Next email: ${e(when(run.dueAt))} (UK time).</p>` : run.state === 'paused' ? '<p>Nothing goes out while paused.</p>' : '';
   // Resume is only offered when it can work: not for an email past its time, and not once a newer version exists.
   const canResume = ['paused', 'held'].includes(run.state) && !tooOld && run.reason !== 'newer_sequence';
   return `<article class="run"><h3>${e(run.displayName || run.email)}</h3><p class="note">${e(run.email)} · <strong>${e(STATE_LABELS[run.state])}</strong>${progress ? ` · ${e(progress)}` : ''}</p>
@@ -117,7 +120,7 @@ function startControls(page: PortalFlowPageInput, detail: PortalFlowReview, publ
   // Real readiness first: a mode of test or live means nothing unless every setting is complete and a sender runs.
   const ready = page.snapshot.readiness.email, database = delivery.database, mode = delivery.mode, search = delivery.search ?? '';
   const modeNote = !ready ? setupNote(delivery.problems.length ? delivery.problems : [mode === 'off' ? 'PP_MARKETING_MODE is off. Set it to test or live once the Postmark settings are in place.' : 'Email delivery did not pass its start-up checks.'])
-    : 'held' in delivery && delivery.held ? '<p class="notice"><strong>Email sending is on hold.</strong> People you start wait and get these emails when it goes again. The note at the top says why.</p>'
+    : 'held' in delivery && delivery.held ? `<p class="notice"><strong>Email sending is on hold.</strong> People you start wait and get these emails when it goes again.${'banner' in delivery && delivery.banner ? ' The note at the top says why.' : ''}</p>`
     : mode === 'test' ? '<p class="notice"><strong>Email sending is in test mode.</strong> Only your test addresses get emails. Anyone else you start waits until you switch to live and press Resume.</p>'
     : '<p><strong>Email sending is on.</strong> People you start will get these emails.</p>';
   const savedFields = hidden('csrf', page.csrf) + hidden('commandId', page.commandId) + hidden('itemId', detail.review.contentItemId) + hidden('versionId', detail.review.contentVersionId);

@@ -42,7 +42,7 @@ function fixture() {
 const bounce = (over: Record<string, unknown> = {}) => ({ RecordType: 'Bounce', MessageStream: 'broadcast', ID: 42, Type: 'HardBounce', Email: 'gone@pp-send-proof.co.uk',
   BouncedAt: '2026-11-12T09:55:00Z', Inactive: true, ServerID: 5151, Metadata: {}, ...over });
 
-test('a stored connection\'s webhook counts each Postmark event once (Transient and Blocked too); a configured source is never counted; a failed write is retried', async () => {
+test('a stored connection\'s webhook counts each Postmark event once (Blocked too, never a Transient); a configured source is never counted; a failed write is retried', async () => {
   const f = fixture();
   assert.equal((await f.post(CONN, CONN_SECRET, bounce())).status, 200);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce())).status, 200, 'a replay');
@@ -54,10 +54,10 @@ test('a stored connection\'s webhook counts each Postmark event once (Transient 
   // The subscription change that accompanies a hard bounce is not a second bounce; an unsubscribe is counted once.
   await f.post(CONN, CONN_SECRET, { RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: 'gone@pp-send-proof.co.uk', ChangedAt: '2026-11-12T09:55:01Z', SuppressSending: true, SuppressionReason: 'HardBounce', ServerID: 5151 });
   await f.post(CONN, CONN_SECRET, { RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: 'leave@pp-send-proof.co.uk', ChangedAt: '2026-11-12T09:57:00Z', SuppressSending: true, SuppressionReason: 'ManualSuppression', ServerID: 5151 });
-  assert.deepEqual(f.counted.map(c => c.kind), ['hard_bounce', 'soft_bounce', 'soft_bounce', 'soft_bounce', 'complaint', 'unsubscribe'],
-    'counted per the list in postmarkCounterKind; an AutoResponder is not; a replay this process saw is skipped (the database keeps any other once)');
-  assert.deepEqual(f.counted.slice(0, 5).map(c => c.key), ['bounce:42', 'bounce:43', 'bounce:44', 'bounce:49', 'bounce:45']);
-  assert.match(f.counted[5]!.key, /^unsub:[0-9a-f]{40}$/u);
+  assert.deepEqual(f.counted.map(c => c.kind), ['hard_bounce', 'soft_bounce', 'blocked', 'complaint', 'unsubscribe'],
+    'counted per the list in postmarkCounterKind; a Transient and an AutoResponder are not; a replay this process saw is skipped (the database keeps any other once)');
+  assert.deepEqual(f.counted.slice(0, 4).map(c => c.key), ['bounce:42', 'bounce:43', 'bounce:49', 'bounce:45']);
+  assert.match(f.counted[4]!.key, /^unsub:[0-9a-f]{40}$/u);
   assert.ok(f.counted.every(c => !c.key.includes('@')), 'no address in any key');
   // Postmark's set-up sample (another ServerID) is answered 200 and counted nowhere.
   const before = f.counted.length;
@@ -67,7 +67,7 @@ test('a stored connection\'s webhook counts each Postmark event once (Transient 
   assert.equal(f.counted.length, before);
   f.setFail(true);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 48 }))).status, 503, 'Postmark retries');
-  assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 51, Type: 'Transient', Inactive: false }))).status, 503, 'a counted-only bounce is retried too');
+  assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 51, Type: 'Blocked', Inactive: false }))).status, 503, 'a counted-only bounce is retried too');
   f.setFail(false);
   assert.equal((await f.post(CONN, CONN_SECRET, bounce({ ID: 48 }))).status, 200);
   assert.deepEqual(f.counted.at(-1), { kind: 'hard_bounce', key: 'bounce:48' });
@@ -80,7 +80,8 @@ test('one classification and one key for the webhook and the hourly read: the sa
   const viaWebhook = readPostmarkCounter(b)!, viaRead = readPostmarkCounterRow(b, 'broadcast')!;
   assert.deepEqual([viaWebhook.kind, viaWebhook.key], ['hard_bounce', 'bounce:4323372036854775807']);
   assert.deepEqual([viaRead.kind, viaRead.key], [viaWebhook.kind, viaWebhook.key]);
-  const table: [string, string | null][] = [['Blocked', 'soft_bounce'], ['SpamNotification', 'soft_bounce'], ['Transient', 'soft_bounce'], ['DMARCPolicy', 'soft_bounce'],
+  // The final mapping (S-7): Transient is never counted; Blocked and SpamNotification only ever slow a business down.
+  const table: [string, string | null][] = [['Blocked', 'blocked'], ['SpamNotification', 'blocked'], ['Transient', null], ['DMARCPolicy', 'soft_bounce'],
     ['SoftBounce', 'soft_bounce'], ['DnsError', 'soft_bounce'], ['Unknown', 'soft_bounce'], ['BadEmailAddress', 'hard_bounce'], ['ChallengeVerification', null], ['AutoResponder', null],
     ['AddressChange', null], ['VirusNotification', null], ['SMTPApiError', null]];
   for (const [Type, kind] of table) {
@@ -89,6 +90,8 @@ test('one classification and one key for the webhook and the hourly read: the sa
     assert.equal(readPostmarkCounterRow({ ...b, Type }, 'broadcast')?.kind ?? null, kind, `hourly read ${Type}`);
   }
   assert.equal(postmarkCounterKind('AutoResponder', true), 'hard_bounce', 'anything Postmark switched off counts as hard');
+  for (const Type of ['Blocked', 'SpamNotification', 'SoftBounce', 'Transient', 'DnsError']) assert.equal(postmarkCounterKind(Type, true), 'hard_bounce', `${Type} switched off`);
+  assert.equal(postmarkCounterKind('Unsubscribe', true), 'unsubscribe', 'an unsubscribe stays an unsubscribe');
   // An unsubscribe as a Bounce record and as a SubscriptionChange: one key.
   const u1 = readPostmarkCounter({ ...b, Type: 'Unsubscribe', Inactive: true })!;
   const u2 = readPostmarkCounter({ RecordType: 'SubscriptionChange', Recipient: 'x@pp-send-proof.co.uk', ChangedAt: '2026-11-14T10:00:00Z', MessageStream: 'broadcast', ServerID: 5151,
@@ -107,12 +110,12 @@ test('the hourly read counts a stored connection\'s rows under the same keys the
     { ID: 43, Type: 'Transient', Email: 'b@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:56:00Z', Inactive: false },
     { ID: 45, Type: 'SpamComplaint', Email: 'c@pp-send-proof.co.uk', BouncedAt: '2026-11-12T09:57:00Z', Inactive: true }];
   const api = { suppressions: async () => [], totals: async () => ({ sent: null, bounced: null, complaints: null }),
-    bounces: async () => ({ total: 3, received: 3, rows: [], counted: raw.map(row => readPostmarkCounterRow(row, 'broadcast')!) }) };
+    bounces: async () => ({ total: 3, received: 3, rows: [], counted: raw.map(row => readPostmarkCounterRow(row, 'broadcast')).filter(row => row !== null) }) };
   const source = (connection: boolean): EmailBounceSource => ({ key: connection ? CONN : 'pp', workspaceId: PP, token: 't', webhookSecret: 's', serverId: '1', streams: new Map([['broadcast', 'marketing']]), connection });
   const counter = async (input: { kind: string; key: string }) => { counted.push(`${input.kind}:${input.key}`); };
   await sweepPostmarkSource({ source: source(true), api, registry: new EmailBlockRegistry(), now: Date.now(), counter });
   await sweepPostmarkSource({ source: source(false), api, registry: new EmailBlockRegistry(), now: Date.now(), counter });
-  assert.deepEqual(counted, ['hard_bounce:bounce:42', 'soft_bounce:bounce:43', 'complaint:bounce:45']);
+  assert.deepEqual(counted, ['hard_bounce:bounce:42', 'complaint:bounce:45'], 'a Transient is not counted');
 });
 
 test('Postmark\'s side of "This address works now": read first, delete only a HardBounce suppression, never an unsubscribe or a spam report', async () => {
@@ -164,33 +167,73 @@ test('Postmark\'s side of "This address works now": read first, delete only a Ha
   assert.equal(await down.reactivateAtProvider(MHP, 'a@b.co'), 'unavailable');
 });
 
-test('the reactivation our own delete causes is not the person re-subscribing; one by the recipient is', async () => {
+test('the reactivation our own delete causes is not the person re-subscribing: matched to our delete (same stream, within minutes), whatever its Origin; a later one is', async () => {
   const lifts: string[] = [];
   let cleared: number | undefined;
+  const T = Date.parse('2026-11-14T10:00:00Z');
   const ledger = { covers: () => true, status: () => 'available', record: async () => 'recorded', recordList: async () => null, rows: async () => null,
     decide: async () => ({ blocked: false, reallowed: false, cleared: cleared === undefined ? {} : { hard_bounce: cleared } }),
     lift: async (input: { email: string }) => { lifts.push(input.email); return 1; } } as never;
-  const service = new EmailBounceService({ config: { sources: [], blockers: [] }, ledger });
-  service.upsertSource({ key: CONN, workspaceId: PP, token: null, webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map([['broadcast', 'marketing']]), connection: true });
-  const webhook = createPostmarkBounceWebhook({ service });
-  const post = async (body: unknown) => {
-    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: `/api/provider-webhooks/postmark/${CONN}`,
-      headers: { 'content-type': 'application/json', authorization: basic(CONN, CONN_SECRET) }, socket: { remoteAddress: '10.0.0.2' } }) as unknown as IncomingMessage;
-    const res = { writeHead() {}, end() {} } as unknown as ServerResponse;
-    await webhook.handle(req, res, new URL(req.url!, 'https://app.example.test'));
+  const fetcher = (async (url: string, init: RequestInit) => {
+    if (init.method === 'GET') return new Response(JSON.stringify({ Suppressions: [{ EmailAddress: new URL(url).searchParams.get('EmailAddress'), SuppressionReason: 'HardBounce', Origin: 'Recipient', CreatedAt: '2026-11-01T00:00:00Z' }] }), { status: 200 });
+    const body = JSON.parse(String(init.body)) as { Suppressions: { EmailAddress: string }[] };
+    return new Response(JSON.stringify({ Suppressions: body.Suppressions.map(x => ({ EmailAddress: x.EmailAddress, Status: 'Deleted', Message: null })) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  let now = T;
+  const make = (token: string | null, streams: string[]) => {
+    const service = new EmailBounceService({ config: { sources: [], blockers: [] }, ledger, now: () => now, suppressionFetch: fetcher });
+    service.upsertSource({ key: CONN, workspaceId: PP, token, webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map(streams.map(x => [x, 'marketing'] as const)), connection: true });
+    const webhook = createPostmarkBounceWebhook({ service, now: () => now });
+    const post = async (body: unknown) => {
+      const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url: `/api/provider-webhooks/postmark/${CONN}`,
+        headers: { 'content-type': 'application/json', authorization: basic(CONN, CONN_SECRET) }, socket: { remoteAddress: '10.0.0.2' } }) as unknown as IncomingMessage;
+      let status = 0;
+      const res = { writeHead(code: number) { status = code; }, end() {} } as unknown as ServerResponse;
+      await webhook.handle(req, res, new URL(req.url!, 'https://app.example.test'));
+      return status;
+    };
+    return { service, post };
   };
-  const change = (origin: string, at: string, n: number) => ({ RecordType: 'SubscriptionChange', MessageStream: 'broadcast', Recipient: `p${n}@pp-send-proof.co.uk`, ChangedAt: at,
+  const change = (origin: string, at: string, n: number, stream = 'broadcast') => ({ RecordType: 'SubscriptionChange', MessageStream: stream, Recipient: `p${n}@pp-send-proof.co.uk`, ChangedAt: at,
     SuppressSending: false, Origin: origin, ServerID: 5151 });
-  cleared = Date.parse('2026-11-14T10:00:00Z');
-  await post(change('Customer', '2026-11-14T10:00:05Z', 1));
-  assert.deepEqual(lifts, [], 'our own delete, seconds after the owner lifted the bounce: no unsubscribe is lifted');
-  await post(change('Recipient', '2026-11-14T10:00:06Z', 2));
-  assert.deepEqual(lifts, ['p2@pp-send-proof.co.uk'], 'the person themselves: counts');
-  await post(change('Customer', '2026-11-16T10:00:00Z', 3));
-  assert.deepEqual(lifts.length, 2, 'two days later is not ours');
+  // Another instance asked Postmark (the owner's lift is in the ledger; this source holds the token).
+  const other = make('srv', ['broadcast']);
+  cleared = T;
+  await other.post(change('Customer', '2026-11-14T10:00:05Z', 1));
+  assert.deepEqual(lifts, [], 'seconds after the owner lifted the bounce: our own delete, no unsubscribe is lifted');
+  await other.post(change('Recipient', '2026-11-14T10:00:06Z', 2));
+  assert.deepEqual(lifts, [], 'within the minutes after our delete it is read as ours whatever Origin says (failing closed: nothing is lifted)');
+  await other.post(change('Customer', '2026-11-14T10:20:00Z', 3));
+  assert.deepEqual(lifts, ['p3@pp-send-proof.co.uk'], '20 minutes later is not ours (no longer a 24-hour window)');
   cleared = undefined;
-  await post(change('Admin', '2026-11-14T10:00:05Z', 4));
-  assert.equal(lifts.length, 3, 'no owner lift recorded: as before');
+  await other.post(change('Admin', '2026-11-14T10:00:05Z', 4));
+  assert.equal(lifts.length, 2, 'no owner lift recorded: as before');
+  // A source we hold no token for could never have been asked by us: the ledger alone does not make it ours.
+  cleared = T;
+  await make(null, ['broadcast']).post(change('Customer', '2026-11-14T10:00:05Z', 5));
+  assert.equal(lifts.length, 3, 'no token: not our delete');
+  // This process asked Postmark itself: matched on the same stream only.
+  cleared = undefined;
+  const own = make('srv', ['broadcast', 'other']);
+  now = T;
+  assert.equal(await own.service.reactivateAtProvider(PP, 'p6@pp-send-proof.co.uk'), 'deleted');
+  await own.post(change('Customer', '2026-11-14T10:00:03Z', 6));
+  assert.equal(lifts.length, 3, 'our own delete, same stream');
+  assert.equal(own.service.ownDeleteNear(PP, 'broadcast', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:00:03Z')), true);
+  assert.equal(own.service.ownDeleteNear(PP, 'elsewhere', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:00:03Z')), false, 'another stream is not ours');
+  assert.equal(own.service.ownDeleteNear(PP, 'broadcast', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:30:00Z')), false, 'half an hour later is not ours');
+  // A ledger that cannot be read: 503 (Postmark retries), nothing lifted.
+  let brokenLifts = 0;
+  const broken = new EmailBounceService({ config: { sources: [], blockers: [] }, now: () => now,
+    ledger: { covers: () => true, status: () => 'available', decide: async () => { throw new Error('down'); }, lift: async () => { brokenLifts++; return 1; } } as never });
+  broken.upsertSource({ key: CONN, workspaceId: PP, token: 'srv', webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map([['broadcast', 'marketing']]), connection: true });
+  const hook = createPostmarkBounceWebhook({ service: broken, now: () => now });
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(change('Customer', '2026-11-14T10:00:05Z', 7)))]), { method: 'POST', url: `/api/provider-webhooks/postmark/${CONN}`,
+    headers: { 'content-type': 'application/json', authorization: basic(CONN, CONN_SECRET) }, socket: { remoteAddress: '10.0.0.3' } }) as unknown as IncomingMessage;
+  let code = 0;
+  await hook.handle(req, { writeHead(c: number) { code = c; }, end() {} } as unknown as ServerResponse, new URL(req.url!, 'https://app.example.test'));
+  assert.equal(code, 503);
+  assert.equal(brokenLifts, 0);
 });
 
 test('Martin Howard Property\'s "This address works now" asks Postmark too and says truthfully what it answered', async () => {

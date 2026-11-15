@@ -12,6 +12,7 @@ import { LocalFlowMessages, type FlowMessageReview } from '../followup-sequences
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { flowSimulationPreset, simulateFollowupFlow } from '../followup-sequences/simulation.js';
 import type { PpMarketingStatus } from '../pp-followup/config.js';
+import { UNCHECKED_BANNER } from '../email-protection/owner.js';
 import { PP_FOLLOWUP_STALE_PAGE, PgPpFollowupRepository, type PpFollowupCommand, type PpFollowupCommandResult, type PpFollowupRepository, type PpFollowupView } from '../pp-followup/repository.js';
 export const PP_FOLLOWUP_ROUTE = '/portal/follow-ups';
 export const PP_FOLLOWUP_SOURCE = 'pp.followup-sequence';
@@ -33,6 +34,14 @@ export interface PortalFlowDeliveryNow { readonly status: PpMarketingStatus; rea
   readonly held?: boolean;
   readonly banner: { readonly title: string; readonly text: string; readonly tone: 'alert' | 'notice' | 'ok' } | null }
 /**
+ * Sending could not be checked (the stored connection's read failed): held, with its own banner. Enrol takes the hold
+ * path: the person is added and waits; the sender holds the same way on the same failure (resolveSendingPlan), so
+ * nothing goes until it can be checked again. Never the environment's settings.
+ */
+export const PP_DELIVERY_UNCHECKED: PortalFlowDeliveryNow = Object.freeze({ status: Object.freeze({ mode: 'live' as const, ready: true, problems: Object.freeze([]) }),
+  testRecipients: null, held: true, banner: UNCHECKED_BANNER });
+
+/**
  * Native PP flow authoring and, when delivery is composed, owner-controlled email runs. Email is ready only
  * when the 0152 run store exists and PP_MARKETING_MODE is test or live with a complete Postmark sender.
  * SMS, WhatsApp and the reply/booked/purchased stops stay unconnected.
@@ -48,7 +57,8 @@ export class PortalFollowupFlowService {
   private now: PortalFlowDeliveryNow | null = null;
   private async refreshDelivery(): Promise<void> {
     const current = this.dependencies.delivery?.current;
-    if (current) this.now = await current().catch(() => null);
+    // Could not check: the safe path (held, everyone waits), never the environment's "Email sending is on".
+    if (current) this.now = await current().catch(() => PP_DELIVERY_UNCHECKED);
   }
   private get status(): PpMarketingStatus | null { return this.now?.status ?? this.dependencies.delivery?.status ?? null; }
   private get testRecipients(): readonly string[] | null { return this.now ? this.now.testRecipients : this.dependencies.delivery?.testRecipients ?? null; }

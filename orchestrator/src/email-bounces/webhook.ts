@@ -30,6 +30,7 @@ import { factBlockReason } from './policy.js';
 import { parsePostmarkJson, readPostmarkWebhook } from './postmark-events.js';
 import type { EmailBounceService } from './service.js';
 import { readPostmarkCounter } from './postmark-events.js';
+import { OWN_DELETE_WINDOW_MS } from './service.js';
 
 export const POSTMARK_BOUNCE_WEBHOOK_PREFIX = '/api/provider-webhooks/postmark/';
 export const POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
@@ -184,7 +185,7 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
         await service.counterSink({ workspaceId: source.workspaceId, kind: counter.kind, key: counter.key, at: counter.at });
       };
       if (reading.outcome === 'ignored') {
-        // A bounce that blocks nobody (a Transient, a Blocked ...) still counts towards the business's bounce rate.
+        // A bounce that blocks nobody (a Blocked, a DnsError ...) still counts for sender protection (postmarkCounterKind).
         try { await countIt(); }
         catch { send(res, 503, { error: 'temporarily_unavailable' }, { 'retry-after': '60' }); return true; }
         send(res, 200, { received: true, outcome: 'ignored' }); return true;
@@ -209,12 +210,14 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       try {
         if (event.kind === 'resubscribed') {
           // Our own "This address works now" deletes a hard-bounce suppression at Postmark, which Postmark then reports as a
-          // reactivation (Origin Customer or Admin). That is not the person re-subscribing: if an owner lifted a hard bounce
-          // for this address in the 24 hours before it, nothing else is lifted. A reactivation by the recipient always counts.
-          let ours = false;
-          if (event.origin !== 'Recipient' && service.ledger) {
+          // reactivation. That is not the person re-subscribing: a reactivation on this stream within 10 minutes of our
+          // own delete (asked by this process), or of the owner's lift of a hard bounce for this address on a source we
+          // hold the token for (the delete may have been asked by another instance), lifts nothing else. Whatever its
+          // Origin says. A read that fails answers 503 and Postmark retries: an unsubscribe is never lifted unchecked.
+          let ours = service.ownDeleteNear(source.workspaceId, event.stream, event.email, event.at);
+          if (!ours && source.token && service.ledger) {
             const cleared = (await service.ledger.decide(source.workspaceId, event.email, 'service'))?.cleared.hard_bounce;
-            ours = cleared !== undefined && cleared <= event.at + 60_000 && event.at - cleared <= 86_400_000;
+            ours = cleared !== undefined && cleared <= event.at + 60_000 && event.at - cleared <= OWN_DELETE_WINDOW_MS;
           }
           if (ours) log(JSON.stringify({ event: 'email.bounces.webhook_own_reactivation', source: source.key }));
           else {

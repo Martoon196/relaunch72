@@ -113,14 +113,18 @@ test('the founder\'s Today: nothing when all is well; one line with one button f
   assert.equal(quiet.needsYou, false, 'slowed recovers by itself: nothing for the founder');
   const today = founderToday({ account: { state: 'held', reason: 'x', since: null, rowVersion: 1, numbers: { line: 'account_bounce', count: 60, total: 1000, limit: 5 } },
     businesses: [{ ...base, state: 'paused', lastStep: { kind: 'paused', at: 'x', line: 'complaints', count: 3, total: 400, limit: 3, days: 30 } },
-      { ...base, workspaceId: 'b0000000-0000-4000-8000-000000000002', businessName: 'Second Ltd', state: 'ok', goLiveRequestedAt: '2026-11-19T00:00:00Z', goLiveApprovedAt: null }] }, 'https://x/f');
+      { ...base, workspaceId: 'b0000000-0000-4000-8000-000000000002', businessName: 'Second Ltd', state: 'ok', goLiveRequestedAt: '2026-11-19T00:00:00Z', goLiveApprovedAt: null, domain: 'second.co.uk' },
+      // S-1: a business approved before for another domain asks again for its new one: it reaches the founder, naming it.
+      { ...base, workspaceId: 'b0000000-0000-4000-8000-000000000003', businessName: 'Third Ltd', state: 'ok', goLiveRequestedAt: '2026-11-19T00:00:00Z', goLiveApprovedAt: '2026-11-01T00:00:00Z', domain: 'new-third.co.uk' }] }, 'https://x/f');
   assert.deepEqual(today.lines.map(l => [l.tone, l.kind, l.button, l.url]), [['red', 'account_held', 'See what happened', 'https://x/f'], ['red', 'paused', 'Review and decide', 'https://x/f'],
-    ['amber', 'go_live_requested', 'Approve', 'https://x/f']]);
+    ['amber', 'go_live_requested', 'Approve', 'https://x/f'], ['amber', 'go_live_requested', 'Approve', 'https://x/f']]);
   assert.deepEqual(today.sentences, [
-    'The whole account is getting close to Postmark\'s limit. The whole account: 60 of 1,000 emails bounced in the last 7 days (6%); theirs: 0 of 0. Our account line is 5%. Marketing emails are on hold for every business.',
+    'The whole account is getting close to Postmark\'s limit. The whole account: 60 of 1,000 emails bounced in the last 7 days (6%). Our account line is 5%. Marketing emails are on hold for every business.',
     'Emails paused for Property Predator Ltd. 3 people marked their emails as spam in the last 30 days. Our line is 3, Postmark\'s is 1 in 1,000 emails. Sign-in and booking emails still go. Nobody else is affected.',
-    'Second Ltd is ready to go live.']);
-  assert.equal(today.summary.startsWith('3 email sending items need you.'), true);
+    'Second Ltd is ready to go live, sending from second.co.uk.', 'Third Ltd is ready to go live, sending from new-third.co.uk.']);
+  assert.equal(today.summary.startsWith('4 email sending items need you.'), true);
+  // The founder's alert email names the domain too.
+  assert.equal(founderAlertEmail({ kind: 'go_live_requested', businessName: 'Third Ltd', trip: null, pageUrl: 'u', domain: 'new-third.co.uk' })!.subject, 'Third Ltd is ready to go live (new-third.co.uk)');
 });
 
 test('every sentence a business owner reads, for each state, is plain and exact', () => {

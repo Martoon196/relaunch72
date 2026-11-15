@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { PgSeoLimitsService } from './seo-blog-limits-service.js';
 import { EMAIL_CONNECT_BUSINESSES, EmailConnectionBounceSources, EmailConnectionService, EmailConnectionVault, emailConnectWebhookOrigin, loadEmailConnectConfig,
   PgEmailConnectionStore } from '../email-connections/index.js';
-import { bannerFromConfig, EmailProtectionService, OwnerSendingService, PgEmailProtectionStore, sendingDecision } from '../email-protection/index.js';
-import type { PortalFlowDelivery } from './followup-flow-service.js';
+import { bannerFromConfig, EmailProtectionAbsentError, EmailProtectionService, holdBanner, OwnerSendingService, PgEmailProtectionStore, sendingDecision } from '../email-protection/index.js';
+import { PP_DELIVERY_UNCHECKED, type PortalFlowDelivery } from './followup-flow-service.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
@@ -1358,12 +1358,19 @@ export async function buildPgPortalPlatform(
     let emailProtectionRef: EmailProtectionService | undefined;
     // The follow-ups page's view of the sender: decided without opening the saved token.
     const ppDeliveryNow: NonNullable<PortalFlowDelivery['current']> = async () => {
-      const config = await emailProtectionStore.sendingConfig(PP_FOLLOWUP_WORKSPACE_ID);
+      let config: Awaited<ReturnType<typeof emailProtectionStore.sendingConfig>>;
+      try { config = await emailProtectionStore.sendingConfig(PP_FOLLOWUP_WORKSPACE_ID); }
+      catch (error) {
+        // 0156 not in this database: today's environment sender, exactly as before. Any other failure: the safe path.
+        if (error instanceof EmailProtectionAbsentError) return null;
+        return PP_DELIVERY_UNCHECKED;
+      }
       const decision = sendingDecision(config, { allowed: storedSendingAllowed });
       if (decision.kind === 'env' || !config) return null;
       const mode = config.mode === 'test' ? 'test' as const : 'live' as const;
+      const banner = bannerFromConfig(config, { mailer: emailProtectionRef?.mailerConfigured ?? false, allowed: storedSendingAllowed });
       return { status: Object.freeze({ mode, ready: true, problems: Object.freeze([]) }), testRecipients: mode === 'test' ? config.testRecipients : null,
-        held: decision.kind === 'hold', banner: bannerFromConfig(config, { mailer: emailProtectionRef?.mailerConfigured ?? false, allowed: storedSendingAllowed }) };
+        held: decision.kind === 'hold', banner: banner ?? (decision.kind === 'hold' ? holdBanner(decision.reason, config) : null) };
     };
     if (ppFlowWorkspace === PP_FOLLOWUP_WORKSPACE_ID) {
       try {

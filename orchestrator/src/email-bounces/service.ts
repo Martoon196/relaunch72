@@ -21,7 +21,7 @@ import { deletePostmarkSuppressions, readPostmarkSuppression } from './postmark-
  * per provider event from the webhook and for every row of the hourly read; must be idempotent on the event key and
  * throw when it could not record (the webhook then asks Postmark to retry).
  */
-export type EmailCounterSink = (input: { readonly workspaceId: string; readonly kind: 'hard_bounce' | 'soft_bounce' | 'complaint' | 'unsubscribe';
+export type EmailCounterSink = (input: { readonly workspaceId: string; readonly kind: 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
   readonly key: string; readonly at: number }) => Promise<unknown>;
 /**
  * What Postmark's side of "This address works now" did: 'deleted' (a hard-bounce suppression was deleted, and every
@@ -119,6 +119,9 @@ export interface EmailBounceSourceLoader {
 const SOURCE_KEY = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 const SOURCE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+/** How close Postmark's reactivation must follow our own delete (or the owner's lift) to be read as ours. */
+export const OWN_DELETE_WINDOW_MS = 10 * 60_000;
+
 export class EmailBounceService {
   readonly registry: EmailBlockRegistry;
   /** The sources from configuration (EMAIL_BOUNCE_SOURCES and each brand's built-in default), fixed at start. */
@@ -131,6 +134,8 @@ export class EmailBounceService {
   private readonly effects = new Map<string, EmailBounceEffects>();
   private readonly running = new Map<string, Promise<SweepResult>>();
   private readonly lastSwept = new Map<string, number>();
+  /** Our own Postmark deletes ("This address works now"), by workspace, stream and address: when each was asked for. */
+  private readonly ownDeletes = new Map<string, number>();
   private readonly now: () => number;
   private readonly apiFor: (source: EmailBounceSource) => PostmarkBounceApi | null;
   private readonly log: (line: string) => void;
@@ -226,12 +231,21 @@ export class EmailBounceService {
         const reason = await readPostmarkSuppression({ token: target.token, stream: target.stream, email: address, fetcher: this.suppressionFetch });
         if (reason === null) continue;
         if (reason !== 'HardBounce') { failed = true; continue; }
+        // Noted before the call: Postmark's reactivation webhook can arrive before its answer does.
+        const mark = `${workspaceId.toLowerCase()}\u0000${target.stream}\u0000${address}`;
+        this.ownDeletes.set(mark, this.now());
         if ((await deletePostmarkSuppressions({ token: target.token, stream: target.stream, emails: [address], fetcher: this.suppressionFetch })).get(address) === 'deleted') deleted++;
-        else failed = true;
+        else { failed = true; this.ownDeletes.delete(mark); }
       } catch { unreachable = true; }
     }
     this.log(JSON.stringify({ event: 'email.bounces.provider_reactivation', level: failed || unreachable ? 'warn' : 'info', streams: targets.length, deleted, failed, unreachable }));
     return failed ? 'failed' : unreachable ? 'unavailable' : deleted > 0 ? 'deleted' : 'not_bounced';
+  }
+  /** Whether THIS process asked Postmark to delete this address's suppression on this stream within OWN_DELETE_WINDOW_MS of at. */
+  ownDeleteNear(workspaceId: string, stream: string, email: string, at: number): boolean {
+    const asked = this.ownDeletes.get(`${workspaceId.toLowerCase()}\u0000${stream}\u0000${email.trim().toLowerCase()}`);
+    for (const [mark, when] of this.ownDeletes) if (this.now() - when > OWN_DELETE_WINDOW_MS) this.ownDeletes.delete(mark);
+    return asked !== undefined && asked <= at + 60_000 && at - asked <= OWN_DELETE_WINDOW_MS;
   }
   get sourceLoader(): EmailBounceSourceLoader | null { return this.loader; }
 

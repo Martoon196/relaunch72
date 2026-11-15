@@ -1178,7 +1178,9 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   const apply = sql.slice(sql.indexOf('CREATE FUNCTION app_private.email_protection_apply('), sql.indexOf('CREATE FUNCTION app_private.email_account_apply('));
   assert.match(apply, /IF c\.protection_state<>p_from THEN RETURN 'stale'; END IF;/u);
   assert.match(apply, /IF NOT \(p_from=p_to OR \(p_from='ok' AND p_to IN\('slowed','paused','off'\)\) OR \(p_from='slowed' AND p_to IN\('ok','paused','off'\)\)\) THEN RETURN 'refused'; END IF;/u);
-  assert.match(apply, /p\.kind IN\('paused','switched_off'\) AND p\.numbers->>'cause'='own' AND p\.occurred_at>v_now-interval '90 days'; IF v_prior IS NOT NULL THEN v_to:='off'; v_kind:='switched_off';/u);
+  assert.match(apply, /p\.kind IN\('paused','switched_off'\) AND p\.numbers->>'cause'='own' AND p\.occurred_at>v_now-interval '90 days'; IF v_prior IS NOT NULL THEN/u);
+  // S-3: off only with 50 live sends since the founder's restart; with fewer, paused again (and why is recorded).
+  assert.match(apply, /e\.occurred_at>=coalesce\(s\.counted_since,'-infinity'::timestamptz\); v_numbers:=v_numbers\|\|jsonb_build_object\('previousPauseAt',v_prior,'sendsSinceRestart',v_since\); IF v_since>=50 THEN v_to:='off'; v_kind:='switched_off'; ELSE v_to:='paused'; v_kind:='paused'; END IF;/u);
   assert.match(apply, /IF v_to IN\('ok','slowed'\) AND \(p_daily<>v_daily OR p_hourly<>v_hourly\) THEN RETURN 'refused'; END IF;/u, 'caps from the ramp only');
   assert.match(apply, /IF p_sample='passed' AND \(s\.sample_full_at IS NULL OR s\.sample_full_at>v_now-interval '2 hours'\) THEN RETURN 'refused'; END IF;/u);
   // Every send is reserved against the holds and caps before it is handed to Postmark.
@@ -1203,7 +1205,11 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   const wait = sql.slice(sql.indexOf('CREATE FUNCTION app_private.pp_followup_hold_wait('));
   assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_pp_followup_definer; CREATE FUNCTION app_private\.pp_followup_hold_wait\(\)/u);
   assert.match(wait, /IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'PP follow-up boundary required' USING ERRCODE='42501';/u);
-  assert.match(wait, /NOT EXISTS\(SELECT 1 FROM app_private\.pp_followup_dispatch_proofs p WHERE p\.send_id=q\.id AND p\.accepted IS NULL\)/u);
+  // The latest hand-off proof decides, as 0152's claim does: unresolved and not the owner-acknowledged unknown one.
+  assert.match(wait, /NOT EXISTS\(SELECT 1 FROM \(SELECT p\.id,p\.accepted FROM app_private\.pp_followup_dispatch_proofs p WHERE p\.send_id=q\.id ORDER BY p\.checked_at DESC,p\.id DESC LIMIT 1\) p WHERE p\.accepted IS NULL AND p\.id IS DISTINCT FROM r\.unknown_ack_proof_id\)/u);
+  // S-2: gated on the runs that can wait, never on one that cannot.
+  assert.match(wait, /min\(r\.due_at\) OVER \(\) AS oldest/u);
+  assert.match(wait, /FROM due d WHERE d\.oldest<v_now-interval '20 minutes'\)/u);
   assert.match(wait, /ORDER BY r\.due_at,r\.id LIMIT 5000\)/u);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.pp_followup_hold_wait\(\) TO r72_identity_command;/u);
   assert.match(sql, /RESET ROLE; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_email_connection_definer,r72_pp_followup_definer; RESET ROLE;$/u);

@@ -24,14 +24,14 @@ export class EmailProtectionInvalidError extends Error {
   constructor() { super('Invalid input.'); }
 }
 
-export type ReserveOutcome = 'ok' | 'replayed' | 'account_held' | 'off' | 'paused' | 'owner_paused' | 'not_live' | 'not_connected' | 'not_approved' | 'needs_test'
+export type ReserveOutcome = 'ok' | 'replayed' | 'replayed_refused' | 'replayed_unknown' | 'account_held' | 'off' | 'paused' | 'owner_paused' | 'not_live' | 'not_connected' | 'not_approved' | 'needs_test'
   | 'sample_wait' | 'sample_held' | 'daily_cap' | 'hourly_cap' | 'test_limit';
 export type SendingCommand = 'test' | 'live' | 'pause' | 'resume';
 export type SendingCommandOutcome = 'test' | 'live' | 'paused' | 'resumed' | 'unchanged' | 'requested' | 'already_requested' | 'not_connected' | 'switched_off'
   | 'needs_webhook' | 'needs_terms' | 'needs_footer' | 'needs_test';
 export type FounderAction = 'approve' | 'lift' | 'reinstate' | 'release_sample' | 'lift_account';
 export type FounderOutcome = 'done' | 'stale' | 'not_needed';
-export type CounterKind = 'hard_bounce' | 'soft_bounce' | 'complaint' | 'unsubscribe';
+export type CounterKind = 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
 
 /** What the sender reads each sweep. */
 export interface SendingConfig {
@@ -47,7 +47,7 @@ export interface SendingConfig {
   readonly testCurrent: boolean;
   readonly lastStep: (Readonly<Record<string, unknown>> & { readonly kind: string; readonly at: string }) | null;
 }
-export interface SendingDay { readonly day: string; readonly sends: number; readonly hardBounces: number; readonly softBounces: number; readonly complaints: number; readonly unsubscribes: number }
+export interface SendingDay { readonly day: string; readonly sends: number; readonly hardBounces: number; readonly softBounces: number; readonly blocked?: number; readonly complaints: number; readonly unsubscribes: number }
 /** What the owner's page shows beyond 0155's state. */
 export interface SendingState {
   /** Who tests go to when no test list is saved: the owner who agreed to the email rules (the sweep uses the same). */
@@ -66,6 +66,8 @@ export interface SendingState {
 export interface FounderBusiness {
   readonly workspaceId: string; readonly businessName: string; readonly status: string; readonly mode: 'off' | 'test' | 'live'; readonly state: ProtectionState;
   readonly reason: string | null; readonly since: string | null; readonly rowVersion: number; readonly goLiveRequestedAt: string | null; readonly goLiveApprovedAt: string | null;
+  /** The domain in use now (a go-live request is only ever shown, and approved, for it). */
+  readonly domain?: string | null;
   readonly sampleState: SampleState; readonly counts: ProtectionCounts | null;
   readonly lastStep: (Readonly<Record<string, unknown>> & { readonly kind: string; readonly at: string }) | null;
 }
@@ -138,7 +140,8 @@ export function readCounts(value: unknown): ProtectionCounts | null {
     reason: str(value.reason), since: str(value.since), dailyCap: int(value.dailyCap), hourlyCap: int(value.hourlyCap), warmupStartedAt: str(value.warmupStartedAt),
     goLiveApprovedAt: str(value.goLiveApprovedAt), warmupStep: int(value.warmupStep), warmupStepAt: str(value.warmupStepAt), countedSince: str(value.countedSince),
     sampleState: sampleOf(value.sampleState), sampleStartedAt: str(value.sampleStartedAt), sampleFullAt: str(value.sampleFullAt), ownerPausedAt: str(value.ownerPausedAt),
-    ownPauses90: int(value.ownPauses90), sends7: int(value.sends7), hard7: int(value.hard7), soft7: int(value.soft7), sends30: int(value.sends30),
+    ownPauses90: int(value.ownPauses90), sends7: int(value.sends7), hard7: int(value.hard7), soft7: int(value.soft7), blocked7: int(value.blocked7),
+    sendsSinceRestart: value.sendsSinceRestart == null ? null : int(value.sendsSinceRestart), sends30: int(value.sends30),
     complaints30: int(value.complaints30), unsubscribes30: int(value.unsubscribes30), last50Sends: int(value.last50Sends), hardLast50: int(value.hardLast50),
     liveDay: int(value.liveDay), liveHour: int(value.liveHour), sampleSends: int(value.sampleSends), sampleBounces: int(value.sampleBounces),
     sampleComplaints: int(value.sampleComplaints), stepSends: int(value.stepSends), stepBounces: int(value.stepBounces), stepComplaints: int(value.stepComplaints),
@@ -169,7 +172,7 @@ function readStatus(value: unknown): ProtectionStatus {
     account: Object.freeze({ state: a.state === 'held' ? 'held' : 'ok', reason: str(a.reason), since: str(a.since), rowVersion: int(a.rowVersion), numbers: record(a.numbers) ? a.numbers : null }),
     businesses: Object.freeze(value.businesses.filter(record).map(b => Object.freeze({ workspaceId: String(b.workspaceId).toLowerCase(), businessName: str(b.businessName) ?? 'This business',
       status: String(b.status ?? ''), mode: modeOf(b.mode), state: stateOf(b.state), reason: str(b.reason), since: str(b.since), rowVersion: int(b.rowVersion),
-      goLiveRequestedAt: str(b.goLiveRequestedAt), goLiveApprovedAt: str(b.goLiveApprovedAt), sampleState: sampleOf(b.sampleState), counts: readCounts(b.counts),
+      goLiveRequestedAt: str(b.goLiveRequestedAt), goLiveApprovedAt: str(b.goLiveApprovedAt), domain: str(b.domain), sampleState: sampleOf(b.sampleState), counts: readCounts(b.counts),
       lastStep: lastStep(b.lastStep) }))),
   });
 }
@@ -254,7 +257,7 @@ export class PgEmailProtectionStore implements EmailProtectionStore {
       testPassedAt: str(value.testPassedAt), ownerPausedAt: str(value.ownerPausedAt), goLiveRequestedAt: str(value.goLiveRequestedAt), goLiveApprovedAt: str(value.goLiveApprovedAt),
       sampleState: sampleOf(value.sampleState), warmupStep: int(value.warmupStep), accountHeld: value.accountHeld === true, lastStep: lastStep(value.lastStep),
       counts: readCounts(value.counts), days: Array.isArray(value.days) ? value.days.filter(record).map(d => Object.freeze({ day: String(d.day), sends: int(d.sends),
-        hardBounces: int(d.hardBounces), softBounces: int(d.softBounces), complaints: int(d.complaints), unsubscribes: int(d.unsubscribes) })) : [] });
+        hardBounces: int(d.hardBounces), softBounces: int(d.softBounces), blocked: int(d.blocked), complaints: int(d.complaints), unsubscribes: int(d.unsubscribes) })) : [] });
   }
   async details(sessionToken: string, workspaceId: string, input: { businessName: string; postalAddress: string; testRecipients: readonly string[] }): Promise<void> {
     await this.call('SELECT app_private.email_sending_details($1,$2,$3,$4,$5) AS value', [hash(sessionToken), workspaceId, input.businessName, input.postalAddress, [...input.testRecipients]]);

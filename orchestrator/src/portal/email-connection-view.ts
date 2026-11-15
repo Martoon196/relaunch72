@@ -131,11 +131,11 @@ const sendingButton = (page: EmailConnectionPageInput, action: string, label: st
 function sendingSection(page: EmailConnectionPageInput, state: EmailConnectionState, sending: OwnerSendingView): string {
   const s = sending.sending!, counts = s.counts;
   const form = page.sendingForm ?? { businessName: s.businessName ?? '', postalAddress: s.postalAddress ?? '', testList: s.testRecipients.join(', ') };
-  const off = state.protection.state === 'off', waiting = Boolean(s.goLiveRequestedAt && !s.goLiveApprovedAt);
+  const off = state.protection.state === 'off', waiting = Boolean(s.goLiveRequestedAt);
   const mode = state.mode === 'live' ? '<p><strong>You are live.</strong> Your marketing emails go out from this address, unless the note at the top says they are waiting.</p>'
     : state.mode === 'test' ? `<p><strong>You are testing.</strong> Only your test addresses get emails: ${e(sending.testList.join(', ') || 'none yet')}.</p>`
     : `<p><strong>Sending is not switched on yet.</strong> Your follow-up emails still go out the way they do today. Send a test to yourself, then go live. Tests go to: ${e(sending.testList.join(', ') || 'no address yet')}.</p>`;
-  const figures = counts ? `<p>In the last 7 days: ${e(plain(counts.sends7, 'email', 'emails'))} sent, ${e(plain(bounces7(counts), 'bounce', 'bounces'))}${counts.sends7 ? ` (${e(percent(bounces7(counts), counts.sends7))})` : ''}. In the last 30 days: ${e(plain(counts.complaints30, 'spam report', 'spam reports'))}.</p>
+  const figures = counts ? `<p>In the last 7 days: ${e(plain(counts.sends7, 'email', 'emails'))} sent, ${e(plain(bounces7(counts), 'bounce', 'bounces'))}${counts.sends7 ? ` (${e(percent(bounces7(counts), counts.sends7))})` : ''}${counts.blocked7 ? `, ${e(plain(counts.blocked7, 'email', 'emails'))} blocked by the receiving email service` : ''}. In the last 30 days: ${e(plain(counts.complaints30, 'spam report', 'spam reports'))}.</p>
     ${state.mode === 'live' && state.protection.state !== 'paused' && !off ? `<p class="small">Right now up to ${e(plain(state.protection.dailyCap, 'marketing email', 'marketing emails'))} a day can go${state.protection.dailyCap < RAMP[RAMP.length - 1]!.daily ? ', rising as your emails keep arriving safely' : ''}. ${e(plain(counts.liveDay, 'has', 'have'))} gone in the last 24 hours.</p>` : ''}` : '';
   const needsGoLive = state.mode !== 'live' || !s.approvedCurrent || !s.testCurrent;
   const controls = off ? '' : `<div class="actions">${sendingButton(page, 'test-send', 'Send a test to me')}
@@ -143,7 +143,7 @@ function sendingSection(page: EmailConnectionPageInput, state: EmailConnectionSt
     ${state.mode === 'live' ? sendingButton(page, 'back-to-test', 'Back to testing', true) : ''}
     ${state.mode === 'off' ? sendingButton(page, 'start-test', 'Start testing', true) : ''}
     ${state.mode !== 'off' ? (s.ownerPausedAt ? sendingButton(page, 'resume', 'Resume') : sendingButton(page, 'pause', 'Pause', true)) : ''}</div>
-    ${state.mode === 'off' ? '<p class="small">Start testing switches your follow-up emails to this connection: from then on only your test addresses get them until you go live.</p>' : ''}`;
+    ${state.mode === 'off' ? '<p class="small">Once you start, your emails are sent through this connection only. Until you go live, only your test addresses get them.</p>' : ''}`;
   const details = `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/details">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}
     <h3>At the bottom of every marketing email</h3><p class="small">The law and our email rules need your real business name and postal address in every marketing email, with an unsubscribe link. We add the link for you.</p>
     <label for="email-business-name">Your business's real name<input id="email-business-name" name="businessName" maxlength="120" required value="${e(form.businessName)}" autocomplete="organization"></label>
@@ -218,9 +218,9 @@ export function renderFounderProtectionPage(page: { status: ProtectionStatus; to
     const version = line.kind === 'account_held' ? status.account.rowVersion : business?.rowVersion ?? 0;
     const c = business?.counts;
     const numbers = c ? `<p class="small">Last 7 days: ${c.sends7} sent, ${bounces7(c)} bounced${c.sends7 ? ` (${percent(bounces7(c), c.sends7)})` : ''}. Last 30 days: ${c.complaints30} spam ${c.complaints30 === 1 ? 'report' : 'reports'}. Own pauses in the last 90 days: ${c.ownPauses90}.</p>` : '';
-    const note = line.kind === 'paused' ? '<p class="small">Lifting restarts their marketing emails slowed (half their daily limit), with their next 50 emails sent first and checked. Only what happens from now counts. A second pause within 90 days switches them off.</p>'
+    const note = line.kind === 'paused' ? '<p class="small">Lifting restarts their marketing emails slowed (half their daily limit), with their next 50 emails sent first and checked. Only what happens from now counts. Another pause within 90 days, once at least 50 more of their emails have gone, switches them off.</p>'
       : line.kind === 'switched_off' ? '<p class="small">Switching back on restarts them slowed, with their next 50 emails sent first and checked.</p>'
-      : line.kind === 'go_live_requested' ? '<p class="small">Both records are verified, the bounce webhook is verified, a test was accepted for sending and the current email rules are ticked. A first go-live, or a new domain, starts at 50 marketing emails a day.</p>' : '';
+      : line.kind === 'go_live_requested' ? '<p class="small">Approving approves this domain only. Both records are verified, the bounce webhook is verified, a test was accepted for sending and the current email rules are ticked. A first go-live, or a new domain, starts at 50 marketing emails a day.</p>' : '';
     return `<article class="card ${line.tone === 'red' ? 'alert' : 'notice'}"><p><strong>${e(line.sentence)}</strong></p>${numbers}${note}${act ? founderButton(page, act.action, line.kind === 'account_held' ? '' : line.workspaceId ?? '', version, act.label) : ''}</article>`;
   }).join('');
   const message = page.message ? `<section class="card ${page.message.ok ? 'ok' : 'notice'}" role="${page.message.ok ? 'status' : 'alert'}"><p>${e(page.message.message)}</p></section>` : '';

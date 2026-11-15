@@ -122,7 +122,11 @@ test('0156 review on real roles: B1, S2, S5, S6, S7, the apply checks, tests whi
     await ownerQuery(admin, `INSERT INTO app_private.email_protection_events(workspace_id,kind,numbers,actor_kind,occurred_at) VALUES($1,'switched_off','{"cause":"own"}','system',now()-interval '80 days'),
       ($1,'paused','{"cause":"own"}','system',now()-interval '95 days')`, [PP]);
     const step = (to: string, kind: string | null, daily = 0, hourly = 0) => store.apply(PP, { from: 'slowed', to: to as never, kind, cause: 'own', reason: 'Proof.', numbers: {}, daily, hourly, step: null, stepAt: null, sample: null });
-    assert.equal(await step('paused', 'paused'), 'off', 'a switch-off 80 days ago makes this pause the second');
+    assert.equal(await step('paused', 'paused'), 'paused', 'a switch-off 80 days ago makes this pause the second, but nothing was sent since the restart (S-3)');
+    status = await store.founderView(founderToken);
+    assert.equal(await store.founderAct(founderToken, PP, 'lift', status.businesses[0]!.rowVersion), 'done');
+    await seedSends(admin, 50, 'live', '0 seconds');
+    assert.equal(await step('paused', 'paused'), 'off', 'and with 50 live sends since the restart: off');
     status = await store.founderView(founderToken);
     assert.equal(await store.founderAct(founderToken, PP, 'reinstate', status.businesses[0]!.rowVersion), 'done');
 

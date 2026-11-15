@@ -5,13 +5,17 @@
  * 10% of all emails sent (soft bounces count) and spam complaints under 1 in 1,000 (0.1%). Ours sit well below:
  *
  *   SLOWED  bounces 2% or more over the last 7 days (once at least 100 emails were sent in those 7 days), or 2 spam
- *           complaints in the last 30 days. The daily and hourly caps are halved.
+ *           complaints in the last 30 days. Here only, emails a mailbox provider blocked or flagged as spam count as
+ *           bounces too. The daily and hourly caps are halved.
  *   PAUSED  bounces 4% or more over the last 7 days (at least 100 sent), or 5 hard bounces while the last 50 emails were
  *           going out (any volume), or 3 spam complaints in the last 30 days. Marketing email stops for that business
- *           only; nobody is marked stopped and no attempt is spent.
- *   OFF     a second pause (of the business's own numbers) within 90 days. Only the founder can lift a pause or
+ *           only; nobody is marked stopped and no attempt is spent. After a founder restart the hard-bounce and
+ *           spam-complaint lines pause only once at least 20 live emails went out since the restart (late reports
+ *           about emails sent before it cannot pause it again on their own); a first pause keeps the rule above.
+ *   OFF     a second pause (of the business's own numbers) within 90 days, once at least 50 live emails went out since
+ *           the founder's restart (with fewer, it is paused again instead). Only the founder can lift a pause or
  *           switch a business back on; nothing here ever moves a business down from paused or off.
- *   Recovery from SLOWED only, by itself: at least 7 days slowed, then 7 days with bounces under 1% (none at all when
+ *   Recovery from SLOWED only, by itself: at least 7 days slowed, then 7 days with bounces (blocked included) under 1% (none at all when
  *           fewer than 100 emails were sent in those 7 days) and fewer than 2 spam complaints in 30 days. Entering at
  *           2% and leaving under 1% after a full week is the hysteresis: a business does not flap.
  *   Bounces are hard plus soft (see email-bounces/postmark-events.ts postmarkCounterKind for exactly which Postmark
@@ -26,11 +30,12 @@
  *   SAMPLE   a go-live (and every lift, reinstatement, release or new verification) sends its first 50 marketing
  *           emails, then waits 2 hours after the 50th; 2 or more bounces or any spam complaint among them (counted from
  *           its first live send) holds the rest at once; otherwise the rest goes by itself.
- *   ACCOUNT  across every business with a connection, live sends only, with at least 1,000 in the window: among the
- *           businesses still sending, bounces of 3% over 7 days, or 3 or more complaints that are also 0.05% (1 in 2,000)
- *           over 30 days, pause the worst offender first: only a business itself at 3% bounces (at least 100 sent) or at
- *           1 in 2,000 complaints is a candidate, highest rate first, then the next, until the rest is back under the
- *           line. Bounces of 5%, or 5 or more complaints that are also 0.08% (1 in 1,250), across the whole account hold
+ *   ACCOUNT  across every business with a connection, live sends only, with at least 1,000 in the window: while at
+ *           least two businesses are sending live, bounces of 3% over 7 days, or 3 or more complaints that are also
+ *           0.05% (1 in 2,000) over 30 days, pause the worst offender first: only a business itself at 3% bounces (at
+ *           least 100 sent) or with 3 or more complaints at 1 in 2,000 (at least 100 sent in 30 days) is a candidate,
+ *           highest rate first, then the next, until the rest is back under the line or one business is left. With one
+ *           business sending live these lines do nothing (its own ladder already covers it). Bounces of 5%, or 5 or more complaints that are also 0.08% (1 in 1,250), across the whole account hold
  *           every business's marketing until the founder lifts it. The founder is told either way.
  * All comparisons are done in whole numbers, so an exact threshold always trips and one below never does.
  */
@@ -66,6 +71,10 @@ export const SAMPLE = Object.freeze({ size: 50, waitHours: 2, holdAtBounces: 2, 
 
 export const ACCOUNT = Object.freeze({
   minSends: 1_000,
+  /** The worst-offender lines run only while at least this many businesses send live. */
+  minSendingBusinesses: 2,
+  /** A business's own minimum to be a complaint candidate. */
+  candidateMinComplaints: 3, candidateMinSends: 100,
   /** Worst offenders paused first. */
   watchBouncePercent: 3, watchComplaintsPerTenThousand: 5, watchMinComplaints: 3,
   /** Every business's marketing held. */
@@ -73,6 +82,10 @@ export const ACCOUNT = Object.freeze({
 });
 /** A step is earned only with at least this many UK days of live sends at half its daily cap or more. */
 export const RAMP_STEP_BUSY_DAYS = 2;
+/** After a founder restart, the hard-bounce and complaint lines pause only once this many live emails went out since it. */
+export const RESTART_MIN_SENDS = 20;
+/** After a founder restart, a second pause switches email off only once this many live emails went out since it (0156 apply). */
+export const RESTART_MIN_SENDS_FOR_OFF = 50;
 
 const DAY = 86_400_000;
 
@@ -98,6 +111,10 @@ export interface ProtectionCounts {
   readonly ownerPausedAt: string | null;
   readonly ownPauses90: number;
   readonly sends7: number; readonly hard7: number; readonly soft7: number;
+  /** Emails a mailbox provider blocked or flagged as spam (7 days): counted toward SLOWED only. */
+  readonly blocked7?: number;
+  /** Live sends since the founder's last restart (null when never restarted). */
+  readonly sendsSinceRestart?: number | null;
   readonly sends30: number; readonly complaints30: number; readonly unsubscribes30: number;
   readonly last50Sends: number; readonly hardLast50: number;
   readonly liveDay: number; readonly liveHour: number;
@@ -122,6 +139,10 @@ export interface Trip {
   readonly days?: number;
   /** Only for the account trip-wire: the business's own share. */
   readonly own?: { readonly count: number; readonly total: number };
+  /** Only for the account trip-wire: 1 when this business had the highest rate, 2 for the next one paused in the same pass... */
+  readonly rank?: number;
+  /** Bounces only: how many of the count were blocked or flagged as spam by a mailbox provider (slowed only). */
+  readonly blocked?: number;
 }
 
 export const bounces7 = (c: Pick<ProtectionCounts, 'hard7' | 'soft7'>): number => c.hard7 + c.soft7;
@@ -132,15 +153,18 @@ const atLeastPerTenThousand = (n: number, d: number, per: number): boolean => d 
 
 /** The highest level a business's own numbers reach right now, and the line that put it there (strongest first). */
 export function judge(c: ProtectionCounts): { readonly level: 'ok' | 'slowed' | 'paused'; readonly trip: Trip | null } {
-  const b = bounces7(c), meaningful = c.sends7 >= LADDER.minSendsForRate;
+  const b = bounces7(c), meaningful = c.sends7 >= LADDER.minSendsForRate, blocked = c.blocked7 ?? 0;
+  // After a founder restart, a handful of late reports about emails sent before it cannot pause it on their own.
+  const settled = c.countedSince == null || (c.sendsSinceRestart ?? 0) >= RESTART_MIN_SENDS;
   if (meaningful && atLeastPercent(b, c.sends7, LADDER.pausedBouncePercent))
     return { level: 'paused', trip: { line: 'bounce_rate', level: 'paused', count: b, total: c.sends7, limit: LADDER.pausedBouncePercent, days: LADDER.bounceWindowDays } };
-  if (c.hardLast50 >= LADDER.pausedHardInLast50)
+  if (settled && c.last50Sends > 0 && c.hardLast50 >= LADDER.pausedHardInLast50)
     return { level: 'paused', trip: { line: 'hard_last50', level: 'paused', count: c.hardLast50, total: c.last50Sends, limit: LADDER.pausedHardInLast50 } };
-  if (c.complaints30 >= LADDER.pausedComplaints)
+  if (settled && c.complaints30 >= LADDER.pausedComplaints)
     return { level: 'paused', trip: { line: 'complaints', level: 'paused', count: c.complaints30, total: c.sends30, limit: LADDER.pausedComplaints, days: LADDER.complaintWindowDays } };
-  if (meaningful && atLeastPercent(b, c.sends7, LADDER.slowedBouncePercent))
-    return { level: 'slowed', trip: { line: 'bounce_rate', level: 'slowed', count: b, total: c.sends7, limit: LADDER.slowedBouncePercent, days: LADDER.bounceWindowDays } };
+  if (meaningful && atLeastPercent(b + blocked, c.sends7, LADDER.slowedBouncePercent))
+    return { level: 'slowed', trip: { line: 'bounce_rate', level: 'slowed', count: b + blocked, total: c.sends7, limit: LADDER.slowedBouncePercent, days: LADDER.bounceWindowDays,
+      ...(blocked > 0 ? { blocked } : {}) } };
   if (c.complaints30 >= LADDER.slowedComplaints)
     return { level: 'slowed', trip: { line: 'complaints', level: 'slowed', count: c.complaints30, total: c.sends30, limit: LADDER.slowedComplaints, days: LADDER.complaintWindowDays } };
   return { level: 'ok', trip: null };
@@ -150,7 +174,8 @@ export function judge(c: ProtectionCounts): { readonly level: 'ok' | 'slowed' | 
 export function recovered(c: ProtectionCounts, now: number): boolean {
   const since = c.since ? Date.parse(c.since) : NaN;
   if (!Number.isFinite(since) || now - since < LADDER.recoverMinDays * DAY) return false;
-  const b = bounces7(c);
+  // Blocked counts toward slowed, so it counts toward leaving it too (no flapping in and out).
+  const b = bounces7(c) + (c.blocked7 ?? 0);
   const clean = c.sends7 >= LADDER.minSendsForRate ? belowPercent(b, c.sends7, LADDER.recoverBouncePercent) : b === 0;
   return clean && c.complaints30 < LADDER.slowedComplaints;
 }
@@ -249,9 +274,11 @@ export function accountDecision(account: AccountCounts, businesses: readonly Pro
         && atLeastPerTenThousand(account.complaints30, account.sends30, ACCOUNT.holdComplaintsPerTenThousand))
       hold = { line: 'account_complaint', level: 'held', count: account.complaints30, total: account.sends30, limit: ACCOUNT.holdComplaintsPerTenThousand, days: 30 };
   }
-  const sending = businesses.filter(b => b.state === 'ok' || b.state === 'slowed');
+  const sending = businesses.filter(b => (b.state === 'ok' || b.state === 'slowed') && b.mode === 'live');
   const pause: { workspaceId: string; trip: Trip }[] = [];
-  for (let guard = 0; guard < businesses.length && sending.length; guard++) {
+  // With one business sending live, the worst-offender lines would only be a second, undocumented own pause: its own
+  // ladder covers it. They run while at least two send, and never pause the last one left.
+  for (let guard = 0; guard < businesses.length && sending.length >= ACCOUNT.minSendingBusinesses; guard++) {
     const s7 = sending.reduce((n, b) => n + b.sends7, 0), b7 = sending.reduce((n, b) => n + bounces7(b), 0);
     const s30 = sending.reduce((n, b) => n + b.sends30, 0), c30 = sending.reduce((n, b) => n + b.complaints30, 0);
     const bounceLine = s7 >= ACCOUNT.minSends && atLeastPercent(b7, s7, ACCOUNT.watchBouncePercent);
@@ -260,14 +287,15 @@ export function accountDecision(account: AccountCounts, businesses: readonly Pro
     // Only a business itself over the line is a candidate; the highest rate goes first (cross-multiplied, no floats).
     const candidates = sending.filter(b => bounceLine
       ? b.sends7 >= LADDER.minSendsForRate && atLeastPercent(bounces7(b), b.sends7, ACCOUNT.watchBouncePercent)
-      : b.complaints30 >= 1 && atLeastPerTenThousand(b.complaints30, b.sends30, ACCOUNT.watchComplaintsPerTenThousand));
+      : b.complaints30 >= ACCOUNT.candidateMinComplaints && b.sends30 >= ACCOUNT.candidateMinSends
+        && atLeastPerTenThousand(b.complaints30, b.sends30, ACCOUNT.watchComplaintsPerTenThousand));
     if (!candidates.length) break;
     const worst = [...candidates].sort((x, y) => bounceLine
       ? bounces7(y) * x.sends7 - bounces7(x) * y.sends7 || bounces7(y) - bounces7(x) || x.workspaceId.localeCompare(y.workspaceId)
       : y.complaints30 * x.sends30 - x.complaints30 * y.sends30 || y.complaints30 - x.complaints30 || x.workspaceId.localeCompare(y.workspaceId))[0]!;
     pause.push({ workspaceId: worst.workspaceId, trip: bounceLine
-      ? { line: 'account_bounce', level: 'paused', count: b7, total: s7, limit: ACCOUNT.watchBouncePercent, days: 7, own: { count: bounces7(worst), total: worst.sends7 } }
-      : { line: 'account_complaint', level: 'paused', count: c30, total: s30, limit: ACCOUNT.watchComplaintsPerTenThousand, days: 30, own: { count: worst.complaints30, total: worst.sends30 } } });
+      ? { line: 'account_bounce', level: 'paused', count: b7, total: s7, limit: ACCOUNT.watchBouncePercent, days: 7, own: { count: bounces7(worst), total: worst.sends7 }, rank: pause.length + 1 }
+      : { line: 'account_complaint', level: 'paused', count: c30, total: s30, limit: ACCOUNT.watchComplaintsPerTenThousand, days: 30, own: { count: worst.complaints30, total: worst.sends30 }, rank: pause.length + 1 } });
     sending.splice(sending.indexOf(worst), 1);
   }
   return { hold, pause };
@@ -282,12 +310,14 @@ export function percent(count: number, total: number): string {
 
 /** The figures written to the protection log (no address, ever). */
 export function tripNumbers(trip: Trip | null, c: ProtectionCounts): Record<string, number | string> {
-  const out: Record<string, number | string> = { sends7: c.sends7, hard7: c.hard7, soft7: c.soft7, complaints30: c.complaints30, sends30: c.sends30,
+  const out: Record<string, number | string> = { sends7: c.sends7, hard7: c.hard7, soft7: c.soft7, blocked7: c.blocked7 ?? 0, complaints30: c.complaints30, sends30: c.sends30,
     hardLast50: c.hardLast50, last50Sends: c.last50Sends, dailyCap: c.dailyCap, hourlyCap: c.hourlyCap };
   if (trip) {
     out.line = trip.line; out.count = trip.count; out.total = trip.total; out.limit = trip.limit;
     if (trip.days) out.days = trip.days;
     if (trip.own) { out.ownCount = trip.own.count; out.ownTotal = trip.own.total; }
+    if (trip.rank) out.rank = trip.rank;
+    if (trip.blocked) out.blocked = trip.blocked;
   }
   return out;
 }
@@ -299,5 +329,6 @@ export function tripFromNumbers(numbers: Readonly<Record<string, unknown>> | nul
   const line = numbers.line as TripLine;
   if (!['bounce_rate', 'hard_last50', 'complaints', 'sample', 'account_bounce', 'account_complaint'].includes(line)) return null;
   return { line, level, count: n('count'), total: n('total'), limit: n('limit'), ...(n('days') ? { days: n('days') } : {}),
-    ...(typeof numbers.ownCount === 'number' ? { own: { count: n('ownCount'), total: n('ownTotal') } } : {}) };
+    ...(typeof numbers.ownCount === 'number' ? { own: { count: n('ownCount'), total: n('ownTotal') } } : {}),
+    ...(n('rank') ? { rank: n('rank') } : {}), ...(n('blocked') ? { blocked: n('blocked') } : {}) };
 }

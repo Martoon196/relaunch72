@@ -138,26 +138,32 @@ export function readPostmarkSuppressionRow(row: unknown): PostmarkSuppressionRow
  * webhook and the hourly read alike, so the same event is counted once whichever reads it first and however each
  * reads it for blocking. Postmark counts every bounce "highlighted in red" towards its 10% line and does not publish
  * that list, so we count the wider set that says a delivery failed:
- *   hard_bounce  HardBounce, BadEmailAddress (whatever Inactive says), and any other Type Postmark switched off (Inactive)
- *   soft_bounce  SoftBounce, Transient, DnsError, Unknown, Blocked, SpamNotification, DMARCPolicy
+ *   hard_bounce  HardBounce, BadEmailAddress, and any other Type Postmark switched off (Inactive)
+ *   soft_bounce  SoftBounce, DnsError, Unknown, DMARCPolicy (not switched off)
+ *   blocked      Blocked, SpamNotification (not switched off): counted toward SLOWED only, never toward a pause, a
+ *                switch-off, the sample or the account lines
  *   complaint    SpamComplaint
  *   unsubscribe  Unsubscribe and ManuallyDeactivated bounce records, and a SubscriptionChange to ManualSuppression
- * Not counted: AutoResponder, AddressChange, Subscribe, OpenRelayTest, VirusNotification, ChallengeVerification,
- * Unconfirmed, SMTPApiError, InboundError, TemplateRenderingFailed (they say nothing about delivery to the person).
+ * Not counted: Transient (a delay Postmark is still retrying), AutoResponder, AddressChange, Subscribe, OpenRelayTest,
+ * VirusNotification, ChallengeVerification, Unconfirmed, SMTPApiError, InboundError, TemplateRenderingFailed (they say
+ * nothing about delivery to the person), unless Postmark switched the address off. The webhook and the hourly read
+ * both use this one function.
  * Key: "bounce:<Postmark ID>" for a bounce or complaint; an unsubscribe is "unsub:" and a digest of the stream and the
  * address (never the address), the same from a bounce record and a subscription change.
  */
-export type PostmarkCounterKind = 'hard_bounce' | 'soft_bounce' | 'complaint' | 'unsubscribe';
+export type PostmarkCounterKind = 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
 const COUNT_HARD = new Set(['HardBounce', 'BadEmailAddress']);
-const COUNT_SOFT = new Set(['SoftBounce', 'Transient', 'DnsError', 'Unknown', 'Blocked', 'SpamNotification', 'DMARCPolicy']);
+const COUNT_SOFT = new Set(['SoftBounce', 'DnsError', 'Unknown', 'DMARCPolicy']);
+const COUNT_BLOCKED = new Set(['Blocked', 'SpamNotification']);
 const COUNT_UNSUBSCRIBE = new Set(['Unsubscribe', 'ManuallyDeactivated']);
 export function postmarkCounterKind(type: unknown, inactive: unknown): PostmarkCounterKind | null {
   if (type === 'SpamComplaint') return 'complaint';
   if (typeof type !== 'string') return null;
   if (COUNT_UNSUBSCRIBE.has(type)) return 'unsubscribe';
-  if (COUNT_HARD.has(type)) return 'hard_bounce';
+  if (COUNT_HARD.has(type) || inactive === true) return 'hard_bounce';
   if (COUNT_SOFT.has(type)) return 'soft_bounce';
-  return inactive === true ? 'hard_bounce' : null;
+  if (COUNT_BLOCKED.has(type)) return 'blocked';
+  return null;
 }
 const unsubscribeKey = (stream: string, email: string): string => `unsub:${createHash('sha256').update(`${stream}\u0000${email}`).digest('hex').slice(0, 40)}`;
 export interface PostmarkCounted { readonly kind: PostmarkCounterKind; readonly key: string; readonly at: number; readonly stream: string; readonly serverId: string | null }

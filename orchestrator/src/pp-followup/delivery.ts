@@ -62,7 +62,9 @@ export async function runPpFollowupDelivery(input: PpFollowupDeliveryInput, stop
       reserve: async lease => { const outcome = await connection.store.reserve(plan.workspaceId, leaseSendKey(lease.leaseId, lease.id), purpose); return outcome === 'replayed' ? 'ok' : outcome; },
       settle: (lease, accepted) => connection.store.settle(plan.workspaceId, leaseSendKey(lease.leaseId, lease.id), accepted),
       onHold: reason => { refused = reason; try { connection.onHold?.(reason); } catch { /* telemetry only */ } } } });
-  if (refused) await wait();
+  // Test mode only ever claims the test list: everyone else in a flow waits, so their windows are restarted every sweep
+  // (the database moves them once the oldest has waited 20 minutes) and none fails before the business goes live.
+  if (refused || plan.mode === 'test') await wait();
   if (result.sent > 0) { try { connection.afterSend?.(plan.workspaceId); } catch { /* telemetry only */ } }
   return { ...result, sender: 'connection', ...(refused ? { hold: refused } : {}) };
 }

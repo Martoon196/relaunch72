@@ -31,6 +31,7 @@ export const SENDING_MESSAGES = Object.freeze({
   testRefusedSender: 'The email service didn\'t accept the test from your address. Press Check again to confirm both records are still found, then try again.',
   testKeyUnreadable: 'We couldn\'t open your saved connection on our side. Press Repair (or Continue) on this page, then try again.',
   testReplayed: 'That test was already sent once. Check your inbox and spam folder.',
+  testReplayedRefused: 'That test did not go the first time. Refresh this page and press Send a test to me again.',
   testRefusedRecipient: (address: string) => `The email service won't send to ${address}: it bounced or was reported as spam before. Use another test address.`,
   testReserved: (address: string) => `${address} can't receive email. Use a real test address.`,
   testUnknown: 'We couldn\'t tell whether the test was sent. Check your inbox in a few minutes before trying again.',
@@ -120,6 +121,28 @@ export function bannerFromConfig(config: SendingConfig, channel: BannerChannel =
       sampleState: config.sampleState, warmupStep: 0, accountHeld: config.accountHeld, lastStep: config.lastStep, counts: null, days: [] }, channel);
 }
 
+/** What the follow-ups page says when sending could not be checked at all (the safe path: everyone waits). */
+export const UNCHECKED_BANNER: Banner = Object.freeze({ tone: 'notice', title: 'We could not check email sending just now',
+  text: 'We could not check email sending just now, so nothing is being sent. People you start wait and get their emails once we can check again. Refresh this page in a minute.' });
+
+/**
+ * The banner for a hold that the protection banner has no words for (a full cap, missing footer details, no test
+ * address ...), so a held follow-ups page always says why. null only when nothing holds.
+ */
+export function holdBanner(reason: string, config: Pick<SendingConfig, 'dailyCap' | 'hourlyCap' | 'liveDay' | 'liveHour' | 'mode'> | null): Banner {
+  if (reason === 'cap' && config) {
+    return config.liveDay >= config.dailyCap
+      ? { tone: 'notice', title: 'Today\'s limit is reached', text: `Today's limit of ${config.dailyCap.toLocaleString('en-GB')} emails has been reached. The rest go tomorrow.` }
+      : { tone: 'notice', title: 'This hour\'s limit is reached', text: `This hour's limit of ${config.hourlyCap.toLocaleString('en-GB')} emails has been reached. The rest go next hour.` };
+  }
+  if (reason === 'needs_footer') return { tone: 'notice', title: 'Add your business details', text: 'Add your business name and postal address before marketing emails can go.' };
+  if (reason === 'not_live' && config?.mode === 'test') return { tone: 'notice', title: 'Add a test address', text: 'Add a test address to send tests.' };
+  if (reason === 'not_live') return { tone: 'notice', title: 'You are not live yet', text: 'You are not live yet, so no marketing emails go. Open your email page to start testing or go live.' };
+  if (reason === 'unreadable') return { tone: 'alert', title: 'We could not open your connection', text: 'We could not open your saved connection on our side, so nothing is being sent. Open your email page and press Repair.' };
+  if (reason === 'unavailable') return UNCHECKED_BANNER;
+  return { tone: 'notice', title: 'Email sending is on hold', text: stillHeld(reason) };
+}
+
 /** In plain words, why marketing email is still not going (after the owner presses Resume), or null when nothing holds it. */
 export function stillHeld(reason: string): string {
   const words: Record<string, string> = {
@@ -133,6 +156,7 @@ export function stillHeld(reason: string): string {
     not_connected: 'Email is not connected right now, so nothing is being sent.',
     cap: 'You have reached today\'s limit; the rest go as the limit frees.',
     not_live: 'You are not live yet.',
+    owner_paused: 'You have paused your marketing emails. Press Resume on your email page when you want them to go.',
     needs_footer: 'Add your business\'s real name and postal address first.',
     switched_off_here: 'Sending through your own connection is switched off on our side right now.',
   };
@@ -215,6 +239,9 @@ export class OwnerSendingService {
       let reserved: ReserveOutcome;
       try { reserved = await this.input.protection.testReserve(identity.sessionToken, identity.workspaceId, key); } catch (error) { return this.refusal(error); }
       if (reserved === 'replayed') { replayed++; continue; }
+      // A replay of an attempt that was refused, or never answered, is not "already sent".
+      if (reserved === 'replayed_refused') return { ok: false, message: SENDING_MESSAGES.testReplayedRefused };
+      if (reserved === 'replayed_unknown') return { ok: false, message: SENDING_MESSAGES.testUnknown };
       if (reserved !== 'ok') return { ok: false, message: reserved === 'test_limit' ? SENDING_MESSAGES.testLimit : reserved === 'off' ? SENDING_MESSAGES.testOff
         : SENDING_MESSAGES.testNotConnected };
       const outcome = await sendPostmarkTest({ fetcher: this.fetcher, token, stream: connection.stream ?? 'broadcast', fromName: connection.fromName, from: connection.fromAddress,
