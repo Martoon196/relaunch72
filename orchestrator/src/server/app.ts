@@ -89,7 +89,7 @@ export function createApp(deps: AppDeps) {
 
     // The client portal — same-origin, browser-navigated HTML, its own tenant
     // auth gate. Only mounted when portal deps are provided.
-    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/')) {
+    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/') || url.pathname === '/studio') {
       if (!deps.portal) { send(res, 404, { error: 'portal not enabled' }); return; }
       try { await handlePortal(req, res, deps.portal); }
       catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
