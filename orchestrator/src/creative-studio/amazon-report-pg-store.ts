@@ -8,7 +8,7 @@ import type { Pool } from 'pg';
 import { withTransaction } from '../db/transaction.js';
 import type { PgSeoBlogPrincipal } from '../seo-blog/pg-store.js';
 import { SeoBlogError } from '../seo-blog/types.js';
-import { parseAmazonTrackingReport, type AmazonTrackingIdReport } from './amazon-tracking-report.js';
+import { parseAmazonTrackingReport, AmazonReportError, type AmazonTrackingIdReport } from './amazon-tracking-report.js';
 
 export interface SavedReportSummary {
   readonly id:string;
@@ -62,7 +62,12 @@ export class PgAmazonTrackingReports {
       input.reportStart>input.reportEnd||
       (Date.parse(input.reportEnd+'T00:00:00Z')-Date.parse(input.reportStart+'T00:00:00Z'))>366*86400*1000)
       throw new SeoBlogError(400,'Enter a valid report range (up to 366 days)');
-    const parsed=parseAmazonTrackingReport(input.originalText);
+    let parsed:AmazonTrackingIdReport;
+    try{parsed=parseAmazonTrackingReport(input.originalText);}
+    catch(e){
+      if(e instanceof AmazonReportError)throw new SeoBlogError(400,e.message);
+      throw e;
+    }
     const id=input.commandId??randomUUID();
     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id))
       throw new SeoBlogError(400,'Invalid import command');
