@@ -22,3 +22,47 @@ test('owner CSRF form escapes hostile source filenames and saves only via POST',
  assert.doesNotMatch(html,/<img src=x onerror/);
  assert.match(html,/media-cut-editor\.js/);
 });
+
+test('interactive editor builds real input/select/textarea controls and safely initializes preview',()=>{
+ const created:Array<{tag:string;type?:string;value?:string;attributes:Record<string,string>;children:unknown[];
+   append:(...values:unknown[])=>void;replaceChildren:(...values:unknown[])=>void;
+   setAttribute:(name:string,value:string)=>void;addEventListener:(name:string,fn:()=>void)=>void;
+   closest:(name:string)=>unknown;getAttribute:(name:string)=>string|null;
+   textContent?:string;maxLength?:number;src?:string;}>=[];
+ function element(tag:string){
+  const x={
+   tag,attributes:{} as Record<string,string>,children:[] as unknown[],value:'',
+   append(...values:unknown[]){this.children.push(...values);},
+   replaceChildren(...values:unknown[]){this.children=[...values];},
+   setAttribute(name:string,value:string){this.attributes[name]=value;},
+   addEventListener(_name:string,_handler:()=>void){},
+   closest(_name:string){return {tag:'label'};},
+   getAttribute(name:string){return this.attributes[name]??null;},
+   textContent:'',type:undefined as string|undefined,maxLength:undefined as number|undefined,
+   src:undefined as string|undefined,
+  };
+  created.push(x);return x;
+ }
+ const textarea=element('textarea');textarea.value=JSON.stringify({
+  canvas:'portrait',disclosure:'#ad',
+  clips:[{startMs:0,endMs:2000,caption:'Hello',transition:'cut',speed:1}],
+ });
+ const source=element('input');
+ source.value='22222222-2222-4222-8222-222222222222:'+ 'a'.repeat(64);
+ const form={querySelector:()=>textarea,elements:{namedItem:()=>source},
+  getAttribute:()=>'/portal/seo-blog/b/11111111-1111-4111-8111-111111111111/creative',
+  insertBefore:(_node:unknown,_before:unknown)=>{},
+  addEventListener:(_name:string,_handler:()=>void)=>{},
+ };
+ const document={querySelectorAll:()=>[form],createElement:element};
+ assert.doesNotThrow(()=>new vm.Script(MEDIA_CUT_EDITOR_SCRIPT).runInNewContext({document}));
+ const tags=created.map(v=>v.tag);
+ assert.ok(tags.filter(t=>t==='input').length>=3);
+ assert.ok(tags.filter(t=>t==='select').length>=3);
+ assert.ok(tags.filter(t=>t==='textarea').length>=2);
+ assert.ok(!tags.includes('number')&&!tags.includes('text'));
+ assert.ok(created.some(v=>v.tag==='input'&&v.type==='number'));
+ assert.ok(created.some(v=>v.tag==='input'&&v.type==='text'));
+ assert.ok(created.some(v=>v.tag==='video'&&v.src?.endsWith('/sources/22222222-2222-4222-8222-222222222222/stream')));
+ assert.equal(JSON.parse(textarea.value).clips[0].endMs,2000);
+});
