@@ -28,6 +28,7 @@ import { createSeoBlogMediaRuntime } from './seo-blog-media-service.js';
 import { createCreativeStudio, engineSavedImages, type SavedImageWithPreview } from './creative-studio-composition.js';
 import type { CreativeStudioService } from '../creative-studio/service.js';
 import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
+import { PgCreativeMediaProductStore } from '../creative-studio/media-product-pg-store.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
@@ -42,6 +43,8 @@ export interface PortalSeoBlogService {
   /** Creative Studio: mounted only when CREATIVE_STUDIO_ENABLED=true (after migration 0144). Renders are local; paid images go through the worker's shared admission. */
   readonly creativeEnabled?: boolean;
   creativeFor?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine): CreativeStudioService | null;
+  /** Immutable affiliate product proposals in the SAME canonical Creative Studio workspace. */
+  mediaProductsFor?(identity: PortalSessionIdentity, requestId: string): PgCreativeMediaProductStore | null;
   /** Receipted outputs of the existing article-image pipeline that the studio may reuse. */
   creativeSavedImages?(identity: PortalSessionIdentity, requestId: string, engine: SeoBlogEngine, brandId: string): Promise<SavedImageWithPreview[]>;
   /** Public brand enquiry capture into the existing CRM (studio enabled and a CRM command pool composed). */
@@ -104,6 +107,13 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       const creators = env.SEO_BLOG_METHOD_PACKS === 'true' && env.SEO_BLOG_CAMPAIGN_CREATORS === 'true'
         ? new PgCampaignCreatorStore(contentCommandPool, { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId }) : undefined;
       return createCreativeStudio({ contentCommandPool, identity, requestId, engine, env, ...(creators ? { creators } : {}) });
+    },
+    mediaProductsFor(identity, requestId) {
+      if (env.CREATIVE_STUDIO_ENABLED?.trim() !== 'true' || env.RL72_MEDIA_PRODUCTS_ENABLED?.trim() !== 'true') return null;
+      return new PgCreativeMediaProductStore(contentCommandPool, {
+        kind: 'user', userId: identity.userId, requestId,
+        sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
+      });
     },
     async creativeSavedImages(identity, _requestId, engine, brandId) {
       return env.CREATIVE_STUDIO_ENABLED?.trim() === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
