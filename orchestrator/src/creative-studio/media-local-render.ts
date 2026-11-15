@@ -77,7 +77,7 @@ export function localRenderFilterGraph(
         throw new SeoBlogError(400, 'Caption file path is not trusted');
       graph += `,drawtext=textfile=${filterPath(path)}:fontcolor=white:fontsize=36:x=(w-text_w)/2:y=h-text_h-64:box=1:boxcolor=black@0.55:boxborderw=12`;
     }
-    if (clip.transition === 'fade' && segment >= 1) {
+    if (clip.transition === 'fade' && segment >= 0.5) {
       const fade = Math.min(0.25, segment / 4);
       graph += `,fade=t=in:st=0:d=${fade},fade=t=out:st=${Math.max(0, segment-fade).toFixed(3)}:d=${fade}`;
     }
