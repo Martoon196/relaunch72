@@ -247,7 +247,7 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       await assert.rejects(other.get(a.brand.id,projectId),/owner|permission|session/iu);
       await assert.rejects(content.query('SELECT * FROM app.creative_media_edit_projects'),/permission denied/iu);
       assert.equal((await owner.save({...input,commandId:randomUUID(),expectedRevision:1,
-        plan:{...plan,clips:[{...plan.clips[0],caption:'Edited caption'}]}})).revision,2);
+        plan:{...plan,clips:[{...plan.clips[0]!,caption:'Edited caption'}]}})).revision,2);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
