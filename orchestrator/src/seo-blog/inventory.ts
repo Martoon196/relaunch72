@@ -5,10 +5,10 @@
  * page — including failures, so an incomplete inventory is visible.
  */
 
-import { parseHtmlPage, parseSitemap } from './html.js';
+import { brandPageHtmlLines, parseHtmlPage, parseSitemap } from './html.js';
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import type { InventoryPage, WebsiteInventory, WebsiteLook } from './types.js';
-import { BRAND_PAGE_LIMIT, BRAND_PAGE_TEXT_LIMIT, brandPageRank } from './brand-dna.js';
+import { BRAND_PAGE_LIMIT, brandPageRank, brandPageText } from './brand-dna.js';
 
 export interface InventoryOptions {
   readonly maxPages?: number;
@@ -119,7 +119,8 @@ export async function buildInventory(brandId: string, website: string, transport
       // Words are kept only from a page that is still on the brand's own site after any redirect: a "join" page that
       // forwards to a checkout or sign-in elsewhere is somebody else's words, not the brand's.
       const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated && sameSite(res.finalUrl, origin);
-      const text = keepText ? parsed.text.replace(/\s+/g, ' ').trim().slice(0, BRAND_PAGE_TEXT_LIMIT) : '';
+      // Brand DNA reads the page's structure only for the few pages whose words are kept.
+      const text = keepText ? brandPageText(brandPageHtmlLines(res.body.toString('utf8'))) : '';
       if (text) withText++;
       pages.push({
         ...(text ? { text } : {}),
