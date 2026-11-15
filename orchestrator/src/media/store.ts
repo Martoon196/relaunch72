@@ -19,6 +19,7 @@ export interface Product {
   merchant: string;
   productUrl: string;
   affiliateUrl: string | null;
+  clicks: number;
   createdAt: string;
 }
 export interface Variant {
