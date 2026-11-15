@@ -31,3 +31,17 @@ Severity-ranked findings with code file/line, reproduction, exploit or failure p
 ## Release gate
 
 Never claim the product is done until an authorised full journey passes: product and rights approved -> source or AI creation -> clips and editable timeline -> actual render -> fresh owner approval -> social schedule/publish with receipt -> tracked outbound affiliate link -> merchant-confirmed earnings -> accurate credits and billing. Operator/API keys, SDK licensing and real external payment/publication steps require explicit human action.
+
+
+## Canonical media hardening review — 15 November additional implementation
+
+Please audit exact changes introduced by commits `2bc073d5` through `899abb4a` on draft PR #108, not old PR #107. Review the following code paths and try to prove a counterexample:
+
+- `orchestrator/src/creative-studio/media-work-executor.ts`: verify that a failed/lost database receipt, provider timeout or stale claimed job never results in a second external paid call; check the distinction between local validation failures and network failures.
+- `orchestrator/src/db/migrations/0158_creative_media_video_jobs.sql`: check SQL owner-session validation, zero-default caps, immutable approved exact request bytes, digest binding, single-use worker leases, terminal unknown state and failure to settle above the reservation.
+- `orchestrator/src/creative-studio/media-providers.ts` and `media-admission-pg-store.ts`: ensure no provider secret reaches public HTML, no caller-controlled payload can replace the approved SQL snapshot, and the provider cannot be invoked with another tenant's lease or command.
+- `orchestrator/src/db/migrations/0159_creative_media_source_videos.sql`: try direct table access as `r72_content_command` and another workspace owner, SQL function misuse, binary/metadata spoofing, concurrent same-command replays, unauthorised blob insertion and forged rights evidence.
+- `orchestrator/src/portal/seo-blog-router.ts`, `creative-media-video-sources-view.ts`, `media-video-source-pg-store.ts`: check CSRF, multipart limit and parsing, filename sanitisation, content sniffing, HTML escaping, owner session expiry, disabled feature gate and error responses.
+- **Deliberately unresolved:** real AV decoding and source rights, 20 MB upload ceiling, protected worker scheduler, permanent output capture and reconciliation, global cost caps, authentic merchant/programme approval, licensed video editor, tenant billing, auto-publishing constraints and live E2E tests. Do not approve merger on mock provider contracts or green CI alone.
+
+CI proof for current implementation: https://github.com/Martoon196/relaunch72/actions/runs/43754549564 (exact head `899abb4a`; disposable local PG, no paid providers).
