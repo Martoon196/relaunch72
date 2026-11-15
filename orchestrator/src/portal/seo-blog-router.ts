@@ -551,6 +551,7 @@ async function handlePost(
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
+      const commandId = f('commandId') ?? '';
       if (parts[1] === 'reports' && parts.length === 2) {
         const importer=input.service.mediaReportsFor?.(identity,input.requestId);
         if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
@@ -592,7 +593,6 @@ async function handlePost(
         return ok(home + '/products','Private product revision saved. No merchant or publishing action was performed.');
       }
 
-      const commandId = f('commandId') ?? '';
       // Rendering runs in the background worker as a durable job; this request only records it (and stores any uploaded
       // background), then sends the owner to the task page, which follows the job and opens the result when it is ready.
       const queued = async (operation: Parameters<typeof studio.enqueueRender>[3]) => {
