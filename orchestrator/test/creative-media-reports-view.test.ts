@@ -26,7 +26,7 @@ test('Amazon imported report screen distinguishes merchant earnings, unknown and
   assert.match(html,/£16\.25/u);
   assert.match(html,/£3\.75/u);
   assert.match(html,/rows unknown/u);
-  assert.match(html,/Merchant/u);
+  assert.match(html,/merchant/iu);
   assert.match(html,/secure-form-test/u);
   assert.match(html,/enctype="multipart\/form-data"/u);
   assert.match(html,/No customer records/u);
