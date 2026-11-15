@@ -37,3 +37,31 @@ The source mode is a draft-intake convenience; it must **never** be treated as a
 ## Acceptance before selling
 
 All CI green on the exact SHA, disposable PG isolation passes, product eligibility and disclosures reviewed for intended geographies and platforms, confirmed direct-owner source rights, provider cap and reconciliation working, editor verified in browser, full render and approval proof, publisher permission checks and recorded real external receipts. A green unit test by itself does **not** demonstrate live AI video, publishing, or affiliate sales.
+
+
+## 15 November implementation extension
+
+This branch now includes more than the initial affiliate Creative Studio intake.
+
+- Migration 0156: signed-owner PostgreSQL product catalogue, immutable revisions, replay-safe commands and tenant RLS.
+- Native Creative Studio -> Manage affiliate products: create and revise private merchant/product proposals and rights assertions. A proposed merchant link is not automatically published.
+- One-click Create artwork and video from this product: securely loads the saved product from that workspace and pre-fills the existing approved Creative Studio Product promotion flow. Fresh rights and programme confirmations are required; existing local video storyboards, rendering and exact-version approval are reused.
+- Migration 0157: append-only merchant-report imports by signed brand owner, source hash, date range, idempotency and private selected-workspace data.
+- Creative Studio -> Import Amazon earnings reports: UTF-8 .txt/.csv upload, report date range, distinct known/unknown earnings, Others/unallocated handling and non-fabricated click totals. Source raw reports are not retained.
+- A separate affiliate_studio product presentation profile backed by the same PostgreSQL customer accounts and creative tools (standalone billing/onboarding still needs implementation).
+- Disabled-by-default Vizard/Shotstack provider adapters and mock contract tests. They are NOT authorised to charge until durable cost reservations and jobs exist.
+- A complete security and product-level Astra audit checklist in docs/rl72-astra-audit-brief.md.
+
+### Feature flags
+
+The private product catalogue is visible with CREATIVE_STUDIO_ENABLED=true and RL72_MEDIA_PRODUCTS_ENABLED=true after migration 0156.
+
+The merchant report importer additionally needs RL72_MEDIA_REPORTS_ENABLED=true after migration 0157. Both new features are off unless explicitly enabled. They do not publish social content, charge video APIs or register merchant affiliate accounts.
+
+### Reporting integrity
+
+The Amazon UK Tracking ID Summary is a user-uploaded merchant report, NOT a verified live Amazon API response. Hide or mark unknown rows as unknown, not zero. Do not allocate Others earnings to a particular product, clip or creative. Do not confuse dispatched-item earnings with collected payouts or clicks with confirmed purchases.
+
+### Not yet a sellable all-in-one creator
+
+Still blocking release: approved live product links and redirects, provider budget reservation/worker claims, owned video ingestion, embedded real editing SDK licensing and implementation, cloud render/output reconciliation, approved publishing through existing Zernio/social rails, standalone onboarding/subscriptions/credits, and E2E browser/live provider proofs. No merge, deployment, public publishing or external spending without operator review.
