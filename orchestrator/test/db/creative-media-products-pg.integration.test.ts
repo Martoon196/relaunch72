@@ -170,6 +170,11 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const list=await store.list(a.brand.id);
       assert.equal(list.length,1);
       assert.equal(list[0]?.sha256,saved.sha256);
+      const privatePreview=await store.load(a.brand.id,saved.id);
+      assert.deepEqual(privatePreview.bytes,bytes);
+      assert.equal(privatePreview.sha256,saved.sha256);
+      await assert.rejects(foreign.load(b.brand.id,saved.id),/not found/iu);
+      await assert.rejects(foreign.load(a.brand.id,saved.id),/owner|session|permission/iu);
       assert.equal((await admin.query("SELECT encode(b.sha256,'hex') AS digest FROM app.creative_media_source_videos s JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id WHERE s.workspace_id=$1",[a.brand.id])).rows[0].digest,saved.sha256);
       assert.deepEqual(await foreign.list(b.brand.id),[]);
       await assert.rejects(foreign.list(a.brand.id),/owner|session|permission/iu);

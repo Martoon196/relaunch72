@@ -7,7 +7,8 @@ export function creativeVideoSourcesPage(shell:Shell,sources:readonly VideoSourc
   const listings=sources.map(s=>'<li><strong>'+e(s.fileName)+'</strong> · '+e(s.mime)
     +' · '+(s.byteLength/1048576).toFixed(2)+' MiB · rights declared: '+e(s.rights)
     +' · <span class="pill warn">Awaiting probe</span>'
-    +'<p class="small muted">SHA256: <code>'+e(s.sha256)+'</code></p></li>').join('');
+    +'<p class="small muted">SHA256: <code>'+e(s.sha256)+'</code></p>'
+    +'<video controls preload="none" playsinline width="320" src="'+base(shell)+'/sources/'+e(s.id)+'/stream">Private preview unsupported</video></li>').join('');
   const html='<section class="card"><h2>Private video sources</h2>'
     +'<p>Store owned or licensed footage privately in the same Creative Studio asset database.</p>'
     +'<p class="notice">A successful upload is not proof of playability, licence validity or publishing permission. '

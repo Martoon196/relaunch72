@@ -43,6 +43,7 @@ import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creati
 import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { creativeMediaReportsPage } from './creative-media-reports-view.js';
 import { creativeVideoSourcesPage } from './creative-media-video-sources-view.js';
+import { videoByteRange } from './media-video-byte-range.js';
 import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
@@ -308,6 +309,28 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      const sourceStream=new RegExp(`^creative/sources/(${UUID})/stream$`,'i').exec(rest);
+      if(sourceStream) {
+        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
+        if(!sources)throw new SeoBlogError(404,'Private video sources are disabled');
+        const video=await sources.load(brandId,sourceStream[1]!.toLowerCase());
+        const total=video.bytes.byteLength,range=videoByteRange(req.headers.range,total);
+        const headers:Record<string,string>={
+          'content-type':video.mime,'cache-control':'private, no-store',
+          'x-content-type-options':'nosniff','x-robots-tag':'noindex, nofollow',
+          'referrer-policy':'no-referrer','accept-ranges':'bytes',
+          'content-disposition':'inline; filename="rl72-private-source"',
+        };
+        if(range.kind==='invalid'){
+          res.writeHead(416,{...headers,'content-range':`bytes */${total}`});
+          res.end();return;
+        }
+        const chunk=range.kind==='partial'?video.bytes.subarray(range.start,range.end+1):video.bytes;
+        const status=range.kind==='partial'?206:200;
+        res.writeHead(status,{...headers,'content-length':String(chunk.byteLength),
+          ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${total}`}:{})});
+        res.end(method==='HEAD'?undefined:chunk);return;
+      }
       if(rest==='creative/sources') {
         const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
         if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');

@@ -50,6 +50,30 @@ export class PgCreativeVideoSources {
     }
   }
   list(workspaceId:string):Promise<VideoSourceRow[]>{return this.command(workspaceId,'list',null,{},null);}
+  /** Server-only owner-scoped private read; never return this from a public API or provider. */
+  async load(workspaceId:string,sourceId:string):Promise<{mime:'video/mp4'|'video/webm';bytes:Buffer;sha256:string}>{
+    const p=this.principal;
+    if(!UUID.test(sourceId))throw new SeoBlogError(400,'Invalid video source ID');
+    if(p.kind!=='user'||!this.sessionHash)throw new SeoBlogError(403,'Signed-in source owner required');
+    try{
+      return await withTransaction(this.pool,{actorKind:'user',workspaceId,userId:p.userId,
+        requestId:p.requestId,portalSessionTokenHash:this.sessionHash},async(t)=>{
+        const row=(await t.query<{mime:'video/mp4'|'video/webm';bytes:Buffer;sha256:string}>(
+          'SELECT * FROM app_private.creative_media_video_source_bytes($1,$2,$3)',
+          [workspaceId,this.sessionHash,sourceId])).rows[0];
+        if(!row)throw new SeoBlogError(404,'Private video source not found');
+        const bytes=Buffer.from(row.bytes);
+        if(bytes.length>20_000_000||!['video/mp4','video/webm'].includes(row.mime)||
+          createHash('sha256').update(bytes).digest('hex')!==row.sha256)
+          throw new SeoBlogError(404,'Source bytes are unavailable');
+        return{mime:row.mime,bytes,sha256:row.sha256};
+      });
+    }catch(error){
+      if((error as {code?:string}).code==='42501')
+        throw new SeoBlogError(403,'Source owner session or workspace not verified');
+      throw error;
+    }
+  }
   upload(input:{workspaceId:string;commandId:string;bytes:Buffer;fileName:string;rights:VideoSourceRights;
     evidenceSha256:string|null;rightsConfirmed:boolean}):Promise<{id:string;sha256:string;replayed:boolean;state:'awaiting_probe'}>{
     if(!UUID.test(input.commandId))throw new SeoBlogError(400,'Invalid upload command');
