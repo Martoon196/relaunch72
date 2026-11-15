@@ -39,6 +39,8 @@ on:
       - 'orchestrator/src/portal/media-scene-timeline.ts'
       - 'orchestrator/test/media-scene-timeline.test.ts'
       - 'orchestrator/test/affiliate-creative.test.ts'
+      - 'orchestrator/src/creative-studio/affiliate-direct-link.ts'
+      - 'orchestrator/test/affiliate-direct-link.test.ts'
       - 'orchestrator/test/media-providers.test.ts'
       - 'orchestrator/test/db/creative-media-products-pg.integration.test.ts'
       - 'orchestrator/src/db/migrations/0157_creative_media_products.sql'
@@ -75,7 +77,7 @@ jobs:
         run: npm --prefix orchestrator run typecheck
       - name: Affiliate intake and Creative Studio regressions
         working-directory: orchestrator
-        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts test/media-video-output.test.ts test/media-reconciler.test.ts test/media-work-executor.test.ts test/media-admission.test.ts test/creative-media-reports-view.test.ts test/amazon-tracking-report.test.ts test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
+        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts test/media-video-output.test.ts test/media-reconciler.test.ts test/media-work-executor.test.ts test/media-admission.test.ts test/creative-media-reports-view.test.ts test/amazon-tracking-report.test.ts test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/affiliate-direct-link.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
       - name: Apply exact schema only to disposable localhost PG
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test

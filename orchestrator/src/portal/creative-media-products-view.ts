@@ -6,6 +6,7 @@
 import type { AffiliateMediaProductRecord } from '../creative-studio/media-product-pg-store.js';
 import { csrfField, layout, type Shell } from './seo-blog-view.js';
 import { base, STYLE } from './creative-studio-view.js';
+import { affiliateDirectLinkPreview,directLinkAnchor } from '../creative-studio/affiliate-direct-link.js';
 
 const e=(value:unknown):string=>String(value??'').replace(/[&<>"']/gu,
   (c)=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]!));
@@ -49,14 +50,21 @@ function productForm(shell:Shell, commandId:string, p?:AffiliateMediaProductReco
 
 export function creativeMediaProductsPage(shell:Shell, products:readonly AffiliateMediaProductRecord[],
   newCommandId:string,editCommandId:()=>string):string {
-  const items=products.map((p)=>'<details class="card"><summary><strong>'+e(p.product_name)+'</strong>'
+  const items=products.map((p)=>{
+    const linkReview=affiliateDirectLinkPreview(p);
+    const approvedPreview=linkReview.status==='manual_review'
+      ? '<p class="small muted">Direct-link candidate only, NOT cleared for publication: '
+        +e(linkReview.reason)+'</p><p>'+directLinkAnchor(linkReview,'Inspect merchant link directly')+'</p>'
+      : '<p class="small muted">Link blocked: '+e(linkReview.reason)+'</p>';
+    return '<details class="card"><summary><strong>'+e(p.product_name)+'</strong>'
     +' · '+e(p.merchant_name)+' <span class="pill warn">Owner proposal · v'+String(p.revision)+'</span></summary>'
     +'<p class="small muted">Network: '+e(p.network)+' · Rights: '+e(p.source_rights)
     +' · Eligibility confirmed by owner: '+(p.owner_channel_eligible?'yes':'no')+'</p>'
     +'<p class="small muted">Product link: '+e(linkLabel(p.product_url))
     +' · Affiliate proposal: '+(p.proposed_affiliate_url?e(linkLabel(p.proposed_affiliate_url)):'none')+'</p>'
     +'<p><a class="button" href="'+base(shell)+'?source_kind=affiliate_product&amp;purpose=product_promotion&amp;product_id='+e(p.product_id)+'">Create artwork and video from this product</a></p>'
-    +productForm(shell,editCommandId(),p)+'</details>').join('');
+    +approvedPreview+productForm(shell,editCommandId(),p)+'</details>';
+  }).join('');
   const notice='<section class="card"><h2>Private affiliate catalogue</h2>'
     +'<p class="muted">Save candidate products and the evidence you have reviewed. Every change creates a new revision. '
     +'These are your statements, not an Amazon approval, a verified Special Link or a sales report.</p>'
