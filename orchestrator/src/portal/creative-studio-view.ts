@@ -62,12 +62,15 @@ export function creativeOverviewPage(shell: Shell, data: {
   /** Images generated from this brand's typed briefs, usable as backgrounds (no new provider call). */
   readonly generatedImages?: readonly { id: string; label: string; previewUrl: string }[];
   readonly generation?: Readonly<{ available: boolean; enabled: boolean; remaining: number }>;
+  readonly productCatalogueEnabled?: boolean;
   /** Milestone 5: general patterns the same person shared from their other brands (never evidence for this brand). */
   readonly otherPatterns?: readonly import('../creative-studio/learning.js').PatternRow[] | null;
 }): string {
   const c = data.context, pre = data.prefill ?? new URLSearchParams();
   const radios = (name: string, options: [string, string][], checked: string) => options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${e(v)}"${v === checked ? ' checked' : ''}> ${e(l)}</label>`).join('');
-  const form = `<section class="card" aria-labelledby="new-h"><h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
+  const catalogue = data.productCatalogueEnabled
+    ? '<p><a class="button secondary" href="'+base(shell)+'/products">Manage affiliate products</a></p>' : '';
+  const form = `<section class="card" aria-labelledby="new-h">${catalogue}<h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
 <form class="cs-form" method="post" action="${base(shell)}/draft" enctype="multipart/form-data">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.commandId)}">
 ${pre.get('brief') ? '<p class="notice small">Pre-filled from a campaign proposal concept. Model-written copy is checked against approved facts like any brief.</p>' : ''}<fieldset><legend>1 · What is it for?</legend><div class="choice">${radios('purpose', CREATIVE_PURPOSES.map((p) => [p, PURPOSE_LABELS[p]]), CREATIVE_PURPOSES.includes(pre.get('purpose') as never) ? pre.get('purpose')! : 'advert')}</div></fieldset>
 <fieldset><legend>2 · What is it about?</legend><div class="choice">${radios('source_kind', [['offer', 'An approved offer'], ['article', 'An article'], ['brief', 'A short brief'], ['affiliate_product', 'An affiliate product (manual review required)']], pre.get('source_kind') === 'affiliate_product' ? 'affiliate_product' : pre.get('source_kind') === 'brief' || !c.offers.length ? 'brief' : 'offer')}</div>
