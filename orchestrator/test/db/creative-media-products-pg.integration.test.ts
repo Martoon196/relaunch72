@@ -11,6 +11,7 @@ import { PgSeoBlogStore } from '../../src/seo-blog/pg-store.js';
 import { PgCreativeMediaProductStore, type AffiliateMediaProductInput } from '../../src/creative-studio/media-product-pg-store.js';
 import { fixtureBrand } from '../rl72-method-fixtures.js';
 import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report-pg-store.js';
+import { PgVideoAdmissionOwner } from '../../src/creative-studio/media-admission-pg-store.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -108,6 +109,26 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       assert.equal(summaries[0]?.summary.unknownEarningsRows,1);
       assert.deepEqual(await other.list(b.brand.id),[]);
       await assert.rejects(other.list(a.brand.id),/session|permission|owner|denied/iu);
+    });
+    await t.test('paid video remains disabled until an actual workspace policy and signed owner approval',async()=>{
+      const owner=new PgVideoAdmissionOwner(content,a.principal);
+      const crossed=new PgVideoAdmissionOwner(content,b.principal);
+      const commandId=randomUUID(),jobId=randomUUID();
+      const request={workspaceId:a.brand.id,commandId,jobId,kind:'vizard_clip' as const,
+        payloadSha:'a'.repeat(64),rightsSha:'b'.repeat(64),estimatedMicrousd:500000,consent:true};
+      await assert.rejects(owner.reserve(request),/disabled|budget/iu);
+      assert.deepEqual(await owner.list(a.brand.id),[]);
+      await assert.rejects(crossed.list(a.brand.id),/session|owner|permission/iu);
+      await assert.rejects(content.query('SELECT * FROM app.creative_media_video_jobs'),/permission denied/iu);
+      await admin.query('INSERT INTO app.creative_media_video_policy(workspace_id,enabled,monthly_microusd,per_job_microusd,max_pending) VALUES($1,true,1000000,750000,1)',[a.brand.id]);
+      const first=await owner.reserve(request);
+      assert.equal(first.replayed,false);
+      const replay=await owner.reserve(request);
+      assert.equal(replay.replayed,true);
+      assert.equal(replay.id,jobId);
+      await assert.rejects(owner.reserve({...request,commandId:randomUUID(),jobId:randomUUID()}),/budget|cap/iu);
+      assert.equal((await owner.list(a.brand.id)).length,1);
+      assert.deepEqual(await crossed.list(b.brand.id),[]);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
