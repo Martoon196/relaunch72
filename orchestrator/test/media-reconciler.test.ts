@@ -8,7 +8,7 @@ function rig(kind:'shotstack_render'|'vizard_clip',status:'processing'|'complete
  const calls:string[]=[];
  const ports={
   pending:async()=>({jobId:ids.job,kind,claimToken:ids.claim,providerId:'provider-123',reservedMicrousd:1000000}),
-  inspectVizard:async()=>{calls.push('inspect-vizard');return{status:status==='complete'?'complete':'processing' as const,clips:status==='complete'?
+  inspectVizard:async()=>{calls.push('inspect-vizard');return{status:(status==='complete'?'complete':'processing') as 'complete'|'processing',clips:status==='complete'?
     [{providerClipId:'clip-1',title:'A clip',transcript:'',durationMs:30000,temporaryDownloadUrl:'https://cdn-video.vizard.ai/1.mp4',expiresWithinDays:7 as const}]:[]};},
   inspectShotstack:async()=>{calls.push('inspect-shotstack');return{status,temporaryDownloadUrl:status==='complete'?'https://cdn.shotstack.io/a.mp4':null,billedCredits:status==='complete'?2:null};},
   download:async()=>{calls.push('download');return {mime:'video/mp4' as const,bytes:Buffer.alloc(1024),sha256:'a'.repeat(64)};},
