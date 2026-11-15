@@ -31,8 +31,8 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  priceCandidates, priceContradiction, priceLines, priceStatus, priceStructure, samePriceLine, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
-  type LinkContext, type PriceStatus, type StructuredPrice,
+  checkPricing, freePriceOk, priceCandidates, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
+  type CheckedPriceLine, type LinkContext, type PriceStatus,
 } from './brand-dna-rules.js';
 
 /**
@@ -294,6 +294,8 @@ interface OfferDecision {
   readonly pagePrice: string | null;
   /** For a tied price: the lines the rule used (the offer's name line and the price's line), shown beside it on the card. */
   readonly priceLines: string | null;
+  /** The model's proposed price structure, when the check accepted every line of it (the price is then tied by it). */
+  readonly checked: readonly CheckedPriceLine[] | null;
   readonly description: { readonly text: string; readonly cut: readonly string[] };
   readonly urlBad: boolean;
 }
@@ -314,16 +316,20 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
   const offers = value.offers.map((o, index): OfferDecision => {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     const description = cutDescription(o.description ?? '', numbers, DESCRIPTION_MAX);
-    const none = { price: null, pagePrice: null, priceLines: null, description, urlBad: false };
+    const none = { price: null, pagePrice: null, priceLines: null, checked: null, description, urlBad: false };
     if (index >= OFFER_LIMIT) return { offer: o, drop: `is past the first ${OFFER_LIMIT} offers`, ...none };
     if (!doc) return { offer: o, drop: 'must name the supplied document it came from in sourceDocumentId', ...none };
     const nameProblem = offerNameProblem(o.name, doc);
     if (nameProblem) return { offer: o, drop: `its name ${nameProblem}. Name the offer exactly as that document does`, ...none };
     const self = names.findIndex((n) => sameValue(n, o.name));
     const at = self < 0 ? names.length : self;
-    const read = priceStatus(o.price ?? '', doc, names, at);
-    const lines = o.price && read.status === 'tied' ? priceLines(doc, names, at, o.price) : null;
-    return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.hint, priceLines: lines, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
+    // A proposed price structure is checked line by line; accepted whole, it ties the price. Otherwise the plain rule.
+    const proposal = proposedLines((o as { pricing?: unknown }).pricing);
+    const checked = proposal ? checkPricing(documents, names, at, o.price, proposal) : null;
+    const free = !checked && o.price !== null && /^free$/iu.test(o.price.trim()) && freePriceOk(doc, names, at);
+    const read = checked || free ? { status: 'tied' as const, hint: null } : priceStatus(o.price ?? '', doc, names, at);
+    const lines = o.price && read.status === 'tied' && !free ? priceLines(doc, names, at, o.price) : null;
+    return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.hint, priceLines: lines, checked, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
   });
   return { offers, names };
 }
@@ -644,7 +650,9 @@ export function cleanProvenance<T extends ProfileFacts>(value: T, documents: rea
     return { field: c.field, detail: c.detail, documentIds: c.documentIds, ...(c.kind ? { kind } : {}), ...(offer ? { offer } : {}), ...(options.length ? { options } : {}) };
   });
   // The model never states who typed a price: that field belongs to an owner's settled choice only.
-  const offers = value.offers.map((o): ProfileOffer => ({ name: o.name, description: o.description, price: o.price ?? null, url: o.url ?? null, sourceDocumentId: o.sourceDocumentId ?? null }));
+  const offers = value.offers.map((o): ProfileOffer => ({ name: o.name, description: o.description, price: o.price ?? null, url: o.url ?? null, sourceDocumentId: o.sourceDocumentId ?? null,
+    // Website door: the model's proposed price structure travels on to be checked (holdConflictedPrices), never stored unchecked.
+    ...(strict && (o as { pricing?: unknown }).pricing !== undefined ? { pricing: (o as { pricing?: unknown }).pricing as ProfileOffer['pricing'] } : {}) }));
   const cleaned: T = { ...value, offers, conflicts, sources: sources.slice(0, 120) };
   if (!sources.length) delete (cleaned as { sources?: unknown }).sources;
   return cleaned;
@@ -699,27 +707,20 @@ export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>
   for (const offer of value.offers) {
     // Skipped only when a price question for this offer is already on the card; a different question about the same offer does not hide a price disagreement.
     if (value.conflicts.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
-    const found = priceConflictFor(offer, value.offers, documents);
-    if (found) added.push(found);
-  }
-  return added;
-}
-function priceConflictFor(offer: ProfileOffer, all: readonly ProfileOffer[], documents: readonly SourceText[]): ProfileConflict | null {
-  {
-    const value = { offers: all };
     const otherNames = value.offers.filter((o) => o !== offer).map((o) => o.name.replace(/\s+/g, ' ').trim().toLowerCase()).filter((n) => n.length >= 3);
     const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames) : [] })).filter((d) => d.prices.length > 0);
     const disagree = perDoc.some((a, i) => perDoc.slice(i + 1).some((b) => !a.prices.some((p) => b.prices.some((q) => q.amount === p.amount))));
-    if (!disagree) return null;
+    if (!disagree) continue;
     const options: ProfileConflictOption[] = [];
     for (const d of perDoc) for (const p of d.prices) {
       if (options.length < 6 && !options.some((o) => o.documentId === d.id && sameValue(o.value, p.phrase))) options.push({ value: p.phrase, documentId: d.id, quote: p.quote });
     }
-    return {
+    added.push({
       field: `${offer.name}: price`, detail: 'Your website pages and documents give different prices for this. Nothing was chosen for you.',
       documentIds: [...new Set(options.map((o) => o.documentId))], kind: 'price', offer: offer.name, options,
-    };
+    });
   }
+  return added;
 }
 
 /** The page's own price expressions for one offer in one document, as answers to put to the owner. */
@@ -730,122 +731,73 @@ function pageOptions(doc: SourceText, names: readonly string[], self: number): P
   });
 }
 
-/** One offer's price structure across every supplied document (its cited document first), duplicates merged. */
-function offerStructure(offer: ProfileOffer, self: number, names: readonly string[], documents: readonly SourceText[]): (OfferPriceLine & StructuredPrice)[] {
-  const ordered = [...documents.filter((d) => d.id === offer.sourceDocumentId), ...documents.filter((d) => d.id !== offer.sourceDocumentId)];
-  const merged: (OfferPriceLine & StructuredPrice)[] = [];
-  for (const d of ordered) {
-    const local = priceStructure(d, names, self);
-    const at: number[] = [];
-    for (const l of local) {
-      const parent = l.parent !== null ? at[l.parent] ?? null : null;
-      const same = merged.findIndex((m) => samePriceLine(m, l) && (l.role !== 'plan' || (m.parent !== null && parent !== null && merged[m.parent]!.amount === merged[parent]!.amount) || m.parent === parent));
-      if (same >= 0) {
-        if (l.role === 'plan' && l.total && !merged[same]!.total) merged[same] = { ...merged[same]!, total: l.total };
-        at.push(same);
-        continue;
-      }
-      at.push(merged.length);
-      merged.push({ ...l, parent, documentId: d.id, quote: clip(l.quote, 300), text: clip(l.text, 200), condition: l.condition ? clip(l.condition, 300) : null, total: l.total ? clip(l.total, 120) : null });
-    }
-  }
-  return merged.slice(0, 12);
-}
-const ROLE_WORDS: Record<string, string> = { standard: 'standard prices', special: 'special offer prices', plan: 'instalment plans', free: 'prices' };
-/** The stored form of structure lines: page words, roles, parents re-pointed after any line is left out. */
-function storedLines(lines: readonly (OfferPriceLine & StructuredPrice)[], drop: ReadonlySet<number>): OfferPriceLine[] {
-  const keep = lines.map((_, i) => i).filter((i) => !drop.has(i));
-  return keep.map((i) => {
-    const l = lines[i]!;
-    const parent = l.parent !== null && keep.includes(l.parent) ? keep.indexOf(l.parent) : null;
-    return { role: l.role, text: l.text, ...(l.condition ? { condition: l.condition } : {}), ...(l.total ? { total: l.total } : {}), ...(l.role === 'plan' ? { parent } : {}),
-      documentId: l.documentId, quote: l.quote };
-  });
-}
-
 /**
- * Site-fed extractions only, after the repair: the price structure of every offer, taken from the page by rule.
- *   - Each offer's structure (standard prices, instalment plans, special offers, free) is read from its own run in every
- *     document; the card shows it, and `price` is its first standard line (null when the page gives only a special).
- *   - The owner is asked only on a real contradiction (`priceContradiction`): two standard prices for the same period,
- *     two specials with the same condition, or two plans of the same length for the same price. The question names the
- *     offer and the role and offers only the contradicting lines.
- *   - A price question the model raised is dropped when the page's structure answers it; with no structure on the page
- *     its answers become the page's own price expressions, as before (fewer than two: it goes and the price stays empty).
- *   - The cross-source backstop compares the same way: a document with no structure for the offer but a different amount
- *     beside its name still asks.
+ * Site-fed extractions only, after the repair: make sure no price the page gives more than one of, and no questioned
+ * price, is shown as settled.
+ *   - A price question the model raised keeps its wording but its answers become the page's own price expressions for
+ *     that offer in every document (so a junk extra offer or a single-answer question cannot steer it); with fewer than
+ *     two, it goes and the price stays empty.
+ *   - An offer whose cited document gives more than one price is asked about: "We found more than one price for X.
+ *     Which is right?", each full expression with its sentence.
+ *   - The cross-source backstop is unchanged: two sources disagreeing are always asked.
  * Only the offer a price question is about is held; its description loses any sentence that states a price.
  */
-export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents: readonly SourceText[], options: { readonly leftOut?: readonly ProfileLeftOut[] } = {}): T {
+export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): T {
+  const byId = new Map(documents.map((d) => [d.id, d]));
   const names = value.offers.map((o) => o.name);
-  const structures = value.offers.map((o, i) => offerStructure(o, i, names, documents));
-  const clashes = structures.map((lines) => priceContradiction(lines));
-  const pageAnswers = (offer: ProfileOffer) => {
+  // Website door, rules v3: each offer's proposed price structure, accepted only when the check accepts every line of it.
+  const checked = value.offers.map((o, i) => {
+    const proposal = proposedLines((o as { pricing?: unknown }).pricing);
+    return proposal && o.price ? checkPricing(documents, names, i, o.price, proposal) : null;
+  });
+  const amountsOf = (i: number) => new Set([value.offers[i]!.price, ...(checked[i] ?? []).flatMap((l) => [l.text, l.total ?? ''])].flatMap((t) => (t ? moneyAmounts(t) : [])));
+  /** Every answer of a question is an amount of the offer's accepted structure (so the structure answers it). */
+  const answered = (c: ProfileConflict, i: number) => checked[i] !== null && (c.options ?? []).length > 0 && (c.options ?? []).every((o) => { const a = moneyAmounts(o.value); return a.length > 0 && a.every((n) => amountsOf(i).has(n)); });
+  const options = (offer: ProfileOffer) => {
     const i = value.offers.indexOf(offer);
     const all = documents.flatMap((d) => pageOptions(d, names, i));
     return all.filter((o, k) => all.findIndex((p) => p.documentId === o.documentId && sameValue(p.value, o.value)) === k).slice(0, 6);
   };
   const heldOffers = new Set<ProfileOffer>();
-  const questions: ProfileConflict[] = [];
+  const modelQuestions: ProfileConflict[] = [];
   for (const c of value.conflicts) {
     const offer = c.kind === 'price' ? priceConflictOffer(c, value.offers) : null;
-    if (!offer) { questions.push(c); continue; }
-    // The page's structure answers the model's price question (or asks its own, below).
-    if (structures[value.offers.indexOf(offer)]!.length) continue;
+    if (!offer) { modelQuestions.push(c); continue; }
+    if (answered(c, value.offers.indexOf(offer))) continue;
     heldOffers.add(offer);
-    const page = pageAnswers(offer);
-    if (page.length >= 2) questions.push({ ...c, field: legendFor(c.field, offer.name), documentIds: [...new Set(page.map((o) => o.documentId))], options: page });
+    const page = options(offer);
+    if (page.length >= 2) modelQuestions.push({ ...c, field: legendFor(c.field, offer.name), documentIds: [...new Set(page.map((o) => o.documentId))], options: page });
   }
-  value.offers.forEach((offer, i) => {
-    const clash = clashes[i];
-    if (!clash || questions.some((c) => priceConflictOffer(c, value.offers) === offer)) return;
-    const seen = new Set<string>();
-    const opts: ProfileConflictOption[] = [];
-    for (const l of clash.lines) {
-      const id = `${l.documentId}\u0000${plain(l.text)}`;
-      if (seen.has(id) || !l.documentId || opts.length >= 6) continue;
-      seen.add(id);
-      opts.push({ value: clip(l.text, 300), documentId: l.documentId, quote: clip(l.quote ?? l.text, 300) });
-    }
-    questions.push({ field: `${offer.name}: price`, detail: `We found two different ${ROLE_WORDS[clash.role]} for ${offer.name}. Which is right?`, documentIds: [...new Set(opts.map((o) => o.documentId))],
-      kind: 'price', offer: offer.name, options: opts, ...(clash.role === 'special' || clash.role === 'plan' ? { pricingRole: clash.role } : {}) });
+  const several: ProfileConflict[] = [];
+  for (const [i, offer] of value.offers.entries()) {
+    if (checked[i] || heldOffers.has(offer) || modelQuestions.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
+    const doc = offer.sourceDocumentId ? byId.get(offer.sourceDocumentId) : undefined;
+    if (!doc) continue;
+    const page = pageOptions(doc, names, i);
+    if (page.length < 2) continue;
+    several.push({ field: `${offer.name}: price`, detail: `We found more than one price for ${offer.name}. Which is right?`, documentIds: [doc.id], kind: 'price', offer: offer.name, options: page });
+  }
+  const before = [...modelQuestions, ...several];
+  // The cross-source backstop as before, except for an offer with an accepted structure: an answer whose amounts are all
+  // covered by an accepted structure (its own, or another offer's checked price and lines) does not conflict.
+  const coveredAnywhere = new Set(value.offers.flatMap((_, i) => (checked[i] ? [...amountsOf(i)] : [])));
+  const backstop = priceConflicts({ offers: value.offers, conflicts: before }, documents).filter((c) => {
+    const i = value.offers.findIndex((o) => o.name === c.offer);
+    if (i < 0 || !checked[i]) return true;
+    return !(c.options ?? []).every((o) => { const a = moneyAmounts(o.value); return a.length > 0 && a.every((n) => amountsOf(i).has(n) || coveredAnywhere.has(n)); });
   });
-  // The cross-source backstop: documents with no structure for an offer, compared with the structure the others give.
-  const backstop: ProfileConflict[] = [];
-  value.offers.forEach((offer, i) => {
-    if (questions.some((c) => priceConflictOffer(c, value.offers) === offer)) return;
-    const unread = documents.filter((d) => priceStructure(d, names, i).length === 0);
-    if (!structures[i]!.length) { const found = priceConflictFor(offer, value.offers, unread); if (found) backstop.push(found); return; }
-    const otherNames = value.offers.filter((o) => o !== offer).map((o) => o.name.replace(/\s+/g, ' ').trim().toLowerCase()).filter((n) => n.length >= 3);
-    const amounts = new Set(structures[i]!.map((l) => moneyAmounts(l.text)[0]).filter((n): n is number => n !== undefined));
-    const extra: ProfileConflictOption[] = [];
-    for (const d of unread) for (const p of d.text ? pricesNear(d.text, offer.name, otherNames) : []) if (!amounts.has(p.amount) && extra.length < 3) extra.push({ value: p.phrase, documentId: d.id, quote: p.quote });
-    if (!extra.length) return;
-    const page = structures[i]!.filter((l) => l.role === 'standard' && l.documentId).slice(0, 3).map((l) => ({ value: l.text, documentId: l.documentId!, quote: l.quote ?? l.text }));
-    if (!page.length) return;
-    const order = (id: string) => documents.findIndex((d) => d.id === id);
-    const opts = [...page, ...extra].sort((a, b) => order(a.documentId) - order(b.documentId));
-    backstop.push({ field: `${offer.name}: price`, detail: 'Your website pages and documents give different prices for this. Nothing was chosen for you.', documentIds: [...new Set(opts.map((o) => o.documentId))], kind: 'price', offer: offer.name, options: opts });
-  });
-  const conflicts = [...questions.slice(0, Math.max(0, 30 - backstop.length)), ...backstop];
-  const held = new Set([...heldOffers, ...conflicts.filter((c) => !c.pricingRole).map((c) => priceConflictOffer(c, value.offers)).filter((o): o is ProfileOffer => Boolean(o))]);
+  const conflicts = [...before.slice(0, Math.max(0, 30 - backstop.length)), ...backstop];
+  const held = new Set([...heldOffers, ...conflicts.map((c) => priceConflictOffer(c, value.offers)).filter((o): o is ProfileOffer => Boolean(o))]);
   const offers = value.offers.map((o, i): ProfileOffer => {
-    const lines = structures[i]!, clash = clashes[i];
-    const drop = new Set<number>(clash ? clash.lines.map((l) => lines.indexOf(l)) : []);
-    const stored = held.has(o) && !lines.length ? [] : storedLines(lines, drop);
-    const { pricing: _old, ...rest } = o;
-    if (held.has(o)) return { ...rest, price: null, description: withoutOtherPrices(o.description ?? '', null), ...(stored.length ? { pricing: { lines: stored } } : {}) };
-    // A single price the repair left empty (the model's differed) stays empty and listed; a structure is the page's own.
-    // When the caller passes what the repair left out, a single price the model did not give at all is the page's too.
-    const blanked = !options.leftOut || options.leftOut.some((l) => l.what === 'price' && sameValue(l.text, o.name));
-    if (!stored.length || (!o.price && stored.length < 2 && blanked)) return rest;
-    const first = stored.find((l) => l.role === 'standard') ?? stored.find((l) => l.role === 'free');
-    return { ...rest, price: first ? first.text : null, pricing: { lines: stored } };
+    const { pricing: _proposal, ...rest } = o;
+    if (held.has(o)) return { ...rest, price: null, description: withoutOtherPrices(o.description ?? '', null) };
+    const lines = checked[i];
+    return lines?.length ? { ...rest, pricing: { lines: lines.map((l): OfferPriceLine => ({ role: l.role, text: l.text, ...(l.label ? { label: l.label } : {}), ...(l.total ? { total: l.total } : {}), ...(l.role === 'plan' ? { for: l.for } : {}), documentId: l.documentId, quote: l.quote })) } } : rest;
   });
   return { ...value, offers, conflicts };
 }
-/** A price question's legend names its offer. */
-const legendFor = (field: string, name: string) => (loose(field).includes(loose(name)) ? field : `${name}: price`);
+/** A price question's legend names its offer (a bare "price" gets the offer's name). */
+const legendFor = (field: string, name: string) => (/^\s*(?:the\s+)?prices?\s*$/iu.test(field) || !field.trim() ? `${name}: price` : field);
 
 /** The version of the rules a website-door card was checked under. A card with a lower (or no) version is shown as made under older rules. */
 export const BRAND_DNA_RULES_VERSION = 3;
@@ -883,12 +835,6 @@ export function settleConflict(profile: Pick<BrandProfile, 'offers' | 'approvedC
   if (conflict.kind === 'price' && !offer) throw new SeoBlogError(409, 'We could not tell which of the things you sell this price belongs to, so nothing was changed. Read your website again to get a fresh card.');
   const conflicts = profile.conflicts.filter((_, i) => i !== index);
   const sources = [...(profile.sources ?? [])];
-  if (offer && conflict.pricingRole) {
-    // A special offer or instalments question settles onto that line of the offer's price structure; the price stands.
-    const line: OfferPriceLine = { role: conflict.pricingRole, text: value, documentId, quote, ...(conflict.pricingRole === 'plan' ? { parent: null } : {}) };
-    const offers = profile.offers.map((o) => o === offer ? { ...o, pricing: { lines: [...(o.pricing?.lines ?? []), line] } } : o);
-    return { offers, approvedClaims: profile.approvedClaims, conflicts, sources };
-  }
   if (offer) {
     // A price the owner did not choose must not live on in the description.
     const offers = profile.offers.map((o) => o === offer ? { ...o, price: value, priceSourceDocumentId: documentId, description: withoutOtherPrices(o.description ?? '', value) } : o);
@@ -904,45 +850,6 @@ export function settleConflict(profile: Pick<BrandProfile, 'offers' | 'approvedC
 }
 
 /** Keep the source of every fact that survives an owner's wording change; a new line is recorded as the owner's own. */
-/** How a price structure line is written in the card's correction form, one per line. */
-const PRICING_LABEL: Record<OfferPriceLine['role'], string> = { standard: 'Price', plan: 'Instalments', special: 'Special offer', free: 'Free' };
-export function pricingEditLine(l: OfferPriceLine): string {
-  return `${PRICING_LABEL[l.role]}: ${l.text}${l.role === 'plan' && l.total ? ` (${l.total})` : ''}${l.role === 'special' && l.condition ? ` — ${l.condition}` : ''}`;
-}
-/**
- * The owner's corrected price lines for one offer (website door). A line written exactly as shown keeps its source; any
- * other line is the owner's own ("You told us") and is not re-checked. A line's role is its label ("Price:",
- * "Instalments:", "Special offer:", "Free"); a line with no label is a price. `price` follows the first standard line.
- */
-export function pricingAfterEdit(offer: ProfileOffer, written: readonly string[]): ProfileOffer {
-  const before = offer.pricing?.lines ?? [];
-  const lines: OfferPriceLine[] = [];
-  for (const raw of written.map((w) => w.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 12)) {
-    const kept = before.find((l) => pricingEditLine(l) === raw);
-    if (kept) { lines.push({ ...kept, ...(kept.role === 'plan' ? { parent: null } : {}) }); continue; }
-    const m = /^(price|instalments|special offer|free)\s*:?\s*(.*)$/iu.exec(raw);
-    const role: OfferPriceLine['role'] = !m ? 'standard' : m[1]!.toLowerCase() === 'instalments' ? 'plan' : m[1]!.toLowerCase() === 'special offer' ? 'special' : m[1]!.toLowerCase() === 'free' ? 'free' : 'standard';
-    let text = clip(m ? m[2] || m[1]! : raw, 200), condition: string | null = null, total: string | null = null;
-    if (role === 'special' && text.includes(' — ')) { condition = clip(text.slice(text.indexOf(' — ') + 3), 300); text = text.slice(0, text.indexOf(' — ')).trim(); }
-    if (role === 'plan') { const t = /\s*\(([^()]+)\)$/u.exec(text); if (t) { total = t[1]!; text = text.slice(0, t.index).trim(); } }
-    if (!text) continue;
-    lines.push({ role, text, ...(condition ? { condition } : {}), ...(total ? { total } : {}), ...(role === 'plan' ? { parent: null } : {}), documentId: null, quote: null });
-  }
-  // A plan pays the price written just before it.
-  const pointed = lines.map((l, i) => {
-    if (l.role !== 'plan') return l;
-    let parent: number | null = null;
-    for (let k = i - 1; k >= 0; k--) if (lines[k]!.role !== 'plan') { parent = k; break; }
-    return { ...l, parent };
-  });
-  const first = pointed.find((l) => l.role === 'standard') ?? pointed.find((l) => l.role === 'free');
-  const { pricing: _old, priceSourceDocumentId: _source, ...rest } = offer;
-  const typed = first ? first.documentId === null : false;
-  const sameFirst = first && offer.price === first.text && !typed;
-  return { ...rest, price: first ? first.text : null, ...(sameFirst ? (offer.priceSourceDocumentId !== undefined ? { priceSourceDocumentId: offer.priceSourceDocumentId } : {}) : first ? { priceSourceDocumentId: typed ? null : first.documentId } : {}),
-    ...(pointed.length ? { pricing: { lines: pointed } } : {}) };
-}
-
 export function sourcesAfterEdit(before: readonly ProfileFactSource[] | undefined, field: 'audience' | 'claim', prior: readonly string[], next: readonly string[]): ProfileFactSource[] {
   const kept = (before ?? []).filter((s) => s.field !== field || next.some((v) => sameValue(v, s.value)));
   const added = next.filter((v) => !prior.some((p) => sameValue(p, v)) && !kept.some((s) => s.field === field && sameValue(s.value, v)))
@@ -961,18 +868,11 @@ export interface DnaSource {
 export interface DnaItem { readonly text: string; readonly source: DnaSource | null }
 export interface DnaOffer {
   readonly name: string; readonly description: string; readonly source: DnaSource | null; readonly price: string | null; readonly priceSource: DnaSource | null; readonly priceOpen: boolean;
-  /** Website door, rules v3: the rest of the offer's price structure, each line with where it was read. */
+  /** Website door, rules v3: the rest of the offer's checked price structure, each line with where it was read. */
   readonly pricing?: DnaPricing;
 }
-export interface DnaPriceLine { readonly text: string; readonly condition: string | null; readonly total: string | null; readonly forText: string | null; readonly source: DnaSource }
-export interface DnaPricing {
-  /** Other standard prices (another period: "£670 a year"). */
-  readonly more: readonly DnaPriceLine[];
-  readonly plans: readonly DnaPriceLine[];
-  readonly specials: readonly DnaPriceLine[];
-  /** The page says the offer is free. */
-  readonly free: DnaPriceLine | null;
-}
+export interface DnaPriceLine { readonly text: string; readonly label: string | null; readonly total: string | null; readonly for: string | null; readonly source: DnaSource }
+export interface DnaPricing { readonly also: readonly DnaPriceLine[]; readonly plans: readonly DnaPriceLine[]; readonly specials: readonly DnaPriceLine[] }
 export interface DnaConflict {
   readonly index: number;
   readonly title: string;
@@ -1077,16 +977,41 @@ function setupCard(profile: BrandProfile, documents: readonly KnowledgeDocument[
   };
 }
 
-/** At most this many "What we could not find" notes on a website-door card. */
+/** At most this many "What we could not find" notes on a website-door card (rules v3). */
 export const GAP_NOTES_SHOWN = 6;
-const PRICE_NOTE = /\bprices?\b|\bpric(?:ed|ing)\b|\bcosts?\b|\bfees?\b|\binstal(?:l)?ments?\b|\bpayments?\b|\bwebinar\b|\bspecial\b|\boffers?\b|\bfound(?:er|ers|ing)\b|\bdiscount|\bplan\b|£/iu;
-/** Gap notes for the card: a note about an offer's price, instalments or special offer goes when that offer now has a price
- * structure or an open question; the rest are capped. */
+const PRICE_NOTE = /\bprices?\b|\bpric(?:ed|ing)\b|\bcosts?\b|\bfees?\b|\binstal(?:l)?ments?\b|\bpayments?\b|\bwebinar\b|\bspecial\b|\boffers?\b|\bfound(?:er|ers|ing)\b|\bdiscount|£/iu;
+/** A note about an offer's price, instalments or special offer goes when that offer has a checked price structure or an
+ * open question about its price; the rest are capped. */
 function gapNotes(profile: BrandProfile): string[] {
   const settled = profile.offers.filter((o) => (o.pricing?.lines.length ?? 0) > 0 || profile.conflicts.some((c) => priceConflictOffer(c, profile.offers) === o));
   return profile.missingFacts.filter(missingFactShowable)
     .filter((m) => !(PRICE_NOTE.test(m) && settled.some((o) => loose(m).includes(loose(o.name.replace(/^the\s+/i, ''))))))
     .slice(0, GAP_NOTES_SHOWN);
+}
+
+/** How a price structure line is written in the card's correction form, one per line. */
+const PRICING_LABEL: Record<OfferPriceLine['role'], string> = { other: 'Also', plan: 'Instalments', special: 'Special offer' };
+export function pricingEditLine(l: OfferPriceLine): string {
+  return `${PRICING_LABEL[l.role]}: ${l.label ? `${l.label} — ` : ''}${l.text}${l.role === 'plan' && l.total ? ` (${l.total})` : ''}`;
+}
+export const pricingEditText = (o: ProfileOffer) => (o.pricing?.lines ?? []).map(pricingEditLine).join('\n');
+/**
+ * The owner's corrected price lines for one offer (website door). The box submitted exactly as it was shown changes nothing.
+ * Otherwise every line is the owner's own ("You told us"), read by its label ("Also:", "Instalments:", "Special offer:";
+ * no label: "Also"), never tied to a parent, never re-checked. `price` is never touched here.
+ */
+export function pricingAfterEdit(offer: ProfileOffer, submitted: string): ProfileOffer {
+  const norm = (t: string) => t.replace(/\r/g, '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  if (norm(submitted) === norm(pricingEditText(offer))) return offer;
+  const lines: OfferPriceLine[] = [];
+  for (const raw of norm(submitted).split('\n').filter(Boolean).slice(0, 12)) {
+    const m = /^(also|instalments|special offer)\s*:\s*(.*)$/iu.exec(raw);
+    const role: OfferPriceLine['role'] = !m ? 'other' : m[1]!.toLowerCase() === 'instalments' ? 'plan' : m[1]!.toLowerCase() === 'special offer' ? 'special' : 'other';
+    const text = clip(m ? m[2]! : raw, 300);
+    if (text) lines.push({ role, text, documentId: null, quote: null });
+  }
+  const { pricing: _old, ...rest } = offer;
+  return lines.length ? { ...rest, pricing: { lines } } : rest;
 }
 
 function websiteDoorCard(profile: BrandProfile, documents: readonly KnowledgeDocument[]): BrandDnaCard {
@@ -1113,23 +1038,16 @@ function websiteDoorCard(profile: BrandProfile, documents: readonly KnowledgeDoc
     const priceOpen = profile.conflicts.some((c) => priceConflictOffer(c, profile.offers) === o);
     const source = o.sourceDocumentId ? from(o.sourceDocumentId) : null;
     if (!source) unsourced++;
-    const fromLine = (l: OfferPriceLine): DnaSource => (l.documentId === null ? { label: 'You told us', url: null, quote: null } : from(l.documentId, l.quote)!);
     // Beside a price: the lines the price rule used, as recorded when the card was made (an owner-settled price has none).
     const priceDoc = o.priceSourceDocumentId !== undefined ? o.priceSourceDocumentId : o.sourceDocumentId;
     const ruled = o.priceSourceDocumentId === undefined && o.price
       ? (profile.sources ?? []).find((s) => s.field === 'price' && s.documentId === o.sourceDocumentId && s.value === o.name && s.quote !== null && appearsIn(s.quote, o.price!)) : undefined;
+    const priceSource = !o.price ? null : from(priceDoc, ruled?.quote ?? null);
     const lines = o.pricing?.lines ?? [];
-    const own = o.price ? lines.find((l) => (l.role === 'standard' || l.role === 'free') && l.text === o.price) : undefined;
-    const priceSource = !o.price ? null : own ? fromLine(own) : from(priceDoc, ruled?.quote ?? null);
-    const dnaLine = (l: OfferPriceLine): DnaPriceLine => ({ text: l.text, condition: l.condition ?? null, total: l.total ?? null,
-      forText: l.role === 'plan' && typeof l.parent === 'number' && lines[l.parent] ? lines[l.parent]!.text : null, source: fromLine(l) });
-    const pricing: DnaPricing | undefined = lines.length ? {
-      more: lines.filter((l) => l.role === 'standard' && l !== own).map(dnaLine), plans: lines.filter((l) => l.role === 'plan').map(dnaLine),
-      specials: lines.filter((l) => l.role === 'special').map(dnaLine), free: lines.filter((l) => l.role === 'free' && l !== own).map(dnaLine)[0] ?? null,
-    } : undefined;
-    // The price is open only while a question about the price itself (not a special offer or instalments) is on the card.
-    const priceAsked = profile.conflicts.some((c) => !c.pricingRole && priceConflictOffer(c, profile.offers) === o);
-    return { name: o.name, description: o.description, source, price: o.price, priceSource, priceOpen: priceOpen && priceAsked, ...(pricing ? { pricing } : {}) };
+    const line = (l: OfferPriceLine): DnaPriceLine => ({ text: l.text, label: l.label ?? null, total: l.total ?? null, for: l.for ?? null,
+      source: l.documentId === null ? { label: 'You told us', url: null, quote: null } : from(l.documentId, l.quote)! });
+    const pricing: DnaPricing | undefined = lines.length ? { also: lines.filter((l) => l.role === 'other').map(line), plans: lines.filter((l) => l.role === 'plan').map(line), specials: lines.filter((l) => l.role === 'special').map(line) } : undefined;
+    return { name: o.name, description: o.description, source, price: o.price, priceSource, priceOpen, ...(pricing ? { pricing } : {}) };
   });
   const used = new Set<string>([...profile.knowledge.map((k) => k.documentId)]);
   const readFrom = [...used].map((id) => latest.get(id)).filter((d): d is KnowledgeDocument => Boolean(d?.text))

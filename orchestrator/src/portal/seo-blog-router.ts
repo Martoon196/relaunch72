@@ -726,8 +726,8 @@ async function handlePost(
       }
       if (parts[1] === 'edit' && parts.length === 2) {
         // Website door: price lines per offer, from fields "pricing-0", "pricing-1"… (only offers shown with a price structure).
-        const pricing: Record<number, string[]> = {};
-        for (let i = 0; i < 30; i++) { const v = f(`pricing-${i}`); if (v !== undefined) pricing[i] = lines(v); }
+        const pricing: Record<number, string> = {};
+        for (let i = 0; i < 30; i++) { const v = f(`pricing-${i}`); if (typeof v === "string") pricing[i] = v; }
         await engine.correctBrandDna(actor, brandId, whole('version'), { summary: f('summary') ?? '', audiences: lines(f('audiences')), approvedClaims: lines(f('approvedClaims')), exclusions: lines(f('exclusions')), voiceDont: lines(f('voiceDont')), ...(Object.keys(pricing).length ? { pricing } : {}) });
         return ok(here, 'Your changes are saved. Confirm the card to use it.');
       }

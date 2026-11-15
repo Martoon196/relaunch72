@@ -8,6 +8,8 @@
  *   - Join: one card per offer (card form), then the course checkout form after the last card, whose labels the old reader
  *     glued into one line ("Start the course: £997 paid once Start the course: £1,497 paid once Or 3 monthly payments …").
  *   - Mentoring: the programme page, no prices.
+ * The Mentoring page also carries the review's pattern B5(a): a paragraph starting "The Members' Room is included…" inside
+ * One Lane Mentoring's own card, then the mentoring price.
  * Words not quoted by the card (descriptions, headings, the Deal Desk and cheat-sheet lines) are short and follow
  * src/mhp/catalog.ts (The Deal Desk is £47 once). The Join page heads the Deal Desk card "Deal Desk" while the Home table and
  * the model name it "The Deal Desk": that is the reconstruction's account of "none found" (see the test for what changed).
@@ -41,10 +43,31 @@ export const MHP_JOIN = page('Join', `<h1>Join</h1>
 
 export const MHP_MENTORING = page('Mentoring', `<h1>One Lane Mentoring</h1>
 <p>Ninety days in a group of twelve, working one lane of property investing with Martin.</p>
+<p>The Members' Room is included for a year.</p>
+<p>£3,997, or 6 x £699</p>
 <h2>How it works</h2><ul><li>A call every week</li><li>Your deals reviewed in the group</li><li>Full refund before the first call</li></ul>
 <h2>One Lane Private</h2><p>Twelve months one to one. By application only.</p>`);
 
 export const MHP_PAGES: Record<string, string> = { '/': MHP_HOME, '/join/': MHP_JOIN, '/mentoring/': MHP_MENTORING };
+
+/** The answer an honest model gives under site prompt 1.5.0: each offer's ordinary price, and its other prices,
+ * instalments and special offers as `pricing.lines`, every word copied from the pages. */
+export function mhpStructuredAnswer(id: Record<string, string>): Record<string, unknown> {
+  const home = id['/']!, join = id['/join/']!;
+  const owner = mhpModelAnswer(id) as { offers: Record<string, unknown>[] };
+  const lines: Record<string, unknown[]> = {
+    'Property Done Properly': [{ kind: 'plan', text: '3 x £525', for: '£1,497' }, { kind: 'special', text: '£997', label: 'Webinar price' }, { kind: 'plan', text: '3 x £349', for: '£997' }],
+    "The Members' Room": [{ kind: 'other', text: '£670 a year' }, { kind: 'special', text: '£47 a month', label: "founders' price" }, { kind: 'special', text: '£47', label: 'for the first 100' }],
+    'One Lane Mentoring': [{ kind: 'plan', text: '6 x £699', for: '£3,997', total: '£4,194 in total' }],
+    'One Lane Private': [{ kind: 'plan', text: '12 x £2,250', for: '£25,000', total: '£27,000 in total' }],
+  };
+  // The Deal Desk's price is written only on the Join page, which heads it "Deal Desk": the model cites the Home row that
+  // names it and leaves the price empty.
+  const prices: Record<string, string> = { 'Free cheat sheets': 'Free', 'Property Done Properly': '£1,497', "The Members' Room": '£67 a month', 'One Lane Mentoring': '£3,997', 'One Lane Private': '£25,000' };
+  return { ...owner, conflicts: [],
+    offers: owner.offers.map((o) => ({ ...o, price: prices[o.name as string] ?? null, sourceDocumentId: o.name === 'One Lane Private' ? join : home,
+      ...(lines[o.name as string] ? { pricing: { lines: lines[o.name as string] } } : {}) })) };
+}
 
 /** The model's answer, as the owner's card shows it: the four price questions, the gap notes, and prices where it gave them. */
 export function mhpModelAnswer(id: Record<string, string>): Record<string, unknown> {

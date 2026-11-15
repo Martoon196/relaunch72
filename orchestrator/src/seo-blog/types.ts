@@ -190,28 +190,23 @@ export function offerForWriting<T extends ProfileOffer>(offer: T): Omit<T, 'pric
   const { pricing: _pricing, ...rest } = offer;
   return rest;
 }
-/** A question as every writing step sees it (the website door's price-role marker taken off). */
-export function conflictForWriting<T extends ProfileConflict>(conflict: T): Omit<T, 'pricingRole'> {
-  if (!('pricingRole' in conflict)) return conflict;
-  const { pricingRole: _role, ...rest } = conflict;
-  return rest;
-}
 
-/** An offer's price structure. `price` on the offer is its first standard line (null when the page gives only a special). */
+/** An offer's price structure, as the model proposed it and the website door checked it line by line. */
 export interface OfferPricing { readonly lines: readonly OfferPriceLine[] }
 export interface OfferPriceLine {
-  readonly role: 'standard' | 'plan' | 'special' | 'free';
+  /** 'other': another ordinary price of the offer (yearly beside monthly, a set-up fee…); 'plan': instalments; 'special': a time-limited, conditional or named price. */
+  readonly role: 'other' | 'plan' | 'special';
   /** The page's own words (or the owner's, when `documentId` is null). */
   readonly text: string;
-  /** A special's condition, in the page's words. */
-  readonly condition?: string | null;
+  /** The page's own words that name the line ("Webinar price", "founders' price", "Set-up fee"). */
+  readonly label?: string | null;
   /** A plan's total, in the page's words ("£1,575 in total"). */
   readonly total?: string | null;
-  /** A plan's price: the index of that line in `lines`. */
-  readonly parent?: number | null;
+  /** A plan's price: the text of `price` or of a special line, only when the check could tie it. */
+  readonly for?: string | null;
   /** The document it was read from; null when the owner typed it ("You told us"). */
   readonly documentId: string | null;
-  /** The page lines it came from (the offer's name line … its own line), markers off. */
+  /** The page line it came from, markers off. */
   readonly quote: string | null;
 }
 
@@ -232,8 +227,6 @@ export interface ProfileConflict {
   /** Exact `offers[].name` this conflict is about, when it is about one offer. */
   readonly offer?: string | null;
   readonly options?: readonly ProfileConflictOption[];
-  /** Website door only: a price question about a special offer or instalments; settling it adds that line to the offer's pricing. */
-  readonly pricingRole?: 'special' | 'plan';
 }
 
 /** Where one fact on the profile was read. `documentId` null means the owner typed or chose it themselves. */

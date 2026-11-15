@@ -8,7 +8,7 @@
 
 import type { BrandDnaState } from '../seo-blog/engine.js';
 import type { BrandDnaCard, DnaItem, DnaPriceLine, DnaSource } from '../seo-blog/brand-dna.js';
-import { BRAND_DNA_MESSAGES, brandDnaPayload, pricingEditLine } from '../seo-blog/brand-dna.js';
+import { BRAND_DNA_MESSAGES, brandDnaPayload, pricingEditText } from '../seo-blog/brand-dna.js';
 import { profilePayload } from '../seo-blog/profile-jobs.js';
 import { escapeHtml as e } from './ui.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -58,21 +58,21 @@ ${c.options.map((o) => `<label class="choice"><input type="radio" name="choice" 
 <p style="margin:12px 0 0"><button class="secondary" type="submit">Save this answer</button></p></fieldset></form>`).join('')}</section>`;
 }
 
-/** An offer's price structure under its price (website door, rules v3): other prices, instalments, special offers. */
+/** An offer's checked price structure under its price (website door, rules v3): other prices, instalments, special offers. */
 function pricingLines(o: BrandDnaCard['offers'][number]): string {
   const p = o.pricing;
   if (!p) return '';
-  const line = (label: string, l: DnaPriceLine, extra = '') => `<span class="price">${label}: ${e(l.text)}${extra}</span>${sourceLine(l.source)}`;
+  const line = (head: string, l: DnaPriceLine, extra = '') => `<span class="price">${head}: ${l.label ? `${e(l.label)} ` : ''}${e(l.text)}${extra}</span>${sourceLine(l.source)}`;
   return [
-    ...(o.priceOpen ? [] : p.more.map((l) => line('Or', l))),
-    ...p.plans.map((l) => line('Or pay in instalments', l, `${l.total ? ` (${e(l.total)})` : ''}${l.forText && l.forText !== o.price ? ` for ${e(l.forText)}` : ''}`)),
-    ...p.specials.map((l) => line('Special offer', l, l.condition && l.condition !== l.text ? ` — ${e(l.condition)}` : '')),
+    ...p.also.map((l) => line('Also', l)),
+    ...p.plans.map((l) => line('Or pay in instalments', l, `${l.total ? ` (${e(l.total)})` : ''}${l.for ? ` for ${e(l.for)}` : ''}`)),
+    ...p.specials.map((l) => line('Special offer', l)),
   ].join('');
 }
 
 function cardSections(card: BrandDnaCard): string {
   const offers = card.offers.length ? `<ul class="facts">${card.offers.map((o) => `<li><strong>${e(o.name)}</strong>${o.description ? `<br>${e(o.description)}` : ''}${sourceLine(o.source)}
-<span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : o.pricing?.specials.length ? 'Price: only a special offer is written (below)' : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}${pricingLines(o)}</li>`).join('')}</ul>`
+<span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}${pricingLines(o)}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
   return `<section class="card"><h2>In a sentence</h2>${card.summary.trim() ? `<p>${e(card.summary)}</p>` : '<p class="notice">Add a one-line summary before you confirm. Use “Something not right? Change it” below.</p>'}${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
 <section class="card"><h2>What you sell</h2><p class="muted">${card.fromWebsite ? 'Each price is copied as your page writes it, with the line we found it on and the line naming what it is for. Read them before you confirm.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
@@ -117,7 +117,7 @@ ${state.status === 'confirmed' ? '<p class="notice">Saving a change makes a new 
 ${area('summary', 'In a sentence', p.summary)}${area('audiences', 'Who it is for', p.audiences.join('\n'), 'One per line.')}
 ${area('approvedClaims', 'What you can say', p.approvedClaims.join('\n'), 'One per line.')}${area('exclusions', 'Never say', p.exclusions.join('\n'), 'One per line.')}
 ${area('voiceDont', 'Words and styles to avoid', p.voice.dont.join('\n'), 'One per line.')}
-${p.strict === true ? p.offers.map((o, i) => (o.pricing?.lines.length ? `${area(`pricing-${i}`, `Prices for ${e(o.name)}`, o.pricing.lines.map(pricingEditLine).join('\n'), 'One per line. Start each with “Price:”, “Instalments:” or “Special offer:”. Remove a line you do not want.')}\n` : '')).join('') : ''}<p><button class="secondary" type="submit">Save my changes</button></p></form></details>`;
+${p.strict === true ? p.offers.map((o, i) => (o.pricing?.lines.length ? `${area(`pricing-${i}`, `Prices for ${e(o.name)}`, pricingEditText(o), 'One per line. Start each with “Also:”, “Instalments:” or “Special offer:”. Remove a line you do not want. A line you change is yours and is kept as you wrote it.')}\n` : '')).join('') : ''}<p><button class="secondary" type="submit">Save my changes</button></p></form></details>`;
 }
 
 function readForm(shell: Shell, state: BrandDnaState, options: { label: string; main: boolean; again: boolean; commandId: string }): string {

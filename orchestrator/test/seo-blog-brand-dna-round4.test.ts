@@ -317,18 +317,15 @@ test('seven honest sites through the real reader: every true price kept, no wron
     const v = card(s.answer(ids));
     const r = door(v, docs, { website: s.website });
     const f = r.final, priced = v.offers.filter((o) => o.price);
-    const right = f.offers.filter((o) => o.price && (priced.some((p) => p.name === o.name && p.price === o.price) || (o.pricing?.lines.find((l) => l.role === 'standard' || l.role === 'free')?.text === o.price))).length;
-    // Rules v3: a price the page states as a structure (standard, plan, special) is the page's first standard line.
-    const own = (o: ProfileOffer): boolean => o.pricing?.lines.find((l) => l.role === 'standard' || l.role === 'free')?.text === o.price;
-    const wrong = f.offers.filter((o) => o.price && !priced.some((p) => p.name === o.name && p.price === o.price) && !own(o)).length;
+    const right = f.offers.filter((o) => o.price && priced.some((p) => p.name === o.name && p.price === o.price)).length;
+    const wrong = f.offers.filter((o) => o.price && !priced.some((p) => p.name === o.name && p.price === o.price)).length;
     const row = [f.offers.length, v.offers.length, right, s.truth, f.audiences.length, v.audiences.length, f.approvedClaims.length, v.approvedClaims.length, f.exclusions!.length, v.exclusions!.length, f.conflicts.length, wrong];
     row.forEach((x, i) => { totals[i] = totals[i]! + x; });
     const lines = priceLineSources(v, docs, { website: s.website });
     t.diagnostic(`${s.name} | offers ${row[0]}/${row[1]} | true prices ${row[2]}/${row[3]} | audiences ${row[4]}/${row[5]} | claims ${row[6]}/${row[7]} | never-say ${row[8]}/${row[9]} | questions ${row[10]} | wrong ${wrong} | first-pass problems ${r.problems.length} | lines ${JSON.stringify(lines.map((l) => l.quote))}`);
     assert.equal(wrong, 0, `${s.name}: wrong prices`);
     // Every price the honest answer gave stays (the broker's £495 and the coach's programme are not given as one offer's price).
-    // Every price the honest answer gave stays; rules v3 add the coach's "£795 or three monthly payments of £275".
-    assert.equal(row[2], priced.length + (/COACH/.test(s.name) ? 1 : 0), `${s.name}: true prices`);
+    assert.equal(row[2], priced.length, `${s.name}: true prices`);
     assert.equal(row[6], row[7], `${s.name}: claims`); assert.equal(row[4], row[5], `${s.name}: audiences`);
     assert.equal(r.problems.length, 0, `${s.name}: first-pass problems`);
     for (const l of lines) assert.ok(l.quote!.split(' … ').every((part) => withoutMarkers(docs.find((d) => d.id === l.documentId)!.text).includes(part)), `${s.name}: ${l.quote}`);

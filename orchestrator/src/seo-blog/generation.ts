@@ -17,7 +17,7 @@ import { loadPrompt, type LoadedPrompt } from '../stages/prompt.js';
 import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
-import { conflictForWriting, offerForWriting, SeoBlogError } from './types.js';
+import { offerForWriting, SeoBlogError } from './types.js';
 import { withoutMarkers } from './brand-dna-rules.js';
 import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSources, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
@@ -254,13 +254,25 @@ export const PROFILE_SCHEMA: AnySchema = {
   },
 };
 
+/** Website door (rules v3): an offer may propose its price structure; the code checks every line of it. */
+const PRICING_LINE = { type: 'object', required: ['kind', 'text'], properties: { kind: { type: 'string', enum: ['other', 'plan', 'special'] }, text: STR,
+  label: { type: ['string', 'null'] }, for: { type: ['string', 'null'] }, total: { type: ['string', 'null'] } } } as const;
+export const SITE_PROFILE_SCHEMA: AnySchema = {
+  ...(PROFILE_SCHEMA as Record<string, unknown>),
+  properties: { ...(PROFILE_SCHEMA as { properties: Record<string, unknown> }).properties,
+    offers: { type: 'array', maxItems: 30, items: { type: 'object', required: ['name', 'description'], properties: {
+      name: STR, description: STR, price: { type: ['string', 'null'] }, url: { type: ['string', 'null'] }, sourceDocumentId: { type: ['string', 'null'] },
+      pricing: { type: ['object', 'null'], properties: { lines: { type: 'array', maxItems: 12, items: PRICING_LINE } } },
+    } } } },
+};
+
 /**
  * The shape a website-door answer may have after the repair: the same as the model's, except that a summary emptied
  * because it stated a figure in no document may be empty (the card then asks the owner for one before confirming).
  */
 export const PROFILE_REPAIRED_SCHEMA: AnySchema = {
-  ...(PROFILE_SCHEMA as Record<string, unknown>),
-  properties: { ...(PROFILE_SCHEMA as { properties: Record<string, unknown> }).properties, summary: { type: 'string', maxLength: 1200, anyOf: [{ maxLength: 0 }, { minLength: 10 }] } },
+  ...(SITE_PROFILE_SCHEMA as Record<string, unknown>),
+  properties: { ...(SITE_PROFILE_SCHEMA as { properties: Record<string, unknown> }).properties, summary: { type: 'string', maxLength: 1200, anyOf: [{ maxLength: 0 }, { minLength: 10 }] } },
 };
 
 /** Only the fields an extraction may set. A field the model adds on its own (`strict`, `confirmedAt`, `leftOut`…) is dropped. */
@@ -314,7 +326,7 @@ export async function extractProfile(llm: LlmClient, input: {
   try {
     result = await callJson<ExtractedProfile>(llm, {
       prompt,
-      schema: PROFILE_SCHEMA,
+      schema: input.strict ? SITE_PROFILE_SCHEMA : PROFILE_SCHEMA,
       // A quoted source per fact roughly doubles the answer; the larger ceiling keeps a full card from being cut short.
       maxTokens: input.strict ? 16000 : 8000,
       user: [`Brand name: ${input.brandName}`, `Website: ${input.website ?? '(not supplied)'}`, dataBlock('knowledge_documents', docs)].join('\n\n'),
@@ -333,12 +345,7 @@ export async function extractProfile(llm: LlmClient, input: {
   // The website door's provenance rule applies to its own cards only; Setup keeps the rule it always had.
   const cleaned = cleanProvenance(knownProfileFields(result.value), docs, input.strict === true);
   if (!input.strict) return { ...result, value: cleaned };
-  const priced = holdConflictedPrices(cleaned, docs, { leftOut });
-  // A price the page's structure now gives is no longer listed as left out.
-  // A price question the repair took off is not "left out" when the page's price structure answers it.
-  const structured = priced.offers.some((o) => o.pricing);
-  leftOut = leftOut.filter((l) => !(l.what === 'question' && structured && (/\bprices?\b/i.test(l.text) || priced.offers.some((o) => o.pricing && l.text.toLowerCase().includes(o.name.toLowerCase())))));
-  leftOut = leftOut.filter((l) => l.what !== 'price' || !priced.offers.some((o) => o.name.trim().toLowerCase() === l.text.trim().toLowerCase() && Boolean(o.price || o.pricing)));
+  const priced = holdConflictedPrices(cleaned, docs);
   // The lines each tied price was read from, decided over the offer list the check used, for the card to show.
   const lines = priceLineSources(result.value, docs, { website: input.website }).filter((s) => priced.offers.some((o) => o.name === s.value && o.price && o.sourceDocumentId === s.documentId));
   const held = lines.length ? { ...priced, sources: [...(priced.sources ?? []), ...lines] } : priced;
@@ -420,10 +427,10 @@ export function researchForPrompt(short:Map<string,ResearchSource>):unknown[] {
 
 export function profileForPrompt(profile: BrandProfile): Record<string, unknown> {
   return {
-    // The price structure (rules v3) never reaches a writer: offers and questions keep their earlier shape.
+    // The price structure (rules v3) never reaches a writer: offers keep their earlier shape.
     summary: profile.summary, audiences: profile.audiences, positioning: profile.positioning, offers: profile.offers.map(offerForWriting),
     conversionPages: profile.conversionPages, voice: profile.voice, approvedClaims: profile.approvedClaims,
-    exclusions: profile.exclusions, unresolvedConflicts: profile.conflicts.map(conflictForWriting), missingFacts: profile.missingFacts,
+    exclusions: profile.exclusions, unresolvedConflicts: profile.conflicts, missingFacts: profile.missingFacts,
   };
 }
 
