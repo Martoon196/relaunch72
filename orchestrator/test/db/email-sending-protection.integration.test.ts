@@ -172,22 +172,19 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     assert.deepEqual([config.protectionState, config.sampleState], ['slowed', 'sending']);
     const counts = (await store.numbers())!.businesses.find(b => b.workspaceId === PP)!;
     assert.deepEqual([counts.hard7, counts.sends7, counts.ownPauses90], [0, 0, 1], 'what came before the lift no longer counts; the pause is remembered');
-    // A second own pause within 90 days, but fewer than 50 live emails since the restart (S-3): paused again, with
-    // why it was not switched off recorded; once 50 went out since the restart, the database switches it off itself.
-    assert.equal(await apply('slowed', 'paused', 'paused'), 'paused');
+    // A second own pause within 90 days, with fewer than 50 live emails since the restart (S-3): paused again, with why
+    // it was not switched off recorded. A third own pause within 90 days is off whatever was sent: repeat offenders go.
+    await ownerQuery(admin, `INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at)
+      SELECT $1,'send','lease:restart'||g,'live','reserved',clock_timestamp() FROM generate_series(1,20) g`, [PP]);
+    assert.equal(await apply('slowed', 'paused', 'paused'), 'paused', 'pause 2, 20 sends since the restart: paused');
     const again = await ownerQuery<{ kind: string; numbers: Record<string, unknown> }>(admin,
       `SELECT kind,numbers FROM app_private.email_protection_events WHERE workspace_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT 1`, [PP]);
-    assert.deepEqual([again[0]!.kind, again[0]!.numbers.sendsSinceRestart, typeof again[0]!.numbers.previousPauseAt], ['paused', 0, 'string']);
+    assert.deepEqual([again[0]!.kind, again[0]!.numbers.sendsSinceRestart, typeof again[0]!.numbers.previousPauseAt], ['paused', 20, 'string']);
     status = await store.founderView(founderToken);
     assert.equal(await store.founderAct(founderToken, PP, 'lift', pp().rowVersion), 'done');
     await ownerQuery(admin, `INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at)
-      SELECT $1,'send','lease:restart'||g,'live','reserved',clock_timestamp() FROM generate_series(1,49) g`, [PP]);
-    assert.equal(await apply('slowed', 'paused', 'paused'), 'paused', '49 since the restart: still paused, not off');
-    status = await store.founderView(founderToken);
-    assert.equal(await store.founderAct(founderToken, PP, 'lift', pp().rowVersion), 'done');
-    await ownerQuery(admin, `INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at)
-      SELECT $1,'send','lease:restart2-'||g,'live','reserved',clock_timestamp() FROM generate_series(1,50) g`, [PP]);
-    assert.equal(await apply('slowed', 'paused', 'paused'), 'off', '50 since the restart: switched off');
+      SELECT $1,'send','lease:restart2-'||g,'live','reserved',clock_timestamp() FROM generate_series(1,10) g`, [PP]);
+    assert.equal(await apply('slowed', 'paused', 'paused'), 'off', 'pause 3 within 90 days, 10 sends since the restart: switched off');
     assert.equal(await store.reserve(PP, 'lease:off', 'live'), 'off');
     assert.equal(await store.reserve(PP, 'test:off', 'test'), 'off', 'nothing but transactional email once off');
     assert.equal(await store.command(ownerToken, PP, 'test', EMAIL_TERMS_VERSION, false), 'switched_off');
@@ -223,7 +220,7 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     await service.count({ workspaceId: PP, kind: 'hard_bounce', key: 'bounce:e4', at: Date.now() });
     await service.settled();
     const after = (await store.sendingConfig(PP))!;
-    assert.equal(after.protectionState, 'paused', 'at the line: paused; a second own pause within 90 days, but only 20 live sends since the restart, so not off');
+    assert.equal(after.protectionState, 'off', 'at the line: paused, and with two own pauses already in 90 days, off');
 
     // Evidence: append-only, no address, and the alerts carry kinds and numbers only.
     const events = await ownerQuery<{ kind: string; numbers: Record<string, unknown>; actor_kind: string }>(admin,
@@ -234,7 +231,7 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     }
     assert.ok(events.every(e => !JSON.stringify(e.numbers).includes('@')));
     const last = events.at(-1)!;
-    assert.deepEqual([last.kind, last.numbers.line, last.numbers.count, last.actor_kind], ['paused', 'hard_last50', 5, 'system']);
+    assert.deepEqual([last.kind, last.numbers.line, last.numbers.count, last.actor_kind], ['switched_off', 'hard_last50', 5, 'system']);
     const alerts = await store.claimAlerts(50);
     assert.ok(alerts.some(a => a.audience === 'founder' && a.kind === 'go_live_requested'));
     assert.ok(alerts.some(a => a.audience === 'owner' && a.kind === 'paused' && a.ownerEmails.includes('owner-send@pp-send-proof.co.uk')));

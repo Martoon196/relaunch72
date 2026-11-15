@@ -108,7 +108,8 @@ export function bannerFor(connection: Pick<EmailConnectionState, 'mode' | 'prote
     sampleState: sending.sampleState, sampleTrip, ownerPaused: Boolean(sending.ownerPausedAt), accountHeld: sending.accountHeld, mode: connection.mode,
     waitingApproval: Boolean(sending.goLiveRequestedAt), notConnected: inCharge && connection.status !== 'verified',
     needsApproval: Boolean(sending.goLiveApprovedAt) && !sending.approvedCurrent && !sending.goLiveRequestedAt, needsTest: sending.approvedCurrent && !sending.testCurrent,
-    switchedOffHere: inCharge && channel.allowed === false && connection.mode !== 'off', emailed, willEmail: channel.mailer && sending.ownerEmailCount > 0 });
+    switchedOffHere: inCharge && channel.allowed === false && connection.mode !== 'off', emailed, willEmail: channel.mailer && sending.ownerEmailCount > 0,
+    secondPause: Boolean(step && step.kind === 'paused' && typeof step.previousPauseAt === 'string') });
 }
 
 /** The same banner from what the sender reads each sweep (for the follow-ups page, without a second read). */

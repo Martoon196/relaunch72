@@ -203,22 +203,29 @@ test('the reactivation our own delete causes is not the person re-subscribing: m
   assert.deepEqual(lifts, [], 'seconds after the owner lifted the bounce: our own delete, no unsubscribe is lifted');
   await other.post(change('Recipient', '2026-11-14T10:00:06Z', 2));
   assert.deepEqual(lifts, [], 'within the minutes after our delete it is read as ours whatever Origin says (failing closed: nothing is lifted)');
-  await other.post(change('Customer', '2026-11-14T10:20:00Z', 3));
-  assert.deepEqual(lifts, ['p3@pp-send-proof.co.uk'], '20 minutes later is not ours (no longer a 24-hour window)');
+  await other.post(change('Recipient', '2026-11-14T10:20:00Z', 3));
+  assert.deepEqual(lifts, ['p3@pp-send-proof.co.uk'], '20 minutes later, by the recipient: not ours');
+  // The owner pressed, Postmark could not be reached; a second press hours later deletes it, and a fresh process (no
+  // mark of our own delete) handles Postmark's reactivation: not the recipient, within 24 hours of the lift: ours.
+  const fresh = make('srv', ['broadcast']);
+  await fresh.post(change('Customer', '2026-11-14T13:00:00Z', 8));
+  assert.deepEqual(lifts, ['p3@pp-send-proof.co.uk'], 'the durable unsubscribe is NOT lifted');
+  await fresh.post(change('Customer', '2026-11-15T10:01:01Z', 9));
+  assert.deepEqual(lifts, ['p3@pp-send-proof.co.uk', 'p9@pp-send-proof.co.uk'], 'more than 24 hours after the lift: not ours');
   cleared = undefined;
   await other.post(change('Admin', '2026-11-14T10:00:05Z', 4));
-  assert.equal(lifts.length, 2, 'no owner lift recorded: as before');
+  assert.equal(lifts.length, 3, 'no owner lift recorded: as before');
   // A source we hold no token for could never have been asked by us: the ledger alone does not make it ours.
   cleared = T;
   await make(null, ['broadcast']).post(change('Customer', '2026-11-14T10:00:05Z', 5));
-  assert.equal(lifts.length, 3, 'no token: not our delete');
+  assert.equal(lifts.length, 4, 'no token: not our delete');
   // This process asked Postmark itself: matched on the same stream only.
   cleared = undefined;
   const own = make('srv', ['broadcast', 'other']);
   now = T;
   assert.equal(await own.service.reactivateAtProvider(PP, 'p6@pp-send-proof.co.uk'), 'deleted');
   await own.post(change('Customer', '2026-11-14T10:00:03Z', 6));
-  assert.equal(lifts.length, 3, 'our own delete, same stream');
+  assert.equal(lifts.length, 4, 'our own delete, same stream');
   assert.equal(own.service.ownDeleteNear(PP, 'broadcast', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:00:03Z')), true);
   assert.equal(own.service.ownDeleteNear(PP, 'elsewhere', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:00:03Z')), false, 'another stream is not ours');
   assert.equal(own.service.ownDeleteNear(PP, 'broadcast', 'p6@pp-send-proof.co.uk', Date.parse('2026-11-14T10:30:00Z')), false, 'half an hour later is not ours');

@@ -71,7 +71,9 @@ export class MemoryProtectionStore implements EmailProtectionStore {
       if (to === 'paused' && input.from !== 'paused' && (input.cause ?? 'own') === 'own'
           && this.events.some(e => e.kind === 'paused' && e.numbers.cause === 'own' && this.now() - e.at < 90 * 86_400_000)) {
         // As 0156: off only once 50 live sends went out since the founder's restart; with fewer, paused again.
-        if (target.countedSince == null || (target.sendsSinceRestart ?? 0) >= 50) { to = 'off'; kind = 'switched_off'; }
+        const own = this.events.filter(e => ['paused', 'switched_off'].includes(e.kind) && e.numbers.cause === 'own' && this.now() - e.at < 90 * 86_400_000).length;
+        // ... and always on the third own pause within 90 days.
+        if (target.countedSince == null || (target.sendsSinceRestart ?? 0) >= 50 || own >= 2) { to = 'off'; kind = 'switched_off'; }
       }
       const next = { ...target, state: to, dailyCap: ['paused', 'off'].includes(to) ? 0 : input.daily, hourlyCap: ['paused', 'off'].includes(to) ? 0 : input.hourly,
         warmupStep: input.step ?? target.warmupStep, warmupStepAt: input.stepAt ?? target.warmupStepAt, sampleState: input.sample ?? target.sampleState,

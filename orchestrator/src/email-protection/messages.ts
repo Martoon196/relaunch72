@@ -21,6 +21,14 @@ const pickedBecause = (trip: Trip): string => (trip.rank ?? 1) <= 1
   : 'and after we paused the business with the highest rate it was still over, so we paused yours, the next highest, too.';
 /** Whether a logged trip came from the account trip-wire (it never counts toward switching email off). */
 export const accountCaused = (trip: Trip | null): boolean => trip?.line === 'account_bounce' || trip?.line === 'account_complaint';
+/**
+ * What a pause means for switching email off, truthfully: a second own pause within 90 days switches it off once at
+ * least 50 emails went out since the restart, and a third always does; an account pause never counts.
+ */
+function pauseWarning(trip: Trip | null, secondPause: boolean | undefined): string {
+  if (accountCaused(trip)) return 'This pause came from our shared account\'s limit, so it does not count toward switching your email off.';
+  return secondPause ? `One more pause within ${LADDER.secondPauseDays} days switches your email off.` : `A second pause within ${LADDER.secondPauseDays} days can switch your email off.`;
+}
 
 /** What still works whatever happens to a business's marketing email. True: protection only holds the marketing sender. */
 export const STILL_GOES = 'Sign-in links, receipts and booking and webinar confirmations still go.';
@@ -93,6 +101,8 @@ export interface OwnerBannerInput {
   readonly needsTest?: boolean;
   /** Sending through stored connections is switched off on this deployment. */
   readonly switchedOffHere?: boolean;
+  /** This pause is the business's second own pause in 90 days (it stayed paused: fewer than 50 emails since the restart). */
+  readonly secondPause?: boolean;
   /** An alert email about this step really went (or is queued with a working sender) to an owner address: only then "reply to our email". */
   readonly emailed?: boolean;
   /** An approval email can reach the owner (a working sender and an owner address): only then "We will email you". */
@@ -112,9 +122,7 @@ export function ownerBanner(input: OwnerBannerInput): Banner | null {
   if (input.switchedOffHere) return { tone: 'alert', title: 'Sending is switched off on our side',
     text: 'Sending through your own connection is switched off on our side right now, so nothing is being sent. Your marketing emails are waiting and will go when it is back.' };
   if (input.state === 'paused') return { tone: 'alert', title: 'Your marketing emails are paused',
-    text: `${what(input.trip, input.reasonText ?? null)}${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then ${tell}. ${accountCaused(input.trip)
-      ? 'Only we can restart it. This pause came from our shared account\'s limit, so it does not count toward switching your email off.'
-      : `Only we can restart it, and a second pause within ${LADDER.secondPauseDays} days switches your email off.`}` };
+    text: `${what(input.trip, input.reasonText ?? null)}${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then ${tell}. Only we can restart it. ${pauseWarning(input.trip, input.secondPause)}` };
   if (input.accountHeld && input.mode === 'live') return { tone: 'alert', title: 'Marketing emails are on hold for everyone',
     text: `Marketing emails are on hold for every business that sends through our shared email account while we look into it. ${STILL_GOES} Yours are waiting and will go when the hold is lifted. You don't need to do anything.` };
   if (input.sampleState === 'held' && input.mode === 'live') return { tone: 'alert', title: 'We have held the rest of your list',
@@ -139,11 +147,14 @@ export function ownerBanner(input: OwnerBannerInput): Banner | null {
 /** One founder line for Today, with its one button. */
 export interface FounderLine { readonly tone: 'red' | 'amber'; readonly sentence: string; readonly button: string; readonly kind: string; readonly workspaceId: string | null }
 
-export function founderLine(input: { kind: string; businessName: string; trip: Trip | null; domain?: string | null }): FounderLine | null {
+export function founderLine(input: { kind: string; businessName: string; trip: Trip | null; domain?: string | null;
+  /** A second own pause that stayed paused: the live emails sent since the founder's last restart. */
+  secondPause?: { readonly sendsSinceRestart: number } | null }): FounderLine | null {
   const b = input.businessName, what = founderTripped(input.trip);
   switch (input.kind) {
     case 'paused': return { tone: 'red', kind: 'paused', workspaceId: null, button: 'Review and decide',
-      sentence: `Emails paused for ${b}. ${what ? `${what} ` : ''}Sign-in and booking emails still go. Nobody else is affected.` };
+      sentence: `Emails paused for ${b}. ${what ? `${what} ` : ''}Sign-in and booking emails still go. Nobody else is affected.${input.secondPause
+        ? ` This is their second pause in ${LADDER.secondPauseDays} days (${plural(input.secondPause.sendsSinceRestart, 'email', 'emails')} sent since you last restarted them), so they were paused again rather than switched off. A third pause switches them off.` : ''}` };
     case 'switched_off': return { tone: 'red', kind: 'switched_off', workspaceId: null, button: 'Review and decide',
       sentence: `Email switched off for ${b}: paused twice within ${LADDER.secondPauseDays} days. ${what ? `${what} ` : ''}Sign-in and booking emails still go.` };
     case 'go_live_requested': return { tone: 'amber', kind: 'go_live_requested', workspaceId: null, button: 'Approve',
@@ -159,15 +170,14 @@ export function founderLine(input: { kind: string; businessName: string; trip: T
 /** The emails. Subject and plain text (the HTML is the same text, escaped, with the one link). */
 export interface AlertEmail { readonly subject: string; readonly text: string; readonly link: string; readonly linkLabel: string }
 
-export function ownerAlertEmail(input: { kind: string; businessName: string; trip: Trip | null; dailyCap?: number; pageUrl: string }): AlertEmail | null {
+export function ownerAlertEmail(input: { kind: string; businessName: string; trip: Trip | null; dailyCap?: number; pageUrl: string; secondPause?: boolean }): AlertEmail | null {
   const b = input.businessName, what = ownerTripped(input.trip), link = input.pageUrl;
   const close = 'If you have a question, reply to this email.';
   switch (input.kind) {
     case 'slowed': return { subject: `We have slowed ${b}'s marketing emails`, link, linkLabel: 'See your email page',
       text: `${what}\n\nYour marketing emails still go, at up to ${plural(input.dailyCap ?? 0, 'email', 'emails')} a day. This lifts by itself after ${LADDER.recoverMinDays} clean days.\n\nTo help: remove addresses that bounced and only email people who asked to hear from you.\n\n${close}` };
     case 'paused': return { subject: `${b}'s marketing emails are paused`, link, linkLabel: 'See your email page',
-      text: `${what}\n\n${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them.\n\nTo restart: remove the addresses that bounced or complained and check where your newest addresses came from, then reply to this email. Only we can restart it. ${accountCaused(input.trip)
-        ? 'This pause came from our shared account\'s limit, so it does not count toward switching your email off.' : `A second pause within ${LADDER.secondPauseDays} days switches your email off.`}` };
+      text: `${what}\n\n${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them.\n\nTo restart: remove the addresses that bounced or complained and check where your newest addresses came from, then reply to this email. Only we can restart it. ${pauseWarning(input.trip, input.secondPause)}` };
     case 'switched_off': return { subject: `${b}'s email sending is switched off`, link, linkLabel: 'See your email page',
       text: `${what ? `${what}\n\n` : ''}Your marketing emails were paused twice within ${LADDER.secondPauseDays} days, so email sending is switched off to protect everyone who sends through our shared account.\n\n${STILL_GOES}\n\nOnly we can switch it back on. Reply to this email to ask for a review.` };
     case 'sample_held': return { subject: `We have held the rest of ${b}'s list`, link, linkLabel: 'See your email page',
@@ -175,7 +185,7 @@ export function ownerAlertEmail(input: { kind: string; businessName: string; tri
     case 'go_live_approved': return { subject: `${b} is live`, link, linkLabel: 'See your email page',
       text: `Your email is approved and live. Your first ${SAMPLE.size} marketing emails go first, then we wait ${SAMPLE.waitHours} hours to check how many bounced or were marked as spam; if that is within our limit, the rest go by themselves.\n\nNew senders start at ${RAMP_START} marketing emails a day. The limit steps up only after busy, clean days (enough emails sent, bounces under 2% and no spam reports), to 2,000 a day after four weeks at the soonest.\n\n${close}` };
     case 'lifted': case 'reinstated': return { subject: `${b}'s marketing emails are going again`, link, linkLabel: 'See your email page',
-      text: `We have restarted your marketing emails. They start slowly (half your usual daily limit) and your next ${SAMPLE.size} emails go first while we check them.\n\nPlease keep only people who asked to hear from you on your lists. Another pause within ${LADDER.secondPauseDays} days, once at least ${RESTART_MIN_SENDS_FOR_OFF} more emails have gone, switches email off.` };
+      text: `We have restarted your marketing emails. They start slowly (half your usual daily limit) and your next ${SAMPLE.size} emails go first while we check them.\n\nPlease keep only people who asked to hear from you on your lists. Another pause within ${LADDER.secondPauseDays} days can switch email off: once at least ${RESTART_MIN_SENDS_FOR_OFF} more emails have gone, and always on a third pause.` };
     case 'sample_released': return { subject: `We have let ${b}'s list go`, link, linkLabel: 'See your email page',
       text: `The rest of your list can go now. The next ${SAMPLE.size} emails go first while we check them again.\n\n${close}` };
     default: return null;
@@ -183,7 +193,8 @@ export function ownerAlertEmail(input: { kind: string; businessName: string; tri
 }
 const RAMP_START = 50;
 
-export function founderAlertEmail(input: { kind: string; businessName: string; trip: Trip | null; pageUrl: string; domain?: string | null }): AlertEmail | null {
+export function founderAlertEmail(input: { kind: string; businessName: string; trip: Trip | null; pageUrl: string; domain?: string | null;
+  secondPause?: { readonly sendsSinceRestart: number } | null }): AlertEmail | null {
   const line = founderLine(input);
   if (!line) return null;
   const subject = input.kind === 'go_live_requested' ? `${input.businessName} is ready to go live${input.domain ? ` (${input.domain})` : ''}`

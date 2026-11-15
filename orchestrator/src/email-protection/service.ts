@@ -133,11 +133,12 @@ export class EmailProtectionService {
     const trip = tripFromNumbers(alert.numbers, levelOf(alert.kind));
     if (alert.audience === 'owner') {
       const daily = typeof alert.numbers.newDailyCap === 'number' ? alert.numbers.newDailyCap : undefined;
-      const email = ownerAlertEmail({ kind: alert.kind, businessName, trip, ...(daily !== undefined ? { dailyCap: daily } : {}), pageUrl: this.url(OWNER_ROUTE) });
+      const email = ownerAlertEmail({ kind: alert.kind, businessName, trip, ...(daily !== undefined ? { dailyCap: daily } : {}), pageUrl: this.url(OWNER_ROUTE),
+        secondPause: alert.kind === 'paused' && typeof alert.numbers.previousPauseAt === 'string' });
       return email ? { email, to: alert.ownerEmails.filter(address => EMAIL.test(address)) } : null;
     }
     const domain = typeof alert.numbers.domain === 'string' ? alert.numbers.domain : null;
-    const email = founderAlertEmail({ kind: alert.kind, businessName, trip, pageUrl: this.url(FOUNDER_ROUTE), domain });
+    const email = founderAlertEmail({ kind: alert.kind, businessName, trip, pageUrl: this.url(FOUNDER_ROUTE), domain, secondPause: secondPauseOf(alert.kind, alert.numbers) });
     const founder = this.input.founderEmail?.trim().toLowerCase() ?? '';
     return email ? { email, to: EMAIL.test(founder) ? [founder] : [] } : null;
   }
@@ -189,6 +190,13 @@ export class EmailProtectionService {
   }
 }
 
+/** A second own pause that stayed paused (0156 apply records previousPauseAt and sendsSinceRestart), or null. */
+function secondPauseOf(kind: string, numbers: Readonly<Record<string, unknown>>): { readonly sendsSinceRestart: number } | null {
+  if (kind !== 'paused' || typeof numbers.previousPauseAt !== 'string') return null;
+  const n = numbers.sendsSinceRestart;
+  return { sendsSinceRestart: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0 };
+}
+
 /** Builds the founder's lines from the protection status (pure, for the Group HQ action and the founder's page). */
 export function founderToday(status: ProtectionStatus | null, url: string): FounderToday {
   const lines: (FounderLine & { url: string })[] = [];
@@ -204,7 +212,8 @@ export function founderToday(status: ProtectionStatus | null, url: string): Foun
       const kind = b.state === 'off' ? 'switched_off' : b.state === 'paused' ? 'paused' : b.sampleState === 'held' ? 'sample_held'
         : b.goLiveRequestedAt ? 'go_live_requested' : null;
       if (!kind) continue;
-      const line = founderLine({ kind, businessName: b.businessName, trip: kind === 'go_live_requested' ? null : stepTrip(levelOf(kind)), domain: b.domain ?? null });
+      const line = founderLine({ kind, businessName: b.businessName, trip: kind === 'go_live_requested' ? null : stepTrip(levelOf(kind)), domain: b.domain ?? null,
+        secondPause: kind === 'paused' && b.lastStep ? secondPauseOf(b.lastStep.kind, b.lastStep) : null });
       if (line) lines.push({ ...line, workspaceId: b.workspaceId, url });
     }
   }

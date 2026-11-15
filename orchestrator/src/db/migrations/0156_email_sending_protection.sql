@@ -528,14 +528,14 @@ END $f$;
 -- UP the ladder or recover slowed -> ok; p_cause 'own' (the business's own numbers) or 'account' (the trip-wire). A
 -- second OWN pause (or switch-off) within 90 days becomes 'off' here, but only once at least 50 live emails went out
 -- since the founder's last restart: with fewer it stays 'paused' (recorded as kind 'paused' with 'previousPauseAt' and
--- 'sendsSinceRestart', so the founder sees why it was not switched off). The caps must be the ramp's for the step and the
--- state; a step may only move up one, once its days are over; a sample passes only 2 hours after its 50th email.
+-- 'sendsSinceRestart', so the founder sees why it was not switched off). A third own pause within 90 days is always 'off'.
+-- The caps must be the ramp's for the step and the state; a step may only move up one, once its days are over; a sample passes only 2 hours after its 50th email.
 -- Answers the state now in force, 'unchanged', 'stale' or 'refused'.
 CREATE FUNCTION app_private.email_protection_apply(p_workspace uuid,p_from text,p_to text,p_kind text,p_cause text,p_reason text,p_numbers jsonb,
  p_daily integer,p_hourly integer,p_step integer,p_step_at timestamptz,p_sample text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE c app_private.email_connections%ROWTYPE; s app_private.email_sending_controls%ROWTYPE; v_to text:=p_to; v_kind text:=p_kind; v_prior timestamptz;
- v_since integer; v_numbers jsonb:=coalesce(p_numbers,'{}'::jsonb); v_now timestamptz; v_step integer; v_due boolean; v_daily integer; v_hourly integer;
+ v_since integer; v_pauses integer; v_numbers jsonb:=coalesce(p_numbers,'{}'::jsonb); v_now timestamptz; v_step integer; v_due boolean; v_daily integer; v_hourly integer;
 BEGIN
  IF session_user<>'r72_identity_command' THEN RAISE EXCEPTION 'Email connection boundary required' USING ERRCODE='42501'; END IF;
  IF p_from IS NULL OR p_to IS NULL OR p_from NOT IN('ok','slowed','paused','off') OR p_to NOT IN('ok','slowed','paused','off')
@@ -561,13 +561,14 @@ BEGIN
  v_hourly:=ceil(v_daily/4.0);
  IF v_to IN('ok','slowed') AND (p_daily<>v_daily OR p_hourly<>v_hourly) THEN RETURN 'refused'; END IF;
  IF v_to='paused' AND p_from<>'paused' AND coalesce(p_cause,'own')='own' THEN
-  SELECT max(p.occurred_at) INTO v_prior FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind IN('paused','switched_off')
+  SELECT max(p.occurred_at),count(*) INTO v_prior,v_pauses FROM app_private.email_protection_events p WHERE p.workspace_id=p_workspace AND p.kind IN('paused','switched_off')
    AND p.numbers->>'cause'='own' AND p.occurred_at>v_now-interval '90 days';
   IF v_prior IS NOT NULL THEN
    SELECT count(*) INTO v_since FROM app_private.email_send_events e WHERE e.workspace_id=p_workspace AND e.kind='send' AND e.purpose='live'
     AND e.state IN('reserved','accepted') AND e.occurred_at>=coalesce(s.counted_since,'-infinity'::timestamptz);
    v_numbers:=v_numbers||jsonb_build_object('previousPauseAt',v_prior,'sendsSinceRestart',v_since);
-   IF v_since>=50 THEN v_to:='off'; v_kind:='switched_off'; ELSE v_to:='paused'; v_kind:='paused'; END IF;
+   -- A repeat offender is removed: the third own pause within 90 days is always off, whatever was sent.
+   IF v_since>=50 OR v_pauses>=2 THEN v_to:='off'; v_kind:='switched_off'; ELSE v_to:='paused'; v_kind:='paused'; END IF;
   END IF;
  END IF;
  UPDATE app_private.email_connections SET protection_state=v_to,

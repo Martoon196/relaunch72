@@ -1180,7 +1180,9 @@ test('0156 is additive on 0155: pinned tables, append-only evidence, the ladder\
   assert.match(apply, /IF NOT \(p_from=p_to OR \(p_from='ok' AND p_to IN\('slowed','paused','off'\)\) OR \(p_from='slowed' AND p_to IN\('ok','paused','off'\)\)\) THEN RETURN 'refused'; END IF;/u);
   assert.match(apply, /p\.kind IN\('paused','switched_off'\) AND p\.numbers->>'cause'='own' AND p\.occurred_at>v_now-interval '90 days'; IF v_prior IS NOT NULL THEN/u);
   // S-3: off only with 50 live sends since the founder's restart; with fewer, paused again (and why is recorded).
-  assert.match(apply, /e\.occurred_at>=coalesce\(s\.counted_since,'-infinity'::timestamptz\); v_numbers:=v_numbers\|\|jsonb_build_object\('previousPauseAt',v_prior,'sendsSinceRestart',v_since\); IF v_since>=50 THEN v_to:='off'; v_kind:='switched_off'; ELSE v_to:='paused'; v_kind:='paused'; END IF;/u);
+  assert.match(apply, /e\.occurred_at>=coalesce\(s\.counted_since,'-infinity'::timestamptz\); v_numbers:=v_numbers\|\|jsonb_build_object\('previousPauseAt',v_prior,'sendsSinceRestart',v_since\); IF v_since>=50 OR v_pauses>=2 THEN v_to:='off'; v_kind:='switched_off'; ELSE v_to:='paused'; v_kind:='paused'; END IF;/u);
+  // A repeat offender is removed: the third own pause within 90 days is off whatever was sent.
+  assert.match(apply, /SELECT max\(p\.occurred_at\),count\(\*\) INTO v_prior,v_pauses FROM app_private\.email_protection_events p/u);
   assert.match(apply, /IF v_to IN\('ok','slowed'\) AND \(p_daily<>v_daily OR p_hourly<>v_hourly\) THEN RETURN 'refused'; END IF;/u, 'caps from the ramp only');
   assert.match(apply, /IF p_sample='passed' AND \(s\.sample_full_at IS NULL OR s\.sample_full_at>v_now-interval '2 hours'\) THEN RETURN 'refused'; END IF;/u);
   // Every send is reserved against the holds and caps before it is handed to Postmark.

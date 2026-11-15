@@ -89,7 +89,7 @@ test('alert emails: the owner\'s and the founder\'s, through the platform sender
   assert.equal(owner.subject, 'Property Predator Ltd\'s marketing emails are paused');
   assert.ok(owner.text.startsWith('In the last 7 days, 6 of your 120 emails bounced (5%). Our limit is 4%.\n\n'));
   assert.match(owner.text, new RegExp(STILL_GOES.replace(/[.]/gu, '\\.')));
-  assert.match(owner.text, /Only we can restart it\. A second pause within 90 days switches your email off\./u);
+  assert.match(owner.text, /Only we can restart it\. A second pause within 90 days can switch your email off\./u);
   assert.match(owner.text, /See your email page: https:\/\/hq\.propertypredator\.com\/portal\/email$/u);
   assert.equal(founder.subject, 'Emails paused for Property Predator Ltd');
   assert.equal(founder.text, 'Emails paused for Property Predator Ltd. 6 of their last 120 emails bounced (5%, last 7 days). Our line is 4%, Postmark\'s is 10%. Sign-in and booking emails still go. Nobody else is affected.\n\nReview and decide: https://hq.propertypredator.com/portal/email/founder');
@@ -137,7 +137,7 @@ test('every sentence a business owner reads, for each state, is plain and exact'
     accountHeld: false, mode: 'live', waitingApproval: false, ...over });
   assert.equal(banner({}), null, 'nothing to say');
   assert.deepEqual(banner({ state: 'paused', trip, emailed: true }), { tone: 'alert', title: 'Your marketing emails are paused',
-    text: `In the last 7 days, 6 of your 120 emails bounced (5%). Our limit is 4%. ${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then reply to our email. Only we can restart it, and a second pause within 90 days switches your email off.` });
+    text: `In the last 7 days, 6 of your 120 emails bounced (5%). Our limit is 4%. ${STILL_GOES} No other business is affected. Your marketing emails are waiting and will go when we restart them. To restart: remove the addresses that bounced or complained, check where your newest addresses came from, then reply to our email. Only we can restart it. A second pause within 90 days can switch your email off.` });
   // "Reply to our email" only when an email really went (or is on its way); otherwise what is true.
   assert.match(banner({ state: 'paused', trip, emailed: false })!.text, /then tell us \(we can see this too\)\./u);
   assert.doesNotMatch(banner({ state: 'paused', trip, emailed: false })!.text, /reply to our email|we will email/iu);

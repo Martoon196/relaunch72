@@ -94,7 +94,7 @@ test('S-6: an account-caused pause never says a second pause switches email off'
   assert.doesNotMatch(email.text, /second pause/u);
   const own = ownerBanner({ state: 'paused', trip: { line: 'complaints', level: 'paused', count: 3, total: 400, limit: 3, days: 30 }, dailyCap: 0, sampleState: 'passed', sampleTrip: null,
     ownerPaused: false, accountHeld: false, mode: 'live', waitingApproval: false })!;
-  assert.match(own.text, /a second pause within 90 days switches your email off\./u);
+  assert.match(own.text, /Only we can restart it\. A second pause within 90 days can switch your email off\./u);
 });
 
 test('S-6: an account complaint candidate needs at least 3 complaints of its own and at least 100 live sends', () => {
@@ -141,7 +141,7 @@ test('true sentences: slowed while not live says nothing goes; the ramp steps up
   assert.deepEqual([gone.tone, gone.title], ['alert', 'Email is not connected right now']);
   assert.equal(gone.text, 'Email is not connected right now, so nothing is being sent. Reconnect it to carry on. People you have started are waiting and will go when it is connected again.');
   const lifted = ownerAlertEmail({ kind: 'lifted', businessName: 'B', trip: null, pageUrl: 'u' })!.text;
-  assert.match(lifted, /Another pause within 90 days, once at least 50 more emails have gone, switches email off\./u);
+  assert.match(lifted, /Another pause within 90 days can switch email off: once at least 50 more emails have gone, and always on a third pause\./u);
 });
 
 test('"Send a test to me" replayed: "already sent" only when the first attempt was accepted; a refused or unanswered one says so', async () => {
@@ -159,4 +159,31 @@ test('"Send a test to me" replayed: "already sent" only when the first attempt w
   assert.deepEqual(await service.sendTest(identity, connection, 'cmd'), { ok: false, message: SENDING_MESSAGES.testUnknown });
   store.reserveAnswer = 'replayed';
   assert.deepEqual(await service.sendTest(identity, connection, 'cmd'), { ok: true, message: SENDING_MESSAGES.testReplayed });
+});
+
+test('a second own pause that stayed paused says what is now true, to the owner and the founder', async () => {
+  const { founderLine } = await import('../src/email-protection/messages.js');
+  const { founderToday } = await import('../src/email-protection/service.js');
+  const { bannerFor } = await import('../src/email-protection/owner.js');
+  const trip = { line: 'complaints' as const, level: 'paused' as const, count: 3, total: 400, limit: 3, days: 30 };
+  const input = { state: 'paused' as const, trip, dailyCap: 0, sampleState: 'passed' as const, sampleTrip: null, ownerPaused: false, accountHeld: false, mode: 'live' as const, waitingApproval: false };
+  const first = ownerBanner(input)!.text, second = ownerBanner({ ...input, secondPause: true })!.text;
+  assert.match(first, /Only we can restart it\. A second pause within 90 days can switch your email off\.$/u);
+  assert.match(second, /Only we can restart it\. One more pause within 90 days switches your email off\.$/u);
+  assert.doesNotMatch(second, /a second pause/iu);
+  assert.match(ownerAlertEmail({ kind: 'paused', businessName: 'B', trip, pageUrl: 'u', secondPause: true })!.text, /One more pause within 90 days switches your email off\.$/u);
+  assert.match(ownerAlertEmail({ kind: 'paused', businessName: 'B', trip, pageUrl: 'u' })!.text, /A second pause within 90 days can switch your email off\.$/u);
+  // The page reads it from the logged step (0156 records previousPauseAt when it stayed paused).
+  const sending = { lastStep: { kind: 'paused', at: 'x', line: 'complaints', count: 3, total: 400, limit: 3, days: 30, previousPauseAt: '2026-11-01T00:00:00Z', sendsSinceRestart: 12 },
+    goLiveApprovedAt: 'x', ownerPausedAt: null, sampleState: 'passed', lastOwnerAlert: null, ownerEmailCount: 0, accountHeld: false, goLiveRequestedAt: null, approvedCurrent: true, testCurrent: true } as never;
+  const connection = { mode: 'live', status: 'verified', protection: { state: 'paused', reason: null, since: null, dailyCap: 0, hourlyCap: 0, warmupStartedAt: null } } as never;
+  assert.match(bannerFor(connection, sending)!.text, /One more pause within 90 days switches your email off\.$/u);
+  // The founder: the line says why it was not switched off and what the next one does.
+  const line = founderLine({ kind: 'paused', businessName: 'Second Ltd', trip, secondPause: { sendsSinceRestart: 12 } })!;
+  assert.match(line.sentence, / This is their second pause in 90 days \(12 emails sent since you last restarted them\), so they were paused again rather than switched off\. A third pause switches them off\.$/u);
+  assert.doesNotMatch(founderLine({ kind: 'paused', businessName: 'Second Ltd', trip })!.sentence, /second pause/u);
+  const today = founderToday({ account: { state: 'ok', reason: null, since: null, rowVersion: 1, numbers: null }, businesses: [{ workspaceId: PP_WS, businessName: 'Second Ltd', status: 'verified',
+    mode: 'live', state: 'paused', reason: null, since: null, rowVersion: 2, goLiveRequestedAt: null, goLiveApprovedAt: 'x', sampleState: 'passed', counts: null,
+    lastStep: { kind: 'paused', at: 'x', line: 'complaints', count: 3, total: 400, limit: 3, days: 30, previousPauseAt: 'y', sendsSinceRestart: 1 } }] }, 'u');
+  assert.match(today.sentences[0]!, /\(1 email sent since you last restarted them\)/u);
 });

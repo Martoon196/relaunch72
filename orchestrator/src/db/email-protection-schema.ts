@@ -16,4 +16,4 @@
  * the filename here, re-pin the checksum and re-run the migration contract and readiness tests.
  */
 export const EMAIL_PROTECTION_MIGRATION = '0156_email_sending_protection.sql';
-export const EMAIL_PROTECTION_CHECKSUM = 'e5f6c14b235d92974f3bc9eb9c781f915a470fce8f6dcf5722b29151bb65745b';
+export const EMAIL_PROTECTION_CHECKSUM = '024cb39314a4c02a09cb935adfe19791fa99f7e7babe6c04cd150c3b5fbf2dfa';

@@ -32,6 +32,9 @@ import type { EmailBounceService } from './service.js';
 import { readPostmarkCounter } from './postmark-events.js';
 import { OWN_DELETE_WINDOW_MS } from './service.js';
 
+/** A reactivation that is not the recipient's own, this long after an owner's lift for the address, is still ours. */
+const OWNER_LIFT_WINDOW_MS = 24 * 60 * 60_000;
+
 export const POSTMARK_BOUNCE_WEBHOOK_PREFIX = '/api/provider-webhooks/postmark/';
 export const POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 export const POSTMARK_BOUNCE_WEBHOOK_SECRET_HEADER = 'x-postmark-webhook-secret';
@@ -212,12 +215,16 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
           // Our own "This address works now" deletes a hard-bounce suppression at Postmark, which Postmark then reports as a
           // reactivation. That is not the person re-subscribing: a reactivation on this stream within 10 minutes of our
           // own delete (asked by this process), or of the owner's lift of a hard bounce for this address on a source we
-          // hold the token for (the delete may have been asked by another instance), lifts nothing else. Whatever its
-          // Origin says. A read that fails answers 503 and Postmark retries: an unsubscribe is never lifted unchecked.
+          // hold the token for (the delete may have been asked by another instance), lifts nothing else, whatever its
+          // Origin says; on that ledger fallback, one not by the recipient within 24 hours of the lift is ours too. A
+          // read that fails answers 503 and Postmark retries: an unsubscribe is never lifted unchecked.
           let ours = service.ownDeleteNear(source.workspaceId, event.stream, event.email, event.at);
           if (!ours && source.token && service.ledger) {
             const cleared = (await service.ledger.decide(source.workspaceId, event.email, 'service'))?.cleared.hard_bounce;
-            ours = cleared !== undefined && cleared <= event.at + 60_000 && event.at - cleared <= OWN_DELETE_WINDOW_MS;
+            // Within 10 minutes of the lift, whatever its Origin; or, unless the recipient did it themselves, within 24
+            // hours (a second press later, after Postmark could not be reached, may be handled by another process).
+            ours = cleared !== undefined && cleared <= event.at + 60_000
+              && (event.at - cleared <= OWN_DELETE_WINDOW_MS || (event.origin !== 'Recipient' && event.at - cleared <= OWNER_LIFT_WINDOW_MS));
           }
           if (ours) log(JSON.stringify({ event: 'email.bounces.webhook_own_reactivation', source: source.key }));
           else {

@@ -182,7 +182,7 @@ test('the banner in each protection state, on the email page, with what tripped 
   h.protection.sending = { ...h.protection.sending, lastStep: { kind: 'paused', at: '2026-11-20T00:00:00Z', line: 'bounce_rate', count: 6, total: 120, limit: 4, days: 7 } };
   let page = await h.call('GET', '/portal/email');
   assert.match(page.body, /<section class="card alert" role="alert"><h2>Your marketing emails are paused<\/h2><p>In the last 7 days, 6 of your 120 emails bounced \(5%\)\. Our limit is 4%\. Sign-in links, receipts and booking and webinar confirmations still go\. No other business is affected\./u);
-  assert.match(page.body, /Only we can restart it, and a second pause within 90 days switches your email off\./u);
+  assert.match(page.body, /Only we can restart it\. A second pause within 90 days can switch your email off\./u);
   clean(page.body, h);
   h.store.row!.protection = { ...h.store.row!.protection, state: 'slowed', dailyCap: 25, hourlyCap: 7 };
   h.protection.sending = { ...h.protection.sending, lastStep: { kind: 'slowed', at: 'x', line: 'complaints', count: 2, total: 300, limit: 2, days: 30 } };

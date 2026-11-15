@@ -123,10 +123,18 @@ test('0156 review on real roles: B1, S2, S5, S6, S7, the apply checks, tests whi
       ($1,'paused','{"cause":"own"}','system',now()-interval '95 days')`, [PP]);
     const step = (to: string, kind: string | null, daily = 0, hourly = 0) => store.apply(PP, { from: 'slowed', to: to as never, kind, cause: 'own', reason: 'Proof.', numbers: {}, daily, hourly, step: null, stepAt: null, sample: null });
     assert.equal(await step('paused', 'paused'), 'paused', 'a switch-off 80 days ago makes this pause the second, but nothing was sent since the restart (S-3)');
-    status = await store.founderView(founderToken);
-    assert.equal(await store.founderAct(founderToken, PP, 'lift', status.businesses[0]!.rowVersion), 'done');
-    await seedSends(admin, 50, 'live', '0 seconds');
-    assert.equal(await step('paused', 'paused'), 'off', 'and with 50 live sends since the restart: off');
+    // The boundary at the second pause (one earlier own pause in 90 days each time): 49 since the restart stays paused, 50 is off.
+    const second = async (sends: number) => {
+      status = await store.founderView(founderToken);
+      assert.equal(await store.founderAct(founderToken, PP, 'lift', status.businesses[0]!.rowVersion), 'done');
+      await ownerQuery(admin, `DELETE FROM app_private.email_protection_events WHERE workspace_id=$1`, [PP]);
+      await ownerQuery(admin, `INSERT INTO app_private.email_protection_events(workspace_id,kind,numbers,actor_kind,occurred_at) VALUES($1,'switched_off','{"cause":"own"}','system',now()-interval '80 days')`, [PP]);
+      await ownerQuery(admin, `DELETE FROM app_private.email_send_events WHERE workspace_id=$1 AND kind='send' AND occurred_at>=now()-interval '1 minute'`, [PP]);
+      await seedSends(admin, sends, 'live', '0 seconds');
+      return step('paused', 'paused');
+    };
+    assert.equal(await second(49), 'paused', '49 live sends since the restart: paused again');
+    assert.equal(await second(50), 'off', 'and with 50 live sends since the restart: off');
     status = await store.founderView(founderToken);
     assert.equal(await store.founderAct(founderToken, PP, 'reinstate', status.businesses[0]!.rowVersion), 'done');
 
