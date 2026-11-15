@@ -158,7 +158,8 @@ BEGIN
     INSERT INTO app.creative_media_video_events(workspace_id,job_id,event) VALUES(p_workspace,p_job,'claimed');
     RETURN jsonb_build_object('id',j.id,'claimToken',j.claim_token,'kind',j.kind,
       'payloadSha',j.exact_payload_sha256,'rightsSha',j.rights_evidence_sha256,
-      'reservedMicrousd',j.reserved_microusd);
+      'reservedMicrousd',j.reserved_microusd,'approvedBy',j.created_by,
+      'approvedAt',j.created_at,'validUntil',j.claim_until);
   END IF;
   IF p_claim IS NULL OR p_claim IS DISTINCT FROM j.claim_token OR j.claim_until<=clock_timestamp()
     OR j.state NOT IN ('claimed','submitted','outcome_unknown') THEN
