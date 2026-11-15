@@ -40,6 +40,7 @@ import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
+import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
@@ -303,6 +304,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      if (rest === 'creative/products') {
+        const products = input.service.mediaProductsFor?.(identity, input.requestId);
+        if (!products) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
+        return send(res, 200, creativeMediaProductsPage(shell('creative'),
+          await products.list(brandId), randomUUID(), () => randomUUID()));
+      }
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
@@ -311,7 +318,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const generatedImages = (generated?.state.generations ?? []).slice(0, 12).map((g) => ({ id: g.id, label: `Generated ${g.createdAt.slice(0, 10)} (${g.width}×${g.height})`,
           previewUrl: generatedUrl(g.id) }));
         const generation = { available: studio.generationAvailable, enabled: generated?.brand.settings.studioImages?.enabled === true, remaining: 0 };
-        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, generatedImages, generation, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
@@ -532,6 +539,31 @@ async function handlePost(
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
+      if (parts[1] === 'products' && parts.length === 2) {
+        const catalogue = input.service.mediaProductsFor?.(identity, input.requestId);
+        if (!catalogue) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
+        await catalogue.save({
+          workspaceId: brandId,
+          ...(f('productId') ? { productId: f('productId')! } : {}),
+          commandId: f('commandId') ?? '',
+          expectedRevision: int(f('expectedRevision'), 'product version'),
+          product: {
+            network: (f('network') ?? '') as 'amazon_associates' | 'other',
+            merchantName: f('merchantName') ?? '',
+            productName: f('productName') ?? '',
+            productUrl: f('productUrl') ?? '',
+            affiliateUrl: f('affiliateUrl') || null,
+            sourceRights: (f('sourceRights') ?? '') as 'original' | 'owned' | 'licensed' | 'none',
+            evidenceSha256: f('evidenceSha256') || null,
+            productReviewed: f('productReviewed') === '1',
+            channelEligible: f('channelEligible') === '1',
+            mediaRightsConfirmed: f('mediaRightsConfirmed') === '1',
+            disclosureVersion: f('disclosureVersion') ?? '',
+          },
+        });
+        return ok(home + '/products','Private product revision saved. No merchant or publishing action was performed.');
+      }
+
       const commandId = f('commandId') ?? '';
       // Rendering runs in the background worker as a durable job; this request only records it (and stores any uploaded
       // background), then sends the owner to the task page, which follows the job and opens the result when it is ready.
