@@ -324,12 +324,29 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const generatedImages = (generated?.state.generations ?? []).slice(0, 12).map((g) => ({ id: g.id, label: `Generated ${g.createdAt.slice(0, 10)} (${g.width}×${g.height})`,
           previewUrl: generatedUrl(g.id) }));
         const generation = { available: studio.generationAvailable, enabled: generated?.brand.settings.studioImages?.enabled === true, remaining: 0 };
+        const productCatalogue=input.service.mediaProductsFor?.(identity,input.requestId);
+        const earningsImport=input.service.mediaReportsFor?.(identity,input.requestId);
+        const [allProducts,allReports]=await Promise.all([
+          productCatalogue?productCatalogue.list(brandId):Promise.resolve([]),
+          earningsImport?earningsImport.list(brandId):Promise.resolve([]),
+        ]);
+        // Latest uploaded date range only: adding overlapping snapshots would fabricate a larger earnings total.
+        const latestReport=allReports[0]??null;
+        const commerceSummary={
+          products:allProducts.length,
+          latestReport:latestReport?{
+            start:latestReport.reportStart,end:latestReport.reportEnd,
+            knownEarningsMinor:latestReport.summary.knownEarningsMinor,
+            unknownRows:latestReport.summary.unknownEarningsRows,
+            unallocatedEarningsMinor:latestReport.summary.unallocatedEarningsMinor,
+          }:null,
+        };
         const productId=url.searchParams.get('product_id');
         const mediaCatalogue=input.service.mediaProductsFor?.(identity,input.requestId);
         const productPrefill=productId && mediaCatalogue
           ? await mediaCatalogue.get(brandId,productId) : null;
         return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview,
-          productPrefill, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
+          productPrefill, commerceSummary, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
           reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
