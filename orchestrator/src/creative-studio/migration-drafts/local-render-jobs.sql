@@ -74,6 +74,9 @@ GRANT SELECT,UPDATE ON app.creative_media_local_render_jobs TO r72_media_job_def
 GRANT SELECT,INSERT ON app.creative_media_local_render_outputs TO r72_media_job_definer;
 GRANT SELECT ON app.creative_media_video_probes TO r72_creative_studio_definer;
 GRANT SELECT ON app.creative_media_edit_projects TO r72_media_job_definer;
+CREATE POLICY creative_media_edit_projects_worker_read ON app.creative_media_edit_projects
+ FOR SELECT TO r72_media_job_definer
+ USING(workspace_id=app_private.current_workspace_id());
 GRANT SELECT ON app.creative_media_source_videos TO r72_media_job_definer;
 GRANT SELECT ON app.seo_blog_blobs TO r72_media_job_definer;
 CREATE TRIGGER creative_media_local_render_outputs_immutable
@@ -88,7 +91,7 @@ CREATE FUNCTION app_private.creative_media_local_render_owner(
 ) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid;source app.creative_media_source_videos;
  project app.creative_media_edit_projects;existing app.creative_media_local_render_jobs;
- project_id uuid;job_id uuid;command_id uuid;revision integer;
+ v_project_id uuid;v_job_id uuid;v_command_id uuid;v_revision integer;
 BEGIN
  IF p_session IS NULL OR app_private.current_actor_kind()<>'user'
    OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN
@@ -121,25 +124,25 @@ BEGIN
   OR coalesce(p_input->>'sourceSha256','')!~'^[a-f0-9]{64}$'
   OR coalesce(p_input->>'planSha256','')!~'^[a-f0-9]{64}$' THEN
   RAISE EXCEPTION 'Exact version and separately confirmed rights required' USING ERRCODE='22023'; END IF;
- job_id:=(p_input->>'jobId')::uuid;
- command_id:=(p_input->>'commandId')::uuid;
- project_id:=(p_input->>'projectId')::uuid;
- revision:=(p_input->>'revision')::integer;
- PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text||':'||project_id::text,0));
- SELECT * INTO existing FROM app.creative_media_local_render_jobs
-  WHERE workspace_id=p_workspace AND command_id=command_id;
+ v_job_id:=(p_input->>'jobId')::uuid;
+ v_command_id:=(p_input->>'commandId')::uuid;
+ v_project_id:=(p_input->>'projectId')::uuid;
+ v_revision:=(p_input->>'revision')::integer;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text||':'||v_project_id::text,0));
+ SELECT * INTO existing FROM app.creative_media_local_render_jobs j
+  WHERE j.workspace_id=p_workspace AND j.command_id=v_command_id;
  IF existing.id IS NOT NULL THEN
-  IF existing.id IS DISTINCT FROM job_id OR existing.project_id IS DISTINCT FROM project_id
-   OR existing.revision IS DISTINCT FROM revision
+  IF existing.id IS DISTINCT FROM v_job_id OR existing.project_id IS DISTINCT FROM v_project_id
+   OR existing.revision IS DISTINCT FROM v_revision
    OR existing.source_sha256 IS DISTINCT FROM p_input->>'sourceSha256'
    OR existing.plan_sha256 IS DISTINCT FROM p_input->>'planSha256' THEN
    RAISE EXCEPTION 'Local render command replay changed the reviewed version' USING ERRCODE='40001'; END IF;
-  RETURN jsonb_build_object('id',job_id,'state',existing.state,'replayed',true);
+  RETURN jsonb_build_object('id',v_job_id,'state',existing.state,'replayed',true);
  END IF;
- SELECT * INTO project FROM app.creative_media_edit_projects
-  WHERE workspace_id=p_workspace AND id=project_id AND revision=revision;
- IF project.id IS NULL OR revision<>(SELECT max(p.revision) FROM app.creative_media_edit_projects p
-  WHERE p.workspace_id=p_workspace AND p.id=project_id) THEN
+ SELECT * INTO project FROM app.creative_media_edit_projects p
+  WHERE p.workspace_id=p_workspace AND p.id=v_project_id AND p.revision=v_revision;
+ IF project.id IS NULL OR v_revision<>(SELECT max(p.revision) FROM app.creative_media_edit_projects p
+  WHERE p.workspace_id=p_workspace AND p.id=v_project_id) THEN
   RAISE EXCEPTION 'Timeline changed; only the latest immutable edit may render' USING ERRCODE='55000'; END IF;
  IF project.source_sha256 IS DISTINCT FROM p_input->>'sourceSha256'
   OR project.plan_sha256 IS DISTINCT FROM p_input->>'planSha256' THEN
@@ -156,9 +159,9 @@ BEGIN
   RAISE EXCEPTION 'Independent source video probe must pass first' USING ERRCODE='55000'; END IF;
  INSERT INTO app.creative_media_local_render_jobs(workspace_id,id,command_id,
    project_id,revision,source_id,source_sha256,plan_sha256,requested_by)
- VALUES(p_workspace,job_id,command_id,project_id,revision,source.id,
+ VALUES(p_workspace,v_job_id,v_command_id,v_project_id,v_revision,source.id,
    source.sha256,project.plan_sha256,actor);
- RETURN jsonb_build_object('id',job_id,'state','queued','replayed',false);
+ RETURN jsonb_build_object('id',v_job_id,'state','queued','replayed',false);
 END $f$;
 CREATE FUNCTION app_private.creative_media_local_render_bytes(
  p_workspace uuid,p_session bytea,p_output uuid
@@ -242,7 +245,7 @@ CREATE FUNCTION app_private.creative_media_local_render_settle(
 ) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE j app.creative_media_local_render_jobs;
   stored app.creative_media_local_render_outputs;
-  blob uuid;output_id uuid;hash text;length integer;
+  blob uuid;v_output_id uuid;hash text;length integer;
 BEGIN
  IF app_private.current_actor_kind()<>'worker'
     OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN
@@ -290,19 +293,19 @@ BEGIN
    OR jsonb_typeof(p_media->'audioPresent')<>'boolean' THEN
   RAISE EXCEPTION 'Offline renderer output integrity or technical metadata mismatch'
     USING ERRCODE='22023'; END IF;
- blob:=gen_random_uuid();output_id:=gen_random_uuid();
+ blob:=gen_random_uuid();v_output_id:=gen_random_uuid();
  INSERT INTO app.seo_blog_blobs(workspace_id,id,mime,bytes,sha256)
  VALUES(p_workspace,blob,'video/mp4',p_bytes,public.digest(p_bytes,'sha256'));
  INSERT INTO app.creative_media_local_render_outputs(workspace_id,id,job_id,blob_id,
   source_sha256,plan_sha256,sha256,byte_length,mime,duration_ms,width,height,
   audio_present,renderer_version)
- VALUES(p_workspace,output_id,p_job,blob,j.source_sha256,j.plan_sha256,hash,
+ VALUES(p_workspace,v_output_id,p_job,blob,j.source_sha256,j.plan_sha256,hash,
   length,'video/mp4',(p_media->>'durationMs')::bigint,(p_media->>'width')::integer,
   (p_media->>'height')::integer,(p_media->>'audioPresent')::boolean,
   'rl72-native-ffmpeg-v1');
- UPDATE app.creative_media_local_render_jobs SET state='completed',output_id=output_id,
+ UPDATE app.creative_media_local_render_jobs SET state='completed',output_id=v_output_id,
   updated_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_job;
- RETURN jsonb_build_object('id',output_id,'sha256',hash,'state','completed','replayed',false);
+ RETURN jsonb_build_object('id',v_output_id,'sha256',hash,'state','completed','replayed',false);
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_local_render_claim(uuid,uuid),
  app_private.creative_media_local_render_settle(uuid,uuid,uuid,text,jsonb,bytea) FROM PUBLIC;
