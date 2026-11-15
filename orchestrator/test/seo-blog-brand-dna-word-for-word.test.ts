@@ -8,11 +8,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  brandDnaCard, brandPageText, BRAND_DNA_RULES_VERSION, cleanProvenance, holdConflictedPrices, leftOutLines, missingFactShowable, repairProfileFacts, settleConflict,
+  brandDnaCard, brandPageText, BRAND_DNA_RULES_VERSION, priceLineSources, cleanProvenance, holdConflictedPrices, leftOutLines, missingFactShowable, repairProfileFacts, settleConflict,
   strictProfileProblems, type ProfileFacts,
 } from '../src/seo-blog/brand-dna.js';
 import { audienceUnit, claimSentence, keyOf, linkAllowed, linkLabel, neverSayKept, priceCandidates, structureOf, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
-import { parseHtmlPage, brandPageLines } from '../src/seo-blog/html.js';
+import { parseHtmlPage, brandPageHtmlLines, brandPageLines } from '../src/seo-blog/html.js';
 import { extractProfile, profileForPrompt, proposeCluster, rewriteSection, writeArticle, writeArticleCampaignPromotions, writeArticlePromotions } from '../src/seo-blog/generation.js';
 import { methodEvidenceContext } from '../src/seo-blog/method-evidence.js';
 import { supportingPassage } from '../src/seo-blog/research.js';
@@ -29,7 +29,7 @@ const claim = (value: string, documentId: string, quote = value) => ({ field: 'c
 const aud = (value: string, documentId: string, quote = value) => ({ field: 'audience' as const, value, documentId, quote });
 const wrap = (html: string) => `<html><head><title>x</title></head><body><header><nav>Home Fees About Contact</nav></header><main>${html}</main><footer>(c)</footer></body></html>`;
 /** As the website read stores a page now (structured lines) and as it stored it before (one line). */
-const tagged = (html: string, url = 'https://x.example/') => brandPageText(parseHtmlPage(wrap(html), url).structured);
+const tagged = (html: string) => brandPageText(brandPageHtmlLines(wrap(html)));
 const oneLine = (html: string, url = 'https://x.example/') => parseHtmlPage(wrap(html), url).text.replace(/\s+/g, ' ').trim().slice(0, 8000);
 const BOTH = [['tagged', tagged], ['one-line', oneLine]] as const;
 /** The whole website door after the model's last answer: check, repair, re-check, provenance, price questions. */
@@ -49,8 +49,8 @@ test('page reader: headings, list items, table rows and customer words are marke
   const lines = brandPageLines(`<h2>Fees</h2><p>We do not offer <label>guaranteed rent</label> or legal cover.</p><p><s>Rent is guaranteed.</s> Rent is paid when your tenant pays.</p><ul><li>No call-out charge</li></ul>
 <table><tr><th>Job</th><th>Price</th></tr><tr><td>Boiler service</td><td>£85</td></tr></table><blockquote><p>Brilliant.</p><cite>— J. Patel</cite></blockquote><div class="review"><p>Great service.</p></div>
 <h2>What our landlords say</h2><p>They found me a tenant in four days.</p><p>Mrs K, Tankerton</p><h2>Contact</h2><p>Call us today.</p>`).split('\n');
-  assert.deepEqual(lines, ['# Fees', 'We do not offer guaranteed rent or legal cover.', 'Rent is paid when your tenant pays.', '• No call-out charge', '| Job | Price', '| Boiler service | £85',
-    '❝ Brilliant.', '❝ — J. Patel', '❝ Great service.', '# What our landlords say', '❝ They found me a tenant in four days.', '❝ Mrs K, Tankerton', '# Contact', 'Call us today.']);
+  assert.deepEqual(lines, ['## Fees', 'We do not offer guaranteed rent or legal cover.', 'Rent is paid when your tenant pays.', '• No call-out charge', '| Job | Price', '| Boiler service | £85',
+    '❝ Brilliant.', '❝ — J. Patel', '❝ Great service.', '## What our landlords say', '❝ They found me a tenant in four days.', '❝ Mrs K, Tankerton', '## Contact', 'Call us today.']);
   // The marker never reaches a person or a comparison, and every other reader of the page is unchanged.
   assert.equal(withoutMarkers('# Fees\n• No call-out charge\n| Boiler service | £85'), 'Fees\nNo call-out charge\nBoiler service | £85');
   assert.equal(keyOf('• No call-out charge'), keyOf('No call-out charge'));
@@ -274,7 +274,15 @@ test('links: only https on the website host (or a subdomain), or a host a page w
   assert.equal(sh('https://quay.wixsite.com/home', 'https://other.wixsite.com/home'), false);
   for (const [site, link] of [['https://www.facebook.com/quaylettings', 'https://www.facebook.com/someone-else'], ['https://www.facebook.com/quaylettings', 'https://l.facebook.com/l.php?u=https://evil.com'],
     ['https://www.etsy.com/shop/QuayCrafts', 'https://www.etsy.com/shop/OtherShop'], ['https://www.checkatrade.com/trades/brightspark', 'https://www.checkatrade.com/trades/rival'], ['https://linktr.ee/quay', 'https://linktr.ee/other'],
-    ['https://quay.myshopify.com', 'https://rival.myshopify.com/'], ['https://quay.myshopify.com', 'https://quay.myshopify.com/products/x']] as const) assert.equal(sh(site, link), false, `${site} -> ${link}`);
+    ['https://quay.myshopify.com', 'https://rival.myshopify.com/'], ['https://quay.myshopify.com', 'https://myshopify.com/x'], ['https://quay.myshopify.com', 'https://shop.quay.myshopify.com/x'],
+    ['https://myshopify.com', 'https://myshopify.com/x'], ['https://www.myshopify.com/', 'https://quay.myshopify.com/x'], ['https://harbour.squarespace.com', 'https://squarespace.com/pricing']] as const) assert.equal(sh(site, link), false, `${site} -> ${link}`);
+  // Round 4: a subdomain-style shared host is the business's own when the full host is the website's.
+  for (const [site, link] of [['https://quay.myshopify.com', 'https://quay.myshopify.com/products/x'], ['https://harbour.squarespace.com', 'https://harbour.squarespace.com/book'],
+    ['https://quay.wixsite.com/home', 'https://quay.wixsite.com/fees'], ['https://quay.github.io', 'https://quay.github.io/prices'], ['https://quay.carrd.co', 'https://quay.carrd.co/#book'],
+    ['https://quay.webflow.io', 'https://quay.webflow.io/x'], ['https://quay.netlify.app', 'https://quay.netlify.app/x'], ['https://quay.vercel.app', 'https://quay.vercel.app/x'],
+    ['https://quay.pages.dev', 'https://quay.pages.dev/x'], ['https://quay.notion.site', 'https://quay.notion.site/x'], ['https://quay.weebly.com', 'https://quay.weebly.com/x']] as const) assert.ok(sh(site, link), `${site} -> ${link}`);
+  assert.equal(sh('', 'https://myshopify.com/x', ['https://myshopify.com/']), false, 'a bare shared domain is never anyone\'s own');
+  assert.ok(sh('', 'https://quay.myshopify.com/x', ['https://quay.myshopify.com/']));
   assert.ok(sh('https://www.facebook.com/quaylettings', 'https://www.facebook.com/quaylettings/reviews'));
   assert.ok(sh('', 'https://anything.example/x', ['https://anything.example/'])); assert.equal(sh('', 'https://sites.google.com/view/other', ['https://sites.google.com/view/quay']), false);
   // Labels: words from a plain sentence, else the path.
@@ -293,7 +301,16 @@ test('description is capped (600 / 600 / 200), cut at whole sentences and listed
   assert.deepEqual(r.final.voice!.tone, []); assert.deepEqual(r.rep.leftOut.map((l) => l.what), ['offer_detail', 'voice', 'summary', 'positioning']);
   assert.equal(missingFactShowable('No named author'), true); for (const no of ['Whether the 3 monthly payments carry interest', 'No £ price']) assert.equal(missingFactShowable(no), false);
   const v = card({ conflicts: [{ field: 'Rent is guaranteed for every landlord', detail: 'x', documentIds: ['d1'], kind: 'other', offer: null, options: [{ value: 'Yes', documentId: 'd1', quote: 'Yes, we cover all of Kent' }] }] });
-  assert.deepEqual(settleConflict({ ...v, sources: [] } as never, 0, { kind: 'option', index: 0 }).approvedClaims, []);
+  // Website door: picking the model's answer to the model's question closes it and adds no claim.
+  assert.deepEqual(settleConflict({ ...v, sources: [], strict: true } as never, 0, { kind: 'option', index: 0 }).approvedClaims, []);
+  assert.equal(settleConflict({ ...v, sources: [], strict: true } as never, 0, { kind: 'option', index: 0 }).conflicts.length, 0);
+  // Every card: what the owner typed is saved as their own, exactly as at 1a9e5160 ("field: value", "You told us").
+  const area = card({ conflicts: [{ field: 'Service area', detail: 'Pages disagree', documentIds: ['d1'], kind: 'other', offer: null, options: [{ value: 'Bristol', documentId: 'd1', quote: 'We cover Bristol' }] }] });
+  for (const strict of [true, undefined]) {
+    const typed = settleConflict({ ...area, sources: [], ...(strict ? { strict } : {}) } as never, 0, { kind: 'typed', text: 'Bristol and Bath' });
+    assert.deepEqual(typed.approvedClaims, ['Service area: Bristol and Bath']);
+    assert.deepEqual(typed.sources, [{ field: 'claim', value: 'Service area: Bristol and Bath', documentId: null, quote: null }]);
+  }
   assert.equal(leftOutLines([{ what: 'price', text: 'Pro Plan', found: '£49 per month' }])[0]!.label, 'The price of “Pro Plan” (your page says “£49 per month”)');
 });
 
@@ -304,14 +321,21 @@ test('the card page: no "checked" wording; each price and claim shows its page a
     offers: [{ name: 'Tenant Find', description: '', price: '75% of the first month’s rent (inc. VAT)', url: null, sourceDocumentId: 'd1' }], approvedClaims: ['We have looked after landlords since 2009.'],
     sources: [{ field: 'claim', value: 'We have looked after landlords since 2009.', documentId: 'd1', quote: 'looked after landlords since 2009' }],
     factsSha: 'f', source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: 'x', generation: null } as unknown as BrandProfile;
+  // Without the lines recorded when the card was made, a price shows its page only: never the first place the string occurs.
+  assert.equal(brandDnaCard(profile, [doc]).offers[0]!.priceSource!.quote, null);
+  // The lines the price rule used (name line and price line) are recorded by the same decision and shown beside the price.
+  const lines = priceLineSources(card({ offers: profile.offers }), [{ id: 'd1', text: doc.text! }]);
+  assert.deepEqual(lines, [{ field: 'price', value: 'Tenant Find', documentId: 'd1', quote: 'Tenant Find … 75% of the first month’s rent (inc. VAT)' }]);
+  Object.assign(profile, { sources: [...profile.sources!, ...lines] });
   const shown = brandDnaCard(profile, [doc]);
-  assert.equal(shown.offers[0]!.priceSource!.quote, '75% of the first month’s rent (inc. VAT)'); assert.equal(shown.claims[0]!.source!.quote, 'We have looked after landlords since 2009.');
+  assert.equal(shown.offers[0]!.priceSource!.quote, 'Tenant Find … 75% of the first month’s rent (inc. VAT)'); assert.equal(shown.claims[0]!.source!.quote, 'We have looked after landlords since 2009.');
   const brand = { id: 'b', name: 'Quay', website: 'https://x.example', settings: { budgets: {} } };
   const render = (p: BrandProfile) => brandDnaPage({ brands: [brand], brand, tab: null, csrf: 'c', notice: null } as never, { brand, profile: p, card: brandDnaCard(p, [doc]), status: 'proposed',
     allowance: { used: 0, ceiling: 1, estimate: 0, enough: true }, writerReady: true, working: false, job: null, cardJob: null, documents: 0, pages: 0, uncertainEarlierAttempt: false } as never, 'cmd');
   const page = render(profile);
   assert.match(page, /Taken from your website\. Read it before you confirm\./); assert.doesNotMatch(page, /checked|verified|word for word|exactly as written/i);
-  assert.match(page, /Price: 75% of the first month’s rent \(inc\. VAT\)<\/span><span class="from"><a[^>]*>From your Fees page<\/a>: <q>75% of the first month’s rent \(inc\. VAT\)<\/q>/);
+  assert.match(page, /Price: 75% of the first month’s rent \(inc\. VAT\)<\/span><span class="from"><a[^>]*>From your Fees page<\/a>: <q>Tenant Find … 75% of the first month’s rent \(inc\. VAT\)<\/q>/);
+  assert.match(page, /with the line we found it on and the line naming what it is for/);
   assert.doesNotMatch(page, /We have tightened our checks/);
   const older = { ...profile, rulesVersion: undefined } as unknown as BrandProfile;
   assert.equal(brandDnaCard(older, [doc]).rulesOutdated, true);
@@ -455,8 +479,9 @@ test('four realistic sites through the real page reader: survival, tagged and on
   }
   const b = totals.tagged!;
   assert.ok(b[2]! >= 12, `true prices on tagged pages: ${b[2]}/16`); assert.equal(b[4], b[5], 'all audiences'); assert.equal(b[8], b[9], 'all honest never-say lines');
-  // Every honest whole sentence survives; the two lost claims are list items that start with "No", which rule C refuses.
-  assert.equal(b[6], b[7]! - 2, `claims ${b[6]}/${b[7]}`);
+  // Round 4: every honest whole sentence and every clean list item survives, including the plumber's "No call-out charge"
+  // and "Free, no-obligation quotes" (an item's own negation is allowed when its lead-in is clean).
+  assert.equal(b[6], b[7], `claims ${b[6]}/${b[7]}`);
 });
 
 // ─── Fuzz, repair consistency, performance, extraction ───────────────────────

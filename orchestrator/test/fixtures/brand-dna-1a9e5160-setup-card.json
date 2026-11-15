@@ -1,0 +1,370 @@
+{
+ "card": {
+  "summary": "Hearth Heating services and installs boilers across Bristol.",
+  "positioning": "Fixed prices and no call-out charge.",
+  "offers": [
+   {
+    "name": "Boiler Care Plan",
+    "description": "An annual service plus unlimited call-outs.",
+    "source": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": null
+    },
+    "price": "£14 per month",
+    "priceSource": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": null
+    },
+    "priceOpen": false
+   },
+   {
+    "name": "Landlord Gas Safety Check",
+    "description": "A CP12 certificate issued the same day.",
+    "source": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": null
+    },
+    "price": "£70",
+    "priceSource": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": null
+    },
+    "priceOpen": false
+   },
+   {
+    "name": "Boiler service",
+    "description": "A yearly service.",
+    "source": {
+     "label": "From your Prices page",
+     "url": "https://hearth.example/prices",
+     "quote": null
+    },
+    "price": "£85",
+    "priceSource": {
+     "label": "From your Prices page",
+     "url": "https://hearth.example/prices",
+     "quote": null
+    },
+    "priceOpen": false
+   },
+   {
+    "name": "Power flush",
+    "description": "Cleans the system.",
+    "source": {
+     "label": "From your Prices page",
+     "url": "https://hearth.example/prices",
+     "quote": null
+    },
+    "price": null,
+    "priceSource": null,
+    "priceOpen": true
+   },
+   {
+    "name": "Typed by the owner",
+    "description": "",
+    "source": null,
+    "price": "£40",
+    "priceSource": {
+     "label": "You told us",
+     "url": null,
+     "quote": null
+    },
+    "priceOpen": false
+   }
+  ],
+  "audiences": [
+   {
+    "text": "Homeowners in Bristol",
+    "source": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": "Hearth Heating price list"
+    }
+   },
+   {
+    "text": "Landlords",
+    "source": null
+   }
+  ],
+  "claims": [
+   {
+    "text": "Gas Safe registered",
+    "source": {
+     "label": "From your document “Price list”",
+     "url": null,
+     "quote": "We are Gas Safe registered engineers"
+    }
+   },
+   {
+    "text": "No call-out charge",
+    "source": {
+     "label": "From your Prices page",
+     "url": "https://hearth.example/prices",
+     "quote": "• No call-out charge"
+    }
+   },
+   {
+    "text": "Service area: Bristol and Bath",
+    "source": {
+     "label": "You told us",
+     "url": null,
+     "quote": null
+    }
+   },
+   {
+    "text": "An unsourced claim",
+    "source": null
+   }
+  ],
+  "voice": {
+   "tone": [
+    "plain",
+    "friendly"
+   ],
+   "do": [
+    "Say what it costs"
+   ],
+   "dont": [
+    "Jargon"
+   ]
+  },
+  "never": [
+   "Tax advice"
+  ],
+  "conflicts": [
+   {
+    "index": 0,
+    "title": "Power flush price",
+    "detail": "The price list and the page differ.",
+    "options": [
+     {
+      "index": 0,
+      "value": "from £350",
+      "source": {
+       "label": "From your Prices page",
+       "url": "https://hearth.example/prices",
+       "quote": "Power flush from £350"
+      }
+     },
+     {
+      "index": 1,
+      "value": "£399",
+      "source": {
+       "label": "From your document “Price list”",
+       "url": null,
+       "quote": "Power flush £399"
+      }
+     }
+    ]
+   },
+   {
+    "index": 1,
+    "title": "Service area",
+    "detail": "Two areas are given.",
+    "options": [
+     {
+      "index": 0,
+      "value": "Bristol",
+      "source": {
+       "label": "From your document “Price list”",
+       "url": null,
+       "quote": "across Bristol"
+      }
+     }
+    ]
+   },
+   {
+    "index": 2,
+    "title": "",
+    "detail": "A question with no title.",
+    "options": []
+   }
+  ],
+  "missing": [
+   "Opening hours",
+   "Whether the 3 monthly payments carry interest"
+  ],
+  "readFrom": [
+   {
+    "label": "document “Price list”",
+    "url": null
+   },
+   {
+    "label": "Prices page",
+    "url": "https://hearth.example/prices"
+   }
+  ],
+  "unsourced": 3,
+  "checked": false,
+  "leftOut": []
+ },
+ "html": "<!DOCTYPE html><html lang=\"en-GB\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"robots\" content=\"noindex,nofollow\"><title>Your Brand DNA · SEO Blog</title><style>\n:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--muted:#5b6570;--line:#d9dee4;--accent:#0b5cad;--ok:#1d7a3a;--warn:#9a5b00;--bad:#b42318}\n@media (prefers-color-scheme:dark){:root{--bg:#0f1215;--card:#171b20;--ink:#e6e9ec;--muted:#a7b0b9;--line:#2a3138;--accent:#7cb7ff;--ok:#5fd38a;--warn:#f0b35a;--bad:#ff8a80}}\n*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,\"Segoe UI\",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}\na{color:var(--accent)}header.sb{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}\nheader.sb form{display:flex;gap:8px;align-items:center}main{max-width:1180px;margin:0 auto;padding:20px}\nnav.tabs{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 16px}nav.tabs a{padding:8px 12px;border-radius:6px;text-decoration:none;color:var(--ink);border:1px solid transparent}\nnav.tabs a[aria-current=page]{background:var(--card);border-color:var(--line);font-weight:600}\n.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0 0 16px}\n.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}\nlabel{display:block;font-weight:600;margin:8px 0 4px}input[type=text],input[type=url],input[type=date],input[type=time],input[type=number],input[type=password],select,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}\ntextarea{min-height:120px}button,.button{display:inline-block;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font:inherit;cursor:pointer;text-decoration:none}\nbutton.secondary,.button.secondary{background:transparent;color:var(--accent)}button.danger{background:var(--bad);border-color:var(--bad)}\n.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.bad{color:var(--bad);border-color:var(--bad)}\n.toggle-state.on{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--card))}.toggle-state.off{color:var(--muted);border-color:var(--muted);background:var(--card)}.toggle-state.paused{color:var(--bad);border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--card))}\n.toggle-control.on{background:#166534;border-color:#166534;color:#fff}.toggle-control.on:hover{background:#14532d}.toggle-control.off{background:#e5e7eb;border-color:#6b7280;color:#1f2937}.toggle-control.off:hover{background:#d1d5db}.toggle-control.paused{background:#b42318;border-color:#b42318;color:#fff}.toggle-control.paused:hover{background:#912018}\n.notice{padding:10px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);margin:0 0 16px}.notice.bad{border-color:var(--bad)}\ntable{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}\n.muted{color:var(--muted)}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.row>*{flex:1 1 160px}\n.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.day{min-height:96px;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--card)}.day.drop{outline:2px dashed var(--accent)}\n.day h4{margin:0 0 4px;font-size:12px;color:var(--muted)}.slot{font-size:12px;padding:4px 6px;border-radius:6px;border:1px solid var(--line);margin:0 0 4px;background:var(--bg);cursor:grab}\n.slot.planned{border-style:dashed;cursor:default}details>summary{cursor:pointer}\n@media (max-width:700px){.cal{grid-template-columns:1fr}.day{min-height:auto}}\n:root{color-scheme:light;--bg:#f6f7fb;--card:#fff;--ink:#0c1018;--muted:#586174;--line:#e4e7ee;--accent:#2a44d6;--bad:#b42318;--ok:#157347;--warn:#906012}\n[data-knowledge-upload] .row{align-items:flex-start}.knowledge-table-wrap{max-width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-top:18px}.knowledge-table-wrap:focus-visible{outline:3px solid #3557ff;outline-offset:3px}.knowledge-table{min-width:820px}.knowledge-table th:first-child,.knowledge-table td:first-child{min-width:170px}.knowledge-table td:nth-child(2){min-width:210px}.knowledge-table td:nth-child(4){min-width:240px}.knowledge-table select{min-width:190px}.category-row input[type=checkbox]{width:20px;height:20px}main{max-width:1440px;padding:28px}h1{font-size:clamp(26px,3vw,36px);line-height:1.15;letter-spacing:-.035em;margin:8px 0 24px}h2{font-size:20px;letter-spacing:-.025em;margin:0 0 14px}h3{font-size:16px}.card{padding:22px;box-shadow:0 3px 14px #0c101804}button,.button{min-height:42px;font-weight:650;border-radius:8px}button:disabled{cursor:not-allowed;opacity:.58}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #3557ff;outline-offset:3px}input,select,textarea{max-width:100%;min-width:0}input[type=file]{width:100%;font:inherit}.sb{box-shadow:0 1px 0 #e4e7ee}nav.tabs{margin-bottom:24px;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:6px}nav.tabs a{white-space:nowrap;border-radius:8px}nav.tabs a[aria-current=page]{background:#eef1ff;color:#2a44d6;border-color:#d9e0ff}.eyebrow{font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:0 0 10px}.programme-hero{display:flex;flex-wrap:wrap;gap:24px;align-items:center;justify-content:space-between;padding:28px;border:1px solid #d9e0ff;border-radius:16px;background:linear-gradient(120deg,#fff,#eef1ff);margin-bottom:24px}.programme-hero h2{font-size:28px;line-height:1.15;max-width:720px}.programme-hero p{max-width:760px}.programme-hero[data-state=held],.programme-hero[data-state=needs_setup]{border-color:#e5c78e;background:linear-gradient(120deg,#fff,#fff8eb)}.programme-hero[data-state=paused]{background:#f0f2f7;border-color:#cbd2df}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:0 0 24px}.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px}.metric strong{display:block;font-size:28px;line-height:1.1;letter-spacing:-.04em;margin:10px 0}.metric small{display:block;color:var(--muted);line-height:1.4}.step-heading{display:flex;gap:12px;align-items:center}.step-number{display:inline-grid;place-items:center;width:30px;height:30px;background:#eef1ff;color:#2a44d6;border-radius:8px;font-size:13px;font-weight:750;flex-shrink:0}.setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.category-row{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.research-status{border-left:4px solid #3557ff}.research-status[data-held=true]{border-left-color:#b1741a}.calendar-toolbar{display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin:0 0 18px}.view-switch{display:flex;gap:4px;border:1px solid var(--line);padding:4px;border-radius:10px;background:#fff}.view-switch a{padding:7px 12px;text-decoration:none;border-radius:6px}.view-switch a[aria-current=page]{background:#eef1ff;font-weight:700}.calendar-shell{padding:16px;overflow:hidden}.calendar-weekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:8px}.calendar-weekdays span{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);padding:0 8px}.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}.day{min-width:0;min-height:120px;padding:8px;border-color:var(--line);background:#fff}.day.outside-month{background:#f7f8fc;color:#778094}.day h4{margin:0 0 10px;font-size:13px;color:var(--ink)}.slot{font-size:13px;padding:10px;border-radius:8px;border-left:3px solid #3557ff;margin:0 0 8px;word-break:break-word;background:#eef1ff;line-height:1.45;min-width:0}.slot a{font-weight:700;text-decoration:none}.slot.planned{background:#f8f9fc;border-color:#bcc5dc;border-left-color:#8792ae}.slot[data-editorial-proposal]{background:#fffaf0;border-left-color:#b1741a}.slot .pill{font-size:10px;padding:1px 5px;margin-top:5px}.slot small{color:var(--muted)}.slot form{display:grid;gap:6px}.slot button{padding:6px;font-size:12px;min-height:34px}.slot input{font-size:12px;padding:5px;min-width:0}.month-view .slot{padding:8px;font-size:12px;line-height:1.35}.month-view .slot p{margin:4px 0}.month-view .slot>a{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}.month-view .slot p:has(small){display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.month-view .slot details{font-size:11px;margin-top:6px}.calendar-agenda{display:none}.calendar-agenda.always{display:block}.agenda-day{display:grid;grid-template-columns:100px minmax(0,1fr);gap:16px;border-bottom:1px solid var(--line);padding:18px 0}.agenda-day h3{margin:0;font-size:14px}.empty-state{padding:34px 20px;text-align:center;background:#f8f9fc;border:1px dashed #cbd2df;border-radius:12px}.empty-state h2{margin:0 0 10px}.review-note{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:10px;background:#eef1ff}.preview-url{word-break:break-all;font:13px ui-monospace,monospace}.doc-history{margin-top:8px}.section-note{font-size:13px;color:var(--muted)}\n@media(max-width:900px){.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.setup-grid{grid-template-columns:1fr}main{padding:22px}.programme-hero{padding:22px}.card{padding:18px}}\n@media(max-width:700px){main{padding:16px}.programme-hero{padding:20px;border-radius:12px;gap:12px}.programme-hero h2{font-size:24px}.metric{padding:14px}.metric strong{font-size:24px}.card{overflow-x:auto}.calendar-shell{overflow:visible;padding:16px}.calendar-desktop{display:none}.calendar-agenda{display:block}.agenda-day{grid-template-columns:72px minmax(0,1fr);gap:12px}.agenda-day .slot{font-size:14px;padding:14px}.calendar-toolbar{align-items:stretch}.calendar-toolbar>div{max-width:100%}.category-row{grid-template-columns:24px minmax(0,1fr)}.category-row>div:last-child{grid-column:2}.sb{padding:12px!important}.sb form{width:100%}.sb form select{flex:1}.review-note{font-size:13px}}\n@media(max-width:760px){.website-connections,.website-connections tbody,.website-connections tr,.website-connections td{display:block;width:100%}.website-connections tr{padding:12px;border:1px solid var(--line);border-radius:10px;margin:12px 0}.website-connections td{border:0;padding:7px 0;overflow-wrap:anywhere}.website-connections td::before{content:attr(data-label);display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px}.website-connections td form{margin:0}.website-connections .muted{display:block;margin-top:6px}}\n</style></head><body>\n<header class=\"sb\"><div><a href=\"/portal/seo-blog\"><strong>Your businesses</strong></a> › <strong>Hearth</strong> · SEO Blog</div><form method=\"get\" action=\"/portal/seo-blog/switch\"><label for=\"brand-switch\" class=\"muted\" style=\"margin:0\">Business</label><select id=\"brand-switch\" name=\"brand\"><option value=\"b\" selected>Hearth</option></select><input type=\"hidden\" name=\"to\" value=\"overview\"><button class=\"secondary\" type=\"submit\">Open</button></form><a href=\"/portal/approvals?brand=b\">Approvals</a><a href=\"/portal\">Back to portal</a></header>\n<main><nav class=\"tabs\" aria-label=\"SEO Blog\"><a href=\"/portal/seo-blog/b/b/overview\">Overview</a><a href=\"/portal/seo-blog/b/b/setup\">Brand setup</a><a href=\"/portal/seo-blog/b/b/topics\">Topics</a><a href=\"/portal/seo-blog/b/b/articles\">Articles</a><a href=\"/portal/seo-blog/b/b/calendar\">Calendar</a><a href=\"/portal/seo-blog/b/b/publishing\">Publishing</a><a href=\"/portal/seo-blog/b/b/social\">Social</a><a href=\"/portal/seo-blog/b/b/activity\">Activity</a></nav><style>\n.dna{max-width:720px;margin:0 auto}.dna h1{margin-bottom:8px}.dna .lead{font-size:17px;margin:0 0 20px}\n.dna .main{display:block;width:100%;padding:14px 18px;font-size:17px;font-weight:600;text-align:center;border-radius:10px}\n.dna button[disabled]{opacity:.5;cursor:not-allowed}.dna .from{display:block;font-size:13px;color:var(--muted);margin-top:2px}\n.dna .from q{font-style:italic}.dna ul.facts{list-style:none;padding:0;margin:0}.dna ul.facts li{padding:10px 0;border-bottom:1px solid var(--line)}\n.dna ul.facts li:last-child{border-bottom:0}.dna .price{font-weight:700}.dna fieldset{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 14px}\n.dna legend{font-weight:700;padding:0 6px}.dna .choice{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);font-weight:400;margin:0}\n.dna .choice input[type=radio]{margin-top:5px;width:20px;height:20px;flex:0 0 auto}.dna .choice strong{display:block}\n.dna .answers{display:grid;gap:0}@media(min-width:640px){.dna .answers.side{grid-template-columns:1fr 1fr;gap:0 18px}}\n.dna .quiet{margin-top:18px}.dna .quiet button,.dna .quiet .button{width:100%;text-align:center}.dna .pill{vertical-align:middle}\n</style><div class=\"dna\"><h1>Your Brand DNA <span class=\"pill warn\">Needs your confirmation</span></h1>\n<p class=\"lead\">Check each line before you confirm it.</p>\n<section class=\"card\" id=\"choose\"><h2>We found different answers</h2>\n<p>Your website pages and documents do not agree on these. Pick the right answer each time. We have not chosen for you.</p>\n\n<form method=\"post\" action=\"/portal/seo-blog/b/b/dna/settle\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"version\" value=\"4\"><input type=\"hidden\" name=\"conflict\" value=\"0\">\n<fieldset><legend>Power flush price</legend><p class=\"muted\">The price list and the page differ.</p><div class=\"answers side\">\n<label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"0\" required><span><strong>from £350</strong><span class=\"from\"><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">From your Prices page</a>: <q>Power flush from £350</q></span></span></label><label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"1\" required><span><strong>£399</strong><span class=\"from\">From your document “Price list”: <q>Power flush £399</q></span></span></label>\n</div><label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"typed\" required><span><strong>Neither, I’ll type it</strong></span></label>\n<label for=\"typed-0\">The right answer</label><input id=\"typed-0\" type=\"text\" name=\"typed\" maxlength=\"300\" autocomplete=\"off\">\n<p style=\"margin:12px 0 0\"><button class=\"secondary\" type=\"submit\">Save this answer</button></p></fieldset></form><form method=\"post\" action=\"/portal/seo-blog/b/b/dna/settle\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"version\" value=\"4\"><input type=\"hidden\" name=\"conflict\" value=\"1\">\n<fieldset><legend>Service area</legend><p class=\"muted\">Two areas are given.</p><div class=\"answers\">\n<label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"0\" required><span><strong>Bristol</strong><span class=\"from\">From your document “Price list”: <q>across Bristol</q></span></span></label>\n</div><label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"typed\" required><span><strong>Neither, I’ll type it</strong></span></label>\n<label for=\"typed-1\">The right answer</label><input id=\"typed-1\" type=\"text\" name=\"typed\" maxlength=\"300\" autocomplete=\"off\">\n<p style=\"margin:12px 0 0\"><button class=\"secondary\" type=\"submit\">Save this answer</button></p></fieldset></form><form method=\"post\" action=\"/portal/seo-blog/b/b/dna/settle\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"version\" value=\"4\"><input type=\"hidden\" name=\"conflict\" value=\"2\">\n<fieldset><legend></legend><p class=\"muted\">A question with no title.</p><div class=\"answers\">\n\n</div><label class=\"choice\"><input type=\"radio\" name=\"choice\" value=\"typed\" required><span><strong>Neither, I’ll type it</strong></span></label>\n<label for=\"typed-2\">The right answer</label><input id=\"typed-2\" type=\"text\" name=\"typed\" maxlength=\"300\" autocomplete=\"off\">\n<p style=\"margin:12px 0 0\"><button class=\"secondary\" type=\"submit\">Save this answer</button></p></fieldset></form></section><section class=\"card\"><h2>In a sentence</h2><p>Hearth Heating services and installs boilers across Bristol.</p><p>Fixed prices and no call-out charge.</p><p class=\"muted\">Summed up from the pages and documents listed under “Where we looked”.</p></section>\n<section class=\"card\"><h2>What you sell</h2><p class=\"muted\">Check each price against your own price list before you confirm.</p><ul class=\"facts\"><li><strong>Boiler Care Plan</strong><br>An annual service plus unlimited call-outs.<span class=\"from\">From your document “Price list”</span>\n<span class=\"price\">Price: £14 per month</span><span class=\"from\">From your document “Price list”</span></li><li><strong>Landlord Gas Safety Check</strong><br>A CP12 certificate issued the same day.<span class=\"from\">From your document “Price list”</span>\n<span class=\"price\">Price: £70</span><span class=\"from\">From your document “Price list”</span></li><li><strong>Boiler service</strong><br>A yearly service.<span class=\"from\"><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">From your Prices page</a></span>\n<span class=\"price\">Price: £85</span><span class=\"from\"><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">From your Prices page</a></span></li><li><strong>Power flush</strong><br>Cleans the system.<span class=\"from\"><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">From your Prices page</a></span>\n<span class=\"price\">Price: choose the right one above</span></li><li><strong>Typed by the owner</strong><span class=\"from\">Where this came from was not recorded. Check it before you confirm.</span>\n<span class=\"price\">Price: £40</span><span class=\"from\">You told us</span></li></ul></section>\n<section class=\"card\"><h2>Who it is for</h2><ul class=\"facts\"><li>Homeowners in Bristol<span class=\"from\">From your document “Price list”: <q>Hearth Heating price list</q></span></li><li>Landlords<span class=\"from\">Where this came from was not recorded. Check it before you confirm.</span></li></ul></section>\n<section class=\"card\"><h2>What you can say</h2><ul class=\"facts\"><li>Gas Safe registered<span class=\"from\">From your document “Price list”: <q>We are Gas Safe registered engineers</q></span></li><li>No call-out charge<span class=\"from\"><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">From your Prices page</a>: <q>• No call-out charge</q></span></li><li>Service area: Bristol and Bath<span class=\"from\">You told us</span></li><li>An unsourced claim<span class=\"from\">Where this came from was not recorded. Check it before you confirm.</span></li></ul></section>\n<section class=\"card\"><h2>How you sound</h2><p>plain, friendly</p>\n<p><strong>Do</strong></p><ul><li>Say what it costs</li></ul><p><strong>Avoid</strong></p><ul><li>Jargon</li></ul>\n<p class=\"muted\">This is our reading of the words on your pages, not a fact about you. Change anything that is wrong.</p></section>\n<section class=\"card\"><h2>Never say</h2><ul><li>Tax advice</li></ul></section>\n<section class=\"card\"><h2>What we could not find</h2><p class=\"muted\">We left these out rather than guess. Add them to your website or your documents if they matter.</p><ul><li>Opening hours</li><li>Whether the 3 monthly payments carry interest</li></ul></section>\n<section class=\"card\"><h2>Where we looked</h2><ul><li>document “Price list”</li><li><a href=\"https://hearth.example/prices\" target=\"_blank\" rel=\"noopener noreferrer\">Prices page</a></li></ul>\n<p class=\"notice\">3 lines on this card have no recorded source. Check them yourself before you rely on them.</p></section>\n<details class=\"card\" id=\"dna-change\"><summary><strong>Something not right? Change it</strong></summary>\n<p class=\"muted\">Use your own words. A line you add is marked “You told us”. To change a price, change it on your website or in your documents, then read your website again.</p>\n\n<form method=\"post\" action=\"/portal/seo-blog/b/b/dna/edit\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"version\" value=\"4\">\n<label for=\"dna-summary\">In a sentence</label><textarea id=\"dna-summary\" name=\"summary\">Hearth Heating services and installs boilers across Bristol.</textarea><label for=\"dna-audiences\">Who it is for</label><textarea id=\"dna-audiences\" name=\"audiences\">Homeowners in Bristol\nLandlords</textarea><small class=\"muted\">One per line.</small>\n<label for=\"dna-approvedClaims\">What you can say</label><textarea id=\"dna-approvedClaims\" name=\"approvedClaims\">Gas Safe registered\nNo call-out charge\nService area: Bristol and Bath\nAn unsourced claim</textarea><small class=\"muted\">One per line.</small><label for=\"dna-exclusions\">Never say</label><textarea id=\"dna-exclusions\" name=\"exclusions\">Tax advice</textarea><small class=\"muted\">One per line.</small>\n<label for=\"dna-voiceDont\">Words and styles to avoid</label><textarea id=\"dna-voiceDont\" name=\"voiceDont\">Jargon</textarea><small class=\"muted\">One per line.</small>\n<p><button class=\"secondary\" type=\"submit\">Save my changes</button></p></form></details><form method=\"post\" action=\"/portal/seo-blog/b/b/dna/confirm\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"version\" value=\"4\">\n<button class=\"main\" type=\"submit\" disabled aria-describedby=\"dna-why\">Confirm my Brand DNA</button>\n<p class=\"muted\" id=\"dna-why\">Choose an answer for each of the 3 questions above first.</p></form>\n<details class=\"card quiet\"><summary>Read my website again</summary><p class=\"muted\">Makes a fresh card from today’s pages and documents. This card is replaced.</p>\n<form method=\"post\" action=\"/portal/seo-blog/b/b/dna/read\"><input type=\"hidden\" name=\"_csrf\" value=\"csrf-token\"><input type=\"hidden\" name=\"commandId\" value=\"cmd-1\">\n<label for=\"dna-website\">Your website address</label><input id=\"dna-website\" type=\"text\" name=\"website\" inputmode=\"url\" autocomplete=\"url\" placeholder=\"www.example.co.uk\" value=\"https://hearth.example\" required>\n\n<p style=\"margin:14px 0 0\"><button class=\"secondary\" type=\"submit\">Read my website again</button></p></form></details></div></main></body></html>",
+ "parsed": {
+  "index": {
+   "ogImage": null,
+   "icons": [],
+   "themeColour": null,
+   "title": "Hearth Heating | Bristol",
+   "description": "Boilers in Bristol",
+   "canonical": "https://hearth.example/",
+   "robotsNoindex": false,
+   "headings": [
+    {
+     "level": 1,
+     "text": "Boiler service in Bristol"
+    },
+    {
+     "level": 2,
+     "text": "Why us"
+    }
+   ],
+   "text": "Boiler service in Bristol\n We service boilers across Bristol.\nCall today now.\n Why us\n No call-out charge\n Gas Safe\n Boiler service £85\n 12 month guarantee\n Great service.",
+   "publishedAt": null,
+   "modifiedAt": null,
+   "links": [
+    "https://hearth.example/prices",
+    "https://hearth.example/about",
+    "https://elsewhere.example/x"
+   ]
+  },
+  "prices": {
+   "ogImage": null,
+   "icons": [],
+   "themeColour": null,
+   "title": "Prices",
+   "description": null,
+   "canonical": null,
+   "robotsNoindex": false,
+   "headings": [
+    {
+     "level": 1,
+     "text": "Prices"
+    }
+   ],
+   "text": "Prices\n Power flush from £350. All prices include VAT.\n See about us .",
+   "publishedAt": null,
+   "modifiedAt": null,
+   "links": [
+    "https://hearth.example/about"
+   ]
+  },
+  "about": {
+   "ogImage": null,
+   "icons": [],
+   "themeColour": null,
+   "title": "About",
+   "description": null,
+   "canonical": null,
+   "robotsNoindex": false,
+   "headings": [],
+   "text": "“Lovely team.”\n Sam\n Founded in 2009.",
+   "publishedAt": null,
+   "modifiedAt": null,
+   "links": []
+  }
+ },
+ "inventory": {
+  "brandId": "b",
+  "website": "https://hearth.example",
+  "fetchedAt": "2026-11-01T00:00:00.000Z",
+  "sitemapUrls": 3,
+  "pages": [
+   {
+    "url": "https://hearth.example/",
+    "canonical": "https://hearth.example/",
+    "title": "Hearth Heating | Bristol",
+    "headings": [
+     "Boiler service in Bristol",
+     "Why us"
+    ],
+    "excerpt": "Boilers in Bristol",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   },
+   {
+    "url": "https://hearth.example/prices",
+    "canonical": null,
+    "title": "Prices",
+    "headings": [
+     "Prices"
+    ],
+    "excerpt": "Prices Power flush from £350. All prices include VAT. See about us .",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   },
+   {
+    "url": "https://hearth.example/about",
+    "canonical": null,
+    "title": "About",
+    "headings": [],
+    "excerpt": "“Lovely team.” Sam Founded in 2009.",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   }
+  ],
+  "notes": []
+ },
+ "inventoryWithTextOtherwise": {
+  "brandId": "b",
+  "website": "https://hearth.example",
+  "fetchedAt": "2026-11-01T00:00:00.000Z",
+  "sitemapUrls": 3,
+  "pages": [
+   {
+    "url": "https://hearth.example/",
+    "canonical": "https://hearth.example/",
+    "title": "Hearth Heating | Bristol",
+    "headings": [
+     "Boiler service in Bristol",
+     "Why us"
+    ],
+    "excerpt": "Boilers in Bristol",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   },
+   {
+    "url": "https://hearth.example/prices",
+    "canonical": null,
+    "title": "Prices",
+    "headings": [
+     "Prices"
+    ],
+    "excerpt": "Prices Power flush from £350. All prices include VAT. See about us .",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   },
+   {
+    "url": "https://hearth.example/about",
+    "canonical": null,
+    "title": "About",
+    "headings": [],
+    "excerpt": "“Lovely team.” Sam Founded in 2009.",
+    "publishedAt": null,
+    "modifiedAt": null,
+    "fetchStatus": "ok",
+    "httpStatus": 200,
+    "editorial": false
+   }
+  ],
+  "notes": []
+ }
+}

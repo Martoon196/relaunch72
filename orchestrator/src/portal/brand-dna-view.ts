@@ -63,13 +63,13 @@ function cardSections(card: BrandDnaCard): string {
 <span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
   return `<section class="card"><h2>In a sentence</h2>${card.summary.trim() ? `<p>${e(card.summary)}</p>` : '<p class="notice">Add a one-line summary before you confirm. Use “Something not right? Change it” below.</p>'}${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
-<section class="card"><h2>What you sell</h2><p class="muted">${card.fromWebsite ? 'Each price is copied as your page writes it, with the sentence it came from. Read it before you confirm.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
+<section class="card"><h2>What you sell</h2><p class="muted">${card.fromWebsite ? 'Each price is copied as your page writes it, with the line we found it on and the line naming what it is for. Read them before you confirm.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
 <section class="card"><h2>Who it is for</h2>${facts(card.audiences, 'We did not find who you sell to written down. Nothing was added.')}</section>
 <section class="card"><h2>What you can say</h2>${facts(card.claims, 'We did not find any claims you make written down. Nothing was added.')}</section>
 <section class="card"><h2>How you sound</h2>${card.voice.tone.length ? `<p>${e(card.voice.tone.join(', '))}</p>` : '<p class="muted">Not enough of your own words to tell yet.</p>'}
 ${card.voice.do.length ? `<p><strong>Do</strong></p>${plainList(card.voice.do)}` : ''}${card.voice.dont.length ? `<p><strong>Avoid</strong></p>${plainList(card.voice.dont)}` : ''}
 <p class="muted">This is our reading of the words on your pages, not a fact about you. Change anything that is wrong.</p></section>
-${card.never.length ? `<section class="card"><h2>Never say</h2><p class="muted">Our suggestions from your pages. Remove any you do not want under “Something not right? Change it”.</p>${plainList(card.never)}</section>` : ''}
+${card.never.length ? `<section class="card"><h2>Never say</h2>${card.fromWebsite ? '<p class="muted">Our suggestions from your pages. Remove any you do not want under “Something not right? Change it”.</p>' : ''}${plainList(card.never)}</section>` : ''}
 ${card.missing.length ? `<section class="card"><h2>What we could not find</h2><p class="muted">We left these out rather than guess. Add them to your website or your documents if they matter.</p>${plainList(card.missing)}</section>` : ''}
 <section class="card"><h2>Where we looked</h2>${card.readFrom.length ? `<ul>${card.readFrom.map((r) => `<li>${r.url ? `<a href="${e(r.url)}" target="_blank" rel="noopener noreferrer">${e(r.label)}</a>` : e(r.label)}</li>`).join('')}</ul>` : '<p class="muted">The pages and documents this card was made from are no longer on record.</p>'}
 ${card.unsourced ? `<p class="notice">${card.unsourced} line${card.unsourced === 1 ? '' : 's'} on this card ${card.unsourced === 1 ? 'has' : 'have'} no recorded source. Check ${card.unsourced === 1 ? 'it' : 'them'} yourself before you rely on ${card.unsourced === 1 ? 'it' : 'them'}.</p>` : ''}</section>`;
@@ -89,7 +89,7 @@ function leftOutSection(shell: Shell, card: BrandDnaCard, canEdit: boolean): str
     : `<a href="${link(shell, 'setup')}#brand-guidance">Add it to your details</a>`;
   const more = items.length - LEFT_OUT_SHOWN;
   return `<section class="card" id="left-out"><h2>What we left out</h2>
-<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not match to your own pages. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
+<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} ${card.fromWebsite ? 'we could not match to your own pages' : 'we could not confirm word for word'}. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
 <ul class="facts">${items.slice(0, LEFT_OUT_SHOWN).map((i) => `<li>${e(i.label)}<span class="from">${add(i.fix)}</span></li>`).join('')}</ul>
 ${more > 0 ? `<p class="muted">And ${more} more.</p>` : ''}<p class="muted">Nothing left out is used to write your content.</p></section>`;
 }
@@ -190,7 +190,7 @@ export function brandDnaPage(given: Shell, state: BrandDnaState, commandId: stri
     const pasteFirst = stopped?.pasteInstead === true;
     return body('Start with your website', `<h1>Start with your website</h1>
 <p class="lead">Paste your website address. We read your pages and any documents you have added, then show you a Brand DNA card: what you sell and what it costs, who it is for and how you sound.</p>
-<p class="muted">Every line on the card says where we found it. Nothing is made up, and nothing is used until you confirm it.</p>
+<p class="muted">Prices and claims show where we found them. You confirm the card before anything is used.</p>
 ${stoppedNotice}${cannotStart || (pasteFirst
     ? `<section class="card"><p><a class="button main" href="${link(shell, 'setup')}#brand-guidance">Paste your details instead</a></p><p class="muted">Paste what you sell, what it costs and who it is for. Then come back here and press “Read my website”.</p></section>
 <details class="card"><summary>Try my website again</summary>${readForm(shell, state, { label: 'Read my website', main: false, again: false, commandId })}</details>`

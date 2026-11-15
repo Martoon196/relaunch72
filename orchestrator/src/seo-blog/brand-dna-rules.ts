@@ -52,10 +52,13 @@ export function wordRun(hay: string | null | undefined, needle: string | null | 
 
 /** Line markers written by the page reader. Shown text never carries them (`withoutMarkers`). */
 export type LineKind = 'heading' | 'item' | 'row' | 'quoted' | 'para';
-const MARKERS: [string, LineKind][] = [['# ', 'heading'], ['• ', 'item'], ['| ', 'row'], ['❝ ', 'quoted']];
-export function lineKind(line: string): { kind: LineKind; start: number } {
-  for (const [m, kind] of MARKERS) if (line.startsWith(m)) return { kind, start: m.length };
-  return { kind: 'para', start: 0 };
+const MARKERS: [string, LineKind][] = [['• ', 'item'], ['| ', 'row'], ['❝ ', 'quoted']];
+/** The kind of a stored line, where its words start, and for a heading its level (1 to 6, from "# " to "###### "). */
+export function lineKind(line: string): { kind: LineKind; start: number; level: number } {
+  const h = /^(#{1,6}) /.exec(line);
+  if (h) return { kind: 'heading', start: h[0].length, level: h[1]!.length };
+  for (const [m, kind] of MARKERS) if (line.startsWith(m)) return { kind, start: m.length, level: 0 };
+  return { kind: 'para', start: 0, level: 0 };
 }
 /** Stored page text as a person should read it: the structure markers removed. */
 export function withoutMarkers(text: string | null | undefined): string {
@@ -64,9 +67,19 @@ export function withoutMarkers(text: string | null | undefined): string {
 
 // ─── Words that turn a sentence round, or say it is not the business's own fact ──
 
-const UNRELIABLE = /\b(?:not|no|never|nor|neither|without|unlike|except|excluding|cannot|unable|none|stopped|myths?|misconceptions?|lies?|false|untrue|wrong|mistakes?)\b|\bno longer\b|\brather than\b|\binstead of\b|n['’]t\b|\bhope to\b|\baim(?:ing)? to\b|\b(?:aim|goal|ambition|mission|vision|dream) is to\b|\bplan to\b|\bwant to become\b|\bwill be\b|\bwould be\b|\bsome (?:\w+ ){0,2}(?:think|thinks|believe|believes|say|says)\b/u;
-/** True when a piece of text holds a negation or an unreliability word (see the list above). */
-export const unreliable = (text: string) => UNRELIABLE.test(basisText(text).toLowerCase());
+/** Negation words, as whole words: "no-obligation" and "non-stop" hold none. */
+const NEGATION = /(?<![\p{L}\p{N}'’-])(?:not|no|never|nor|neither|without|unlike|except|excluding|cannot|unable|none|stopped)(?![\p{L}\p{N}'’-])|\bno longer\b|\brather than\b|\binstead of\b|n['’]t(?![\p{L}])/u;
+/** Words that say a sentence is not a plain statement of fact: myths, mistakes, hopes and plans. */
+const NOT_FACT = /\b(?:myths?|misconceptions?|lies?|false|untrue|wrong|mistakes?)\b|\bhope to\b|\baim(?:ing)? to\b|\b(?:aim|goal|ambition|mission|vision|dream) is to\b|\bplan to\b|\bwant to become\b|\bwill be\b|\bwould be\b|\bsome (?:\w+ ){0,2}(?:think|thinks|believe|believes|say|says)\b/u;
+/** Not yet, or only asked about: never who the business serves or what it sells. */
+const NOT_YET = /\bworking towards\b|\bask(?:ed)? about\b|\boften ask\b|\blooking into\b|\bconsidering\b|\bcoming soon\b|\bsoon\b/u;
+/** A list's introduction that says the list is about problems, or other people. */
+const PAIN = /\?|\btired of\b|\bfed up\b|\bstruggling\b|\bworried\b|\bsound(?:s)? familiar\b|\bsick of\b|\bfrustrated\b|\bagents who\b|\bcompanies that\b|\bfirms that\b|\bothers\b|\bother (?:agents|companies|firms|businesses)\b|\bproblems?\b|\bmistakes\b|\bpitfalls\b/u;
+const lowerBasis = (text: string) => basisText(text).toLowerCase();
+/** True when a piece of text holds a negation or an unreliability word (the lists above, "not yet" words included). */
+export const unreliable = (text: string) => { const t = lowerBasis(text); return NEGATION.test(t) || NOT_FACT.test(t) || NOT_YET.test(t); };
+const leadInBad = (text: string) => { const t = lowerBasis(text); return NEGATION.test(t) || NOT_FACT.test(t) || PAIN.test(t); };
+const itemBad = (text: string) => CROSS.test(text) || NOT_FACT.test(lowerBasis(text));
 const QUOTE_MARKS = /["“”„«»]/u;
 const CROSS = /[✗✘❌✕×]/u;
 /** Sentences that are about someone else's product. */
@@ -121,9 +134,11 @@ function sentences(line: string, from: number): { s: number; e: number }[] {
   return out;
 }
 
-/** A short line naming who said the line above: "Sarah T, landlord", "— Tom", "John D.". */
-const NAME_LINE = /^(?:[-–—]\s*\S.*|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}\s*,\s*[\p{L}][\p{L}\s'’-]*|[\p{Lu}][\p{L}'’-]+\s+[\p{Lu}]\.?)$/u;
-const nameLike = (text: string) => text.length <= 60 && text.trim().split(/\s+/).length <= 6 && !/\p{N}/u.test(text) && !/[!?:;]/.test(text) && NAME_LINE.test(text.trim());
+/** A short line naming who said the line above: "Sarah T, landlord", "— Tom", "John D.", "The Smith family", "Ann, 34, nurse". */
+const NAME_LINE = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
+const nameLike = (text: string) => text.length <= 60 && text.trim().split(/\s+/).length <= 6 && !/[!?:;]/.test(text) && NAME_LINE.test(text.trim());
+/** Only a line that is itself in quotation marks is attributed by a short name line under it (the page reader also uses italics and star ratings). */
+const inQuoteMarks = (text: string) => /^["“«„]/u.test(text.trim()) || /["”»]$/u.test(text.trim());
 
 export interface Structure { readonly basis: string; readonly lines: readonly Line[]; readonly units: readonly Unit[]; readonly tokens: readonly Tok[]; readonly key: string; readonly tokenLine: Int32Array }
 
@@ -144,8 +159,8 @@ export function structureOf(text: string | null | undefined): Structure {
     // A paragraph followed by a short name-like line is a quote; so is the name line.
     const nextPara = kinds[li + 1]?.kind === 'para' ? raw[li + 1] ?? '' : '';
     const prevLine = li > 0 ? raw[li - 1]! : '';
-    const attributed = kind === 'para' && nameLike(nextPara);
-    const isAttribution = kind === 'para' && li > 0 && kinds[li - 1]!.kind === 'para' && nameLike(line) && prevLine.trim().length > 0;
+    const attributed = kind === 'para' && inQuoteMarks(line) && nameLike(nextPara);
+    const isAttribution = kind === 'para' && li > 0 && kinds[li - 1]!.kind === 'para' && nameLike(line) && inQuoteMarks(prevLine);
     const tooLong = line.length - start > LINE_SPLIT_LIMIT;
     // Quoted spans: from an opening quote mark to its closing mark, across sentences, within the line.
     const spans: [number, number][] = [];
@@ -165,8 +180,10 @@ export function structureOf(text: string | null | undefined): Structure {
       const chunk = line.slice(p.s, p.e), lead = chunk.length - chunk.trimStart().length, unitText = chunk.trim();
       const us = s + p.s + lead, ue = us + unitText.length;
       const next = parts[i + 1] ? line.slice(parts[i + 1]!.s, parts[i + 1]!.e) : '';
+      // "Best decision we ever made. — Sarah": a short dash-name ending the line attributes the sentence before it.
+      const dashName = (t: string) => /^\s*[—–]\s*\p{Lu}/u.test(t) && nameLike(t.trim().replace(/^[—–]\s*/u, ''));
       const quoted = kind === 'quoted' || attributed || isAttribution || spans.some(([a, b]) => a < p.e && b >= p.s)
-        || /^\s*[-–—]\s*\p{L}/u.test(next) || /^[-–—]/u.test(unitText) || /["”»’]\s*[-–—]/u.test(unitText);
+        || (i === parts.length - 2 && dashName(next)) || (i === parts.length - 1 && i > 0 && dashName(unitText)) || /["”»’]\s*[—–-]\s*\p{Lu}/u.test(unitText);
       return { text: unitText, s: us, e: ue, line: li, key: keyOf(unitText), kind, quoted, unreliable: unreliable(unitText), ends: /[.!]["'”’)\]»]*$/u.test(unitText),
         words: unitText.split(/\s+/).filter(Boolean).length, tooLong };
     });
@@ -202,8 +219,10 @@ export const CLAIM_MAX = 220;
 /**
  * The text of the source sentence an approved claim is, or null. A claim is one whole unit of the document, and one of:
  *   - a prose sentence: a paragraph unit that ends with "." or "!" and has at least four words;
- *   - a whole list item, when neither the item nor its lead-in line holds a negation or unreliability word and the
- *     item has no cross mark and does not start with "no" or "not".
+ *   - a whole list item, when its lead-in line (the nearest earlier line that is not an item) is not a question and
+ *     holds no negation, unreliability or "problem" word (tired of, sound familiar, other agents, pitfalls …), and the
+ *     item itself has no cross mark and no myth/false/wrong/hope-to word. An item's own "No …" is allowed: "No
+ *     call-out charge" is the business's statement.
  * Never: a heading, a table cell, customer words (testimonial lines, quotation marks, an attributed quote), anything
  * with a question mark, anything over 220 characters, or a line too long to split.
  */
@@ -219,9 +238,9 @@ export function claimSentence(claim: string, doc: { readonly text?: string | nul
   for (const l of st.lines) {
     if (l.kind !== 'item') continue;
     const content = itemContent(st, l);
-    if (keyOf(content) !== k || content.includes('?') || CROSS.test(content) || /^(?:no|not)\b/iu.test(content) || unreliable(content)) continue;
+    if (keyOf(content) !== k || content.includes('?') || itemBad(content)) continue;
     const lead = leadIn(st, st.lines.indexOf(l));
-    if (lead && unreliable(lead.text)) continue;
+    if (lead && leadInBad(withoutMarkers(lead.text))) continue;
     return content;
   }
   return null;
@@ -243,7 +262,7 @@ export function audienceUnit(audience: string, doc: { readonly text?: string | n
   return st.units.find((u) => !u.quoted && !u.unreliable && !u.tooLong && !QUOTE_MARKS.test(u.text) && ` ${u.key} `.includes(` ${k} `)
     && (u.kind !== 'item' || !leadInUnreliable(st, u.line))) ?? null;
 }
-const leadInUnreliable = (st: Structure, line: number) => { const l = leadIn(st, line); return l ? unreliable(l.text) : false; };
+const leadInUnreliable = (st: Structure, line: number) => { const l = leadIn(st, line); return l ? leadInBad(withoutMarkers(l.text)) : false; };
 
 // ─── 4. Offer names ──────────────────────────────────────────────────────────
 
@@ -321,6 +340,8 @@ const OWN_SUBJECTS = new Set(['we', 'our', 'i', 'it', 'this', 'that', 'which', '
 const SAVING_BEFORE = new Set(['save', 'saving', 'savings', 'worth', 'discount', 'discounted', 'cashback', 'voucher', 'credit', 'rebate', 'off']);
 const SAVING_AFTER = new Set(['off', 'discount', 'cashback', 'saving', 'savings', 'voucher', 'credit']);
 const HOLD_WORDS = new Set(['deposit', 'minimum', 'min', 'spend', 'holding']);
+/** Words an expression never runs past. */
+const STOP_WORDS = new Set(['and', 'or', 'but', 'plus', '+', 'with', 'for', 'to', 'in', 'on', 'at', 'by', 'from', 'including', 'inc', 'incl', 'ex', 'excl', 'excluding', 'if', 'when', 'then', 'so', 'as', 'than', 'vat']);
 
 /** A full price expression: the amount (or range) with every qualifier written beside it, and why it may not be a price. */
 export interface PriceExpression {
@@ -331,6 +352,8 @@ export interface PriceExpression {
   readonly subject: string | null;
   /** A deposit or minimum word beside the amount: a price only for an offer whose own name holds that word. */
   readonly hold: string | null;
+  /** The expression ends its sentence or meets punctuation: nothing unread trails it. */
+  readonly endsClean: boolean;
 }
 
 const seq = (tokens: readonly Tok[], at: number, words: readonly string[]) => words.every((w, i) => tokens[at + i]?.w === w);
@@ -356,6 +379,10 @@ function priceView(st: Structure): PriceView {
     const last = groups[groups.length - 1], prev = last?.[last.length - 1];
     if (prev && /^\s*(?:-|–|—|to)\s*$/iu.test(basis.slice(prev.e, a.s))) last!.push(a); else groups.push([a]);
   }
+  // Helpers over the gaps between words: punctuation breaks an expression; an apostrophe joins one word ("month's").
+  const amountStarts = new Set<number>(amounts.map((a) => a.ts));
+  const gapBreaks = (a: number, b: number) => /[.,;:!?()[\]|\n•❝]/.test(basis.slice(tokens[a]!.e, tokens[b]!.s));
+  const joined = (a: number, b: number) => /^['’]$/.test(basis.slice(tokens[a]!.e, tokens[b]!.s));
   const expressions: PriceExpression[] = [];
   const byLine = new Map<number, PriceExpression[]>();
   const byUnit = new Map<Unit, PriceExpression[]>();
@@ -376,15 +403,24 @@ function priceView(st: Structure): PriceView {
       const cal = tokens[te + link]?.w === 'calendar' ? 1 : 0;
       const period = tokens[te + link + cal];
       if (period && PERIODS.has(period.w) && (link || /\//.test(basis.slice(tokens[te - 1]!.e, next.s)))) { te += link + cal + 1; changed = true; continue; }
+      // "per square metre", "per 1,000 words", "per walk": after per/a/an/each/every, the next one to three words,
+      // stopping at punctuation, another amount or a joining word.
+      if (link && !gapBreaks(te - 1, te)) {
+        let k = te + 1, taken = 0;
+        while (taken < 3 && k < tokens.length && !STOP_WORDS.has(tokens[k]!.w) && !amountStarts.has(k) && !gapBreaks(k - 1, k) && /[\p{L}\p{N}]/u.test(tokens[k]!.w)) { k++; taken++; while (k < tokens.length && joined(k - 1, k)) k++; }
+        if (taken) { te = k; changed = true; continue; }
+      }
       if (next.w === 'for' && tokens[te + 1]?.w === 'your' && tokens[te + 2]?.w === 'first' && tokens[te + 4] && PERIODS.has(tokens[te + 4]!.w)) { te += 5; changed = true; continue; }
       const after = AFTER.find((q) => seq(tokens, te, q));
       if (after) { te += after.length; changed = true; continue; }
-      if (percent && next.w === 'of') {
-        for (let k = 1; k <= 6 && te + k < tokens.length; k++) {
-          const t = tokens[te + k]!;
-          if (/^[£$€¥%]$|^\d/.test(t.w)) break;
-          if (BASES.has(t.w)) { te += k + 1; changed = true; based = true; break; }
+      if (percent && !based && next.w === 'of') {
+        // A percentage's base: up to four words after "of", one of them naming what it is a percentage of.
+        let k = te + 1, words = 0, hasBase = false;
+        while (words < 4 && k < tokens.length && !STOP_WORDS.has(tokens[k]!.w) && !amountStarts.has(k) && !gapBreaks(k - 1, k) && /\p{L}/u.test(tokens[k]!.w)) {
+          if (BASES.has(tokens[k]!.w)) hasBase = true;
+          k++; words++; while (k < tokens.length && joined(k - 1, k)) { if (BASES.has(tokens[k]!.w)) hasBase = true; k++; }
         }
+        if (hasBase) { te = k; changed = true; based = true; continue; }
       }
       if (percent && !based && (next.w === 'commission' || next.w === 'fee' || next.w === 'fees' || next.w === 'management')) { te += 1; based = true; changed = true; }
     }
@@ -413,7 +449,8 @@ function priceView(st: Structure): PriceView {
       }
     }
     const x: PriceExpression = { ts, te, s, e, key: tokens.slice(ts, te).map((t) => t.w).join(' '), text, line: st.tokenLine[g[0]!.ts]!, unit: u,
-      never: Boolean(competitor) || saving || (percent && !based) || Boolean(u?.quoted) || st.lines[st.tokenLine[g[0]!.ts]!]!.kind === 'quoted', subject, hold };
+      never: Boolean(competitor) || saving || (percent && !based) || Boolean(u?.quoted) || st.lines[st.tokenLine[g[0]!.ts]!]!.kind === 'quoted', subject, hold,
+      endsClean: !tokens[te] || (u ? tokens[te]!.s >= u.e : false) || /[.,;:!?()|\n]/.test(basis.slice(e, tokens[te]!.s)) };
     expressions.push(x);
     const list = byLine.get(x.line); if (list) list.push(x); else byLine.set(x.line, [x]);
     if (u) { const ul = byUnit.get(u); if (ul) ul.push(x); else byUnit.set(u, [x]); }
@@ -436,28 +473,42 @@ function candidateFor(x: PriceExpression, key: string): boolean {
   return true;
 }
 
-/** Which offer (longest name) a line begins with, after its marker; -1 when none. For a table row, its first cell. */
-function anchorOf(st: Structure, line: Line, names: readonly string[], keys: readonly string[][]): number {
-  if (line.kind === 'quoted') return -1;
-  const content = st.basis.slice(line.contentStart, line.e);
-  const first = tokenize(content).slice(0, OFFER_NAME_WORDS).map((t) => t.w);
+/** Where an offer's name begins a line, or a table cell. */
+interface Anchor { readonly offer: number; readonly line: number; readonly s: number; readonly end: number }
+
+/** The cells of a table row: [start, end) positions of each cell's words. */
+function rowCells(st: Structure, line: Line): [number, number][] {
+  const out: [number, number][] = [];
+  let at = line.contentStart;
+  const text = st.basis;
+  while (at <= line.e) {
+    const bar = text.indexOf(' | ', at);
+    const end = bar === -1 || bar >= line.e ? line.e : bar;
+    out.push([at, end]);
+    if (end === line.e) break;
+    at = end + 3;
+  }
+  return out;
+}
+
+/** The offer (longest name) whose name begins the words from `pos`, or -1. */
+function nameAt(st: Structure, pos: number, end: number, names: readonly string[], keys: readonly string[][]): number {
+  const first = tokenize(st.basis.slice(pos, Math.min(end, pos + 400))).slice(0, OFFER_NAME_WORDS).map((t) => t.w);
   let best = -1;
   keys.forEach((k, i) => { if (k.length && usableName(names[i]!) && k.every((w, j) => first[j] === w) && (best < 0 || k.length > keys[best]!.length)) best = i; });
   return best;
 }
 
-/** The line starts a new "name, then price" card: a short label line with no sentence punctuation that is not just price words. */
-function cardStart(st: Structure, view: PriceView, i: number): boolean {
+/** A short line that looks like the next card's name: no sentence punctuation, not just price words, an amount on it or within two lines. */
+function cardLabel(st: Structure, view: PriceView, i: number): boolean {
   const l = st.lines[i]!;
-  if (l.kind === 'heading') return true;
   const content = st.basis.slice(l.contentStart, l.e).trim();
   if (!content || content.length >= 60 || /[.!?]/.test(content) || !/\p{L}/u.test(content)) return false;
   const own = view.byLine.get(i);
   const label = own?.length ? st.basis.slice(l.contentStart, own[0]!.s) : content;
   const words = tokenize(label).map((t) => t.w).filter((w) => /\p{L}/u.test(w));
   if (!words.length || words.every((w) => PRICE_LABEL_WORDS.has(w))) return false;
-  if (own?.length) return true;
-  return Boolean(view.byLine.get(i + 1)?.length || view.byLine.get(i + 2)?.length);
+  return Boolean(own?.length || view.byLine.get(i + 1)?.length || view.byLine.get(i + 2)?.length);
 }
 
 const RUN_LINES = 12, RUN_CHARS = 600;
@@ -469,8 +520,25 @@ const nextIsCard = (st: Structure, i: number, isAnchor: ReadonlySet<number>) => 
   for (let j = i + 1; j < st.lines.length; j++) if (st.lines[j]!.text.trim()) return st.lines[j]!.kind === 'heading' || isAnchor.has(j);
   return false;
 };
+
+/** What the price rule found for one offer in one document, and how. */
+export interface PriceReading {
+  readonly candidates: readonly PriceExpression[];
+  /** 'run': from the offer's own card or row; 'prose': one sentence naming the offer and one price; 'none'. */
+  readonly via: 'run' | 'prose' | 'none';
+  /** The page writes prices above names. */
+  readonly pricesAbove: boolean;
+  /** For each candidate (by key), the line its offer's name began. */
+  readonly anchorLine: ReadonlyMap<string, number>;
+  /** Every amount the offer's own run (or sentence) holds was a candidate: none was set aside as a saving, deposit, bare percentage or other. */
+  readonly onlyAmounts?: boolean;
+}
+
 /** Names, keys and anchors of one document for one offer list, built once per check. */
-interface Anchors { readonly done: Map<number, PriceExpression[]>; readonly nameKeys: readonly string[]; readonly anchorsOf: ReadonlyMap<number, number[]>; readonly isAnchor: ReadonlySet<number>; readonly unitOffers: ReadonlyMap<Unit, ReadonlySet<number>>; readonly hits: readonly [number, number][][] }
+interface Anchors {
+  readonly done: Map<number, PriceReading>; readonly nameKeys: readonly string[]; readonly anchors: readonly Anchor[]; readonly isAnchor: ReadonlySet<number>;
+  readonly unitOffers: ReadonlyMap<Unit, ReadonlySet<number>>; readonly hits: readonly [number, number][][]; readonly pricesAbove: boolean;
+}
 const anchorCache = new WeakMap<Structure, Map<string, Anchors>>();
 function anchorsFor(st: Structure, names: readonly string[]): Anchors {
   const id = JSON.stringify(names);
@@ -479,14 +547,34 @@ function anchorsFor(st: Structure, names: readonly string[]): Anchors {
   const done = byNames.get(id);
   if (done) return done;
   const keys = names.map((n) => (usableName(n) ? keyOf(n).split(' ') : []));
-  const anchorsOf = new Map<number, number[]>();
+  const anchors: Anchor[] = [];
   const isAnchor = new Set<number>();
-  if (st.lines.length >= 2) st.lines.forEach((l, i) => { const a = anchorOf(st, l, names, keys); if (a >= 0) { isAnchor.add(i); const list = anchorsOf.get(a); if (list) list.push(i); else anchorsOf.set(a, [i]); } });
+  // A table row is structure even on a page of one line; any other line begins an offer only on a page of several lines.
+  st.lines.forEach((l, i) => {
+    if (l.kind === 'quoted' || !l.text.trim()) return;
+    if (l.kind !== 'row' && st.lines.length < 2) return;
+    if (l.kind === 'row') {
+      // Each cell may begin an offer's name; its run is the cells up to the next cell that does ("name | price | name | price").
+      const cells = rowCells(st, l), found: [number, number][] = [];
+      cells.forEach(([cs, ce]) => { const o = nameAt(st, cs, ce, names, keys); if (o >= 0) found.push([o, cs]); });
+      found.forEach(([o, cs], k) => anchors.push({ offer: o, line: i, s: cs, end: found[k + 1]?.[1] ?? l.e }));
+      if (found.length) isAnchor.add(i);
+      return;
+    }
+    const o = nameAt(st, l.contentStart, l.e, names, keys);
+    if (o >= 0) { anchors.push({ offer: o, line: i, s: l.s, end: -1 }); isAnchor.add(i); }
+  });
+  // Prices written above their names: the line just before the first offer's line is only a price.
+  let first = -1;
+  for (const i of isAnchor) if (first < 0 || i < first) first = i;
+  const view = priceView(st);
+  let prev = first - 1; while (prev >= 0 && !st.lines[prev]!.text.trim()) prev--;
+  const pricesAbove = first >= 0 && prev >= 0 && amountOnly(st, view, prev);
   // Which offers each sentence names, once, for the prose fallback.
   const hits = names.map((n) => (usableName(n) ? nameHits(st, n) : []));
   const unitOffers = new Map<Unit, Set<number>>();
   hits.forEach((hs, i) => { for (const [a] of hs) { const u = unitOfToken(st, a); if (u) { const set = unitOffers.get(u); if (set) set.add(i); else unitOffers.set(u, new Set([i])); } } });
-  const result = { done: new Map<number, PriceExpression[]>(), nameKeys: keys.map((k) => k.join(' ')), anchorsOf, isAnchor, unitOffers, hits };
+  const result: Anchors = { done: new Map(), nameKeys: keys.map((k) => k.join(' ')), anchors, isAnchor, unitOffers, hits, pricesAbove };
   byNames.set(id, result);
   return result;
 }
@@ -494,10 +582,12 @@ function anchorsFor(st: Structure, names: readonly string[]): Anchors {
 /**
  * THE PRICE RULE. The distinct full price expressions written for offer `self` (an index into `names`, the model's own
  * offer list) in one document, tied by the page's structure, never by "the nearest amount":
- *   - an ANCHOR is a line that the offer's name begins (heading, list item, table row's first cell, paragraph), the
+ *   - an ANCHOR is a line that the offer's name begins (heading, list item, paragraph), or a table cell it begins, the
  *     longest name winning; a mention inside prose is not an anchor;
- *   - its RUN is the anchor line to just before the next heading, the next anchor of any offer the model named, or the
- *     next line that starts another "name, then price" card; at most 12 lines and 600 characters; a table row is its run;
+ *   - its RUN is the anchor line onwards, stopping before: another offer's anchor; a heading (unless it is a deeper
+ *     sub-heading straight under the offer's own heading, with no price before it); once a price has been found, a short
+ *     label line that is followed within two lines by an amount (the next card); 12 lines or 600 characters. For a table
+ *     cell, the run is that cell up to the next cell that begins another offer's name;
  *   - every money amount, and every percentage with a base, in the run is a candidate, except: a competitor sentence, a
  *     saving or value ("save", "worth", "off", "discount"), a deposit or minimum (unless the offer's own name says so),
  *     a percentage with no base, and customer words.
@@ -505,63 +595,90 @@ function anchorsFor(st: Structure, names: readonly string[]): Anchors {
  * the offer's name, then exactly one candidate amount, and no other offer the model named. A price written above its name
  * is never tied.
  */
-export function priceCandidates(doc: { readonly text?: string | null }, names: readonly string[], self: number): PriceExpression[] {
+export function priceReading(doc: { readonly text?: string | null }, names: readonly string[], self: number): PriceReading {
   const st = structureOfDoc(doc);
   const name = names[self] ?? '';
-  if (!usableName(name)) return [];
+  if (!usableName(name)) return { candidates: [], via: 'none', pricesAbove: false, anchorLine: new Map() };
   const anchors = anchorsFor(st, names);
   const known = anchors.done.get(self);
   if (known) return known;
-  const result = findCandidates(st, anchors, names, self);
+  const result = readPrices(st, anchors, names, self);
   anchors.done.set(self, result);
   return result;
 }
-function findCandidates(st: Structure, anchors: Anchors, names: readonly string[], self: number): PriceExpression[] {
+export function priceCandidates(doc: { readonly text?: string | null }, names: readonly string[], self: number): PriceExpression[] {
+  return [...priceReading(doc, names, self).candidates];
+}
+
+function readPrices(st: Structure, anchors: Anchors, names: readonly string[], self: number): PriceReading {
   const view = priceView(st), name = names[self]!;
-  const { nameKeys, anchorsOf, isAnchor, unitOffers, hits } = anchors;
+  const { nameKeys, isAnchor, unitOffers, hits, pricesAbove } = anchors;
   const selfKey = nameKeys[self] ?? keyOf(name);
   const found = new Map<string, PriceExpression>();
-  const add = (x: PriceExpression) => { if (!found.has(x.key)) found.set(x.key, x); };
-  const mine = anchorsOf.get(self) ?? [];
-  // Prices written above their names: the line just before the first offer's line is only a price.
-  let firstAnchor = -1;
-  for (const i of isAnchor) if (firstAnchor < 0 || i < firstAnchor) firstAnchor = i;
-  let prev = firstAnchor - 1; while (prev >= 0 && !st.lines[prev]!.text.trim()) prev--;
-  const pricesAbove = firstAnchor >= 0 && prev >= 0 && amountOnly(st, view, prev);
+  const anchorLine = new Map<string, number>();
+  const add = (x: PriceExpression, line: number) => { if (!found.has(x.key)) { found.set(x.key, x); anchorLine.set(x.key, line); } };
+  let setAside = 0;
+  const mine = anchors.anchors.filter((a) => a.offer === self);
   for (const a of mine) {
-    const start = st.lines[a]!;
-    let end = a + 1;
-    if (start.kind !== 'row') {
-      while (end < st.lines.length && end - a < RUN_LINES && st.lines[end]!.e - start.s <= RUN_CHARS && !isAnchor.has(end) && !cardStart(st, view, end)) end++;
+    const start = st.lines[a.line]!;
+    if (start.kind === 'row') {
+      for (const x of view.byLine.get(a.line) ?? []) if (x.s >= a.s && x.s < a.end) { if (candidateFor(x, selfKey)) add(x, a.line); else setAside++; }
+      continue;
     }
-    for (let i = a; i < end; i++) {
-      // A line that is only a price, straight above a heading or another offer's line, belongs to what follows (a layout
-      // with prices above names): it is tied to neither.
-      if (i > a && pricesAbove && amountOnly(st, view, i) && nextIsCard(st, i, isAnchor)) continue;
-      for (const x of view.byLine.get(i) ?? []) if (x.s >= start.s && candidateFor(x, selfKey)) add(x);
+    const level = start.kind === 'heading' ? lineKind(start.text).level : 0;
+    let have = false;
+    for (let i = a.line; i < st.lines.length; i++) {
+      const l = st.lines[i]!;
+      if (i > a.line) {
+        if (i - a.line >= RUN_LINES || l.e - start.s > RUN_CHARS || isAnchor.has(i)) break;
+        if (l.kind === 'heading' && !(level && lineKind(l.text).level > level && !have)) break;
+        if (have && l.kind !== 'heading' && cardLabel(st, view, i)) break;
+        // A line that is only a price, straight above a heading or another offer's line, belongs to what follows (a layout
+        // with prices above names): it is tied to neither.
+        if (pricesAbove && amountOnly(st, view, i) && nextIsCard(st, i, isAnchor)) continue;
+      }
+      for (const x of view.byLine.get(i) ?? []) if (x.s >= start.s) { if (candidateFor(x, selfKey)) { add(x, a.line); have = true; } else setAside++; }
     }
   }
-  if (mine.length) return [...found.values()];
+  if (mine.length) return { candidates: [...found.values()], via: found.size ? 'run' : 'none', pricesAbove, anchorLine, onlyAmounts: setAside === 0 };
   // Prose fallback.
-  for (const [a] of hits[self] ?? []) {
-    const u = unitOfToken(st, a);
+  for (const [h] of hits[self] ?? []) {
+    const u = unitOfToken(st, h);
     if (!u || u.quoted) continue;
     const cands = (view.byUnit.get(u) ?? []).filter((x) => candidateFor(x, selfKey));
-    if (cands.length !== 1 || cands[0]!.ts < a) continue;
+    if (cands.length !== 1 || cands[0]!.ts < h) continue;
     let other = false;
     for (const o of unitOffers.get(u) ?? []) if (o !== self && nameKeys[o] !== selfKey) { other = true; break; }
     if (other) continue;
-    add(cands[0]!);
+    add(cands[0]!, u.line);
+    if ((view.byUnit.get(u) ?? []).length !== 1) setAside++;
   }
-  return found.size === 1 ? [...found.values()] : [];
+  return found.size === 1 ? { candidates: [...found.values()], via: 'prose', pricesAbove, anchorLine, onlyAmounts: setAside === 0 } : { candidates: [], via: 'none', pricesAbove, anchorLine: new Map() };
 }
 
 export type PriceStatus = 'tied' | 'ambiguous' | 'untied';
-/** The model's price against the page: exactly the one candidate ('tied'), the page gives several ('ambiguous'), or not. */
-export function priceStatus(price: string, doc: { readonly text?: string | null }, names: readonly string[], self: number): { status: PriceStatus; page: readonly PriceExpression[] } {
-  const page = priceCandidates(doc, names, self);
-  if (page.length > 1) return { status: 'ambiguous', page };
-  return { status: page.length === 1 && page[0]!.key === keyOf(price) ? 'tied' : 'untied', page };
+/**
+ * The model's price against the page: exactly the one candidate ('tied'), the page gives several ('ambiguous'), or not.
+ * `hint` is the page's own expression to show the owner when the model's differs: only when the offer's own card held
+ * exactly one candidate and no other amount, nothing unread trails it, and the page does not put prices above names.
+ */
+export function priceStatus(price: string, doc: { readonly text?: string | null }, names: readonly string[], self: number): { status: PriceStatus; page: readonly PriceExpression[]; hint: string | null } {
+  const r = priceReading(doc, names, self);
+  const page = r.candidates;
+  const hint = r.via !== 'none' && r.onlyAmounts === true && page.length === 1 && page[0]!.endsClean && !r.pricesAbove ? page[0]!.text : null;
+  if (page.length > 1) return { status: 'ambiguous', page, hint: null };
+  return { status: page.length === 1 && page[0]!.key === keyOf(price) ? 'tied' : 'untied', page, hint };
+}
+
+/** The lines the price rule used for an offer's price: its name's line and the price's line (one line when they are the same). */
+export function priceLines(doc: { readonly text?: string | null }, names: readonly string[], self: number, price: string): string | null {
+  const r = priceReading(doc, names, self);
+  const x = r.candidates.find((c) => c.key === keyOf(price));
+  if (!x) return null;
+  const st = structureOfDoc(doc);
+  const line = (i: number) => withoutMarkers(st.lines[i]!.text).trim();
+  const a = r.anchorLine.get(x.key) ?? x.line;
+  return a === x.line ? line(a) : `${line(a)} … ${line(x.line)}`;
 }
 
 // ─── 6. Description fields ───────────────────────────────────────────────────
@@ -626,10 +743,13 @@ export function neverSayKept(line: string, documents: readonly { readonly text?:
 // ─── 8. Links ────────────────────────────────────────────────────────────────
 
 /** Hosts many unrelated businesses share. On one, a business's site is its path, so a link must start with that path. */
-export const SHARED_HOSTS = ['sites.google.com', 'github.io', 'wixsite.com', 'carrd.co', 'wordpress.com', 'blogspot.com', 'squarespace.com', 'webflow.io', 'netlify.app', 'vercel.app',
-  'pages.dev', 'notion.site', 'weebly.com', 'godaddysites.com', 'square.site', 'linktr.ee', 'company.site', 'mystrikingly.com', 'jimdosite.com', 'site123.me',
-  'facebook.com', 'instagram.com', 'linkedin.com', 'x.com', 'twitter.com', 'tiktok.com', 'youtube.com', 'etsy.com', 'ebay.co.uk', 'ebay.com', 'amazon.co.uk', 'checkatrade.com',
-  'yell.com', 'trustatrader.com', 'mybuilder.com', 'bark.com', 'google.com', 'business.site', 'myshopify.com'];
+/** Shared hosts where each business has its own subdomain (name.myshopify.com): the full host is the business's own. */
+export const SUBDOMAIN_HOSTS = ['github.io', 'wixsite.com', 'carrd.co', 'wordpress.com', 'blogspot.com', 'squarespace.com', 'webflow.io', 'netlify.app', 'vercel.app',
+  'pages.dev', 'notion.site', 'weebly.com', 'godaddysites.com', 'square.site', 'company.site', 'mystrikingly.com', 'jimdosite.com', 'site123.me', 'business.site', 'myshopify.com'];
+/** Shared hosts where each business has its own path (facebook.com/name): only links under that path are the business's own. */
+export const PATH_HOSTS = ['sites.google.com', 'linktr.ee', 'facebook.com', 'instagram.com', 'linkedin.com', 'x.com', 'twitter.com', 'tiktok.com', 'youtube.com', 'etsy.com',
+  'ebay.co.uk', 'ebay.com', 'amazon.co.uk', 'checkatrade.com', 'yell.com', 'trustatrader.com', 'mybuilder.com', 'bark.com', 'google.com'];
+export const SHARED_HOSTS = [...SUBDOMAIN_HOSTS, ...PATH_HOSTS];
 export interface LinkContext { readonly website?: string | null; readonly pages?: readonly (string | null | undefined)[] }
 
 function parsed(url: string): URL | null {
@@ -643,13 +763,18 @@ function parsed(url: string): URL | null {
   } catch { return null; }
 }
 const withScheme = (site: string) => (/^https?:\/\//i.test(site) ? site : `https://${site}`);
-const shared = (host: string) => SHARED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+const under = (host: string, list: readonly string[]) => list.some((h) => host === h || host.endsWith(`.${h}`));
+/** A subdomain-style shared domain itself (myshopify.com, www.myshopify.com): never any one business's own. */
+const bareShared = (host: string) => SUBDOMAIN_HOSTS.some((h) => host === h || host === `www.${h}`);
+/** A host that can be a business's own by itself: not a path-style shared host, not a bare shared domain. */
+const ownable = (host: string) => !under(host, PATH_HOSTS) && !bareShared(host);
 
 /**
  * A link (offer url or conversion page) is kept only when it is https (any letter case), with no user name or password,
  * on the default port, and its host is the business's website host or a subdomain of it, or exactly a host a page was
- * read from. A host written in page text does not count. On a shared host (social networks, marketplaces, site builders)
- * the link must start with the website's own path; a website on a shared host with no path allows no links at all.
+ * read from. A host written in page text does not count. On a subdomain-style shared host (name.myshopify.com) the
+ * link's full host must equal the website's full host. On a path-style shared host (facebook.com/name) the link must
+ * also start with the website's own path; a website there with no path allows no links. A bare shared domain is no one's.
  */
 export function linkAllowed(url: string | null | undefined, context: LinkContext): boolean {
   if (typeof url !== 'string') return false;
@@ -661,13 +786,17 @@ export function linkAllowed(url: string | null | undefined, context: LinkContext
   const siteHost = site?.hostname.toLowerCase() ?? null;
   const base = siteHost?.replace(/^www\./, '') ?? null;
   const pageHosts = (context.pages ?? []).flatMap((p) => { try { return p ? [new URL(p).hostname.toLowerCase()] : []; } catch { return []; } });
-  if (siteHost && shared(siteHost)) {
+  if (bareShared(host)) return false;
+  if (siteHost && bareShared(siteHost)) return false;
+  if (siteHost && under(siteHost, PATH_HOSTS)) {
     const sitePath = site!.pathname.replace(/\/+$/, '');
     if (!sitePath) return false;
     return host === siteHost && (u.pathname === sitePath || u.pathname.startsWith(`${sitePath}/`));
   }
-  if (!siteHost && pageHosts.some(shared)) return false;
-  return (base !== null && (host === base || host === siteHost || host.endsWith(`.${base}`))) || pageHosts.includes(host);
+  if (siteHost && under(siteHost, SUBDOMAIN_HOSTS)) return host === siteHost;
+  const fromPage = pageHosts.includes(host) && ownable(host);
+  if (!siteHost) return fromPage;
+  return host === base || host === siteHost || host.endsWith(`.${base}`) || fromPage;
 }
 
 /** A conversion-page label is kept when it is a run of words from a sentence that is not customer words and negates nothing; otherwise the link's own path. */

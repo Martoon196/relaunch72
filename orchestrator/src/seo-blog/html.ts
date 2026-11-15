@@ -56,12 +56,6 @@ export interface ParsedPage {
   readonly robotsNoindex: boolean;
   readonly headings: readonly { level: number; text: string }[];
   readonly text: string;
-  /**
-   * Brand DNA only: the main content as lines, each starting with a structure marker ("# " heading, "• " list item,
-   * "| " table row with cells joined by " | ", "❝ " testimonial or quoted material, none for a paragraph). Struck-through
-   * text is left out. `text` above is unchanged and is what every other reader uses.
-   */
-  readonly structured: string;
   readonly publishedAt: string | null;
   readonly modifiedAt: string | null;
   readonly links: readonly string[];
@@ -166,7 +160,6 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
     robotsNoindex: robots.includes('noindex'),
     headings,
     text: stripTags(mainHtml).slice(0, 200_000),
-    structured: brandPageLines(mainHtml).slice(0, 200_000),
     publishedAt: validDate(publishedAt),
     modifiedAt: validDate(modifiedAt),
     links,
@@ -192,77 +185,234 @@ export function parseSitemap(xml: string): { index: boolean; locs: string[] } {
   return { index, locs };
 }
 
-// ─── Brand DNA: the page as structured lines ────────────────────────────────
+// ─── Brand DNA: a page as structured lines ──────────────────────────────────
+//
+// Used only by the Brand DNA website read, and only for pages whose words are kept (`parseHtmlPage` above is
+// unchanged and never calls this). Each output line starts with a marker that the Brand DNA comparison ignores:
+// "# " h1, "## " h2 … "###### " h6, "• " list item (also a typed "- " or "• " bullet), "| " table row with its cells
+// joined by " | ", "❝ " customer words; no marker for a paragraph. One linear pass over the tags; input over 2 MB is
+// cut first; nesting deeper than 200 is ignored.
 
+/** Pages over this size are cut before they are read. */
+export const BRAND_HTML_LIMIT = 2_000_000;
+const NEST_LIMIT = 200;
+/** Tags whose content is never page text. Skipped whole by jumping to their closing tag. */
+const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'iframe', 'select', 'textarea', 'head', 'object', 'canvas', 'math']);
+/** Struck-through text is not the business's current words. */
+const STRUCK_TAGS = new Set(['s', 'del', 'strike']);
+/** Inline tags: text on either side joins with no space. Every other tag separates words. */
+const INLINE_TAGS = new Set(['a', 'span', 'b', 'strong', 'i', 'em', 'u', 'small', 'mark', 'abbr', 'code', 'label', 'button']);
+/** Line elements that are one paragraph of their parent (an attribution is beside its quote when both share the parent). */
+const PARA_TAGS = new Set(['p', 'li', 'dt', 'dd', 'caption', 'figcaption', 'blockquote', 'address', 'pre']);
+/** Tags that end a line. */
 const LINE_TAGS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article', 'dt', 'dd', 'ul', 'ol', 'dl', 'table', 'thead', 'tbody', 'tfoot', 'caption',
-  'blockquote', 'figure', 'figcaption', 'header', 'footer', 'nav', 'main', 'aside', 'form', 'address', 'tr', 'pre', 'details', 'summary']);
-const VOID_LINE_TAGS = new Set(['br', 'hr']);
+  'blockquote', 'figure', 'figcaption', 'header', 'footer', 'nav', 'main', 'aside', 'form', 'address', 'tr', 'pre', 'details', 'summary', 'fieldset', 'legend', 'center', 'br', 'hr']);
 const VOID_TAGS = new Set(['br', 'hr', 'img', 'input', 'meta', 'link', 'source', 'wbr', 'area', 'col', 'embed', 'track', 'param', 'base']);
-/** Elements whose words are a customer's, or quoted: their lines are marked "❝ ". */
+/** Elements that hold customer words. */
 const QUOTED_TAGS = new Set(['blockquote', 'q', 'cite']);
-const QUOTED_CLASS = /testimonial|review|quote|rating|stars|trustpilot|feedback/i;
-/** A heading that starts a section of customer words, up to the next heading. */
-const QUOTED_SECTION = /^(?:(?:our|customer|client|google|latest|recent|real|happy)\s+)*(?:reviews|testimonials|feedback)$|\bwhat (?:our |my )?(?:customers|clients|landlords|tenants|students|people|members|buyers|sellers|homeowners|users|patients|guests|families) (?:say|think)\b|\bkind words\b|\bfeedback from\b|\bin their (?:own )?words\b|\b(?:client|customer|success) stories\b|\btestimonials\b/i;
+/** Class or id tokens that mark customer words: whole tokens only, never on html, body or main. */
+const QUOTED_TOKENS = new Set(['testimonial', 'testimonials', 'review', 'reviews', 'customer-review', 'customer-reviews', 'client-review', 'client-reviews', 'star-rating', 'trustpilot', 'feefo', 'google-reviews']);
+const STAR_TOKENS = new Set(['stars', 'star-rating', 'rating', 'ratings']);
+/** A heading that starts a section of customer words, up to the next heading or the end of its container. */
+const QUOTED_SECTION = /^(?:(?:our|customer|client|google|latest|recent|real|happy)\s+)*(?:reviews|testimonials|feedback)$|\bwhat (?:our |my )?(?:customers|clients|landlords|tenants|students|people|members|buyers|sellers|homeowners|users|patients|guests|families|owners|parents|learners) (?:say|think)\b|\bwhat people say\b|\bkind words\b|\bfeedback from\b|\bin their (?:own )?words\b|\b(?:client|customer|success) stories\b|\btestimonials\b|\bdon['’]t (?:just )?take our word for it\b|\bhappy (?:customers|clients)\b/i;
+/** A short line naming who said the line above it. */
+const ATTRIBUTION = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
+
+interface Segment { kind: 'heading' | 'item' | 'para' | 'row'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
+interface Cell { segments: Segment[]; text: string }
+interface TableCtx { rows: Cell[][]; row: Cell[] | null; cell: Cell | null; quoted: boolean }
+
+function classTokens(attrs: string): string[] {
+  const out: string[] = [];
+  if (!attrs || !/class|id/i.test(attrs)) return out;
+  for (const m of attrs.matchAll(/\b(class|id)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi)) out.push(...String(m[3] ?? m[4] ?? m[5] ?? '').toLowerCase().split(/\s+/).filter(Boolean));
+  return out;
+}
+
+/** The main content of an HTML page as Brand DNA lines (the same main-content choice as `parseHtmlPage`). */
+export function brandPageHtmlLines(html: string): string {
+  const capped = html.length > BRAND_HTML_LIMIT ? html.slice(0, BRAND_HTML_LIMIT) : html;
+  const lower = capped.toLowerCase();
+  const bodyAt = lower.indexOf('<body'), bodyEnd = lower.lastIndexOf('</body>');
+  const body = bodyAt !== -1 && bodyEnd > bodyAt ? capped.slice(bodyAt, bodyEnd + 7) : capped;
+  const bl = body.toLowerCase();
+  for (const tag of ['main', 'article']) {
+    const at = bl.search(new RegExp(`<${tag}\\b`));
+    const end = at === -1 ? -1 : bl.indexOf(`</${tag}>`, at);
+    if (at !== -1 && end !== -1) return brandPageLines(body.slice(at, end + tag.length + 3));
+  }
+  return brandPageLines(body, true);
+}
 
 /**
- * The page's main content as structured lines for Brand DNA (see `ParsedPage.structured`). One linear pass over the
- * tags; struck-through text (s, del, strike) is removed, not stored; label and button do not end a line.
+ * HTML (already the main content) as Brand DNA lines. `dropChrome` skips nav, header and footer, as `parseHtmlPage`
+ * does when a page has no main element.
  */
-export function brandPageLines(html: string): string {
-  const clean = html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|noscript|template|svg|iframe)\b[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<(s|del|strike)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
-  const out: string[] = [];
-  const stack: { tag: string; quoted: boolean }[] = [];
-  let quotedDepth = 0, headingDepth = 0, itemDepth = 0, quotedSection = false;
-  let buffer = '';
-  let row: string[] | null = null, cell: string | null = null;
-  const tidy = (t: string) => decodeEntities(t).replace(/\s+/g, ' ').trim();
-  const flush = () => {
-    const text = tidy(buffer);
-    buffer = '';
-    if (!text) return;
-    if (headingDepth > 0) quotedSection = QUOTED_SECTION.test(text);
-    const quoted = quotedDepth > 0 || (quotedSection && headingDepth === 0);
-    out.push(`${quoted ? '❝ ' : headingDepth > 0 ? '# ' : itemDepth > 0 ? '• ' : ''}${text}`);
+export function brandPageLines(input: string, dropChrome = false): string {
+  const html = input.length > BRAND_HTML_LIMIT ? input.slice(0, BRAND_HTML_LIMIT) : input;
+  const lower = html.toLowerCase();
+  const sink: string[][] = [[]];
+  const stack: { tag: string; quoted: boolean; stars: boolean }[] = [];
+  const open = new Map<string, number>(), overflow = new Map<string, number>();
+  let quotedDepth = 0, struckDepth = 0, italicDepth = 0, starsDepth = 0;
+  const headingLevels: number[] = [];
+  let itemDepth = 0;
+  /** A heading that opens a section of customer words, and the stack depth of the container it sits in. */
+  let quotedSection = false, quotedSectionDepth = -1;
+  let buffer = '', bufferItalicOnly = true, bufferHasText = false;
+  const tables: TableCtx[] = [];
+  let lastSegment: Segment | null = null, containerSeq = 0;
+  const containers: { id: number; para: boolean }[] = [];
+  /** Containers that hold a star rating (a star/rating class, or a line of stars): a short name line in one is an attribution. */
+  const starContainers = new Set<number>();
+  const currentContainer = () => {
+    const top = containers[containers.length - 1];
+    return !top ? 0 : top.para ? containers[containers.length - 2]?.id ?? 0 : top.id;
   };
-  for (const m of clean.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*)>|([^<]+)/g)) {
-    if (m[4] !== undefined) { if (cell !== null) cell += m[4]; else buffer += m[4]; continue; }
+  const tidy = (t: string) => (t.includes('&') ? decodeEntities(t) : t).replace(/\s+/g, ' ').trim();
+  const emit = (seg: Segment) => {
+    const t = tables[tables.length - 1];
+    if (t?.cell) { t.cell.segments.push(seg); return; }
+    const marker = seg.quoted ? '❝ ' : seg.kind === 'heading' ? `${'#'.repeat(Math.min(6, Math.max(1, seg.level)))} ` : seg.kind === 'item' ? '• ' : seg.kind === 'row' ? '| ' : '';
+    sink[sink.length - 1]!.push(marker + seg.text);
+  };
+  const flush = () => {
+    if (!bufferHasText) { buffer = ''; return; }
+    let text = tidy(buffer);
+    const italicOnly = bufferHasText && bufferItalicOnly;
+    buffer = ''; bufferItalicOnly = true; bufferHasText = false;
+    if (!text) return;
+    const level = headingLevels.length ? headingLevels[headingLevels.length - 1]! : 0;
+    let kind: Segment['kind'] = level ? 'heading' : itemDepth > 0 ? 'item' : 'para';
+    // A typed bullet ("- Fixed prices", "• Insured") is a list item, never an attribution.
+    const bullet = /^(?:[-–•*]|•)\s+(?=\S)/u.exec(text);
+    if (kind === 'para' && bullet) { kind = 'item'; text = text.slice(bullet[0].length); }
+    // Words the site itself starts with "#", "|" or "❝" are not our markers: an invisible character keeps them apart.
+    if (/^(?:#{1,6} |\| |❝ |• )/u.test(text)) text = `\u200B${text}`;
+    // The section of customer words ends when the heading's own container closes (it is the element below the heading).
+    // (The heading is still open here, so its container is the element below it; at the top level nothing closes it.)
+    if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; }
+    // The element that holds this line beside its siblings: a paragraph's (or list item's) parent, else the block itself.
+    const container = currentContainer();
+    if (/^[★☆⭐✩✪✭✮✯]{3,}/u.test(text)) starContainers.add(container);
+    let quoted = quotedDepth > 0 || (quotedSection && kind !== 'heading');
+    // A short name line straight after a quoted or italic line, or beside a star rating, is an attribution: both lines are customer words.
+    const prev = lastSegment;
+    if (!quoted && kind === 'para' && prev && prev.kind === 'para' && text.split(/\s+/).length <= 6 && ATTRIBUTION.test(text) && !/[!?:;]/.test(text)
+      && (prev.italic || /^["“«„]|["”»]$/u.test(prev.text) || prev.stars || starsDepth > 0 || starContainers.has(container)) && prev.container === container) {
+      quoted = true;
+      if (!prev.quoted) {
+        prev.quoted = true;
+        const lines = sink[sink.length - 1]!, t = tables[tables.length - 1];
+        if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) lines[lines.length - 1] = `❝ ${prev.text}`;
+      }
+    }
+    const seg: Segment = { kind, level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
+    lastSegment = seg;
+    emit(seg);
+  };
+  const addText = (t: string) => {
+    if (struckDepth > 0) return;
+    if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; }
+    buffer += t;
+  };
+  const closeCell = (t: TableCtx) => {
+    if (!t.cell) return;
+    flush();
+    const cell = t.cell;
+    cell.text = cell.segments.length === 1 ? cell.segments[0]!.text : cell.segments.map((s) => s.text).join(' ').replace(/\s+/g, ' ').trim();
+    t.row?.push(cell); t.cell = null;
+  };
+  const closeRow = (t: TableCtx) => { closeCell(t); flush(); if (t.row?.length) t.rows.push(t.row); t.row = null; };
+  const closeTable = () => {
+    // The last cell's words are flushed into it while the table is still the current one (end tags may be omitted).
+    closeRow(tables[tables.length - 1]!);
+    const t = tables.pop()!;
+    // A one-column table, or one with long cells, is page layout: its content is read as ordinary lines.
+    const layout = t.rows.every((r) => r.filter((c) => c.text).length <= 1) || t.rows.some((r) => r.some((c) => c.text.length > 300));
+    for (const r of t.rows) {
+      if (layout) { for (const c of r) for (const s of c.segments) emit(s); continue; }
+      const cells = r.map((c) => c.text).filter(Boolean);
+      if (cells.length) emit({ kind: 'row', level: 0, text: cells.join(' | '), quoted: t.quoted || r.some((c) => c.segments.some((s) => s.quoted)), italic: false, stars: false, container: 0 });
+    }
+  };
+  let nextGt = -1;
+  for (let i = 0; i < html.length;) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) { addText(html.slice(i)); break; }
+    if (lt > i) addText(html.slice(i, lt));
+    if (html.startsWith('<!--', lt)) { const end = html.indexOf('-->', lt + 4); i = end === -1 ? html.length : end + 3; continue; }
+    const c = html[lt + 1];
+    if (!c || !(/[a-zA-Z/!?]/.test(c))) { addText('<'); i = lt + 1; continue; }
+    if (nextGt < lt + 1) { nextGt = html.indexOf('>', lt + 1); if (nextGt === -1) nextGt = html.length; }
+    if (nextGt >= html.length) { addText(html.slice(lt)); break; }
+    const raw = html.slice(lt + 1, nextGt);
+    i = nextGt + 1;
+    const m = /^(\/?)([a-zA-Z][\w:-]*)([\s\S]*)$/.exec(raw);
+    if (!m) continue; // <!doctype>, <?xml?>
     const closing = m[1] === '/', tag = m[2]!.toLowerCase(), attrs = m[3] ?? '';
-    if (!closing) {
-      if (VOID_LINE_TAGS.has(tag)) { if (cell !== null) cell += ' '; else flush(); continue; }
-      if (tag === 'tr') { flush(); row = []; }
-      else if ((tag === 'td' || tag === 'th') && row) { cell = ''; }
-      else if (LINE_TAGS.has(tag) && cell === null) flush();
-      else if (cell === null && !LINE_TAGS.has(tag)) buffer += ' ';
-      if (VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
-      const quoted = QUOTED_TAGS.has(tag) || QUOTED_CLASS.test(/\b(?:class|id)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i.exec(attrs)?.[1] ?? '');
-      stack.push({ tag, quoted });
-      if (quoted) quotedDepth++;
-      if (/^h[1-6]$/.test(tag)) headingDepth++;
-      if (tag === 'li') itemDepth++;
+    if (!closing && SKIP_TAGS.has(tag) && !/\/\s*$/.test(attrs)) {
+      const end = lower.indexOf(`</${tag}`, i);
+      if (end === -1) { i = html.length; break; }
+      const gt = html.indexOf('>', end);
+      i = gt === -1 ? html.length : gt + 1;
       continue;
     }
-    const at = stack.map((x) => x.tag).lastIndexOf(tag);
-    if (at === -1) continue;
-    if ((tag === 'td' || tag === 'th') && row && cell !== null) { row.push(tidy(cell)); cell = null; }
-    else if (tag === 'tr' && row) {
-      if (cell !== null) { row.push(tidy(cell)); cell = null; }
-      const cells = row.filter(Boolean);
-      if (cells.length) out.push(`${quotedDepth > 0 || quotedSection ? '❝ ' : '| '}${cells.join(' | ')}`);
-      row = null;
-    } else if (LINE_TAGS.has(tag) && cell === null) flush();
-    else if (cell === null) buffer += ' ';
-    while (stack.length > at) {
+    if (dropChrome && !closing && (tag === 'nav' || tag === 'header' || tag === 'footer')) {
+      const end = lower.indexOf(`</${tag}>`, i);
+      i = end === -1 ? html.length : end + tag.length + 3;
+      continue;
+    }
+    const t = tables[tables.length - 1];
+    if (!closing) {
+      if (tag === 'table') { flush(); tables.push({ rows: [], row: null, cell: null, quoted: quotedDepth > 0 }); }
+      else if (t && tag === 'tr') { closeRow(t); t.row = []; }
+      else if (t && (tag === 'td' || tag === 'th')) { closeCell(t); if (!t.row) t.row = []; flush(); t.cell = { segments: [], text: '' }; }
+      else if (LINE_TAGS.has(tag)) flush();
+      else if (!INLINE_TAGS.has(tag)) addText(' ');
+      if (tag === 'sup' || tag === 'sub') addText(' ');
+      if (VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
+      if (stack.length >= NEST_LIMIT) { overflow.set(tag, (overflow.get(tag) ?? 0) + 1); continue; }
+      const tokens = tag === 'html' || tag === 'body' || tag === 'main' ? [] : classTokens(attrs);
+      const quoted = QUOTED_TAGS.has(tag) || tokens.some((k) => QUOTED_TOKENS.has(k));
+      const stars = tokens.some((k) => STAR_TOKENS.has(k));
+      if (stars) starContainers.add(currentContainer());
+      stack.push({ tag, quoted, stars });
+      open.set(tag, (open.get(tag) ?? 0) + 1);
+      if (quoted) quotedDepth++;
+      if (stars) starsDepth++;
+      if (STRUCK_TAGS.has(tag)) struckDepth++;
+      if (tag === 'i' || tag === 'em') italicDepth++;
+      if (/^h[1-6]$/.test(tag)) headingLevels.push(Number(tag[1]));
+      if (tag === 'li') itemDepth++;
+      if (LINE_TAGS.has(tag) && !/^h[1-6]$/.test(tag)) containers.push({ id: ++containerSeq, para: PARA_TAGS.has(tag) });
+      continue;
+    }
+    // Any end tag but a pure inline one separates the words on either side, whether or not it closes anything.
+    if (!INLINE_TAGS.has(tag)) addText(' ');
+    if ((overflow.get(tag) ?? 0) > 0) { overflow.set(tag, overflow.get(tag)! - 1); continue; }
+    if (!(open.get(tag) ?? 0)) continue;
+    if (t && (tag === 'td' || tag === 'th')) closeCell(t);
+    else if (t && tag === 'tr') closeRow(t);
+    else if (tag === 'table' && t) { /* handled after popping */ }
+    else if (LINE_TAGS.has(tag)) flush();
+    while (stack.length) {
       const x = stack.pop()!;
+      open.set(x.tag, open.get(x.tag)! - 1);
       if (x.quoted) quotedDepth--;
-      if (/^h[1-6]$/.test(x.tag)) headingDepth--;
+      if (x.stars) starsDepth--;
+      if (STRUCK_TAGS.has(x.tag)) struckDepth--;
+      if (x.tag === 'i' || x.tag === 'em') italicDepth--;
+      if (/^h[1-6]$/.test(x.tag)) headingLevels.pop();
       if (x.tag === 'li') itemDepth--;
+      if (LINE_TAGS.has(x.tag) && !/^h[1-6]$/.test(x.tag)) containers.pop();
+      if (x.tag === 'table' && tables.length) closeTable();
+      // A section of customer words ends when the container that held its heading closes.
+      if (quotedSection && stack.length <= quotedSectionDepth) { flush(); quotedSection = false; }
+      if (x.tag === tag) break;
     }
   }
-  if (cell !== null && row) row.push(tidy(cell));
-  if (row?.some(Boolean)) out.push(`| ${row.filter(Boolean).join(' | ')}`);
+  while (tables.length) closeTable();
   flush();
-  return out.join('\n');
+  return sink[0]!.join('\n');
 }

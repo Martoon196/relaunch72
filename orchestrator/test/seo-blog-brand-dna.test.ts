@@ -216,9 +216,15 @@ test('settling takes the value from the stored card by position; the card says w
   const typed = settleConflict(profile, 0, { kind: 'typed', text: '  £55 per month  ' });
   assert.equal(typed.offers[0]!.price, '£55 per month'); assert.equal(typed.offers[0]!.priceSourceDocumentId, null);
   assert.equal(brandDnaCard({ ...profile, ...typed }, documents).offers[0]!.priceSource!.label, 'You told us');
+  // A Setup card settles exactly as at 1a9e5160.
   const other = settleConflict(profile, 1, { kind: 'option', index: 0 });
-  // Any other question is closed only: its model-written title never becomes an approved claim.
-  assert.deepEqual(other.approvedClaims, []); assert.equal(other.offers[0]!.price, null); assert.equal(other.conflicts.length, 1); assert.deepEqual(other.sources, profile.sources);
+  assert.deepEqual(other.approvedClaims, ['Service area: Kent']); assert.equal(other.offers[0]!.price, null);
+  assert.equal(brandDnaCard({ ...profile, ...other }, documents).claims[0]!.source!.label, 'From your Pricing page');
+  // A website-door card: the model's title plus the model's answer is closed only, never an approved claim.
+  const door = settleConflict({ ...profile, strict: true }, 1, { kind: 'option', index: 0 });
+  assert.deepEqual(door.approvedClaims, []); assert.equal(door.offers[0]!.price, null); assert.equal(door.conflicts.length, 1); assert.deepEqual(door.sources, profile.sources);
+  // What the owner types is theirs on either card.
+  for (const p of [profile, { ...profile, strict: true } as BrandProfile]) assert.deepEqual(settleConflict(p, 1, { kind: 'typed', text: 'Kent and Sussex' }).approvedClaims, ['Service area: Kent and Sussex']);
   for (const bad of [[0, 2], [0, -1], [5, 0], [1, 1], [0, 1.5]] as const) assert.throws(() => settleConflict(profile, bad[0], { kind: 'option', index: bad[1] }), { status: 400 });
   assert.throws(() => settleConflict(profile, 0, { kind: 'typed', text: ' ' }), /Type the right answer/);
 });
@@ -967,7 +973,7 @@ test('wording: verbatim prices are promised only on a website-door card, no dead
 
   const made = await proposedCard();
   const fresh = door((await call(serviceFor(made.h), owner, 'GET', `/portal/seo-blog/b/${made.brand.id}/dna`)).body);
-  assert.match(fresh, /Each price is copied as your page writes it, with the sentence it came from\. Read it before you confirm\./); assert.match(fresh, /Taken from your website\. Read it before you confirm\./);
+  assert.match(fresh, /Each price is copied as your page writes it, with the line we found it on and the line naming what it is for\. Read them before you confirm\./); assert.match(fresh, /Taken from your website\. Read it before you confirm\./);
   assert.doesNotMatch(fresh, /checked|verified|word for word/i, 'the card never says a line was checked');
 
   // The web side updated first and an older reader picked the task up: it holds it, and the page says to come back shortly.

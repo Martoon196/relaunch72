@@ -31,7 +31,7 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  priceCandidates, priceStatus, sourceNumbers, structureOfDoc, VOICE_LINE_MAX, withoutMarkers, wordRun, type LinkContext, type PriceStatus,
+  priceCandidates, priceLines, priceStatus, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun, type LinkContext, type PriceStatus,
 } from './brand-dna-rules.js';
 
 /**
@@ -289,8 +289,10 @@ interface OfferDecision {
   readonly drop: string | null;
   /** 'tied': the price stands. 'untied': emptied and listed. 'ambiguous': emptied; the owner is asked. */
   readonly price: PriceStatus | null;
-  /** The page's own price expression for this offer, when there is exactly one (shown to the owner when the model's differs). */
+  /** The page's own price expression for this offer, shown to the owner when the model's differs (only when the rule is sure of it). */
   readonly pagePrice: string | null;
+  /** For a tied price: the lines the rule used (the offer's name line and the price's line), shown beside it on the card. */
+  readonly priceLines: string | null;
   readonly description: { readonly text: string; readonly cut: readonly string[] };
   readonly urlBad: boolean;
 }
@@ -311,16 +313,27 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
   const offers = value.offers.map((o, index): OfferDecision => {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     const description = cutDescription(o.description ?? '', numbers, DESCRIPTION_MAX);
-    const none = { price: null, pagePrice: null, description, urlBad: false };
+    const none = { price: null, pagePrice: null, priceLines: null, description, urlBad: false };
     if (index >= OFFER_LIMIT) return { offer: o, drop: `is past the first ${OFFER_LIMIT} offers`, ...none };
     if (!doc) return { offer: o, drop: 'must name the supplied document it came from in sourceDocumentId', ...none };
     const nameProblem = offerNameProblem(o.name, doc);
     if (nameProblem) return { offer: o, drop: `its name ${nameProblem}. Name the offer exactly as that document does`, ...none };
     const self = names.findIndex((n) => sameValue(n, o.name));
-    const read = priceStatus(o.price ?? '', doc, names, self < 0 ? names.length : self);
-    return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.page.length === 1 ? read.page[0]!.text : null, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
+    const at = self < 0 ? names.length : self;
+    const read = priceStatus(o.price ?? '', doc, names, at);
+    const lines = o.price && read.status === 'tied' ? priceLines(doc, names, at, o.price) : null;
+    return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.hint, priceLines: lines, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
   });
   return { offers, names };
+}
+
+/**
+ * Website door: for each offer whose price the rule tied, the lines it was tied by, carried from the same decision the
+ * check and repair made (same offer list) to the card, which shows them beside the price. Never sent to any writing step.
+ */
+export function priceLineSources(value: ProfileFacts, documents: readonly SourceText[], context: SourceContext = {}): ProfileFactSource[] {
+  return decideOffers(value, documents, context).offers.flatMap((d) => !d.drop && d.price === 'tied' && d.priceLines && d.offer.sourceDocumentId
+    ? [{ field: 'price' as const, value: clip(d.offer.name, 400), documentId: d.offer.sourceDocumentId, quote: clip(d.priceLines, 600) }] : []);
 }
 
 /** The sources entry that supports an audience or claim, or null. Its quote must be word for word in its document and hold the line. */
@@ -771,7 +784,7 @@ export type ConflictChoice = { readonly kind: 'option'; readonly index: number }
  * by position; the only text ever taken from the owner is their own typed answer. A price question sets that offer's
  * price; any other question is closed only.
  */
-export function settleConflict(profile: Pick<BrandProfile, 'offers' | 'approvedClaims' | 'conflicts' | 'sources'>, index: number, choice: ConflictChoice):
+export function settleConflict(profile: Pick<BrandProfile, 'offers' | 'approvedClaims' | 'conflicts' | 'sources'> & Partial<Pick<BrandProfile, 'strict'>>, index: number, choice: ConflictChoice):
   Pick<BrandProfile, 'offers' | 'approvedClaims' | 'conflicts'> & { sources: readonly ProfileFactSource[] } {
   const conflict = Number.isInteger(index) && index >= 0 ? profile.conflicts[index] : undefined;
   if (!conflict) throw new SeoBlogError(400, 'That question is not on this card any more. Reload the page and try again.');
@@ -795,10 +808,13 @@ export function settleConflict(profile: Pick<BrandProfile, 'offers' | 'approvedC
     const offers = profile.offers.map((o) => o === offer ? { ...o, price: value, priceSourceDocumentId: documentId, description: withoutOtherPrices(o.description ?? '', value) } : o);
     return { offers, approvedClaims: profile.approvedClaims, conflicts, sources };
   }
-  // Any other question is closed and nothing else changes. Its title was written by the model, so it never becomes an
-  // approved claim; the owner adds a claim in their own words if they want one.
-  void documentId; void quote;
-  return { offers: profile.offers, approvedClaims: profile.approvedClaims, conflicts, sources };
+  // Website door only: picking one of the model's answers to a model-written question closes it and adds no claim (the
+  // title and the answer are both the model's words). An answer the owner typed is saved as their own, on every card.
+  if (profile.strict === true && choice.kind === 'option') return { offers: profile.offers, approvedClaims: profile.approvedClaims, conflicts, sources };
+  const claim = clip(`${conflict.field}: ${value}`, 400);
+  const approvedClaims = profile.approvedClaims.some((c) => sameValue(c, claim)) ? profile.approvedClaims : [...profile.approvedClaims, claim];
+  sources.push({ field: 'claim', value: claim, documentId, quote });
+  return { offers: profile.offers, approvedClaims, conflicts, sources };
 }
 
 /** Keep the source of every fact that survives an owner's wording change; a new line is recorded as the owner's own. */
@@ -846,9 +862,9 @@ export interface BrandDnaCard {
   /** True only for a website-door card made under today's rules. */
   readonly checked: boolean;
   /** True for any card made by the website door, whichever rules it was made under. */
-  readonly fromWebsite: boolean;
+  readonly fromWebsite?: boolean;
   /** A website-door card checked under older, looser rules: the page asks the owner to read the website again. */
-  readonly rulesOutdated: boolean;
+  readonly rulesOutdated?: boolean;
   /** What was left off this card because it could not be found word for word. Never used in writing. */
   readonly leftOut: readonly DnaLeftOut[];
 }
@@ -881,7 +897,49 @@ export function documentLabel(doc: Pick<KnowledgeDocument, 'title' | 'origin'> |
   return doc.origin?.kind === 'website' ? `your ${pageLabel(doc.origin.url)}` : `your document “${doc.title}”`;
 }
 
+/** The card the owner reads. A Setup (documents-only) card is built exactly as before Brand DNA's website rules. */
 export function brandDnaCard(profile: BrandProfile, documents: readonly KnowledgeDocument[]): BrandDnaCard {
+  return profile.strict === true ? websiteDoorCard(profile, documents) : setupCard(profile, documents);
+}
+
+function setupCard(profile: BrandProfile, documents: readonly KnowledgeDocument[]): BrandDnaCard {
+  const latest = new Map<string, KnowledgeDocument>();
+  for (const d of documents) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
+  const from = (documentId: string | null | undefined, quote: string | null = null): DnaSource | null => {
+    if (documentId === undefined) return null;
+    if (documentId === null) return { label: 'You told us', url: null, quote: null };
+    const doc = latest.get(documentId);
+    return { label: `From ${documentLabel(doc)}`, url: doc?.origin?.url ?? null, quote };
+  };
+  let unsourced = 0;
+  const sourced = (field: ProfileFactSource['field'], text: string): DnaItem => {
+    const s = (profile.sources ?? []).find((x) => x.field === field && sameValue(x.value, text));
+    if (!s) unsourced++;
+    return { text, source: s ? from(s.documentId, s.quote) : null };
+  };
+  const offers = profile.offers.map((o): DnaOffer => {
+    const priceOpen = profile.conflicts.some((c) => priceConflictOffer(c, profile.offers) === o);
+    const source = o.sourceDocumentId ? from(o.sourceDocumentId) : null;
+    if (!source) unsourced++;
+    const priceSource = !o.price ? null : o.priceSourceDocumentId !== undefined ? from(o.priceSourceDocumentId) : source;
+    return { name: o.name, description: o.description, source, price: o.price, priceSource, priceOpen };
+  });
+  const used = new Set<string>([...profile.knowledge.map((k) => k.documentId)]);
+  const readFrom = [...used].map((id) => latest.get(id)).filter((d): d is KnowledgeDocument => Boolean(d?.text))
+    .map((d) => ({ label: documentLabel(d).replace(/^your /, ''), url: d.origin?.url ?? null }));
+  return {
+    summary: profile.summary, positioning: profile.positioning, offers,
+    audiences: profile.audiences.map((a) => sourced('audience', a)), claims: profile.approvedClaims.map((c) => sourced('claim', c)),
+    voice: { tone: profile.voice.tone, do: profile.voice.do, dont: profile.voice.dont }, never: profile.exclusions,
+    conflicts: profile.conflicts.map((c, index): DnaConflict => ({
+      index, title: c.field, detail: c.detail,
+      options: (c.options ?? []).map((o, i) => ({ index: i, value: o.value, source: from(o.documentId, o.quote)! })),
+    })),
+    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true, leftOut: leftOutLines(profile.leftOut),
+  };
+}
+
+function websiteDoorCard(profile: BrandProfile, documents: readonly KnowledgeDocument[]): BrandDnaCard {
   const latest = new Map<string, KnowledgeDocument>();
   for (const d of documents) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
   const from = (documentId: string | null | undefined, quote: string | null = null): DnaSource | null => {
@@ -891,24 +949,25 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
     return { label: `From ${documentLabel(doc)}`, url: doc?.origin?.url ?? null, quote: quote === null ? null : withoutMarkers(quote) };
   };
   // The site's own sentence that holds a line, shown beside it (never the page's structure markers).
-  const sentenceWith = (documentId: string | null | undefined, text: string, claim: boolean): string | null => {
+  const claimLine = (documentId: string | null | undefined, text: string): string | null => {
     const doc = documentId ? latest.get(documentId) : undefined;
-    if (!doc?.text) return null;
-    if (claim) return claimSentence(text, doc);
-    return structureOfDoc(doc).units.find((u) => appearsIn(u.text, text))?.text ?? null;
+    return doc?.text ? claimSentence(text, doc) : null;
   };
   let unsourced = 0;
   const sourced = (field: ProfileFactSource['field'], text: string): DnaItem => {
     const s = (profile.sources ?? []).find((x) => x.field === field && sameValue(x.value, text));
     if (!s) unsourced++;
-    return { text, source: s ? from(s.documentId, (field === 'claim' ? sentenceWith(s.documentId, text, true) : null) ?? s.quote) : null };
+    return { text, source: s ? from(s.documentId, (field === 'claim' ? claimLine(s.documentId, text) : null) ?? s.quote) : null };
   };
   const offers = profile.offers.map((o): DnaOffer => {
     const priceOpen = profile.conflicts.some((c) => priceConflictOffer(c, profile.offers) === o);
     const source = o.sourceDocumentId ? from(o.sourceDocumentId) : null;
     if (!source) unsourced++;
+    // Beside a price: the lines the price rule used, as recorded when the card was made (an owner-settled price has none).
     const priceDoc = o.priceSourceDocumentId !== undefined ? o.priceSourceDocumentId : o.sourceDocumentId;
-    const priceSource = !o.price ? null : from(priceDoc, priceDoc ? sentenceWith(priceDoc, o.price, false) : null);
+    const ruled = o.priceSourceDocumentId === undefined && o.price
+      ? (profile.sources ?? []).find((s) => s.field === 'price' && s.documentId === o.sourceDocumentId && s.value === o.name && s.quote !== null && appearsIn(s.quote, o.price!)) : undefined;
+    const priceSource = !o.price ? null : from(priceDoc, ruled?.quote ?? null);
     return { name: o.name, description: o.description, source, price: o.price, priceSource, priceOpen };
   });
   const used = new Set<string>([...profile.knowledge.map((k) => k.documentId)]);

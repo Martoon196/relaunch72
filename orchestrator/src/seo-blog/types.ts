@@ -197,7 +197,8 @@ export interface ProfileConflict {
 
 /** Where one fact on the profile was read. `documentId` null means the owner typed or chose it themselves. */
 export interface ProfileFactSource {
-  readonly field: 'offer' | 'audience' | 'claim' | 'voice' | 'settled';
+  /** 'price' (website door only): `value` is the offer's name and `quote` the lines the price rule tied its price to. */
+  readonly field: 'offer' | 'audience' | 'claim' | 'voice' | 'settled' | 'price';
   readonly value: string;
   readonly documentId: string | null;
   readonly quote: string | null;
