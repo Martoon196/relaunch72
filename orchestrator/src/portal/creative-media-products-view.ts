@@ -55,6 +55,7 @@ export function creativeMediaProductsPage(shell:Shell, products:readonly Affilia
     +' · Eligibility confirmed by owner: '+(p.owner_channel_eligible?'yes':'no')+'</p>'
     +'<p class="small muted">Product link: '+e(linkLabel(p.product_url))
     +' · Affiliate proposal: '+(p.proposed_affiliate_url?e(linkLabel(p.proposed_affiliate_url)):'none')+'</p>'
+    +'<p><a class="button" href="'+base(shell)+'?source_kind=affiliate_product&amp;purpose=product_promotion&amp;product_id='+e(p.product_id)+'">Create artwork and video from this product</a></p>'
     +productForm(shell,editCommandId(),p)+'</details>').join('');
   const notice='<section class="card"><h2>Private affiliate catalogue</h2>'
     +'<p class="muted">Save candidate products and the evidence you have reviewed. Every change creates a new revision. '
