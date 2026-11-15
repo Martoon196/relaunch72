@@ -87,11 +87,22 @@ export class MediaEngine {
         merchant: requiredText(data.merchant,'Merchant',100),
         productUrl: validUrl(data.productUrl,'Product URL'),
         affiliateUrl: data.affiliateUrl ? validUrl(data.affiliateUrl,'Affiliate URL') : null,
+        clicks: 0,
         createdAt: nowIso(),
       };
       c.products.push(p); c.updatedAt = nowIso();
       log(s,c,'product_added',p.name);
       return p;
+    });
+  }
+  /** Records an outbound click, not an order. The public route verifies its HMAC first. */
+  async outboundClick(tid: string, campaignId: string, productId: string): Promise<string> {
+    return this.store.update(tid,(s)=>{
+      const c=findCampaign(s,campaignId);
+      const p=c.products.find((x)=>x.id===productId);
+      if(!p || !p.affiliateUrl) throw new MediaError('Affiliate link unavailable',404);
+      p.clicks=(p.clicks??0)+1;
+      return p.affiliateUrl;
     });
   }
   async draftScript(tid: string, id: string): Promise<Variant> {
