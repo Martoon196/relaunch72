@@ -158,7 +158,9 @@ test('the founder sees "Use this domain" for a domain already in the account; a 
   assert.match(page.body, /action="\/portal\/email\/use-domain"[^]*>Use this domain</u);
   page = await f.call('POST', '/portal/email/use-domain', { csrf: f.csrf, commandId: f.commandId });
   assert.equal(page.status, 200);
-  assert.match(page.body, /Add these 2 records/u);
+  // That domain's records are already verified: the page says so, not "Add these 2 records".
+  assert.match(page.body, /Your 2 records are already in place/u);
+  assert.doesNotMatch(page.body, /Add these 2 records|Add the 2 records/u);
   const c = setup();
   c.postmark.domains.push({ id: 5, name: 'propertypredator-test.co.uk', returnPath: 'pm-bounces.propertypredator-test.co.uk', dkimVerified: true, returnPathVerified: true });
   page = await c.call('POST', '/portal/email/connect', { csrf: c.csrf, commandId: c.commandId, ...fields });
@@ -181,4 +183,51 @@ test('the home page links to Connect email only when it is switched on and the d
     assert.match(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE as never, undefined, { emailConnectAvailable: true }), /href="\/portal\/email">Connect email</u);
     assert.doesNotMatch(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE as never, undefined, { emailConnectAvailable: false }), /\/portal\/email"/u);
   }
+});
+
+const stateOf = (over: Record<string, unknown>) => ({ status: 'dns_pending', step: null, domain: 'propertypredator-test.co.uk', fromName: 'PP', fromAddress: 'hello@propertypredator-test.co.uk',
+  replyTo: null, serverId: 1, domainId: 2, stream: 'broadcast', webhookId: 3, hasServerToken: true, hasWebhookSecret: true, mode: 'off', verifiedAt: null, rowVersion: 1,
+  dns: { dkim: { host: '20261115pm._domainkey.propertypredator-test.co.uk', value: 'k=rsa; p=KEY', verified: false },
+    returnPath: { host: 'pm-bounces.propertypredator-test.co.uk', value: 'pm.mtasv.net', verified: false } },
+  protection: { state: 'ok', reason: null, since: null, dailyCap: 50, hourlyCap: 13, warmupStartedAt: null }, terms: null, goLiveApprovedAt: null, domainAttempted: false, ...over }) as never;
+const submitButtons = (html: string) => [...html.matchAll(/<button type="submit"( class="secondary")?>([^<]+)<\/button>/gu)].map(m => ({ label: m[2], primary: !m[1] }));
+
+test('a domain already in our account: one primary button, "Use this domain"; Continue is not offered beside it (it would only meet the same domain again)', () => {
+  const view = { offered: true as const, dnsHost: null, business: EMAIL_CONNECT_BUSINESSES[0]!, state: stateOf({ status: 'needs_attention', step: 'domain', dns: null, domainId: null }) };
+  const offered = submitButtons(renderEmailConnectionPage({ csrf: 'c', commandId: 'id', view, offerTakeOver: true }));
+  assert.deepEqual(offered.filter(b => b.primary).map(b => b.label), ['Use this domain']);
+  assert.equal(offered.some(b => b.label === 'Continue'), false);
+  assert.ok(offered.some(b => b.label === 'Start again' && !b.primary), 'Start again stays, as a secondary button');
+  assert.ok(offered.some(b => b.label === 'Connect with these details' && !b.primary), 'other details stay possible, as a secondary button');
+  // Without the clash, Continue is the primary next step as before, and there is no take-over.
+  const plain = submitButtons(renderEmailConnectionPage({ csrf: 'c', commandId: 'id', view }));
+  assert.deepEqual(plain.filter(b => b.primary && b.label !== 'Connect with these details').map(b => b.label), ['Continue']);
+  assert.equal(plain.some(b => b.label === 'Use this domain'), false);
+});
+
+test('the records screen: when both records are already found it says so and asks for Check, never "Add these 2 records"', () => {
+  const found = { host: 'x', value: 'y', verified: true };
+  const both = renderEmailConnectionPage({ csrf: 'c', commandId: 'id', message: { text: 'Nearly there. Both records are already in place for your domain, so press Check below to finish.', ok: true },
+    view: { offered: true, dnsHost: 'cloudflare', business: EMAIL_CONNECT_BUSINESSES[0]!,
+      state: stateOf({ dns: { dkim: { ...found, host: 'a._domainkey.propertypredator-test.co.uk' }, returnPath: { ...found, host: 'pm-bounces.propertypredator-test.co.uk' } } }) } });
+  assert.match(both, /<h2>Your 2 records are already in place<\/h2>/u);
+  assert.match(both, /Both records are already found, so there is nothing to add\. Press Check to finish connecting\./u);
+  assert.doesNotMatch(both, /Add these 2 records|Add both records|Add the 2 records|Where do I add these|Email these to whoever/u);
+  assert.ok(submitButtons(both).some(b => b.label === 'Check' && b.primary), 'the Check it names is on the page');
+  // One or none found: the add-records screen as before.
+  for (const dns of [{ dkim: { ...found, host: 'a._domainkey.propertypredator-test.co.uk' }, returnPath: { host: 'pm-bounces.propertypredator-test.co.uk', value: 'pm.mtasv.net', verified: false } }, undefined]) {
+    const html = renderEmailConnectionPage({ csrf: 'c', commandId: 'id', view: { offered: true, dnsHost: null, business: EMAIL_CONNECT_BUSINESSES[0]!, state: stateOf(dns ? { dns } : {}) } });
+    assert.match(html, /<h2>Add these 2 records where your domain is managed<\/h2>/u);
+    assert.doesNotMatch(html, /already in place/u);
+  }
+});
+
+test('Connect for a domain whose records are already verified answers "already in place" in the banner too', async () => {
+  const f = setup(undefined, true);
+  f.postmark.domains.push({ id: 5, name: 'propertypredator-test.co.uk', returnPath: 'pm-bounces.propertypredator-test.co.uk', dkimVerified: true, returnPathVerified: true });
+  const fields = { fromName: 'PP', fromAddress: 'hello@propertypredator-test.co.uk', replyTo: '', agree: 'yes' };
+  await f.call('POST', '/portal/email/connect', { csrf: f.csrf, commandId: f.commandId, ...fields });
+  const page = await f.call('POST', '/portal/email/use-domain', { csrf: f.csrf, commandId: f.commandId });
+  assert.match(page.body, /role="status"><p>Nearly there\. Both records are already in place for your domain, so press Check below to finish\.<\/p>/u);
+  assert.doesNotMatch(page.body, /Add the 2 records below/u);
 });
