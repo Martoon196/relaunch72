@@ -211,6 +211,8 @@ export interface ProfileLeftOut {
   readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'summary' | 'positioning' | 'voice' | 'voice_dont' | 'link' | 'exclusion';
   /** The offer name, audience, claim, question or removed words, as the model gave them. Untrusted: always escaped. */
   readonly text: string;
+  /** For a price the page writes differently: the page's own price expression, so the owner can add it in one go. */
+  readonly found?: string;
 }
 
 export interface BrandProfile {

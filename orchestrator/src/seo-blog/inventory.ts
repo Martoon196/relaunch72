@@ -119,7 +119,7 @@ export async function buildInventory(brandId: string, website: string, transport
       // Words are kept only from a page that is still on the brand's own site after any redirect: a "join" page that
       // forwards to a checkout or sign-in elsewhere is somebody else's words, not the brand's.
       const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated && sameSite(res.finalUrl, origin);
-      const text = keepText ? brandPageText(parsed.text) : '';
+      const text = keepText ? brandPageText(parsed.structured) : '';
       if (text) withText++;
       pages.push({
         ...(text ? { text } : {}),

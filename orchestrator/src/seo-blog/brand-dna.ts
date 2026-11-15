@@ -6,16 +6,18 @@
  * brand document; the existing profile extraction then proposes a card. Nothing
  * here calls a model, the network or the database.
  *
- * Two classes of field (the exact rules are in `brand-dna-rules.ts`):
- *   - QUOTED FACTS are the business's own words, checked exactly: an approved claim is one whole sentence of a source;
- *     an audience is an unbroken run of words in one sentence that negates nothing; an offer name is written in the
- *     document it cites; a price is the full price expression written first beside its offer's name; a link is on the
- *     business's own site;
- *   - DESCRIPTION (summary, positioning, offer descriptions, voice, conversion-page labels) is our wording: it carries no
- *     money or percentage at all, any other number must be one a source states, and writers receive it under
- *     `descriptionNotFacts`, told never to take a fact, price or promise from it;
+ * The model that reads the site is ours and makes honest mistakes; these checks stop invention, rewording and a price
+ * attached to the wrong product, and cannot understand context. The owner reads the card, with where each line came from,
+ * before confirming it. Where a rule cannot be sure, the line is left out or the owner is asked; nothing is picked. The
+ * exact rules are in `brand-dna-rules.ts`:
+ *   - QUOTED FACTS are copied from the business's own pages: an approved claim is one whole sentence (or clean list item);
+ *     an audience is a run of words in one plain sentence; an offer name is written where the business presents it; a
+ *     price is the full price expression written for that offer, tied by the page's structure; a link is on its own site;
+ *   - DESCRIPTION (summary, positioning, offer descriptions, voice, conversion-page labels) is our wording: no money or
+ *     percentage at all, any other number one a source states, and length-capped;
  *   - the model's own notes (what it could not find, the wording of a question) are shown to the owner only;
- * *   - differing prices for one offer are never settled by the machine, and the price stays empty until the owner chooses;
+ *   - more than one price for one offer is never settled by the machine: the price stays empty until the owner chooses;
+ *   - what writing steps receive is unchanged by these rules (the card's fields, as the owner confirmed them);
  *   - a settled choice takes its value from the stored card, never the browser;
  *   - pages read from the website are only held with the card task until a card built from them is saved.
  */
@@ -28,8 +30,8 @@ import type {
 import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
-  AUDIENCE_MAX, audienceUnit, basisText, claimUnit, wordRun, cutDescription, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, offerNameProblem, priceStatus, sourceNumbers, tiedPrices,
-  type LinkContext, type PriceStatus,
+  AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
+  priceCandidates, priceStatus, sourceNumbers, structureOfDoc, VOICE_LINE_MAX, withoutMarkers, wordRun, type LinkContext, type PriceStatus,
 } from './brand-dna-rules.js';
 
 /**
@@ -173,7 +175,7 @@ export function websiteDocuments(input: {
 // ─── Word-for-word checks ────────────────────────────────────────────────────
 
 function plain(text: string): string {
-  return basisText(text).replace(/[‘’‚‛]/g, "'").replace(/[“”„‟]/g, '"').replace(/[‐-―−]/g, '-')
+  return basisText(withoutMarkers(text)).replace(/[‘’‚‛]/g, "'").replace(/[“”„‟]/g, '"').replace(/[‐-―−]/g, '-')
     .replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
@@ -285,8 +287,10 @@ interface OfferDecision {
   readonly offer: ProfileOffer;
   /** Why the whole offer goes, or null. */
   readonly drop: string | null;
-  /** 'tied': the price stands. 'untied': emptied and listed. 'ambiguous': emptied and put to the owner as a question. */
+  /** 'tied': the price stands. 'untied': emptied and listed. 'ambiguous': emptied; the owner is asked. */
   readonly price: PriceStatus | null;
+  /** The page's own price expression for this offer, when there is exactly one (shown to the owner when the model's differs). */
+  readonly pagePrice: string | null;
   readonly description: { readonly text: string; readonly cut: readonly string[] };
   readonly urlBad: boolean;
 }
@@ -304,27 +308,28 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
   const names = value.offerNames ?? value.offers.map((o) => o.name);
   const numbers = sourceNumbers(documents);
   const links = linkContext(documents, context);
-  const offers = value.offers.map((o): OfferDecision => {
+  const offers = value.offers.map((o, index): OfferDecision => {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
-    const description = cutDescription(o.description ?? '', numbers);
-    if (!doc) return { offer: o, drop: 'must name the supplied document it came from in sourceDocumentId', price: null, description, urlBad: false };
+    const description = cutDescription(o.description ?? '', numbers, DESCRIPTION_MAX);
+    const none = { price: null, pagePrice: null, description, urlBad: false };
+    if (index >= OFFER_LIMIT) return { offer: o, drop: `is past the first ${OFFER_LIMIT} offers`, ...none };
+    if (!doc) return { offer: o, drop: 'must name the supplied document it came from in sourceDocumentId', ...none };
     const nameProblem = offerNameProblem(o.name, doc);
-    if (nameProblem) return { offer: o, drop: `its name ${nameProblem}. Name the offer exactly as that document does`, price: null, description, urlBad: false };
+    if (nameProblem) return { offer: o, drop: `its name ${nameProblem}. Name the offer exactly as that document does`, ...none };
     const self = names.findIndex((n) => sameValue(n, o.name));
-    const price = o.price ? priceStatus(o.price, doc, names, self < 0 ? names.length : self) : null;
-    return { offer: o, drop: null, price, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
+    const read = priceStatus(o.price ?? '', doc, names, self < 0 ? names.length : self);
+    return { offer: o, drop: null, price: o.price ? read.status : null, pagePrice: read.page.length === 1 ? read.page[0]!.text : null, description, urlBad: Boolean(o.url) && !linkAllowed(o.url, links) };
   });
   return { offers, names };
 }
 
-/** The sources entry that supports an audience or claim, or null. Its quote must be word for word in the document it cites. */
+/** The sources entry that supports an audience or claim, or null. Its quote must be word for word in its document and hold the line. */
 function supportingSource(field: 'audience' | 'claim', item: string, value: ProfileFacts, byId: ReadonlyMap<string, SourceText>): ProfileFactSource | null {
   for (const s of value.sources ?? []) {
     if (s.field !== field || !sameValue(s.value, item) || !s.documentId) continue;
     const doc = byId.get(s.documentId);
-    // The quote shown beside the line must hold it, and the line must pass its rule in the document the quote is from.
     if (!doc || !appearsIn(doc.text, s.quote) || !meaningfulQuote(s.quote) || !wordRun(s.quote, item)) continue;
-    if (field === 'claim' ? claimUnit(item, doc) : audienceUnit(item, doc)) return s;
+    if (field === 'claim' ? claimSentence(item, doc) : audienceUnit(item, doc)) return s;
   }
   return null;
 }
@@ -332,20 +337,15 @@ const hasQuotedSource = (field: 'audience' | 'claim', item: string, value: Profi
   (value.sources ?? []).some((s) => s.field === field && sameValue(s.value, item) && s.documentId && byId.has(s.documentId) && appearsIn(byId.get(s.documentId)!.text, s.quote) && meaningfulQuote(s.quote));
 
 /** A voice example is the business's own words: one whole sentence of a source, exactly as an approved claim must be. */
-const exampleOk = (line: string, documents: readonly SourceText[]) => documents.some((d) => claimUnit(line, d) !== null);
-/** A voice tone/do/don't line is description: each of its sentences must pass the description rule, or the line goes. */
-const voiceLineOk = (line: string, numbers: ReadonlySet<string>) => cutDescription(line, numbers).cut.length === 0;
-
-/** A price question's answer must be one of the full price expressions tied to that offer in the document it cites. */
-function priceOptionOk(option: ProfileConflictOption, offer: string, doc: SourceText, names: readonly string[]): boolean {
-  const self = names.findIndex((n) => sameValue(n, offer));
-  return priceStatus(option.value, doc, names, self < 0 ? names.length : self) !== 'untied';
-}
+const exampleOk = (line: string, documents: readonly SourceText[]) => documents.some((d) => claimSentence(line, d) !== null);
+/** A voice tone/do/don't line is description: each of its sentences must pass the description rule, and it is at most 200 characters. */
+const voiceLineOk = (line: string, numbers: ReadonlySet<string>) => line.length <= VOICE_LINE_MAX && cutDescription(line, numbers).cut.length === 0;
 
 /**
  * Reasons a site-fed extraction must be corrected. Any entry sends the model's one correction pass; what still
- * fails after it is taken off the card by `repairProfileFacts`, and only a card with nothing verifiable left is refused.
+ * fails after it is taken off the card by `repairProfileFacts`, and only a card with nothing usable left is refused.
  * Every rule here is the same function the repair applies, over the same offer list, so a repaired card has no problem.
+ * Messages never describe a position the model could satisfy by picking a different amount: unsure means leave it empty.
  */
 export function strictProfileProblems(value: ProfileFacts, documents: readonly SourceText[], context: SourceContext = {}): string[] {
   const byId = new Map(documents.map((d) => [d.id, d]));
@@ -356,10 +356,10 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
   for (const d of decided.offers) {
     const o = d.offer;
     if (d.drop) { problems.push(`offer "${o.name}" ${d.drop}`); continue; }
-    if (d.price === 'untied') problems.push(`offer "${o.name}": the price "${o.price}" is not written as the first price beside "${o.name}" in document ${o.sourceDocumentId}. Copy the whole price exactly as written there with its words ("from", "per month", "+ VAT"), or set price to null and add the gap to missingFacts`);
-    if (d.price === 'ambiguous') problems.push(`offer "${o.name}": document ${o.sourceDocumentId} gives more than one price beside "${o.name}". Set price to null: the owner will be asked which is right`);
+    if (d.price === 'untied') problems.push(`offer "${o.name}": the price "${o.price}" is not the price document ${o.sourceDocumentId} writes for this offer. Copy the price written for "${o.name}" with all its words, or leave price empty if you are unsure`);
+    if (d.price === 'ambiguous') problems.push(`offer "${o.name}": document ${o.sourceDocumentId} gives more than one price for "${o.name}". Leave price empty: the owner will be asked which is right`);
     if (d.urlBad) problems.push(`offer "${o.name}": the url must be an https address on the business's own website, or null`);
-    if (d.description.cut.length) problems.push(`the description of "${o.name}" has a sentence with a price, a percentage or a number no document states ("${d.description.cut[0]!.slice(0, 80)}"). Descriptions are your own words and carry no figures`);
+    if (d.description.cut.length) problems.push(`the description of "${o.name}" has a sentence with a price, a percentage or a number no document states, or runs over ${DESCRIPTION_MAX} characters ("${d.description.cut[0]!.slice(0, 80)}"). Descriptions are your own short words and carry no figures`);
   }
   for (const s of value.sources ?? []) {
     const doc = s.documentId ? byId.get(s.documentId) : undefined;
@@ -368,11 +368,11 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
   }
   for (const item of value.approvedClaims) {
     if (!hasQuotedSource('claim', item, value, byId)) problems.push(`approved claim "${item}" has no sources entry with a word-for-word quote. Quote the document that states it, or remove it`);
-    else if (!supportingSource('claim', item, value, byId)) problems.push(`approved claim "${item}" is not one whole sentence of the document it cites. An approved claim is a complete sentence copied exactly, start to end (not in quotation marks, not a question), or remove it`);
+    else if (!supportingSource('claim', item, value, byId)) problems.push(`approved claim "${item}" is not one whole sentence the business states in the document it cites. An approved claim is a complete sentence copied exactly (not a heading, table cell, customer's words or question), or remove it`);
   }
   for (const item of value.audiences) {
     if (!hasQuotedSource('audience', item, value, byId)) problems.push(`audience "${item}" has no sources entry with a word-for-word quote. Quote the document that states it, or remove it`);
-    else if (!supportingSource('audience', item, value, byId)) problems.push(`audience "${item}" is not an unbroken run of words in one sentence of the document it cites that has no "not", "no", "never", "without" or "unlike". Copy the words exactly (at most ${AUDIENCE_MAX} characters), or remove it`);
+    else if (!supportingSource('audience', item, value, byId)) problems.push(`audience "${item}" is not an unbroken run of words in one plain sentence of the document it cites (no negation, no customer's words). Copy the words exactly (at most ${AUDIENCE_MAX} characters), or remove it`);
   }
   for (const c of value.conflicts) {
     for (const [part, text] of [['title', c.field], ['detail', c.detail]] as const) {
@@ -391,11 +391,10 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
       else if (!meaningfulQuote(option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is too short. Quote at least three words`);
       else if (!appearsIn(doc.text, option.value)) problems.push(`conflict "${c.field}": the ${answer} "${option.value}" does not appear character for character in document ${doc.id}. Copy it exactly as written there`);
       else if (figuresIn(option.value).some((figure) => !appearsIn(option.quote, figure))) problems.push(`conflict "${c.field}": the quote for "${option.value}" must contain every figure in it`);
-      else if (c.kind === 'price' && c.offer && !priceOptionOk(option, c.offer, doc, decided.names)) problems.push(`conflict "${c.field}": the price option "${option.value}" is not a whole price written beside "${c.offer}" in document ${doc.id}. Offer only prices that document states for this offer, with their words`);
     }
   }
   for (const line of value.exclusions ?? []) {
-    if (!neverSayKept(line, documents)) problems.push(`exclusion "${line}" must be a short topic or prohibition (at most ${NEVER_SAY_MAX} characters, no numbers or prices) and not something the business itself says`);
+    if (!neverSayKept(line, documents)) problems.push(`exclusion "${line}" must be a short topic or wording to avoid (2 or more words, at most ${NEVER_SAY_MAX} characters, no numbers or prices, no instruction to say something) and not something the business itself says`);
   }
   for (const line of value.missingFacts) {
     if (!missingFactShowable(line)) problems.push(`missingFacts line "${line}" states a number or price. Name the gap in words only`);
@@ -403,14 +402,14 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
   const links = linkContext(documents, context);
   for (const p of value.conversionPages ?? []) {
     if (!linkAllowed(p.url, links)) problems.push(`conversion page ${p.url} is not an https address on the business's own website`);
-    else if (linkLabel(p.label, p.url, documents) !== p.label) problems.push(`conversion page ${p.url}: its label must be words copied from a supplied document (at most 80 characters)`);
+    else if (linkLabel(p.label, p.url, documents) !== p.label) problems.push(`conversion page ${p.url}: its label must be words copied from a plain sentence of a supplied document (at most 80 characters)`);
   }
-  // Description is our wording: no money or percentage at all, and only numbers a source states.
-  const free: [string, string][] = [['summary', value.summary ?? ''], ['positioning', value.positioning ?? ''],
-    ...(['tone', 'do', 'dont'] as const).flatMap((part) => (value.voice?.[part] ?? []).map((line): [string, string] => [`voice "${part}" line`, line]))];
-  for (const [where, text] of free) {
-    const cut = cutDescription(text, numbers).cut;
-    if (cut.length) problems.push(`the ${where} has a sentence with a price, a percentage or a number no document states ("${cut[0]!.slice(0, 80)}"). Description is your own words and carries no figures`);
+  // Description is our wording: no money or percentage at all, only numbers a source states, and short.
+  const free: [string, string, number][] = [['summary', value.summary ?? '', DESCRIPTION_MAX], ['positioning', value.positioning ?? '', DESCRIPTION_MAX],
+    ...(['tone', 'do', 'dont'] as const).flatMap((part) => (value.voice?.[part] ?? []).map((line): [string, string, number] => [`voice "${part}" line`, line, VOICE_LINE_MAX]))];
+  for (const [where, text, max] of free) {
+    const cut = cutDescription(text, numbers, max).cut;
+    if (cut.length) problems.push(`the ${where} has a sentence with a price, a percentage or a number no document states, or runs over ${max} characters ("${cut[0]!.slice(0, 80)}"). Description is your own short words and carries no figures`);
   }
   for (const line of value.voice?.examples ?? []) {
     if (!exampleOk(line, documents)) problems.push(`voice example "${line.slice(0, 80)}" must be one whole sentence copied exactly from a supplied document`);
@@ -433,10 +432,10 @@ export interface ProfileRepair<T> {
  * that passes. It never adds, rewrites or paraphrases a fact. It removes a line (an offer, audience, claim, voice line or
  * example, "never say" line, question, conversion page), empties a price, link or a question's title or detail, replaces
  * a conversion-page label that is not the business's words with the link's own path, and cuts whole sentences out of
- * description (summary, positioning, offer descriptions) that carry a figure. Cutting a sentence can leave description
- * saying less, or more plainly, than the model wrote; every cut is listed under "What we left out", and description never
- * reaches a writer as fact. Each decision is the one `strictProfileProblems` makes, over the same offer list (the model's
- * own list, carried in `offerNames`), so `strictProfileProblems(result.value, documents)` is [].
+ * description (summary, positioning, offer descriptions) that carry a figure or run over the length limit. Cutting a
+ * sentence can leave description saying less, or more plainly, than the model wrote; every cut is listed under "What we
+ * left out". Each decision is the one `strictProfileProblems` makes, over the same offer list (the model's own list,
+ * carried in `offerNames`), so `strictProfileProblems(result.value, documents)` is [].
  *
  * Returns null when the answer cannot be repaired truthfully: a price question that is dropped but cannot be tied to
  * one offer (its price could otherwise be shown as settled), or a question marked "other" that is really about a price.
@@ -446,7 +445,9 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
   const everywhere = documents.map((d) => d.text ?? '').join('\n');
   const numbers = sourceNumbers(documents);
   const leftOut: ProfileLeftOut[] = [];
-  const leave = (what: ProfileLeftOut['what'], text: string) => { if (!leftOut.some((l) => l.what === what && sameValue(l.text, text))) leftOut.push({ what, text: clip(text, 300) }); };
+  const leave = (what: ProfileLeftOut['what'], text: string, found?: string | null) => {
+    if (!leftOut.some((l) => l.what === what && sameValue(l.text, text))) leftOut.push({ what, text: clip(text, 300), ...(found ? { found: clip(withoutMarkers(found), 200) } : {}) });
+  };
   const anywhere = (f: string) => appearsIn(everywhere, f);
   const decided = decideOffers(value, documents, context);
 
@@ -458,7 +459,7 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
     const o = d.offer;
     if (d.drop) { leave('offer', o.name); continue; }
     let next: ProfileOffer = o;
-    if (d.price === 'untied') { next = { ...next, price: null }; leave('price', o.name); }
+    if (d.price === 'untied') { next = { ...next, price: null }; leave('price', o.name, d.pagePrice); }
     if (d.price === 'ambiguous') next = { ...next, price: null };
     if (d.description.cut.length) { next = { ...next, description: d.description.text }; leave('offer_detail', o.name); }
     if (d.urlBad) { next = { ...next, url: null }; leave('link', o.url!); }
@@ -471,16 +472,15 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
   const keptSources = sources.filter((s) => s.field === 'audience' ? audiences.some((a) => sameValue(a, s.value)) : s.field === 'claim' ? approvedClaims.some((c) => sameValue(c, s.value)) : true);
 
   // Questions: unverifiable answers are dropped; a question left with fewer than two answers, a malformed one, or a price
-  // question about an offer no longer on the card is dropped. A price it held stays empty: nothing is chosen.
+  // question about an offer no longer on the card is dropped. A price it held stays empty: nothing is chosen. A price
+  // question that stays has its answers replaced by the page's own price expressions afterwards (`holdConflictedPrices`).
   const noPrice = new Set<ProfileOffer>();
   const conflicts: ProfileConflict[] = [];
   for (const c of value.conflicts) {
     const named = typeof c.offer === 'string' && c.offer.trim() ? offers.find((o) => sameValue(o.name, c.offer!)) ?? null : undefined;
     const options = (c.options ?? []).filter((option) => {
       const doc = byId.get(option.documentId);
-      return doc && appearsIn(doc.text, option.quote) && meaningfulQuote(option.quote) && appearsIn(doc.text, option.value)
-        && figuresIn(option.value).every((f) => appearsIn(option.quote, f))
-        && !(c.kind === 'price' && c.offer && !priceOptionOk(option, c.offer, doc, decided.names));
+      return doc && appearsIn(doc.text, option.quote) && meaningfulQuote(option.quote) && appearsIn(doc.text, option.value) && figuresIn(option.value).every((f) => appearsIn(option.quote, f));
     });
     // The title and detail are labels for the owner: one stating a figure in no document is emptied, never reworded.
     const badField = figuresIn(c.field).some((f) => !anywhere(f)), badDetail = figuresIn(c.detail).some((f) => !anywhere(f));
@@ -513,11 +513,11 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
     return o;
   });
 
-  // Description: whole sentences with a figure are cut (and listed); a voice line with one goes; an example that is not
-  // one whole sentence of a source goes.
+  // Description: whole sentences with a figure, or past the length limit, are cut (and listed); a voice line with one goes;
+  // an example that is not one whole sentence of a source goes.
   const freeText = (what: 'summary' | 'positioning', text: string | undefined): string | undefined => {
     if (text === undefined) return text;
-    const cut = cutDescription(text, numbers);
+    const cut = cutDescription(text, numbers, DESCRIPTION_MAX);
     if (!cut.cut.length) return text;
     leave(what, text);
     // A summary too short to stand on its own is emptied: the owner writes one before confirming.
@@ -528,7 +528,7 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
     examples: value.voice.examples.filter((line) => exampleOk(line, documents) || (leave('voice', line), false)) } : undefined;
   const summary = freeText('summary', value.summary), positioning = freeText('positioning', value.positioning);
 
-  // "Never say" lines restrict the writer only: kept unless they carry a figure, run long, or forbid the business's own words.
+  // "Never say" lines are suggestions that restrict the writer only.
   const exclusions = value.exclusions?.filter((line) => neverSayKept(line, documents) || (leave('exclusion', line), false));
   // The model's note of what it could not find is shown to the owner only, and never with a figure or price in it.
   const missingFacts = value.missingFacts.filter(missingFactShowable);
@@ -576,30 +576,53 @@ export function nothingVerifiable(value: Pick<ProfileFacts, 'offers' | 'audience
   return value.offers.length === 0 && value.audiences.length === 0 && value.approvedClaims.length === 0;
 }
 
+// The provenance rule Setup's documents-only path has always used, kept exactly (its own text normalisation included).
+const LEGACY_SMALL_WORDS = new Set(['about', 'across', 'also', 'and', 'any', 'are', 'been', 'being', 'both', 'but', 'can', 'each', 'every', 'for', 'from', 'had', 'has', 'have', 'her', 'his', 'into', 'its',
+  'just', 'more', 'most', 'not', 'only', 'our', 'out', 'over', 'such', 'than', 'that', 'the', 'their', 'them', 'then', 'these', 'they', 'this', 'those', 'too', 'very', 'was', 'were', 'what', 'when',
+  'which', 'who', 'whom', 'will', 'with', 'you', 'your']);
+const legacyPlain = (text: string) => text.normalize('NFKC').replace(/[‘’‚‛]/g, "'").replace(/[“”„‟]/g, '"').replace(/[‐-―−]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
+const legacyAppearsIn = (text: string | null | undefined, quote: string | null | undefined) => { const needle = legacyPlain(quote ?? ''); return needle.length >= 2 && foundWhole(legacyPlain(text ?? ''), needle); };
+const legacyWordsOf = (text: string) => legacyPlain(text).split(/[^a-z0-9]+/).filter(Boolean);
+function legacyUnsupportedBy(value: string, quote: string | null | undefined): string | null {
+  const q = legacyPlain(quote ?? '');
+  if (!(q.length >= 12 || q.split(' ').filter(Boolean).length >= 3)) return 'too short';
+  for (const figure of figuresIn(value)) if (!legacyAppearsIn(quote, figure)) return 'figure';
+  const words = [...new Set(legacyWordsOf(value).filter((w) => !LEGACY_SMALL_WORDS.has(w) && !/^\d+$/.test(w)))];
+  const long = words.filter((w) => w.length >= 4);
+  const keys = long.length ? long : words.filter((w) => w.length >= 2);
+  if (!keys.length) return null;
+  const quoted = legacyWordsOf(quote ?? '');
+  const hits = keys.filter((k) => quoted.some((w) => w.startsWith(k.slice(0, 5)))).length;
+  return hits >= Math.ceil((keys.length * 2) / 3) ? null : 'key words';
+}
+
 /**
- * Keep only provenance that can be shown truthfully. Used on every extraction (on the website door after the repair, so
- * nothing more goes there). A claim's source line is kept when its quote is word for word in the document and the claim
- * is one whole sentence of that document; an audience's when the audience rule holds; a voice or offer line when its quote
- * is word for word and at least three words. On the documents-only Setup path this only decides which source lines are
- * shown; it removes no claim, audience or other line from the profile.
+ * Keep only provenance that can be shown truthfully. Used on every extraction. On the website door (`strict`), after the
+ * repair: a claim's source line is kept when its quote is word for word in the document, holds the claim, and the claim is
+ * one whole sentence of that document; an audience's when the audience rule holds; a voice or offer line when its quote is
+ * word for word and at least three words. On Setup's documents-only path it is exactly the rule it always was. It never
+ * removes a claim, audience or other line from the profile.
  */
-export function cleanProvenance<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): T {
+export function cleanProvenance<T extends ProfileFacts>(value: T, documents: readonly SourceText[], strict = false): T {
   const byId = new Map(documents.map((d) => [d.id, d]));
   const sources: ProfileFactSource[] = [];
   for (const s of value.sources ?? []) {
     if (s.field !== 'audience' && s.field !== 'claim' && s.field !== 'voice' && s.field !== 'offer') continue;
     const doc = s.documentId ? byId.get(s.documentId) : undefined;
-    if (!doc || !appearsIn(doc.text, s.quote)) continue;
     const item = String(s.value ?? '');
-    const shown = s.field === 'claim' ? claimUnit(item, doc) !== null && wordRun(s.quote, item) : s.field === 'audience' ? audienceUnit(item, doc) !== null && wordRun(s.quote, item) : meaningfulQuote(s.quote);
-    if (!shown) continue;
+    if (strict) {
+      if (!doc || !appearsIn(doc.text, s.quote)) continue;
+      const shown = s.field === 'claim' ? claimSentence(item, doc) !== null && wordRun(s.quote, item) : s.field === 'audience' ? audienceUnit(item, doc) !== null && wordRun(s.quote, item) : meaningfulQuote(s.quote);
+      if (!shown) continue;
+    } else if (!doc || !legacyAppearsIn(doc.text, s.quote) || legacyUnsupportedBy(item, s.quote)) continue;
     sources.push({ field: s.field, value: clip(s.value, 400), documentId: doc.id, quote: clip(s.quote, 300) });
   }
+  const has = strict ? appearsIn : legacyAppearsIn;
   const conflicts = value.conflicts.map((c): ProfileConflict => {
     const options = (c.options ?? []).flatMap((o): ProfileConflictOption[] => {
       const doc = byId.get(o.documentId);
       // A choice is only offered when both its answer and its quote are word for word in the document it names.
-      return doc && appearsIn(doc.text, o.quote) && clip(o.value, 300).length >= 2 && appearsIn(doc.text, o.value) ? [{ value: clip(o.value, 300), documentId: doc.id, quote: clip(o.quote, 300) }] : [];
+      return doc && has(doc.text, o.quote) && clip(o.value, 300).length >= 2 && has(doc.text, o.value) ? [{ value: clip(o.value, 300), documentId: doc.id, quote: clip(o.quote, 300) }] : [];
     }).slice(0, 6);
     const kind = c.kind === 'price' ? 'price' as const : 'other' as const;
     const offer = typeof c.offer === 'string' && c.offer.trim() ? clip(c.offer, 200) : null;
@@ -655,8 +678,7 @@ function pricesNear(text: string, name: string, otherNames: readonly string[]): 
 /**
  * Deterministic backstop: when two sources each put a different price beside the same offer name and
  * share none, the owner must choose. It never picks, and it never fires on one page listing several
- * prices for an offer (monthly and yearly, say). Deliberately broad: THE PRICE RULE never narrows this search,
- * so a disagreement anywhere in the business's sources is always put to the owner.
+ * prices for an offer (monthly and yearly, say).
  */
 export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>, documents: readonly SourceText[]): ProfileConflict[] {
   const added: ProfileConflict[] = [];
@@ -679,126 +701,65 @@ export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>
   return added;
 }
 
-/**
- * One offer, one price: when the document an offer cites puts more than one price beside its name (was and now, a range,
- * a set-up fee, a monthly and a yearly figure), the card asks the owner which is right instead of picking. Each answer is
- * a full price expression exactly as written, quoted with its sentence.
- */
-export function morePriceQuestions(value: Pick<ProfileFacts, 'offers' | 'conflicts'>, documents: readonly SourceText[]): ProfileConflict[] {
-  const byId = new Map(documents.map((d) => [d.id, d]));
-  const names = value.offers.map((o) => o.name);
-  const added: ProfileConflict[] = [];
-  for (const [i, offer] of value.offers.entries()) {
-    if (value.conflicts.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
-    const doc = offer.sourceDocumentId ? byId.get(offer.sourceDocumentId) : undefined;
-    if (!doc) continue;
-    const tied = tiedPrices(doc, names, i);
-    if (tied.length < 2) continue;
-    const options = tied.slice(0, 6).map((x): ProfileConflictOption => ({ value: clip(x.text, 300), documentId: doc.id, quote: clip(x.unit?.text ?? x.text, 300) }));
-    added.push({ field: `${offer.name}: price`, detail: `We found more than one price for ${offer.name}. Which is right?`, documentIds: [doc.id], kind: 'price', offer: offer.name, options });
-  }
-  return added;
+/** The page's own price expressions for one offer in one document, as answers to put to the owner. */
+function pageOptions(doc: SourceText, names: readonly string[], self: number): ProfileConflictOption[] {
+  return priceCandidates(doc, names, self).slice(0, 6).map((x): ProfileConflictOption => {
+    const quote = withoutMarkers(x.unit?.text ?? x.text);
+    return { value: clip(withoutMarkers(x.text), 300), documentId: doc.id, quote: clip(quote.length >= 12 ? quote : x.text, 300) };
+  });
 }
 
 /**
- * Site-fed extractions only: add the backstop and "more than one price" questions and make sure no questioned price is
- * shown as settled. Only the offer a price question is about is held; its description loses any sentence that states a price.
+ * Site-fed extractions only, after the repair: make sure no price the page gives more than one of, and no questioned
+ * price, is shown as settled.
+ *   - A price question the model raised keeps its wording but its answers become the page's own price expressions for
+ *     that offer in every document (so a junk extra offer or a single-answer question cannot steer it); with fewer than
+ *     two, it goes and the price stays empty.
+ *   - An offer whose cited document gives more than one price is asked about: "We found more than one price for X.
+ *     Which is right?", each full expression with its sentence.
+ *   - The cross-source backstop is unchanged: two sources disagreeing are always asked.
+ * Only the offer a price question is about is held; its description loses any sentence that states a price.
  */
 export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): T {
-  const backstop = priceConflicts(value, documents);
-  const several = morePriceQuestions({ offers: value.offers, conflicts: [...value.conflicts, ...backstop] }, documents);
-  const added = [...backstop, ...several];
-  const conflicts = [...value.conflicts.slice(0, Math.max(0, 30 - added.length)), ...added];
-  const held = new Set(conflicts.map((c) => priceConflictOffer(c, value.offers)).filter(Boolean));
+  const byId = new Map(documents.map((d) => [d.id, d]));
+  const names = value.offers.map((o) => o.name);
+  const options = (offer: ProfileOffer) => {
+    const i = value.offers.indexOf(offer);
+    const all = documents.flatMap((d) => pageOptions(d, names, i));
+    return all.filter((o, k) => all.findIndex((p) => p.documentId === o.documentId && sameValue(p.value, o.value)) === k).slice(0, 6);
+  };
+  const heldOffers = new Set<ProfileOffer>();
+  const modelQuestions: ProfileConflict[] = [];
+  for (const c of value.conflicts) {
+    const offer = c.kind === 'price' ? priceConflictOffer(c, value.offers) : null;
+    if (!offer) { modelQuestions.push(c); continue; }
+    heldOffers.add(offer);
+    const page = options(offer);
+    if (page.length >= 2) modelQuestions.push({ ...c, documentIds: [...new Set(page.map((o) => o.documentId))], options: page });
+  }
+  const several: ProfileConflict[] = [];
+  for (const [i, offer] of value.offers.entries()) {
+    if (heldOffers.has(offer) || modelQuestions.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
+    const doc = offer.sourceDocumentId ? byId.get(offer.sourceDocumentId) : undefined;
+    if (!doc) continue;
+    const page = pageOptions(doc, names, i);
+    if (page.length < 2) continue;
+    several.push({ field: `${offer.name}: price`, detail: `We found more than one price for ${offer.name}. Which is right?`, documentIds: [doc.id], kind: 'price', offer: offer.name, options: page });
+  }
+  const before = [...modelQuestions, ...several];
+  const backstop = priceConflicts({ offers: value.offers, conflicts: before }, documents);
+  const conflicts = [...before.slice(0, Math.max(0, 30 - backstop.length)), ...backstop];
+  const held = new Set([...heldOffers, ...conflicts.map((c) => priceConflictOffer(c, value.offers)).filter((o): o is ProfileOffer => Boolean(o))]);
   const offers = value.offers.map((o) => held.has(o) ? { ...o, price: null, description: withoutOtherPrices(o.description ?? '', null) } : o);
   return { ...value, offers, conflicts };
 }
 
-// ─── What a writing step may be given ────────────────────────────────────────
-
-/** The version of the rules a website-door card was checked under. A card with a lower (or no) version is re-filtered for writing. */
+/** The version of the rules a website-door card was checked under. A card with a lower (or no) version is shown as made under older rules. */
 export const BRAND_DNA_RULES_VERSION = 2;
 
 /** True for a website-door card checked under today's rules. */
 export function checkedUnderCurrentRules(profile: Pick<BrandProfile, 'strict' | 'rulesVersion'>): boolean {
   return profile.strict === true && (profile.rulesVersion ?? 1) >= BRAND_DNA_RULES_VERSION;
-}
-
-/** An offer's quoted facts as a writing step sees them. The description is not here: it is description, not fact. */
-export interface WritingOffer { readonly name: string; readonly price: string | null; readonly url: string | null; readonly sourceDocumentId: string | null }
-
-/** An offer link a writing step may see: an absolute https address on the business's own site, or nothing. */
-export function writingUrl(url: string | null | undefined, website?: string | null): string | null {
-  if (typeof url !== 'string') return null;
-  if (website) return linkAllowed(url, { website }) ? url : null;
-  return /^https:\/\/[^\s\\@]+$/i.test(url) && url.startsWith('https://') ? url : null;
-}
-
-export function writingOffers(profile: Pick<BrandProfile, 'offers' | 'strict' | 'rulesVersion'>, website?: string | null): WritingOffer[] {
-  // A card from before today's rules, read without the website address, has links nobody can check here: none are passed.
-  const trusted = checkedUnderCurrentRules(profile) || profile.strict !== true;
-  return profile.offers.map((o) => ({ name: o.name, price: o.price ?? null, url: website || trusted ? writingUrl(o.url, website) : null, sourceDocumentId: o.sourceDocumentId ?? null }));
-}
-
-export interface WritingProfile {
-  /** Copied from the business's own pages and documents: whole-sentence claims. */
-  readonly approvedClaims: readonly string[];
-  readonly audiences: readonly string[];
-  /** Offer names and their full price expressions. */
-  readonly offers: readonly WritingOffer[];
-  readonly conversionPages: readonly { readonly url: string; readonly label: string }[];
-  /** Topics and wording never to use. Restrictions only. */
-  readonly exclusions: readonly string[];
-  readonly offersWithOpenQuestions: readonly string[];
-  readonly hasOtherOpenQuestions: boolean;
-  /** Our own description of the business, for tone and context only. Never a source of a fact, figure, price or promise. */
-  readonly descriptionNotFacts: {
-    readonly summary: string; readonly positioning: string;
-    readonly voice: { readonly tone: readonly string[]; readonly do: readonly string[]; readonly dont: readonly string[]; readonly examples: readonly string[] };
-    readonly offerDescriptions: readonly { readonly offer: string; readonly description: string }[];
-  };
-}
-
-/**
- * The one list of profile fields that reach any writing prompt (planning, article, section, social, campaign).
- * Quoted facts (claims, audiences, offer names and prices, never-say lines, links) sit at the top level; our description
- * sits under `descriptionNotFacts`. Never included: `missingFacts`, question titles, details and answers, `sources` and
- * their quotes, `leftOut`, confirmation fields and owner-settled price provenance.
- *
- * A website-door card checked under today's rules is passed as it was checked (links re-checked against `website` when
- * given). Any other card (an older website-door card, or a documents-only Setup profile, which no program checks) is
- * filtered with what can be applied without its sources: description sentences with money or a percentage are cut (on an
- * older website-door card, any sentence with a number, and its voice examples and "never say" lines with a number go),
- * and links must be on the website's own host. Claims, audiences and prices on those cards are passed as the owner
- * confirmed them: they were not checked under today's rules, and the card page says so for a website-door card.
- */
-export function writingProfile(profile: BrandProfile, website?: string | null): WritingProfile {
-  const current = checkedUnderCurrentRules(profile);
-  const olderDoor = profile.strict === true && !current;
-  // Without sources, an older website-door card's numbers cannot be checked: description keeps none. A Setup profile keeps
-  // its other numbers (the owner wrote or confirmed them) but never money or a percentage in description.
-  const numbers: ReadonlySet<string> | null = olderDoor ? null : new Set(numbersInDescriptionAllowed(profile));
-  const describe = (text: string) => current ? text : cutDescription(text, numbers).text;
-  const line = (items: readonly string[]) => current ? [...items] : items.filter((l) => cutDescription(l, numbers).cut.length === 0);
-  const links = (url: string) => !website ? (current || !olderDoor) && writingUrl(url) !== null : linkAllowed(url, { website });
-  const open = [...new Set(profile.conflicts.map((c) => conflictOffer(c, profile.offers)?.name).filter((n): n is string => Boolean(n)))];
-  return {
-    approvedClaims: [...profile.approvedClaims], audiences: [...profile.audiences], offers: writingOffers(profile, website),
-    conversionPages: profile.conversionPages.filter((p) => links(p.url)).map((p) => ({ url: p.url, label: p.label })),
-    exclusions: olderDoor ? profile.exclusions.filter((l) => !/[\p{N}£$€¥%]/u.test(l)) : [...profile.exclusions],
-    offersWithOpenQuestions: open, hasOtherOpenQuestions: profile.conflicts.some((c) => conflictOffer(c, profile.offers) === null),
-    descriptionNotFacts: {
-      summary: describe(profile.summary), positioning: describe(profile.positioning),
-      voice: { tone: line(profile.voice.tone), do: line(profile.voice.do), dont: line(profile.voice.dont), examples: olderDoor ? [] : [...profile.voice.examples] },
-      offerDescriptions: profile.offers.map((o) => ({ offer: o.name, description: describe(o.description ?? '') })).filter((o) => o.description),
-    },
-  };
-}
-
-/** A Setup profile's description may keep any number other than money or a percentage: every number it states counts as allowed. */
-function numbersInDescriptionAllowed(profile: BrandProfile): string[] {
-  const all = [profile.summary, profile.positioning, ...profile.voice.tone, ...profile.voice.do, ...profile.voice.dont, ...profile.offers.map((o) => o.description ?? '')].join(' ');
-  return [...sourceNumbers([{ text: all }])];
 }
 
 // ─── The owner settles a conflict ────────────────────────────────────────────
@@ -882,8 +843,10 @@ export interface BrandDnaCard {
   readonly readFrom: readonly { readonly label: string; readonly url: string | null }[];
   /** Facts shown without a recorded source (cards made before Brand DNA). The screen says so rather than implying one. */
   readonly unsourced: number;
-  /** True only for a website-door card checked under today's rules. */
+  /** True only for a website-door card made under today's rules. */
   readonly checked: boolean;
+  /** True for any card made by the website door, whichever rules it was made under. */
+  readonly fromWebsite: boolean;
   /** A website-door card checked under older, looser rules: the page asks the owner to read the website again. */
   readonly rulesOutdated: boolean;
   /** What was left off this card because it could not be found word for word. Never used in writing. */
@@ -908,7 +871,8 @@ export function leftOutLines(items: readonly ProfileLeftOut[] | undefined): DnaL
     const whole = clip(item.text, 2000), text = whole.slice(0, 120).trim();
     // A question whose own title could not be found word for word is named without it.
     if (!text && item.what === 'question') return [{ label: 'One of the questions we found', fix: known[1] }];
-    return [{ label: `${known[0]} “${text}${whole.length > 120 ? '…' : ''}”`, fix: known[1] }];
+    const found = item.what === 'price' && item.found ? ` (your page says “${clip(item.found, 120)}”)` : '';
+    return [{ label: `${known[0]} “${text}${whole.length > 120 ? '…' : ''}”${found}`, fix: known[1] }];
   });
 }
 
@@ -924,19 +888,27 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
     if (documentId === undefined) return null;
     if (documentId === null) return { label: 'You told us', url: null, quote: null };
     const doc = latest.get(documentId);
-    return { label: `From ${documentLabel(doc)}`, url: doc?.origin?.url ?? null, quote };
+    return { label: `From ${documentLabel(doc)}`, url: doc?.origin?.url ?? null, quote: quote === null ? null : withoutMarkers(quote) };
+  };
+  // The site's own sentence that holds a line, shown beside it (never the page's structure markers).
+  const sentenceWith = (documentId: string | null | undefined, text: string, claim: boolean): string | null => {
+    const doc = documentId ? latest.get(documentId) : undefined;
+    if (!doc?.text) return null;
+    if (claim) return claimSentence(text, doc);
+    return structureOfDoc(doc).units.find((u) => appearsIn(u.text, text))?.text ?? null;
   };
   let unsourced = 0;
   const sourced = (field: ProfileFactSource['field'], text: string): DnaItem => {
     const s = (profile.sources ?? []).find((x) => x.field === field && sameValue(x.value, text));
     if (!s) unsourced++;
-    return { text, source: s ? from(s.documentId, s.quote) : null };
+    return { text, source: s ? from(s.documentId, (field === 'claim' ? sentenceWith(s.documentId, text, true) : null) ?? s.quote) : null };
   };
   const offers = profile.offers.map((o): DnaOffer => {
     const priceOpen = profile.conflicts.some((c) => priceConflictOffer(c, profile.offers) === o);
     const source = o.sourceDocumentId ? from(o.sourceDocumentId) : null;
     if (!source) unsourced++;
-    const priceSource = !o.price ? null : o.priceSourceDocumentId !== undefined ? from(o.priceSourceDocumentId) : source;
+    const priceDoc = o.priceSourceDocumentId !== undefined ? o.priceSourceDocumentId : o.sourceDocumentId;
+    const priceSource = !o.price ? null : from(priceDoc, priceDoc ? sentenceWith(priceDoc, o.price, false) : null);
     return { name: o.name, description: o.description, source, price: o.price, priceSource, priceOpen };
   });
   const used = new Set<string>([...profile.knowledge.map((k) => k.documentId)]);
@@ -950,7 +922,7 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
       index, title: c.field.trim() || (c.offer ? `${c.offer}: price` : 'A question about your details'), detail: c.detail,
       options: (c.options ?? []).map((o, i) => ({ index: i, value: o.value, source: from(o.documentId, o.quote)! })),
     })),
-    missing: profile.missingFacts.filter(missingFactShowable), readFrom, unsourced, checked: checkedUnderCurrentRules(profile), rulesOutdated: profile.strict === true && !checkedUnderCurrentRules(profile), leftOut: leftOutLines(profile.leftOut),
+    missing: profile.missingFacts.filter(missingFactShowable), readFrom, unsourced, checked: checkedUnderCurrentRules(profile), fromWebsite: profile.strict === true, rulesOutdated: profile.strict === true && !checkedUnderCurrentRules(profile), leftOut: leftOutLines(profile.leftOut),
   };
 }
 

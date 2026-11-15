@@ -6,6 +6,7 @@
  * stored with the campaign brief so every later edit and approval is checked
  * against exactly the evidence the proposal was written from.
  */
+import { withoutMarkers } from './brand-dna-rules.js';
 import { currentKnowledge } from './method-evidence.js';
 import type { Article, ArticleVersion, BrandProfile, KnowledgeDocument, ResearchSource, TopicPlan } from './types.js';
 
@@ -45,7 +46,7 @@ export function buildAcquisitionEvidence(input: {
   const bound = currentKnowledge(input.knowledge).filter((d) => d.brandId === profile.brandId && d.text && ['audience_notes', 'faqs'].includes(d.category)
     && profile.knowledge.some((k) => k.documentId === d.id && k.version === d.version && k.sha256 === d.sha256));
   const facts: AcquisitionFact[] = bound.slice(0, ACQUISITION_EVIDENCE_LIMITS.facts).map((d) => ({
-    id: `knowledge:${d.id}:${d.version}`, kind: 'knowledge', title: trim(d.title, 120), text: trim(d.text!, ACQUISITION_EVIDENCE_LIMITS.factText), url: null }));
+    id: `knowledge:${d.id}:${d.version}`, kind: 'knowledge', title: trim(d.title, 120), text: trim(withoutMarkers(d.text!), ACQUISITION_EVIDENCE_LIMITS.factText), url: null }));
   for (const { article, version } of input.articles.slice(0, ACQUISITION_EVIDENCE_LIMITS.articles)) {
     if (article.brandId !== profile.brandId || version.articleId !== article.id) continue;
     facts.push({ id: `article:${article.id}`, kind: 'article', title: trim(version.body.title, 160),

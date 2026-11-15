@@ -152,7 +152,7 @@ test('nothing invented: a price must be word for word in its source, and every a
     sources: [{ field: 'audience' as const, value: 'Private landlords in Kent', documentId: 'home', quote: 'private landlords in Kent' }] };
   assert.deepEqual(strictProfileProblems(good, docs), []);
   const invented = strictProfileProblems({ ...good, offers: [{ ...good.offers[0]!, price: '£39 per month' }] }, docs);
-  assert.equal(invented.length, 1); assert.match(invented[0]!, /£39 per month.*not written as the first price beside/);
+  assert.equal(invented.length, 1); assert.match(invented[0]!, /£39 per month.*is not the price document page writes for this offer.*or leave price empty if you are unsure/);
   assert.match(strictProfileProblems({ ...good, offers: [{ ...good.offers[0]!, sourceDocumentId: 'made-up' }] }, docs)[0]!, /must name the supplied document/);
   // Description is our wording: no money or percentage at all, and only numbers a source states.
   assert.match(strictProfileProblems({ ...good, summary: 'Compliance for private landlords in Kent, from £49 per month.' }, docs)[0]!, /the summary has a sentence with a price/);
@@ -265,15 +265,15 @@ test('an invented price that survives the correction pass is left blank, not fat
   assert.ok(profile, 'one unverifiable price never costs the owner the whole card');
   assert.equal(profile.strict, true); assert.equal(profile.offers[0]!.name, 'Quay Compliance Plan'); assert.equal(profile.offers[0]!.price, null, 'the price is left blank, never guessed');
   assert.deepEqual(profile.audiences, ['Private landlords in Kent']); assert.deepEqual(profile.approvedClaims, ['We help landlords in Kent'], 'everything verified is kept');
-  assert.deepEqual(profile.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }]);
+  assert.deepEqual(profile.leftOut, [{ what: 'price', text: 'Quay Compliance Plan', found: '£49 per month' }], 'the page’s own price is shown so the owner can add it in one go');
   const cardJob = (await h.engine.listJobs(OWNER, brand.id)).find(isProfileJob)!;
   assert.equal(cardJob.state, 'done'); assert.equal((await h.engine.usage(OWNER, brand.id)).model_tokens, 3600, 'both calls are accounted, once');
   assert.ok(!JSON.stringify(profileForPrompt(profile)).includes('leftOut'), 'what was left out is never sent to a writing step');
   assert.ok(!JSON.stringify(profileForPrompt(profile)).includes('£39'));
 
   const shown = door((await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
-  assert.match(shown, /<h2>What we left out<\/h2>\s*<p>We left out 1 thing we could not confirm word for word\. You can add it yourself\.<\/p>/);
-  assert.match(shown, new RegExp(`<li>The price of “Quay Compliance Plan”<span class="from"><a href="/portal/seo-blog/b/${brand.id}/setup#brand-guidance">Add it to your details</a>`));
+  assert.match(shown, /<h2>What we left out<\/h2>\s*<p>We left out 1 thing we could not match to your own pages\. You can add it yourself\.<\/p>/);
+  assert.match(shown, new RegExp(`<li>The price of “Quay Compliance Plan” \\(your page says “£49 per month”\\)<span class="from"><a href="/portal/seo-blog/b/${brand.id}/setup#brand-guidance">Add it to your details</a>`));
   assert.match(shown, /Price: none found in your pages or documents/); assert.doesNotMatch(shown, /£39/);
   assert.doesNotMatch(shown, /We stopped before making your card|role="alert"/, 'a card, not an error');
   assert.match(shown, /<button class="main" type="submit">Confirm my Brand DNA<\/button>/); assert.equal(mains(shown), 1);
@@ -752,14 +752,14 @@ test('strict mode: a short or unrelated quote, a figure outside its quote, a pri
   const claim = (value: string, quote: string) => strictProfileProblems({ ...base, approvedClaims: [value], sources: [{ field: 'claim', value, documentId: 'd1', quote }] }, docs);
   assert.deepEqual(claim('We help property investors find deals', 'We help property investors find deals'), []);
   assert.match(claim('We help property investors find deals', 'in')[0]!, /no sources entry with a word-for-word quote/, 'a quote too short to mean anything is no source');
-  assert.match(claim('Over 10,000 investors trust us, with 27% average returns guaranteed', 'Trusted by investors across the UK')[0]!, /is not one whole sentence of the document it cites/);
+  assert.match(claim('Over 10,000 investors trust us, with 27% average returns guaranteed', 'Trusted by investors across the UK')[0]!, /is not one whole sentence the business states in the document it cites/);
   assert.match(claim('Rated the best sourcing company in Britain', 'We help property investors find deals')[0]!, /is not one whole sentence/);
   assert.match(claim('We help property investors', 'We help property investors find deals')[0]!, /is not one whole sentence/, 'part of a sentence is not a claim');
   const audience = (value: string, quote: string) => strictProfileProblems({ ...base, audiences: [value], sources: [{ field: 'audience', value, documentId: 'd1', quote }] }, docs);
   assert.deepEqual(audience('Property investors', 'We help property investors find deals'), []); assert.match(audience('First-time buyers in Leeds', 'We help property investors find deals')[0]!, /not an unbroken run of words/);
 
   // Prices on whole numbers; figures in names, descriptions and voice lines must be in a source.
-  for (const price of ['£4', '£49', '£499 per year', '£499']) assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, price }] }, docs)[0]!, /not written as the first price beside/, price);
+  for (const price of ['£4', '£49', '£499 per year', '£499']) assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, price }] }, docs)[0]!, /is not the price document d1 writes for this offer/, price);
   assert.deepEqual(strictProfileProblems({ ...base, offers: [{ ...gold, price: '£499 per month' }] }, docs), []);
   assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, name: 'Guaranteed 30% ROI plan' }] }, docs)[0]!, /offer "Guaranteed 30% ROI plan" its name is not written as these words/);
   assert.match(strictProfileProblems({ ...base, offers: [{ ...gold, description: 'Only £599 per month.' }] }, docs)[0]!, /description of "Gold Membership" has a sentence with a price/);
@@ -908,7 +908,7 @@ test('Brand setup’s "Extract profile" is sent the prompt it always was and ret
   const setupPrompt = loadPrompt('seo-blog-profile.md'), doorPrompt = loadPrompt('seo-blog-profile-site.md');
   assert.equal(setupPrompt.header.version, '1.1.0'); assert.equal(setupPrompt.sha256, 'f17838886613cc298a85d4d0422729606c64a94d1c72867c0cfb2c2bda18f94d', 'byte for byte the prompt in use before Brand DNA');
   assert.doesNotMatch(setupPrompt.body, /`sources`|`quote`|`kind`/); assert.equal(doorPrompt.header.stage, setupPrompt.header.stage);
-  assert.match(doorPrompt.body, /reviews, testimonials[^.]*\) are NOT the brand's own claims/); assert.match(doorPrompt.body, /Every conflict must give `kind`/); assert.equal(doorPrompt.header.version, '1.2.0');
+  assert.match(doorPrompt.body, /reviews, testimonials[^.]*\) are NOT the brand's own claims/); assert.match(doorPrompt.body, /Every conflict must give `kind`/); assert.equal(doorPrompt.header.version, '1.3.0');
   assert.match(doorPrompt.body, /An approved claim is ONE WHOLE SENTENCE copied exactly/); assert.match(doorPrompt.body, /One offer, one price/);
 
   const h = harness(); seedSite(h);
@@ -961,13 +961,14 @@ test('wording: verbatim prices are promised only on a website-door card, no dead
   const { brand } = await setupConfirmedBrand(h);
   const service = serviceFor(h), owner = identity(OWNER.userId);
   const older = door((await call(service, owner, 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body);
-  assert.doesNotMatch(older, /Prices are shown exactly as written/); assert.match(older, /Check each price against your own price list before you confirm\./);
+  assert.doesNotMatch(older, /Each price is copied as your page writes it/); assert.match(older, /Check each price against your own price list before you confirm\./);
   assert.match(older, /2 lines on this card have no recorded source\. Check them yourself before you rely on them\./); assert.doesNotMatch(older, /Read your website again to get a card/);
   assert.match(older, /The card above carries on being used until the new one is ready\. If a new card cannot be made, nothing changes\./);
 
   const made = await proposedCard();
   const fresh = door((await call(serviceFor(made.h), owner, 'GET', `/portal/seo-blog/b/${made.brand.id}/dna`)).body);
-  assert.match(fresh, /Prices are shown exactly as written\. We never work one out\./); assert.match(fresh, /Check each line\. Every one says where we found it\./);
+  assert.match(fresh, /Each price is copied as your page writes it, with the sentence it came from\. Read it before you confirm\./); assert.match(fresh, /Taken from your website\. Read it before you confirm\./);
+  assert.doesNotMatch(fresh, /checked|verified|word for word/i, 'the card never says a line was checked');
 
   // The web side updated first and an older reader picked the task up: it holds it, and the page says to come back shortly.
   const g = harness(); seedSite(g); useModel(g, honestCard);
@@ -1000,7 +1001,7 @@ test('what was left out is listed escaped, capped, each with the existing way to
   const page = (await call(serviceFor(h), identity(OWNER.userId), 'GET', `/portal/seo-blog/b/${brand.id}/dna`)).body;
   const shown = door(page);
   assert.doesNotMatch(page, /<script>alert|<img src=x/); assert.match(shown, /The offer “Quay &lt;script&gt;alert\(1\)&lt;\/script&gt; &quot;Plan&quot; &amp; &lt;img src=x onerror=alert\(2\)&gt;”/);
-  assert.match(shown, /We left out 12 things we could not confirm word for word\. You can add them yourself\./);
+  assert.match(shown, /We left out 12 things we could not match to your own pages\. You can add them yourself\./);
   const listed = shown.slice(shown.indexOf('id="left-out"'), shown.indexOf('</section>', shown.indexOf('id="left-out"')));
   assert.equal((listed.match(/<li>/g) ?? []).length, 10); assert.match(listed, /And 2 more\./); assert.match(listed, /Nothing left out is used to write your content\./);
   assert.match(listed, /<li>Who it is for: “Unquoted audience a”<span class="from"><a href="#dna-change">Add it yourself<\/a>/);
@@ -1064,7 +1065,7 @@ test('a summary the repair had to empty: the card is still made, asks for a summ
   await read(h, brand.id); await work(h);
   const profile = (await h.engine.getProfile(OWNER, brand.id))!;
   assert.equal(profile.summary, ''); assert.deepEqual(profile.leftOut, [{ what: 'summary', text: 'Trusted by 500 landlords across Kent.' }]);
-  assert.equal((profileForPrompt(profile).descriptionNotFacts as { summary: string }).summary, '', 'the writers are sent an empty summary, never the removed words');
+  assert.equal(profileForPrompt(profile).summary, '', 'the writers are sent an empty summary, never the removed words');
   const service = serviceFor(h), owner = identity(OWNER.userId), csrf = portalCsrfToken(SECRET, owner.sessionToken), base = `/portal/seo-blog/b/${brand.id}/dna`;
   const shown = door((await call(service, owner, 'GET', base)).body);
   assert.match(shown, /<h2>In a sentence<\/h2><p class="notice">Add a one-line summary before you confirm\./);

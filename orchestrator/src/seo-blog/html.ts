@@ -34,9 +34,7 @@ export function stripTags(html: string): string {
       .replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/<(script|style|noscript|template|svg|iframe)\b[\s\S]*?<\/\1\s*>/gi, ' ')
       .replace(/<br\s*\/?>/gi, '\n')
-      // Block ends become line breaks, so a reader of the text can still tell a heading, list item or table cell apart.
-      .replace(/<\/(p|div|li|h[1-6]|section|article|tr|td|th|dt|dd|ul|ol|table|thead|tbody|blockquote|figcaption|header|footer|nav|main|aside|form|label|button|address)>/gi, '\n')
-      .replace(/<hr\b[^>]*>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)>/gi, '\n')
       .replace(/<[^>]+>/g, ' '),
   )
     .replace(/[ \t\f\v\r]+/g, ' ')
@@ -58,6 +56,12 @@ export interface ParsedPage {
   readonly robotsNoindex: boolean;
   readonly headings: readonly { level: number; text: string }[];
   readonly text: string;
+  /**
+   * Brand DNA only: the main content as lines, each starting with a structure marker ("# " heading, "• " list item,
+   * "| " table row with cells joined by " | ", "❝ " testimonial or quoted material, none for a paragraph). Struck-through
+   * text is left out. `text` above is unchanged and is what every other reader uses.
+   */
+  readonly structured: string;
   readonly publishedAt: string | null;
   readonly modifiedAt: string | null;
   readonly links: readonly string[];
@@ -162,6 +166,7 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
     robotsNoindex: robots.includes('noindex'),
     headings,
     text: stripTags(mainHtml).slice(0, 200_000),
+    structured: brandPageLines(mainHtml).slice(0, 200_000),
     publishedAt: validDate(publishedAt),
     modifiedAt: validDate(modifiedAt),
     links,
@@ -185,4 +190,79 @@ export function parseSitemap(xml: string): { index: boolean; locs: string[] } {
     if (loc) locs.push(loc);
   }
   return { index, locs };
+}
+
+// ─── Brand DNA: the page as structured lines ────────────────────────────────
+
+const LINE_TAGS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article', 'dt', 'dd', 'ul', 'ol', 'dl', 'table', 'thead', 'tbody', 'tfoot', 'caption',
+  'blockquote', 'figure', 'figcaption', 'header', 'footer', 'nav', 'main', 'aside', 'form', 'address', 'tr', 'pre', 'details', 'summary']);
+const VOID_LINE_TAGS = new Set(['br', 'hr']);
+const VOID_TAGS = new Set(['br', 'hr', 'img', 'input', 'meta', 'link', 'source', 'wbr', 'area', 'col', 'embed', 'track', 'param', 'base']);
+/** Elements whose words are a customer's, or quoted: their lines are marked "❝ ". */
+const QUOTED_TAGS = new Set(['blockquote', 'q', 'cite']);
+const QUOTED_CLASS = /testimonial|review|quote|rating|stars|trustpilot|feedback/i;
+/** A heading that starts a section of customer words, up to the next heading. */
+const QUOTED_SECTION = /^(?:(?:our|customer|client|google|latest|recent|real|happy)\s+)*(?:reviews|testimonials|feedback)$|\bwhat (?:our |my )?(?:customers|clients|landlords|tenants|students|people|members|buyers|sellers|homeowners|users|patients|guests|families) (?:say|think)\b|\bkind words\b|\bfeedback from\b|\bin their (?:own )?words\b|\b(?:client|customer|success) stories\b|\btestimonials\b/i;
+
+/**
+ * The page's main content as structured lines for Brand DNA (see `ParsedPage.structured`). One linear pass over the
+ * tags; struck-through text (s, del, strike) is removed, not stored; label and button do not end a line.
+ */
+export function brandPageLines(html: string): string {
+  const clean = html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|noscript|template|svg|iframe)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<(s|del|strike)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
+  const out: string[] = [];
+  const stack: { tag: string; quoted: boolean }[] = [];
+  let quotedDepth = 0, headingDepth = 0, itemDepth = 0, quotedSection = false;
+  let buffer = '';
+  let row: string[] | null = null, cell: string | null = null;
+  const tidy = (t: string) => decodeEntities(t).replace(/\s+/g, ' ').trim();
+  const flush = () => {
+    const text = tidy(buffer);
+    buffer = '';
+    if (!text) return;
+    if (headingDepth > 0) quotedSection = QUOTED_SECTION.test(text);
+    const quoted = quotedDepth > 0 || (quotedSection && headingDepth === 0);
+    out.push(`${quoted ? '❝ ' : headingDepth > 0 ? '# ' : itemDepth > 0 ? '• ' : ''}${text}`);
+  };
+  for (const m of clean.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*)>|([^<]+)/g)) {
+    if (m[4] !== undefined) { if (cell !== null) cell += m[4]; else buffer += m[4]; continue; }
+    const closing = m[1] === '/', tag = m[2]!.toLowerCase(), attrs = m[3] ?? '';
+    if (!closing) {
+      if (VOID_LINE_TAGS.has(tag)) { if (cell !== null) cell += ' '; else flush(); continue; }
+      if (tag === 'tr') { flush(); row = []; }
+      else if ((tag === 'td' || tag === 'th') && row) { cell = ''; }
+      else if (LINE_TAGS.has(tag) && cell === null) flush();
+      else if (cell === null && !LINE_TAGS.has(tag)) buffer += ' ';
+      if (VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
+      const quoted = QUOTED_TAGS.has(tag) || QUOTED_CLASS.test(/\b(?:class|id)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i.exec(attrs)?.[1] ?? '');
+      stack.push({ tag, quoted });
+      if (quoted) quotedDepth++;
+      if (/^h[1-6]$/.test(tag)) headingDepth++;
+      if (tag === 'li') itemDepth++;
+      continue;
+    }
+    const at = stack.map((x) => x.tag).lastIndexOf(tag);
+    if (at === -1) continue;
+    if ((tag === 'td' || tag === 'th') && row && cell !== null) { row.push(tidy(cell)); cell = null; }
+    else if (tag === 'tr' && row) {
+      if (cell !== null) { row.push(tidy(cell)); cell = null; }
+      const cells = row.filter(Boolean);
+      if (cells.length) out.push(`${quotedDepth > 0 || quotedSection ? '❝ ' : '| '}${cells.join(' | ')}`);
+      row = null;
+    } else if (LINE_TAGS.has(tag) && cell === null) flush();
+    else if (cell === null) buffer += ' ';
+    while (stack.length > at) {
+      const x = stack.pop()!;
+      if (x.quoted) quotedDepth--;
+      if (/^h[1-6]$/.test(x.tag)) headingDepth--;
+      if (x.tag === 'li') itemDepth--;
+    }
+  }
+  if (cell !== null && row) row.push(tidy(cell));
+  if (row?.some(Boolean)) out.push(`| ${row.filter(Boolean).join(' | ')}`);
+  flush();
+  return out.join('\n');
 }

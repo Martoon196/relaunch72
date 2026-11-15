@@ -51,13 +51,13 @@ test('a price not word for word in its source is emptied; the offer and everythi
   assert.equal(strictProfileProblems(card, DOCS).length, 1);
   const result = repaired(card);
   assert.deepEqual(result.value.offers, [{ ...plan, price: null }, mentoring]);
-  assert.deepEqual(result.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }]);
+  assert.deepEqual(result.leftOut, [{ what: 'price', text: 'Quay Compliance Plan', found: '£49 per month' }]);
   assert.deepEqual({ ...result.value, offers: card.offers }, card, 'nothing verified is removed');
 
   // An emptied price does not live on in the description, exactly as a held price question strips it.
   const said = repaired({ ...card, offers: [{ ...plan, price: '£39 per month', description: 'The Quay Compliance Plan costs £49 per month. Cancel any time.' }] });
   assert.equal(said.value.offers[0]!.price, null); assert.equal(said.value.offers[0]!.description, 'Cancel any time.');
-  assert.deepEqual(said.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }, { what: 'offer_detail', text: 'Quay Compliance Plan' }]);
+  assert.deepEqual(said.leftOut, [{ what: 'price', text: 'Quay Compliance Plan', found: '£49 per month' }, { what: 'offer_detail', text: 'Quay Compliance Plan' }]);
 });
 
 test('hardening: full-width digits and a leading "500) " are figures; "£1," is not found in "£1,500"', () => {
@@ -213,7 +213,7 @@ test('extraction: a bad price after the correction pass gives a card with that p
   assert.equal(llm.calls, 2, 'the correction pass is still asked for first');
   assert.equal(result.value.offers[0]!.price, null); assert.deepEqual(result.value.audiences, ['Private landlords in Kent']);
   assert.deepEqual(result.value.conversionPages, []);
-  assert.deepEqual(result.value.leftOut, [{ what: 'price', text: 'Quay Compliance Plan' }, { what: 'link', text: 'http://quay.example/join' }]);
+  assert.deepEqual(result.value.leftOut, [{ what: 'price', text: 'Quay Compliance Plan', found: '£49 per month' }, { what: 'link', text: 'http://quay.example/join' }]);
 
   // Setup's documents-only path is untouched: no repair, no left-out list, the model's own field never kept.
   const setup = await extractProfile(scripted(() => answer({ offers: [], conversionPages: [] })), { brandName: 'Quay', website: null, documents: docs({ pricing: PRICING, home: HOME }) });

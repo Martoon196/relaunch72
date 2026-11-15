@@ -63,7 +63,7 @@ function cardSections(card: BrandDnaCard): string {
 <span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
   return `<section class="card"><h2>In a sentence</h2>${card.summary.trim() ? `<p>${e(card.summary)}</p>` : '<p class="notice">Add a one-line summary before you confirm. Use “Something not right? Change it” below.</p>'}${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
-<section class="card"><h2>What you sell</h2><p class="muted">${card.checked ? 'Prices are shown exactly as written. We never work one out.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
+<section class="card"><h2>What you sell</h2><p class="muted">${card.fromWebsite ? 'Each price is copied as your page writes it, with the sentence it came from. Read it before you confirm.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
 <section class="card"><h2>Who it is for</h2>${facts(card.audiences, 'We did not find who you sell to written down. Nothing was added.')}</section>
 <section class="card"><h2>What you can say</h2>${facts(card.claims, 'We did not find any claims you make written down. Nothing was added.')}</section>
 <section class="card"><h2>How you sound</h2>${card.voice.tone.length ? `<p>${e(card.voice.tone.join(', '))}</p>` : '<p class="muted">Not enough of your own words to tell yet.</p>'}
@@ -89,7 +89,7 @@ function leftOutSection(shell: Shell, card: BrandDnaCard, canEdit: boolean): str
     : `<a href="${link(shell, 'setup')}#brand-guidance">Add it to your details</a>`;
   const more = items.length - LEFT_OUT_SHOWN;
   return `<section class="card" id="left-out"><h2>What we left out</h2>
-<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not confirm word for word. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
+<p>We left out ${items.length === 1 ? '1 thing' : `${items.length} things`} we could not match to your own pages. You can add ${items.length === 1 ? 'it' : 'them'} yourself.</p>
 <ul class="facts">${items.slice(0, LEFT_OUT_SHOWN).map((i) => `<li>${e(i.label)}<span class="from">${add(i.fix)}</span></li>`).join('')}</ul>
 ${more > 0 ? `<p class="muted">And ${more} more.</p>` : ''}<p class="muted">Nothing left out is used to write your content.</p></section>`;
 }
@@ -204,7 +204,7 @@ ${state.documents ? `<p class="muted">You have already added ${state.documents} 
   const confirmed = state.status === 'confirmed', outOfDate = state.status === 'out_of_date';
   const open = card.conflicts.length;
   // A website-door card cannot be confirmed without a summary (the server refuses it too).
-  const noSummary = card.checked && !card.summary.trim();
+  const noSummary = card.fromWebsite && !card.summary.trim();
   const pill = outOfDate ? '<span class="pill bad">Out of date</span>' : confirmed ? '<span class="pill ok">Confirmed</span>' : '<span class="pill warn">Needs your confirmation</span>';
   const documentsOnly = state.job?.state === 'done' && brandDnaPayload(state.job).result?.websiteReadable === false
     ? `<p class="notice">We could not read enough words from your website, so this card uses your documents only. ${paste} if anything is missing.</p>` : '';
@@ -228,7 +228,7 @@ ${cannotStart || readForm(shell, state, { label: 'Read my website again', main: 
   }
 
   return body('Your Brand DNA', `<h1>Your Brand DNA ${pill}</h1>
-<p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : card.checked ? 'Check each line. Every one says where we found it.' : 'Check each line before you confirm it.'}</p>
+<p class="lead">${outOfDate ? 'This is the old card.' : confirmed ? 'This is what your content is written from.' : card.fromWebsite ? 'Taken from your website. Read it before you confirm.' : 'Check each line before you confirm it.'}</p>
 ${stopped ? `<p class="notice bad" role="alert">${e(stopped.text)}${stopped.pasteInstead ? ` ${paste}.` : ''}</p>` : ''}${card.rulesOutdated && !outOfDate ? `<section class="card" id="dna-recheck"><p>We have tightened our checks since this was read. Read your website again to re-check it.</p>
 ${cannotStart || readForm(shell, state, { label: 'Read my website', main: false, again: confirmed, commandId })}</section>` : ''}${documentsOnly}${outOfDate ? action : ''}${conflictForms(shell, card, version, confirmed)}${leftOutSection(shell, card, !outOfDate)}${cardSections(card)}
 ${outOfDate ? '' : correctionForm(shell, state)}${look}${outOfDate ? '' : action}`);

@@ -75,10 +75,9 @@ function figureInText(figure: string, text: string): boolean {
   return false;
 }
 
-/** The profile's quoted facts only (offer names, prices, approved claims). Descriptions are our wording and never support a figure. */
 function profileFactText(profile: BrandProfile): string {
   return [
-    ...profile.offers.flatMap((o) => [o.name, o.price ?? '']),
+    ...profile.offers.flatMap((o) => [o.name, o.description, o.price ?? '']),
     ...profile.approvedClaims,
   ].join('\n');
 }

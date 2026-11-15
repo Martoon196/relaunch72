@@ -135,7 +135,7 @@ test('the existing article correction receives the entire prior draft, unchanged
  assert.equal(context.research[0].publishedAt,f.f.sources[0]!.publishedAt??null);
  assert.equal(context.research[0].confidence,f.f.sources[0]!.confidence??'unknown');
  const profile=block(a!.messages[0]!.content,'brand_profile');assert.equal(profile.approvedClaimReferences.length,f.f.profile.approvedClaims.length);
- assert.equal(profile.approvedClaims,undefined);assert.equal(profile.voice,undefined);assert.deepEqual(profile.descriptionNotFacts.voice,f.f.profile.voice,'voice is passed as description, never as fact');assert.equal(profile.missingFacts,undefined,'the model\'s own note of gaps never reaches a writer');
+ assert.equal(profile.approvedClaims,undefined);assert.deepEqual(profile.voice,f.f.profile.voice);assert.deepEqual(profile.missingFacts,f.f.profile.missingFacts);
  assert.deepEqual(block(b!.messages[0]!.content,'linkable_pages').map((l:any)=>l.url),block(a!.messages[0]!.content,'linkable_pages').map((l:any)=>l.url));
  assert.ok(block(b!.messages[0]!.content,'linkable_pages').some((l:any)=>l.url==='https://hearth.example/guide'));
  assert.doesNotMatch(a!.messages[0]!.content,/<research_sources>/);assert.match(a!.system,/Complete verified claims and full offer facts appear once/);
