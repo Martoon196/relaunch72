@@ -9,6 +9,10 @@ on:
       - 'orchestrator/src/portal/creative-studio-view.ts'
       - 'orchestrator/src/portal/product-profile.ts'
       - 'orchestrator/test/portal-product-profile.test.ts'
+      - 'orchestrator/src/portal/seo-blog-router.ts'
+      - 'orchestrator/src/portal/seo-blog-service.ts'
+      - 'orchestrator/src/portal/creative-media-products-view.ts'
+      - 'orchestrator/test/creative-media-products-view.test.ts'
       - 'orchestrator/test/affiliate-creative.test.ts'
       - 'orchestrator/test/media-providers.test.ts'
       - 'orchestrator/test/db/creative-media-products-pg.integration.test.ts'
@@ -46,7 +50,7 @@ jobs:
         run: npm --prefix orchestrator run typecheck
       - name: Affiliate intake and Creative Studio regressions
         working-directory: orchestrator
-        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/affiliate-creative.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
+        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/creative-media-products-view.test.ts test/affiliate-creative.test.ts test/media-providers.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
       - name: Apply exact schema only to disposable localhost PG
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
