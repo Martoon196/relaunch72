@@ -64,6 +64,14 @@ export function creativeOverviewPage(shell: Shell, data: {
   readonly generation?: Readonly<{ available: boolean; enabled: boolean; remaining: number }>;
   readonly productCatalogueEnabled?: boolean;
   readonly reportImportEnabled?: boolean;
+  readonly commerceSummary?: {
+    readonly products: number;
+    readonly latestReport: null | {
+      readonly start: string; readonly end: string;
+      readonly knownEarningsMinor: number; readonly unknownRows: number;
+      readonly unallocatedEarningsMinor: number;
+    };
+  };
   readonly productPrefill?: Pick<import('../creative-studio/media-product-pg-store.js').AffiliateMediaProductRecord, 'product_name' | 'merchant_name' | 'network'> | null;
   /** Milestone 5: general patterns the same person shared from their other brands (never evidence for this brand). */
   readonly otherPatterns?: readonly import('../creative-studio/learning.js').PatternRow[] | null;
@@ -71,11 +79,23 @@ export function creativeOverviewPage(shell: Shell, data: {
   const c = data.context, pre = data.prefill ?? new URLSearchParams();
   const productPrefill = data.productPrefill;
   const radios = (name: string, options: [string, string][], checked: string) => options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${e(v)}"${v === checked ? ' checked' : ''}> ${e(l)}</label>`).join('');
+  const fmtGBP = (p: number) => '£' + (p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const cs = data.commerceSummary;
+  const commerceDashboard = (data.productCatalogueEnabled || data.reportImportEnabled) && cs
+    ? '<section class="card"><h2>Affiliate Commerce</h2><div class="grid">'
+      + '<div><strong>' + cs.products + '</strong><div class="small muted">Products in private catalogue</div></div>'
+      + '<div><strong>' + (cs.latestReport ? fmtGBP(cs.latestReport.knownEarningsMinor) : '—') + '</strong>'
+      + '<div class="small muted">Known merchant-reported earnings' + (cs.latestReport ? ' · ' + e(cs.latestReport.start) + '–' + e(cs.latestReport.end) : '') + '</div></div>'
+      + '<div><strong>' + (cs.latestReport ? fmtGBP(cs.latestReport.unallocatedEarningsMinor) : '—') + '</strong>'
+      + '<div class="small muted">Others / unallocated earnings</div></div>'
+      + '<div><strong>' + (cs.latestReport ? cs.latestReport.unknownRows : '—') + '</strong>'
+      + '<div class="small muted">Earnings rows unknown (not zero)</div></div>'
+      + '</div><p class="small muted">Last imported report only; overlapping reports are not summed. No product-specific sales attribution is assumed.</p></section>' : '';
   const catalogue = data.productCatalogueEnabled
     ? '<p><a class="button secondary" href="'+base(shell)+'/products">Manage affiliate products</a></p>' : '';
   const reports = data.reportImportEnabled
     ? '<p><a class="button secondary" href="'+base(shell)+'/reports">Import Amazon earnings reports</a></p>' : '';
-  const form = `<section class="card" aria-labelledby="new-h">${catalogue}${reports}<h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
+  const form = `${commerceDashboard}<section class="card" aria-labelledby="new-h">${catalogue}${reports}<h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
 <form class="cs-form" method="post" action="${base(shell)}/draft" enctype="multipart/form-data">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.commandId)}">
 ${pre.get('brief') ? '<p class="notice small">Pre-filled from a campaign proposal concept. Model-written copy is checked against approved facts like any brief.</p>' : ''}<fieldset><legend>1 · What is it for?</legend><div class="choice">${radios('purpose', CREATIVE_PURPOSES.map((p) => [p, PURPOSE_LABELS[p]]), productPrefill ? 'product_promotion' : CREATIVE_PURPOSES.includes(pre.get('purpose') as never) ? pre.get('purpose')! : 'advert')}</div></fieldset>
 <fieldset><legend>2 · What is it about?</legend><div class="choice">${radios('source_kind', [['offer', 'An approved offer'], ['article', 'An article'], ['brief', 'A short brief'], ['affiliate_product', 'An affiliate product (manual review required)']], (productPrefill || pre.get('source_kind') === 'affiliate_product') ? 'affiliate_product' : pre.get('source_kind') === 'brief' || !c.offers.length ? 'brief' : 'offer')}</div>
