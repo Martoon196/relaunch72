@@ -108,5 +108,5 @@ jobs:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts test/db/creative-media-products-pg.integration.test.ts test/db/creative-media-output-review-pg.integration.test.ts test/db/creative-media-local-render-pg.integration.test.ts
-      - name: Full canonical orchestrator test suite (all email protections and follow-up tests)
-        run: npm --prefix orchestrator test
+      - name: Full canonical npm test suite (all email protections, bounded test concurrency)
+        run: npm --prefix orchestrator test -- --test-concurrency=2
