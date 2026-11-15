@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   VizardVideoProvider, ShotstackVideoProvider, MediaProviderError,
-  validateMediaAdmission, assertShotstackEdit, type VerifiedMediaAdmission,
+  validateMediaAdmission, assertShotstackEdit, mediaRequestDigests, type VerifiedMediaAdmission,
   type ClipJobRequest, type RenderJobRequest,
 } from '../src/creative-studio/media-providers.js';
 
@@ -15,6 +15,7 @@ const permit=(kind:'vizard_clip'|'shotstack_render'):VerifiedMediaAdmission=>({
   kind,approvedBy:actor,approvedAt:'2026-11-15T10:00:00.000Z',
   reservedCostMicrousd:1000000,validUntil:'2099-11-15T10:00:00.000Z',
   state:'reserved',
+  ...mediaRequestDigests(kind==='vizard_clip'?youtube:renderReq),
 });
 const rights={rights:'owned' as const,evidenceRef:'owner-upload-provenance-17'};
 const youtube:ClipJobRequest={
@@ -23,7 +24,7 @@ const youtube:ClipJobRequest={
 };
 const edit={timeline:{tracks:[{clips:[{asset:{type:'title',text:'Hi'},start:0,length:4}]}]},output:{format:'mp4'}};
 const renderReq:RenderJobRequest={
-  workspaceId:workspace,commandId:command,edit,
+  workspaceId:workspace,commandId:command,edit,rights,
   reviewedEditSha256:createHash('sha256').update(JSON.stringify(edit)).digest('hex'),
 };
 

@@ -7,10 +7,10 @@ const uuid=(part:string)=>'11111111-1111-4111-8111-'+part;
 const ws=uuid('111111111111'), cmd=uuid('222222222222'),jobId=uuid('333333333333'), reviewer=uuid('444444444444');
 
 test('database worker claim converts into scoped short-lived provider admission',()=>{
-  const claim={id:jobId,claimToken:uuid('555555555555'),kind:'vizard_clip' as const,
+  const claim={id:jobId,claimToken:uuid('555555555555'),commandId:cmd,kind:'vizard_clip' as const,
     payloadSha:'a'.repeat(64),rightsSha:'b'.repeat(64),reservedMicrousd:500000,
     approvedBy:reviewer,approvedAt:'2026-11-15T10:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z'};
-  const admission=providerAdmission(claim,ws,cmd);
+  const admission=providerAdmission(claim,ws);
   assert.equal(admission.workspaceId,ws);
   assert.equal(admission.reservedCostMicrousd,500000);
   assert.equal(admission.approvedBy,reviewer);

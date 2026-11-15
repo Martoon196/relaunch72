@@ -25,6 +25,9 @@ export interface VerifiedMediaAdmission {
   readonly reservedCostMicrousd: number;
   readonly validUntil: string;
   readonly state: 'reserved';
+  /** Immutable database-approved exact request and source-rights digests. */
+  readonly payloadSha256: string;
+  readonly rightsSha256: string;
 }
 export interface SourceRight {
   /** Signed-in owner has supplied evidence, or an owned private upload was verified. */
@@ -46,6 +49,8 @@ export interface RenderJobRequest {
   readonly workspaceId: string;
   readonly commandId: string;
   readonly edit: Readonly<Record<string, unknown>>;
+  /** Rights for every supplied edit asset; bound to the immutable owner approval. */
+  readonly rights: SourceRight;
   /** SHA256 of the exact approved edit payload, checked against the latest saved version. */
   readonly reviewedEditSha256: string;
 }
@@ -93,6 +98,19 @@ const json = async (response:Response):Promise<Record<string,unknown>>=>{
 const str=(v:unknown):string=>typeof v==='string'?v:'';
 const numeric=(v:unknown):number|null=>typeof v==='number'&&Number.isFinite(v)?v:null;
 
+export function mediaRequestDigests(request: ClipJobRequest | RenderJobRequest): {payloadSha256:string;rightsSha256:string} {
+  if (!request.rights || !['owned','licensed'].includes(request.rights.rights)
+    || typeof request.rights.evidenceRef !== 'string' || !request.rights.evidenceRef.trim())
+    throw new MediaProviderError('source','Verified media source rights are required');
+  return {payloadSha256:sha(JSON.stringify(request)), rightsSha256:sha(JSON.stringify(request.rights))};
+}
+
+export function assertExactMediaJob(request:ClipJobRequest|RenderJobRequest, admission:VerifiedMediaAdmission):void {
+  const actual=mediaRequestDigests(request);
+  if(actual.payloadSha256!==admission.payloadSha256 || actual.rightsSha256!==admission.rightsSha256)
+    throw new MediaProviderError('admission','Media payload or source-rights evidence changed since owner approval');
+}
+
 export function validateMediaAdmission(
   record: VerifiedMediaAdmission,
   workspaceId: string,
@@ -104,6 +122,8 @@ export function validateMediaAdmission(
     record.workspaceId!==workspaceId || record.commandId!==commandId ||
     !UUID.test(record.receiptId) || !UUID.test(record.approvedBy) ||
     !Number.isSafeInteger(record.reservedCostMicrousd)||record.reservedCostMicrousd<=0 ||
+    !/^[a-f0-9]{64}$/u.test(record.payloadSha256) ||
+    !/^[a-f0-9]{64}$/u.test(record.rightsSha256) ||
     !Number.isFinite(Date.parse(record.approvedAt)) ||
     !(Date.parse(record.approvedAt)<=now.getTime()) ||
     !(Date.parse(record.validUntil)>now.getTime())) {
@@ -150,6 +170,7 @@ export class VizardVideoProvider {
   async submit(req:ClipJobRequest,reservation:VerifiedMediaAdmission):Promise<string>{
     if(!this.configured)throw new MediaProviderError('disabled','Vizard video processing is disabled');
     validateMediaAdmission(reservation,req.workspaceId,req.commandId,'vizard_clip');
+    assertExactMediaJob(req,reservation);
     const source=clipSource(req);
     if(!req.projectName.trim()||req.projectName.length>120)throw new MediaProviderError('request','Project name required');
     const payload={lang:'en',preferLength:[0],videoUrl:req.sourceUrl,videoType:source.videoType,
@@ -201,6 +222,7 @@ export class ShotstackVideoProvider {
   async submit(req:RenderJobRequest,reservation:VerifiedMediaAdmission):Promise<string>{
     if(!this.configured)throw new MediaProviderError('disabled','Shotstack video rendering is disabled');
     validateMediaAdmission(reservation,req.workspaceId,req.commandId,'shotstack_render');
+    assertExactMediaJob(req,reservation);
     assertShotstackEdit(req);
     let response:Response;
     try{response=await this.http(this.api,{

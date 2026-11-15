@@ -30,6 +30,7 @@ export interface MediaJobSummary {
 export interface ClaimedMediaJob {
   readonly id:string;
   readonly claimToken:string;
+  readonly commandId:string;
   readonly kind:MediaWorkKind;
   readonly payloadSha:string;
   readonly rightsSha:string;
@@ -39,15 +40,17 @@ export interface ClaimedMediaJob {
   readonly validUntil:string;
 }
 /** Constructed from PostgreSQL output only after a valid worker lease claim. */
-export function providerAdmission(job:ClaimedMediaJob,workspaceId:string,commandId:string):VerifiedMediaAdmission {
+export function providerAdmission(job:ClaimedMediaJob,workspaceId:string):VerifiedMediaAdmission {
   if(!UUID.test(job.id)||!UUID.test(job.approvedBy)||!UUID.test(job.claimToken)
-    ||!UUID.test(workspaceId)||!UUID.test(commandId)
+    ||!UUID.test(workspaceId)||!UUID.test(job.commandId)
+    ||!SHA.test(job.payloadSha)||!SHA.test(job.rightsSha)
     ||!Number.isSafeInteger(job.reservedMicrousd)||job.reservedMicrousd<=0)
     throw new SeoBlogError(403,'Invalid video job lease');
   return Object.freeze({
-    receiptId:job.id,workspaceId,commandId,kind:job.kind,approvedBy:job.approvedBy,
+    receiptId:job.id,workspaceId,commandId:job.commandId,kind:job.kind,approvedBy:job.approvedBy,
     approvedAt:job.approvedAt,reservedCostMicrousd:job.reservedMicrousd,
     validUntil:job.validUntil,state:'reserved' as const,
+    payloadSha256:job.payloadSha,rightsSha256:job.rightsSha,
   });
 }
 export class PgVideoAdmissionOwner {

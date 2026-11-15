@@ -159,20 +159,24 @@ BEGIN
       claim_until=clock_timestamp()+interval '10 minutes',updated_at=clock_timestamp()
       WHERE workspace_id=p_workspace AND id=p_job RETURNING * INTO j;
     INSERT INTO app.creative_media_video_events(workspace_id,job_id,event) VALUES(p_workspace,p_job,'claimed');
-    RETURN jsonb_build_object('id',j.id,'claimToken',j.claim_token,'kind',j.kind,
+    RETURN jsonb_build_object('id',j.id,'claimToken',j.claim_token,'commandId',j.command_id,'kind',j.kind,
       'payloadSha',j.exact_payload_sha256,'rightsSha',j.rights_evidence_sha256,
       'reservedMicrousd',j.reserved_microusd,'approvedBy',j.created_by,
       'approvedAt',j.created_at,'validUntil',j.claim_until);
   END IF;
   IF p_claim IS NULL OR p_claim IS DISTINCT FROM j.claim_token OR j.claim_until<=clock_timestamp()
-    OR j.state NOT IN ('claimed','submitted','outcome_unknown') THEN
+    OR j.state NOT IN ('claimed','submitted') THEN
     RAISE EXCEPTION 'Current claimed job lease required' USING ERRCODE='42501'; END IF;
   next_state:=CASE p_action WHEN 'submitted' THEN 'submitted'
     WHEN 'completed' THEN 'completed' WHEN 'failed' THEN 'failed'
     WHEN 'outcome_unknown' THEN 'outcome_unknown' ELSE NULL END;
   IF next_state IS NULL OR (next_state='submitted' AND (p_provider_id IS NULL OR length(p_provider_id) NOT BETWEEN 3 AND 160))
     OR (next_state='completed' AND (p_cost IS NULL OR p_cost<0))
-    OR (p_cost IS NOT NULL AND p_cost>1000000000000) THEN
+    OR (p_cost IS NOT NULL AND p_cost>1000000000000)
+    OR (next_state='submitted' AND j.state<>'claimed')
+    OR (next_state='completed' AND (j.state<>'submitted' OR p_cost>j.reserved_microusd))
+    OR (next_state='failed' AND j.state NOT IN ('claimed','submitted'))
+    OR (next_state='outcome_unknown' AND j.state NOT IN ('claimed','submitted')) THEN
     RAISE EXCEPTION 'Invalid worker transition' USING ERRCODE='22023'; END IF;
   -- Unknown outcome does not refund or automatically repeat a potentially charged call.
   UPDATE app.creative_media_video_jobs SET state=next_state,
