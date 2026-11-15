@@ -169,6 +169,8 @@ export function dashboardPage(d: DashboardData, billing?: BillingView): string {
       <div class="kpi"><div class="n">${ads}</div><div class="l">ad drafts (paused)</div></div>
     </div>
 
+    <div class="box" style="border-color:var(--amber);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap"><div><h3>🎬 RL72 AI Media Studio</h3><div class="s">Affiliate video campaigns · AI scripts · authorised clips · video editing · human approvals</div></div><a class="btn" style="text-decoration:none;background:var(--amber);color:#141d2a" href="/portal/studio">Open Media Studio →</a></div>
+
     <div class="grid">
       <main>
         <div class="box"><h3>Your pipeline</h3><div class="s">contacts by stage</div><div class="pipe">${pipe}</div></div>
