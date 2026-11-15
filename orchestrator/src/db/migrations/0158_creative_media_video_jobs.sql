@@ -95,10 +95,10 @@ BEGIN
     RAISE EXCEPTION 'Owner session required' USING ERRCODE='42501'; END IF;
   actor:=app_private.seo_media_owner(p_workspace,p_session);
   IF p_action='list' THEN
-    RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'kind',kind,'state',state,
-      'reservedMicrousd',reserved_microusd,'actualMicrousd',actual_microusd,
-      'createdAt',created_at) ORDER BY created_at DESC)
-      FROM app.creative_media_video_jobs WHERE workspace_id=p_workspace),'[]'::jsonb);
+    RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('id',j.id,'kind',j.kind,'state',j.state,
+      'reservedMicrousd',j.reserved_microusd,'actualMicrousd',j.actual_microusd,
+      'createdAt',j.created_at) ORDER BY j.created_at DESC)
+      FROM app.creative_media_video_jobs j WHERE j.workspace_id=p_workspace),'[]'::jsonb);
   END IF;
   IF p_action<>'reserve' OR p_input IS NULL OR jsonb_typeof(p_input)<>'object'
     OR octet_length(p_input::text)>4096 OR p_input->>'consent' IS DISTINCT FROM 'true'
