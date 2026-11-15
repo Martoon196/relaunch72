@@ -12,6 +12,7 @@ import { PgCreativeMediaProductStore, type AffiliateMediaProductInput } from '..
 import { fixtureBrand } from '../rl72-method-fixtures.js';
 import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report-pg-store.js';
 import { PgVideoAdmissionOwner, PgVideoAdmissionWorker } from '../../src/creative-studio/media-admission-pg-store.js';
+import { mediaRequestDigests } from '../../src/creative-studio/media-providers.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -114,8 +115,12 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const owner=new PgVideoAdmissionOwner(content,a.principal);
       const crossed=new PgVideoAdmissionOwner(content,b.principal);
       const commandId=randomUUID(),jobId=randomUUID();
+      const mediaRequest={workspaceId:a.brand.id,commandId,
+        sourceUrl:'https://www.youtube.com/watch?v=owned-video',durationSeconds:120,
+        projectName:'Owned source for verified clipping',rights:{rights:'owned' as const,evidenceRef:'private-asset-001'}};
+      const digests=mediaRequestDigests(mediaRequest);
       const request={workspaceId:a.brand.id,commandId,jobId,kind:'vizard_clip' as const,
-        payloadSha:'a'.repeat(64),rightsSha:'b'.repeat(64),estimatedMicrousd:500000,consent:true};
+        request:mediaRequest,estimatedMicrousd:500000,consent:true};
       await assert.rejects(owner.reserve(request),/disabled|budget/iu);
       assert.deepEqual(await owner.list(a.brand.id),[]);
       await assert.rejects(crossed.list(a.brand.id),/session|owner|permission/iu);
@@ -136,8 +141,9 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const claim=await worker.claim(a.brand.id,jobId);
       assert.equal(claim.id,jobId);
       assert.equal(claim.commandId,commandId);
-      assert.equal(claim.payloadSha,'a'.repeat(64));
-      assert.equal(claim.rightsSha,'b'.repeat(64));
+      assert.equal(claim.payloadSha,digests.payloadSha256);
+      assert.equal(claim.rightsSha,digests.rightsSha256);
+      assert.deepEqual(JSON.parse(claim.reviewedRequestJson),mediaRequest);
       await assert.rejects(worker.claim(a.brand.id,jobId),/not available/iu);
       await assert.rejects(worker.completed(a.brand.id,jobId,claim.claimToken,100000),/Invalid worker transition/iu);
       const sent=await worker.submitted(a.brand.id,jobId,claim.claimToken,'vizard-job-1234');

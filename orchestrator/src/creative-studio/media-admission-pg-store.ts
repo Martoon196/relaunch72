@@ -10,7 +10,10 @@ import type { Pool } from 'pg';
 import { withTransaction } from '../db/transaction.js';
 import type { PgSeoBlogPrincipal } from '../seo-blog/pg-store.js';
 import { SeoBlogError } from '../seo-blog/types.js';
-import type { VerifiedMediaAdmission, MediaWorkKind } from './media-providers.js';
+import {
+  mediaRequestDigests, assertShotstackEdit, assertClipSource,
+  type VerifiedMediaAdmission, type MediaWorkKind, type ClipJobRequest, type RenderJobRequest,
+} from './media-providers.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA = /^[a-f0-9]{64}$/u;
@@ -31,6 +34,8 @@ export interface ClaimedMediaJob {
   readonly id:string;
   readonly claimToken:string;
   readonly commandId:string;
+  /** Exact immutable request string, read from the SQL owner-approved job. */
+  readonly reviewedRequestJson:string;
   readonly kind:MediaWorkKind;
   readonly payloadSha:string;
   readonly rightsSha:string;
@@ -84,18 +89,26 @@ export class PgVideoAdmissionOwner {
   list(workspaceId:string):Promise<MediaJobSummary[]> {return this.command(workspaceId,'list',{});}
   reserve(input:{
     workspaceId:string;commandId?:string;jobId?:string;kind:MediaWorkKind;
-    payloadSha:string;rightsSha:string;estimatedMicrousd:number;consent:boolean;
+    request:ClipJobRequest|RenderJobRequest;
+    estimatedMicrousd:number;consent:boolean;
   }):Promise<ReservedMediaJob>{
-    const commandId=input.commandId??randomUUID(),jobId=input.jobId??randomUUID();
+    const commandId=input.commandId??input.request.commandId,jobId=input.jobId??randomUUID();
     if(!UUID.test(commandId)||!UUID.test(jobId)||
       !['vizard_clip','shotstack_render'].includes(input.kind)||
-      !SHA.test(input.payloadSha)||!SHA.test(input.rightsSha)||
+      input.request.workspaceId!==input.workspaceId||input.request.commandId!==commandId||
       !Number.isSafeInteger(input.estimatedMicrousd)||input.estimatedMicrousd<=0||
       input.estimatedMicrousd>1_000_000_000_000||input.consent!==true)
       throw new SeoBlogError(400,'Reviewed media, rights, explicit consent and valid cost are required');
+    if(input.kind==='vizard_clip')assertClipSource(input.request as ClipJobRequest);
+    else assertShotstackEdit(input.request as RenderJobRequest);
+    const digests=mediaRequestDigests(input.request);
+    const requestJson=JSON.stringify(input.request),rightsJson=JSON.stringify(input.request.rights);
+    if(Buffer.byteLength(requestJson,'utf8')>12000)
+      throw new SeoBlogError(400,'Reviewed media request exceeds the safe storage limit');
     return this.command(input.workspaceId,'reserve',{
-      commandId,jobId,kind:input.kind,payloadSha:input.payloadSha,
-      rightsSha:input.rightsSha,estimatedMicrousd:String(input.estimatedMicrousd),consent:true,
+      commandId,jobId,kind:input.kind,payloadSha:digests.payloadSha256,
+      rightsSha:digests.rightsSha256,requestJson,rightsJson,
+      estimatedMicrousd:String(input.estimatedMicrousd),consent:true,
     });
   }
 }

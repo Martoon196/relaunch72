@@ -14,6 +14,7 @@ function rig(mode:'ok'|'timeout'|'disabled'|'receipt-failed'='ok',changeRequest=
   const events:string[]=[];
   const digests=mediaRequestDigests(request);
   const claim={id:job,commandId:command,claimToken:token,kind:'vizard_clip' as const,
+    reviewedRequestJson:JSON.stringify(request),
     payloadSha:changeRequest?'a'.repeat(64):digests.payloadSha256,rightsSha:digests.rightsSha256,
     reservedMicrousd:500000,approvedBy:id('555555555555'),
     approvedAt:'2026-11-15T10:00:00Z',validUntil:'2099-01-01T00:00:00Z'};
@@ -35,7 +36,7 @@ function rig(mode:'ok'|'timeout'|'disabled'|'receipt-failed'='ok',changeRequest=
 }
 test('claim, verify SHA256 and submit exactly once with SQL receipt',async()=>{
   const {events,ports}=rig();
-  assert.deepEqual(await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports),
+  assert.deepEqual(await submitApprovedMediaJob(workspace,job,ports),
     {state:'submitted',jobId:job,providerJobId:'1234567'});
   assert.deepEqual(events,['claim','provider','submitted']);
   await assert.rejects(submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports),/already claimed/);
@@ -66,7 +67,11 @@ test('accepted provider response with lost database receipt is NOT resubmitted',
 });
 test('worker refuses wrong tenant and request digest before calling any provider',async()=>{
   const {events,ports}=rig();
-  const wrong={...request,workspaceId:id('999999999999')};
-  assert.equal((await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request:wrong},ports)).state,'failed');
+  const originalClaim=ports.ledger.claim;
+  ports.ledger.claim=async(...args)=>{
+    const stored=await originalClaim(...args);
+    return {...stored, reviewedRequestJson:JSON.stringify({...request,workspaceId:id('999999999999')})};
+  };
+  assert.equal((await submitApprovedMediaJob(workspace,job,ports)).state,'failed');
   assert.deepEqual(events,['claim','failed']);
 });

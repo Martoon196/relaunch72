@@ -130,6 +130,7 @@ export function validateMediaAdmission(
     throw new MediaProviderError('admission', 'A current, same-workspace reviewed paid-media reservation is required');
   }
 }
+export function assertClipSource(req:ClipJobRequest):void { clipSource(req); }
 function clipSource(req:ClipJobRequest):{videoType:1|2;ext?:string} {
   if(!['owned','licensed'].includes(req.rights.rights) ||
     !req.rights.evidenceRef.trim() || req.rights.evidenceRef.length>1000)

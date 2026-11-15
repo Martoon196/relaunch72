@@ -27,6 +27,18 @@ export type MediaSubmissionOutcome =
   | Readonly<{state:'submitted';jobId:string;providerJobId:string}>
   | Readonly<{state:'failed'|'outcome_unknown';jobId:string;reason:string}>;
 
+function reviewedSubmission(claim:ClaimedMediaJob):MediaSubmission {
+  let request:unknown;
+  try{request=JSON.parse(claim.reviewedRequestJson);}catch{
+    throw new MediaProviderError('admission','Reviewed request is missing or corrupt');
+  }
+  if(!request || typeof request!=='object' || Array.isArray(request))
+    throw new MediaProviderError('admission','Reviewed request must be a stored object');
+  // No caller-supplied plan: the SQL claim contains the exact owner-reviewed bytes.
+  return claim.kind==='vizard_clip'
+    ?{kind:'vizard_clip',request:request as ClipJobRequest}
+    :{kind:'shotstack_render',request:request as RenderJobRequest};
+}
 function checkClaim(claim:ClaimedMediaJob,workspaceId:string, submission:MediaSubmission):void {
   if (claim.kind!==submission.kind || submission.request.workspaceId!==workspaceId)
     throw new MediaProviderError('admission','Video request does not match the workspace lease and kind');
@@ -36,18 +48,19 @@ function checkClaim(claim:ClaimedMediaJob,workspaceId:string, submission:MediaSu
 }
 
 /**
- * Never call this from an HTTP route; the source plan MUST come from the
- * owner's reviewed immutable request record (not a new client JSON body).
+ * Never call this from an HTTP route; the plan is loaded from the atomic
+ * SQL claim of the owner's immutable reviewed request, not new client JSON.
  * After a transport attempt all ambiguous failures hold the reservation for
  * operator reconciliation, so repeated worker invocations cannot double spend.
  */
 export async function submitApprovedMediaJob(
-  workspaceId:string,jobId:string,submission:MediaSubmission,
+  workspaceId:string,jobId:string,
   ports:MediaSubmissionPorts,
 ):Promise<MediaSubmissionOutcome> {
-  let claim:ClaimedMediaJob;
-  claim=await ports.ledger.claim(workspaceId,jobId); // SQL refuses duplicate claims.
+  const claim=await ports.ledger.claim(workspaceId,jobId); // SQL refuses duplicate claims.
+  let submission:MediaSubmission;
   try {
+    submission=reviewedSubmission(claim);
     checkClaim(claim,workspaceId,submission);
   } catch(error) {
     // No provider call was made. A tampered/stale plan cannot be substituted.
