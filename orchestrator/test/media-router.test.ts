@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
+import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { MediaEngine } from '../src/media/engine.js';
@@ -16,7 +17,7 @@ function request(method:string,url:string,body?:unknown,csrf?:string) {
   };
   req.method=method;req.url=url;
   req.headers={'content-type':'application/json',...(csrf?{'x-rl72-csrf':csrf}:{})};
-  return req;
+  return req as unknown as IncomingMessage;
 }
 function response() {
   return {
