@@ -11,7 +11,7 @@ import { PgSeoBlogStore } from '../../src/seo-blog/pg-store.js';
 import { PgCreativeMediaProductStore, type AffiliateMediaProductInput } from '../../src/creative-studio/media-product-pg-store.js';
 import { fixtureBrand } from '../rl72-method-fixtures.js';
 import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report-pg-store.js';
-import { PgVideoAdmissionOwner } from '../../src/creative-studio/media-admission-pg-store.js';
+import { PgVideoAdmissionOwner, PgVideoAdmissionWorker } from '../../src/creative-studio/media-admission-pg-store.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -129,6 +129,24 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       await assert.rejects(owner.reserve({...request,commandId:randomUUID(),jobId:randomUUID()}),/budget|cap/iu);
       assert.equal((await owner.list(a.brand.id)).length,1);
       assert.deepEqual(await crossed.list(b.brand.id),[]);
+      // SQL worker leases are single-claim; only submitted jobs can settle,
+      // unknowns cannot be resubmitted and final cost cannot exceed reserve.
+      const worker=new PgVideoAdmissionWorker(admin,'creative-media-real-pg-worker');
+      await assert.rejects(worker.claim(b.brand.id,jobId),/not found/iu);
+      const claim=await worker.claim(a.brand.id,jobId);
+      assert.equal(claim.id,jobId);
+      assert.equal(claim.commandId,commandId);
+      assert.equal(claim.payloadSha,'a'.repeat(64));
+      assert.equal(claim.rightsSha,'b'.repeat(64));
+      await assert.rejects(worker.claim(a.brand.id,jobId),/not available/iu);
+      await assert.rejects(worker.completed(a.brand.id,jobId,claim.claimToken,100000),/Invalid worker transition/iu);
+      const sent=await worker.submitted(a.brand.id,jobId,claim.claimToken,'vizard-job-1234');
+      assert.equal(sent.state,'submitted');
+      await assert.rejects(worker.submitted(a.brand.id,jobId,claim.claimToken,'vizard-job-1234'),/Invalid worker transition/iu);
+      await assert.rejects(worker.completed(a.brand.id,jobId,claim.claimToken,600000),/Invalid worker transition/iu);
+      const unknown=await worker.unknown(a.brand.id,jobId,claim.claimToken);
+      assert.equal(unknown.state,'outcome_unknown');
+      await assert.rejects(worker.submitted(a.brand.id,jobId,claim.claimToken,'vizard-job-1234'),/lease required/iu);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
