@@ -18,7 +18,7 @@ import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
 import { SeoBlogError } from './types.js';
-import { cleanProvenance, holdConflictedPrices, nothingVerifiable, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
+import { cleanProvenance, holdConflictedPrices, nothingVerifiable, repairProfileFacts, strictProfileProblems, writingOffers, writingProfile } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
 import {decodeArticleOutput} from './article-output.js';
@@ -298,7 +298,7 @@ export async function extractProfile(llm: LlmClient, input: {
   let leftOut: readonly ProfileLeftOut[] = [];
   let refusal: 'nothing_clear' | 'unrepairable' | null = null;
   const repair = (v: ExtractedProfile): ExtractedProfile | null => {
-    const fixed = repairProfileFacts(knownProfileFields(v), docs);
+    const fixed = repairProfileFacts(knownProfileFields(v), docs, { website: input.website });
     if (!fixed) { refusal = 'unrepairable'; return null; }
     const pages = fixed.value.conversionPages.filter((p) => /^https:\/\//.test(p.url));
     const links = fixed.value.conversionPages.filter((p) => !pages.includes(p)).map((p): ProfileLeftOut => ({ what: 'link', text: String(p.url ?? '').slice(0, 300) }));
@@ -318,7 +318,7 @@ export async function extractProfile(llm: LlmClient, input: {
       validate: (v) => [
         ...v.offers.filter((o) => o.price && (!o.sourceDocumentId || !ids.has(o.sourceDocumentId))).map((o) => `offer "${o.name}" has a price without a valid sourceDocumentId`),
         ...v.conversionPages.filter((p) => !/^https:\/\//.test(p.url)).map((p) => `conversion page ${p.url} is not an absolute https URL`),
-        ...(input.strict ? strictProfileProblems(v, docs) : []),
+        ...(input.strict ? strictProfileProblems(v, docs, { website: input.website }) : []),
       ],
       ...(input.strict ? { repair, repairSchema: PROFILE_REPAIRED_SCHEMA } : {}),
     });
@@ -406,12 +406,12 @@ export function researchForPrompt(short:Map<string,ResearchSource>):unknown[] {
     retrievedAt:s.retrievedAt,publishedAt:s.publishedAt??null,observedPeriod:s.observedPeriod??null,confidence:s.confidence??'unknown'}));
 }
 
+/**
+ * The brand profile as every writing prompt receives it: exactly `writingProfile`'s allowlist, nothing else.
+ * `missingFacts`, conflict wording, sources, what was left out and unchecked links never reach a writer.
+ */
 export function profileForPrompt(profile: BrandProfile): Record<string, unknown> {
-  return {
-    summary: profile.summary, audiences: profile.audiences, positioning: profile.positioning, offers: profile.offers,
-    conversionPages: profile.conversionPages, voice: profile.voice, approvedClaims: profile.approvedClaims,
-    exclusions: profile.exclusions, unresolvedConflicts: profile.conflicts, missingFacts: profile.missingFacts,
-  };
+  return writingProfile(profile);
 }
 
 export async function proposeCluster(llm: LlmClient, input: {
@@ -434,7 +434,7 @@ export async function proposeCluster(llm: LlmClient, input: {
     maxTokens: 16000,
     ...(methodRunFor(llm)?.structuredPlanning?{correctionUser:[
       `Brand: ${input.brandName}`,
-      dataBlock('brand_profile',{...correctionProfile,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:input.profile.offers.map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))}),
+      dataBlock('brand_profile',{...correctionProfile,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))}),
       dataBlock('website_inventory',[...inventoryUrls].map(url=>({url}))),ownerInputs,
     ].join('\n\n')}:{}),
     user: [
@@ -525,7 +525,7 @@ export async function writeArticle(llm: LlmClient, input: {
   const allowedLinks = new Set([...input.linkable.map((l) => l.url),...linkable.map(l=>l.url), ...input.sources.map((s) => s.url)]);
   const structured=methodRunFor(llm)?.structuredArticle;
   const {approvedClaims:_claims,offers:_offers,...profileRest}=profileForPrompt(input.profile);
-  const referencedProfile={...profileRest,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:input.profile.offers.map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))};
+  const referencedProfile={...profileRest,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:writingOffers(input.profile).map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))};
   const brief=dataBlock('brief',{
     role:input.brief.role,working_title:input.brief.workingTitle,target_query:input.brief.targetQuery,
     search_intent:input.brief.searchIntent,related_questions:input.brief.relatedQuestions,angle:input.brief.angle,

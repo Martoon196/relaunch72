@@ -51,7 +51,7 @@ function seedSite(h: Harness, options: { pricing?: string; home?: string; head?:
 interface ModelDoc { id: string; title: string; text: string; page?: string }
 type CardScript = (docs: ModelDoc[], attempt: number) => Record<string, unknown>;
 
-/** A card that quotes its sources word for word, as the strict path requires. */
+/** A card that quotes its sources word for word, as the strict path requires. These pages state no "never say" line, so it gives none. */
 const honestCard: CardScript = (docs) => {
   const priced = docs.find((d) => /Quay Compliance Plan costs £\d+ per month/.test(d.text));
   const price = priced ? /Quay Compliance Plan costs (£\d+ per month)/.exec(priced.text)![1]! : null;
@@ -61,7 +61,7 @@ const honestCard: CardScript = (docs) => {
     summary: 'Quay Lettings helps private landlords in Kent stay compliant.', audiences: ['Private landlords in Kent'], positioning: 'Plain-English compliance help.',
     offers: priced ? [{ name: 'Quay Compliance Plan', description: 'Monthly compliance support', price, url: null, sourceDocumentId: priced.id }] : [],
     conversionPages: [], voice: { tone: ['plain', 'reassuring'], do: ['Explain rules simply'], dont: ['Jargon'], examples: [] },
-    approvedClaims: ['We help landlords in Kent'], exclusions: ['Tax advice'], conflicts: [], missingFacts: ['A named author'],
+    approvedClaims: ['We help landlords in Kent'], exclusions: [], conflicts: [], missingFacts: ['A named author'],
     sources: [
       { field: 'audience', value: 'Private landlords in Kent', documentId: who.id, quote: 'private landlords in Kent' },
       { field: 'claim', value: 'We help landlords in Kent', documentId: claim.id, quote: 'We help landlords in Kent' },

@@ -208,7 +208,7 @@ export interface ProfileFactSource {
  * Kept so the owner is told plainly what is missing and can add it themselves. Never sent to any writing step.
  */
 export interface ProfileLeftOut {
-  readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'summary' | 'positioning' | 'voice' | 'voice_dont' | 'link';
+  readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'summary' | 'positioning' | 'voice' | 'voice_dont' | 'link' | 'exclusion';
   /** The offer name, audience, claim, question or removed words, as the model gave them. Untrusted: always escaped. */
   readonly text: string;
 }

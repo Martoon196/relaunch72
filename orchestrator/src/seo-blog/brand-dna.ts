@@ -7,8 +7,13 @@
  * here calls a model, the network or the database.
  *
  * "Nothing invented" is enforced here, not asked for politely:
- *   - a price must appear word for word in the document it cites, on whole numbers ("£4" is not in "£49");
- *   - every audience and claim must quote a supplied document, and the quote must carry its key words and figures;
+ *   - a price must appear word for word in the document it cites, on whole numbers ("£4" is not in "£49"), and beside
+ *     that offer's own name (THE PRICE RULE), not anywhere on the page;
+ *   - every audience and claim must quote a supplied document that says the same thing (THE RULE): the same words, or
+ *     every content word in order, with no negation, strengthening word or number added or dropped;
+ *   - "never say" lines must be stated by a document, an offer link must be on the business's own site, and the model's
+ *     own notes (what it could not find, the wording of a question) carry no figure that is in no document;
+ *   - nothing unchecked reaches a writing step: `writingProfile` is the one list of what may;
  *   - differing prices for one offer are never settled by the machine, and the price stays empty until the owner chooses;
  *   - a settled choice takes its value from the stored card, never the browser;
  *   - pages read from the website are only held with the card task until a card built from them is saved.
@@ -161,14 +166,17 @@ function plain(text: string): string {
 
 /** `needle` sits in `hay` without cutting a number in half: "£4" is not in "£49", "£49" is not in "£499", "£49.99" or "£49k". */
 function foundWhole(hay: string, needle: string): boolean {
+  for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + 1)) if (wholeHere(hay, needle, at)) return true;
+  return false;
+}
+
+/** The test `foundWhole` makes at one position. */
+function wholeHere(hay: string, needle: string, at: number): boolean {
   // A needle ending "1," or "1." still ends inside a number when the text goes on with a digit: "£1," is not in "£1,500".
   const startsWithDigit = /^\d/.test(needle), endsWithDigit = /\d[.,]?$/.test(needle);
-  for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + 1)) {
-    if (startsWithDigit && /(?:\d|\d[.,])$/.test(hay.slice(Math.max(0, at - 2), at))) continue;
-    if (endsWithDigit && /^(?:\d|[.,]\d|\s?%|\s?(?:k|m|bn|thousand|million|billion)\b)/.test(hay.slice(at + needle.length, at + needle.length + 10))) continue;
-    return true;
-  }
-  return false;
+  if (startsWithDigit && /(?:\d|\d[.,])$/.test(hay.slice(Math.max(0, at - 2), at))) return false;
+  if (endsWithDigit && /^(?:\d|[.,]\d|\s?%|\s?(?:k|m|bn|thousand|million|billion)\b)/.test(hay.slice(at + needle.length, at + needle.length + 10))) return false;
+  return true;
 }
 
 /** True when `quote` appears in `text`, ignoring only case, spacing and typographic quote/dash variants. Numbers match whole. */
@@ -186,35 +194,103 @@ export function meaningfulQuote(quote: string | null | undefined): boolean {
 const sameValue = (a: string, b: string) => plain(a) === plain(b);
 const loose = (text: string) => plain(text).replace(/[^a-z0-9£]+/g, ' ').trim();
 
-const SMALL_WORDS = new Set(['about', 'across', 'also', 'and', 'any', 'are', 'been', 'being', 'both', 'but', 'can', 'each', 'every', 'for', 'from', 'had', 'has', 'have', 'her', 'his', 'into', 'its',
-  'just', 'more', 'most', 'not', 'only', 'our', 'out', 'over', 'such', 'than', 'that', 'the', 'their', 'them', 'then', 'these', 'they', 'this', 'those', 'too', 'very', 'was', 'were', 'what', 'when',
-  'which', 'who', 'whom', 'will', 'with', 'you', 'your']);
-const wordsOf = (text: string) => plain(text).split(/[^a-z0-9]+/).filter(Boolean);
+// ─── What a quote supports ───────────────────────────────────────────────────
+//
+// THE RULE (claims, audiences, and the documents' own "never say" lines):
+// `value` is supported by `quote` only when ALL of these hold:
+//   1. the quote is meaningful (at least twelve characters or three words);
+//   2. every figure in the value (as `figuresIn` reads it) appears in the quote on whole numbers, and every other number
+//      the value states (a single digit too) is a whole word of the quote;
+//   3. the value and the quote carry the same number of negation words (NEGATIONS below, plus any word ending "n't"),
+//      counted over the whole quote: "Not trusted by landlords" is not supported by "Trusted by 300 landlords", and
+//      "Trusted by landlords" is not supported by "We are not trusted by landlords";
+//   4. and either
+//      (a) the value's words appear in the quote as one unbroken run, ignoring case, punctuation and spacing; or
+//      (b) every content word of the value (any word that is not a FUNCTION_WORDS word, a negation, a strengthening
+//          word or a number) appears in the quote as the same word or a plain inflection of it (`stem`: plural,
+//          possessive, -ed, -ing; nothing else), in the same order; and, for an approved claim only, the
+//          strengthening words (STRENGTHENERS below) of the value and of the whole quote are exactly the same list.
+//          A value with no content word cannot use (b).
+// Anything else is unsupported, so the repair leaves it out and lists it for the owner to add by hand.
+// Audiences describe who the business serves rather than promise anything, so they skip only the strengthening check.
 
-/** The words that carry a fact's meaning: longer words first, short ones only when there is nothing else. */
-function keyWords(text: string): string[] {
-  const words = [...new Set(wordsOf(text).filter((w) => !SMALL_WORDS.has(w) && !/^\d+$/.test(w)))];
-  const long = words.filter((w) => w.length >= 4);
-  return long.length ? long : words.filter((w) => w.length >= 2);
+/** Small words that carry no fact on their own. Negations and strengthening words are never in this list. */
+const FUNCTION_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'from', 'with', 'into', 'onto', 'as', 'so', 'if', 'but', 'than', 'then',
+  'we', 'us', 'our', 'ours', 'you', 'your', 'yours', 'they', 'them', 'their', 'it', 'its', 'he', 'she', 'his', 'her', 'i', 'me', 'my',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am', 'has', 'have', 'had', 'do', 'does', 'did', 'can', 'will', 'would', 'could', 'should', 'may', 'might', 'shall',
+  'this', 'that', 'these', 'those', 'which', 'who', 'whom', 'whose', 'what', 'when', 'where', 'how', 'there', 'here', 'also', 'just', 'up', 'out', 'about', 'each', 'both']);
+/** Words that turn a statement round. Counted, not matched: "not" and "never" both count once. */
+const NEGATIONS = new Set(['not', 'no', 'never', 'none', 'nothing', 'nobody', 'nowhere', 'neither', 'nor', 'without', 'non', 'cannot']);
+/** Words that make a claim stronger or wider than a plain statement. "#1" and "100%" are read as single words. */
+const STRENGTHENERS = new Set(['guaranteed', 'guarantee', 'guarantees', 'guaranteeing', 'always', 'best', 'only', 'all', 'every', 'everyone', 'everybody', 'everything', 'everywhere',
+  '#1', '100%', 'leading', 'top', 'unbeatable', 'unrivalled', 'unrivaled', 'unmatched', 'unbeaten', 'ultimate', 'perfect', 'proven', 'certain', 'certainly', 'definitely', 'fully',
+  'completely', 'totally', 'entirely', 'absolutely', 'most', 'more', 'over', 'largest', 'biggest', 'cheapest', 'fastest', 'lowest', 'highest', 'first', 'risk-free', 'award-winning']);
+
+function tokens(text: string): string[] {
+  return plain(text).replace(/\bnumber one\b/g, '#1').replace(/\b100\s?(?:%|percent\b)/g, '100%')
+    .match(/#1\b|100%|[a-z0-9]+(?:['-][a-z0-9]+)*/g) ?? [];
+}
+const isNegation = (t: string) => NEGATIONS.has(t) || /n't$/.test(t);
+const isNumber = (t: string) => /^\d/.test(t);
+
+/** A plain inflection only: plural, possessive, -ed and -ing come off; nothing else is guessed ("compliance" is not "compliant"). */
+export function stem(word: string): string {
+  let w = word.replace(/'s$|'$/, '');
+  const undouble = (s: string) => /(bb|dd|gg|mm|nn|pp|rr|tt)$/.test(s) ? s.slice(0, -1) : s;
+  if (w.length > 4 && w.endsWith('ies')) w = `${w.slice(0, -3)}y`;
+  else if (w.length > 4 && /(?:ss|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2);
+  else if (w.length > 3 && w.endsWith('s') && !/(?:ss|us|is)$/.test(w)) w = w.slice(0, -1);
+  if (w.length > 5 && w.endsWith('ing')) w = undouble(w.slice(0, -3));
+  else if (w.length > 4 && w.endsWith('ed') && !w.endsWith('eed')) w = undouble(w.slice(0, -2));
+  return w.length > 3 ? w.replace(/e$/, '') : w;
 }
 
+const contentWords = (ts: readonly string[]) => ts.filter((t) => !FUNCTION_WORDS.has(t) && !isNegation(t) && !STRENGTHENERS.has(t) && !isNumber(t));
+const strengtheners = (ts: readonly string[]) => ts.filter((t) => STRENGTHENERS.has(t)).sort().join(' ');
+
+/** Rule (a): the value's words, as one unbroken run of the quote's words. */
+function wordRunIn(value: string, quote: string): boolean {
+  const v = tokens(value).join(' ');
+  return v.length >= 2 && ` ${tokens(quote).join(' ')} `.includes(` ${v} `);
+}
+
+/** Rule (b): every content word of the value, as itself or a plain inflection, in the same order in the quote. */
+function contentInOrder(value: string, quote: string): boolean {
+  const wanted = contentWords(tokens(value)).map(stem);
+  if (!wanted.length) return false;
+  const have = tokens(quote).map(stem);
+  let at = 0;
+  for (const w of wanted) { while (at < have.length && have[at] !== w) at++; if (at === have.length) return false; at++; }
+  return true;
+}
+
+export type SupportKind = 'claim' | 'audience';
+
 /**
- * Why `quote` does not support `value`, or null when it does. The quote must be long enough to mean something,
- * share at least two thirds of the fact's key words (by word stem) and contain every figure the fact states.
+ * Why `quote` does not support `value`, or null when it does. See THE RULE above. `kind` is 'claim' for an approved
+ * claim (the strengthening check applies) and 'audience' for an audience, a voice or offer source line, or a document's
+ * own "never say" line (it does not).
  */
-export function unsupportedBy(value: string, quote: string | null | undefined): string | null {
+export function unsupportedBy(value: string, quote: string | null | undefined, kind: SupportKind = 'claim'): string | null {
   if (!meaningfulQuote(quote)) return 'the quote is too short to support it (quote at least three words)';
-  for (const figure of figuresIn(value)) if (!appearsIn(quote, figure)) return `it states "${figure}", which the quote does not contain`;
-  const keys = keyWords(value);
-  if (!keys.length) return null;
-  const quoted = wordsOf(quote ?? '');
-  const hits = keys.filter((k) => quoted.some((q) => q.startsWith(k.slice(0, 5)))).length;
-  return hits >= Math.ceil((keys.length * 2) / 3) ? null : 'the quote does not use the same key words';
+  const q = quote ?? '';
+  for (const figure of figuresIn(value)) if (!appearsIn(q, figure)) return `it states "${figure}", which the quote does not contain`;
+  const vt = tokens(value), qt = tokens(q);
+  // Small numbers too ("5 homes"): every number the line states is a whole word of the quote.
+  for (const n of vt.filter(isNumber)) if (!qt.includes(n)) return `it states "${n}", which the quote does not contain`;
+  if (vt.filter(isNegation).length !== qt.filter(isNegation).length) return 'the quote and the line do not say "not", "no", "never" or "without" the same way';
+  if (wordRunIn(value, q)) return null;
+  if (!contentInOrder(value, q)) return 'the quote does not use the same key words in the same order';
+  if (kind === 'claim' && strengtheners(vt) !== strengtheners(qt)) return 'it adds or drops a word such as "guaranteed", "only", "all" or "best" compared with the quote';
+  return null;
 }
 
 /** The part of a profile these rules read. Structural so the extraction module can use it without a cycle. */
-export type ProfileFacts = Pick<BrandProfile, 'offers' | 'audiences' | 'approvedClaims' | 'conflicts' | 'missingFacts'> & Partial<Pick<BrandProfile, 'summary' | 'positioning' | 'voice'>> & { readonly sources?: readonly ProfileFactSource[] };
-type SourceText = Pick<KnowledgeDocument, 'id' | 'text'>;
+export type ProfileFacts = Pick<BrandProfile, 'offers' | 'audiences' | 'approvedClaims' | 'conflicts' | 'missingFacts'> & Partial<Pick<BrandProfile, 'summary' | 'positioning' | 'voice' | 'exclusions'>> & { readonly sources?: readonly ProfileFactSource[] };
+/** A supplied document as the checks read it. `page` is the website address it was read from, when it was. */
+type SourceText = Pick<KnowledgeDocument, 'id' | 'text'> & { readonly page?: string | null };
+/** What the checks know besides the documents: the business's own website address, when it has one. */
+export interface SourceContext { readonly website?: string | null }
 
 /** Position of `name` in `text` as a whole word (both already lower case), from `from` onwards; -1 when absent. */
 function wholeWordAt(text: string, name: string, from = 0): number {
@@ -223,6 +299,113 @@ function wholeWordAt(text: string, name: string, from = 0): number {
     if ((before === undefined || !/[a-z0-9]/.test(before)) && (after === undefined || !/[a-z0-9]/.test(after))) return at;
   }
   return -1;
+}
+
+// ─── A price sits beside its own offer ───────────────────────────────────────
+//
+// THE PRICE RULE: a price is the offer's only when, in the document it cites, some occurrence of the price (matched on
+// whole numbers, as `appearsIn` does) sits in the same BLOCK as a MENTION of that offer and either
+//   (i) it starts at most PRICE_AFTER_NAME characters after the end of the mention, or ends at most PRICE_BEFORE_NAME
+//       characters before its start, and no other offer's mention in that block is as close to the price or closer
+//       (at an equal distance a name written before the price beats one written after it: "Pro £49 per month Pro Plus"); or
+//  (ii) the document names the offer in full exactly once, the price is in that same block, the block is at most
+//       PRICE_BLOCK_LIMIT characters long, and no other offer is mentioned in the block.
+// A BLOCK is a line of the document or, within a line, one sentence (text up to ". ", "! " or "? "). Website pages are
+// stored as one line (the read collapses their spacing), so on a page a block is a sentence, a table row or list item
+// with no full stop runs on until the next sentence end, and the character window is what bounds it.
+// A MENTION is the offer's full name, or a distinctive part of it, as whole words: a run of two or more of its words
+// that are not all generic, or the name's one non-generic word when it has only one ("Gold" of "Gold Membership") and
+// it has four or more letters; a part that is also in another offer's name is never used. Where mentions overlap the longer one wins ("Pro" inside "Pro Plus" is a mention of "Pro Plus").
+// "Other offers" are every other offer the answer named, kept or not, so the rule only grows easier as offers are removed.
+
+/** Characters allowed between the end of an offer's name and the start of its price. A pricing card's name, short line and price. */
+export const PRICE_AFTER_NAME = 200;
+/** Characters allowed between the end of a price and the start of the offer's name ("£49 a month: Quay Compliance Plan"). */
+export const PRICE_BEFORE_NAME = 60;
+/** The longest block in which an offer named only once may carry its price anywhere. About one long sentence. */
+export const PRICE_BLOCK_LIMIT = 400;
+const GENERIC_NAME_WORDS = new Set(['plan', 'plans', 'package', 'packages', 'membership', 'memberships', 'member', 'service', 'services', 'programme', 'programmes', 'program', 'programs',
+  'course', 'courses', 'option', 'options', 'tier', 'bundle', 'subscription', 'product', 'products', 'offer', 'deal', 'pack', 'plus', 'monthly', 'yearly', 'annual', 'month', 'year',
+  'support', 'help', 'session', 'sessions', 'call', 'calls', 'the', 'a', 'an', 'and', 'of', 'for', 'with', 'our', 'your', 'to', 'in', 'on', '&']);
+
+function blocksOf(text: string): string[] {
+  return text.normalize('NFKC').split(/\r?\n+/).flatMap((line) => line.split(/(?<=[.!?])\s+/)).map(plain).filter(Boolean);
+}
+
+/** Start positions of `needle` in `hay` that do not cut a number in half. Both already plain. */
+function wholeAt(hay: string, needle: string): number[] {
+  const out: number[] = [];
+  if (needle.length < 2) return out;
+  for (let at = hay.indexOf(needle); at !== -1 && out.length < 50; at = hay.indexOf(needle, at + 1)) if (wholeHere(hay, needle, at)) out.push(at);
+  return out;
+}
+
+interface Mention { readonly offer: number; readonly start: number; readonly end: number }
+
+/** The words of a name that may stand for it, longest first. `names[self]` is this offer; a part shared with another name is not used. */
+function namePhrases(names: readonly string[], self: number): string[] {
+  const full = plain(names[self] ?? '');
+  const words = full.split(' ').filter(Boolean);
+  const others = names.filter((_, i) => i !== self).map((n) => ` ${plain(n).replace(/[^a-z0-9£&#%-]+/g, ' ').trim()} `);
+  const phrases = new Set<string>(full.length >= 2 ? [full] : []);
+  for (let size = words.length - 1; size >= 1; size--) {
+    for (let i = 0; i + size <= words.length; i++) {
+      const part = words.slice(i, i + size);
+      const phrase = part.join(' ');
+      // One word stands for the name only when it is the name's one non-generic word ("Gold" for "Gold Membership"):
+      // "tenant" alone is not "Tenant Find".
+      const distinctive = size >= 2 ? part.some((w) => !GENERIC_NAME_WORDS.has(w))
+        : phrase.replace(/[^a-z]/g, '').length >= 4 && !GENERIC_NAME_WORDS.has(phrase) && !FUNCTION_WORDS.has(phrase) && words.filter((w) => !GENERIC_NAME_WORDS.has(w)).length === 1;
+      if (distinctive && !others.some((o) => o.includes(` ${phrase.replace(/[^a-z0-9£&#%-]+/g, ' ').trim()} `))) phrases.add(phrase);
+    }
+  }
+  return [...phrases];
+}
+
+/** Every mention of every offer in one block, overlaps resolved in favour of the longer phrase. */
+function mentionsIn(block: string, names: readonly string[]): Mention[] {
+  const all: Mention[] = [];
+  names.forEach((_, offer) => {
+    for (const phrase of namePhrases(names, offer)) {
+      for (let at = wholeWordAt(block, phrase), n = 0; at !== -1 && n < 40; at = wholeWordAt(block, phrase, at + 1), n++) all.push({ offer, start: at, end: at + phrase.length });
+    }
+  });
+  all.sort((a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start);
+  const kept: Mention[] = [];
+  for (const m of all) if (!kept.some((k) => k.start < m.end && m.start < k.end)) kept.push(m);
+  return kept;
+}
+
+const gap = (m: { start: number; end: number }, p: { start: number; end: number }) => Math.max(0, m.end <= p.start ? p.start - m.end : m.start - p.end);
+/** Characters between a name and a price, doubled, plus one when the name comes after the price: at an equal distance the name written first wins. */
+const closeness = (m: { start: number; end: number }, p: { start: number; end: number }) => gap(m, p) * 2 + (m.end <= p.start ? 0 : 1);
+
+/**
+ * True when `price` sits beside `offerName` in `text` under THE PRICE RULE above. `otherNames` are the other offers'
+ * names (a name equal to this offer's own is ignored). Pure; used for offer prices, price-question answers and the backstop.
+ */
+export function priceBesideOffer(text: string | null | undefined, offerName: string, price: string, otherNames: readonly string[]): boolean {
+  const needle = plain(price);
+  const own = plain(offerName);
+  if (!text || needle.length < 2 || own.length < 2) return false;
+  const names = [offerName, ...otherNames.filter((n) => plain(n).length >= 2 && !sameValue(n, offerName))];
+  const whole = plain(text);
+  let fullCount = 0;
+  for (let at = wholeWordAt(whole, own), n = 0; at !== -1 && n < 3; at = wholeWordAt(whole, own, at + 1), n++) fullCount++;
+  for (const block of blocksOf(text)) {
+    const prices = wholeAt(block, needle).map((start) => ({ start, end: start + needle.length }));
+    if (!prices.length) continue;
+    const mentions = mentionsIn(block, names);
+    const mine = mentions.filter((m) => m.offer === 0), theirs = mentions.filter((m) => m.offer !== 0);
+    if (fullCount === 1 && block.length <= PRICE_BLOCK_LIMIT && wholeWordAt(block, own) !== -1 && theirs.length === 0) return true;
+    for (const p of prices) {
+      const near = mine.filter((m) => m.end <= p.start ? p.start - m.end <= PRICE_AFTER_NAME : m.start >= p.end ? m.start - p.end <= PRICE_BEFORE_NAME : true);
+      if (!near.length) continue;
+      const best = Math.min(...near.map((m) => closeness(m, p)));
+      if (theirs.every((m) => closeness(m, p) > best)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -265,18 +448,65 @@ export function withoutOtherPrices(description: string, keep: string | null): st
   return description.split(/(?<=[.!?])\s+/).filter((sentence) => moneyAmounts(sentence).every((amount) => kept.has(amount))).join(' ').trim();
 }
 
+// ─── Links, "never say" lines and the model's own notes ──────────────────────
+
+const hostOf = (url: string | null | undefined): string | null => {
+  try { const u = new URL(String(url ?? '')); return u.hostname ? u.hostname.toLowerCase().replace(/^www\./, '') : null; } catch { return null; }
+};
+
+/** The hosts that are the business's own: its website address and every page it was read from. */
+function ownHosts(documents: readonly SourceText[], context: SourceContext): Set<string> {
+  const hosts = new Set<string>();
+  for (const url of [context.website, ...documents.map((d) => d.page)]) { const h = hostOf(url); if (h) hosts.add(h); }
+  return hosts;
+}
+
+/**
+ * An offer link is kept only when it is an https address whose host is the business's own (its website, or a page it
+ * was read from) or is written in one of its documents. Anything else is emptied.
+ */
+export function offerUrlAllowed(url: string | null | undefined, documents: readonly SourceText[], context: SourceContext = {}): boolean {
+  if (!url) return true;
+  if (!/^https:\/\/[^\s]+$/i.test(url)) return false;
+  const host = hostOf(url);
+  if (!host || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return false;
+  if (ownHosts(documents, context).has(host)) return true;
+  return documents.some((d) => wholeWordAt(plain(d.text ?? ''), host) !== -1);
+}
+
+/** A sentence of a document short enough to be a quote (the prompt's own limit), in which the business states a line. */
+const QUOTE_LIMIT = 300;
+
+/**
+ * A "never say" line the model proposed is kept only when one sentence of a supplied document (a block as THE PRICE RULE
+ * reads it, at most 300 characters) supports it under THE RULE as an audience is checked: the same words, or every content
+ * word in order, with the same negations and every number. "Never promise guaranteed rent" is kept from "We never promise
+ * guaranteed rent."; "Guaranteed rent" alone is not (the page's "never" is not in it). Lines the owner typed are not checked.
+ */
+export function exclusionSupported(line: string, documents: readonly SourceText[]): boolean {
+  return documents.some((d) => blocksOf(d.text ?? '').some((block) => block.length <= QUOTE_LIMIT && unsupportedBy(line, block, 'audience') === null));
+}
+
+/** A line of the model's own "what we could not find" note may be shown to the owner only when it states no number, price or percentage at all. */
+export function missingFactShowable(line: string): boolean {
+  return !/[0-9£$€%]/.test(line.normalize('NFKC'));
+}
+
 /**
  * Reasons a site-fed extraction must be corrected. Any entry sends the model's one correction pass; what still
  * fails after it is taken off the card by `repairProfileFacts`, and only a card with nothing verifiable left is refused.
  */
-export function strictProfileProblems(value: ProfileFacts, documents: readonly SourceText[]): string[] {
+export function strictProfileProblems(value: ProfileFacts, documents: readonly SourceText[], context: SourceContext = {}): string[] {
   const byId = new Map(documents.map((d) => [d.id, d]));
   const everywhere = documents.map((d) => d.text ?? '').join('\n');
   const problems: string[] = [];
+  const otherNames = (self: { name: string }) => value.offers.filter((o) => o !== self).map((o) => o.name);
   for (const o of value.offers) {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     if (!doc) { problems.push(`offer "${o.name}" must name the supplied document it came from in sourceDocumentId`); continue; }
     if (o.price && !appearsIn(doc.text, o.price)) problems.push(`offer "${o.name}": the price "${o.price}" does not appear character for character in document ${doc.id}. Copy it exactly as written there, or set price to null and add the gap to missingFacts`);
+    else if (o.price && !priceBesideOffer(doc.text, o.name, o.price, otherNames(o))) problems.push(`offer "${o.name}": the price "${o.price}" is in document ${doc.id} but not beside this offer's name (the same sentence or line, close to the name and nearer it than any other offer). Use the price written beside "${o.name}", or set price to null and add the gap to missingFacts`);
+    if (o.url && !offerUrlAllowed(o.url, documents, context)) problems.push(`offer "${o.name}": the url must be an https address on the business's own website or written in a supplied document, or null`);
     for (const figure of figuresIn(o.name)) if (!appearsIn(doc.text, figure)) problems.push(`the name of offer "${o.name}" states "${figure}", which is not in document ${doc.id}. Name the offer as that document does`);
     for (const figure of figuresIn(o.description ?? '')) if (!appearsIn(doc.text, figure)) problems.push(`the description of "${o.name}" states "${figure}", which is not in document ${doc.id}. Remove the figure or copy one exactly as that document writes it`);
   }
@@ -291,11 +521,14 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
     for (const item of items) {
       const found = quoted(field, item);
       if (!found.length) { problems.push(`${label} "${item}" has no sources entry with a word-for-word quote. Quote the document that states it, or remove it`); continue; }
-      const why = found.map((s) => unsupportedBy(item, s.quote));
+      const why = found.map((s) => unsupportedBy(item, s.quote, field));
       if (!why.includes(null)) problems.push(`${label} "${item}": ${why[0]}. Quote the words that state it, including every number, or remove it`);
     }
   }
   for (const c of value.conflicts) {
+    for (const [part, text] of [['title', c.field], ['detail', c.detail]] as const) {
+      for (const figure of figuresIn(text)) if (!appearsIn(everywhere, figure)) problems.push(`the ${part} of conflict "${c.field}" states "${figure}", which is in none of the supplied documents. Describe the question without it`);
+    }
     for (const id of c.documentIds) if (!byId.has(id)) problems.push(`conflict "${c.field}" cites a document id that was not supplied`);
     if (c.kind !== 'price' && c.kind !== 'other') problems.push(`conflict "${c.field}" must give kind: "price" when it is about what one offer costs, otherwise "other"`);
     const named = typeof c.offer === 'string' && c.offer.trim() ? value.offers.some((o) => sameValue(o.name, c.offer!)) : null;
@@ -308,8 +541,15 @@ export function strictProfileProblems(value: ProfileFacts, documents: readonly S
       else if (!appearsIn(doc.text, option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is not word for word in document ${doc.id}`);
       else if (!meaningfulQuote(option.quote)) problems.push(`conflict "${c.field}": the option quote "${option.quote.slice(0, 60)}" is too short. Quote at least three words`);
       else if (!appearsIn(doc.text, option.value)) problems.push(`conflict "${c.field}": the ${answer} "${option.value}" does not appear character for character in document ${doc.id}. Copy it exactly as written there`);
-      else for (const figure of figuresIn(option.value)) if (!appearsIn(option.quote, figure)) problems.push(`conflict "${c.field}": the quote for "${option.value}" must contain "${figure}"`);
+      else if (figuresIn(option.value).some((figure) => !appearsIn(option.quote, figure))) problems.push(`conflict "${c.field}": the quote for "${option.value}" must contain "${figuresIn(option.value).find((f) => !appearsIn(option.quote, f))}"`);
+      else if (c.kind === 'price' && c.offer && !priceBesideOffer(doc.text, c.offer, option.value, value.offers.map((o) => o.name))) problems.push(`conflict "${c.field}": the price option "${option.value}" is not written beside "${c.offer}" in document ${doc.id}. Offer only prices that document states for this offer`);
     }
+  }
+  for (const line of value.exclusions ?? []) {
+    if (!exclusionSupported(line, documents)) problems.push(`exclusion "${line}" is not stated in any supplied document. List only wording a document itself says must not be used, in its own words, or leave exclusions empty`);
+  }
+  for (const line of value.missingFacts) {
+    if (!missingFactShowable(line)) problems.push(`missingFacts line "${line}" states a number or price. Name the gap in words only`);
   }
   // The free-text parts (the summary, the positioning, voice lines and examples) carry no source line on the card,
   // so a figure in them must exist in at least one supplied source. Words are the model's; numbers are not.
@@ -336,7 +576,7 @@ export interface ProfileRepair<T> {
 /**
  * Website door only, after the model's correction pass: take off exactly the lines that cannot be found word for word
  * and keep everything that can. It never adds, rewrites or paraphrases anything; it only removes a line, empties a
- * price or empties a whole free-text field. Each rule mirrors one in `strictProfileProblems`, so
+ * price or a link, or empties a whole free-text field or a question's title or detail. Each rule mirrors one in `strictProfileProblems`, so
  * `strictProfileProblems(result.value, documents)` is [].
  *
  * Free text (an offer description, the summary, the positioning) is never cut down to the sentences that pass: taking
@@ -346,29 +586,34 @@ export interface ProfileRepair<T> {
  * Returns null when the answer cannot be repaired truthfully: a price question that is dropped but cannot be tied to
  * one offer (its price could otherwise be shown as settled), or a question marked "other" that is really about a price.
  */
-export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): ProfileRepair<T> | null {
+export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: readonly SourceText[], context: SourceContext = {}): ProfileRepair<T> | null {
   const byId = new Map(documents.map((d) => [d.id, d]));
   const everywhere = documents.map((d) => d.text ?? '').join('\n');
   const leftOut: ProfileLeftOut[] = [];
   const leave = (what: ProfileLeftOut['what'], text: string) => { if (!leftOut.some((l) => l.what === what && sameValue(l.text, text))) leftOut.push({ what, text: clip(text, 300) }); };
+  const anywhere = (f: string) => appearsIn(everywhere, f);
+  // Every offer the answer named, kept or not: a neighbour that is taken off still counts as another offer's name.
+  const otherNames = (self: { name: string }) => value.offers.filter((o) => o !== self).map((o) => o.name);
 
   // A source line counts only when its quote is word for word in a supplied document.
   const sources = (value.sources ?? []).filter((s) => s.documentId && byId.has(s.documentId) && appearsIn(byId.get(s.documentId)!.text, s.quote));
 
   // Offers: no valid source, or a figure in the name the source does not state, drops the offer. A price not word for
-  // word in the source is emptied. A description stating any figure the source does not is emptied as a whole.
+  // word in the source, or not beside the offer's own name, is emptied. A description stating any figure the source does
+  // not is emptied as a whole. A link that is not https on the business's own site (or written in its documents) is emptied.
   const offers: ProfileOffer[] = [];
   for (const o of value.offers) {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     if (!doc || figuresIn(o.name).some((f) => !appearsIn(doc.text, f))) { leave('offer', o.name); continue; }
     let next: ProfileOffer = o;
-    if (o.price && !appearsIn(doc.text, o.price)) { next = { ...next, price: null }; leave('price', o.name); }
+    if (o.price && (!appearsIn(doc.text, o.price) || !priceBesideOffer(doc.text, o.name, o.price, otherNames(o)))) { next = { ...next, price: null }; leave('price', o.name); }
     if (figuresIn(o.description ?? '').some((f) => !appearsIn(doc.text, f))) { next = { ...next, description: '' }; leave('offer_detail', o.name); }
+    if (o.url && !offerUrlAllowed(o.url, documents, context)) { next = { ...next, url: null }; leave('link', o.url); }
     offers.push(next);
   }
 
-  // Audiences and claims: kept only with a word-for-word quote that carries their key words and figures.
-  const supported = (field: 'audience' | 'claim', item: string) => sources.some((s) => s.field === field && sameValue(s.value, item) && unsupportedBy(item, s.quote) === null);
+  // Audiences and claims: kept only with a word-for-word quote that supports them under THE RULE.
+  const supported = (field: 'audience' | 'claim', item: string) => sources.some((s) => s.field === field && sameValue(s.value, item) && unsupportedBy(item, s.quote, field) === null);
   const audiences = value.audiences.filter((a) => supported('audience', a) || (leave('audience', a), false));
   const approvedClaims = value.approvedClaims.filter((c) => supported('claim', c) || (leave('claim', c), false));
   const keptSources = sources.filter((s) => s.field === 'audience' ? audiences.some((a) => sameValue(a, s.value)) : s.field === 'claim' ? approvedClaims.some((c) => sameValue(c, s.value)) : true);
@@ -382,9 +627,14 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
     const options = (c.options ?? []).filter((option) => {
       const doc = byId.get(option.documentId);
       return doc && appearsIn(doc.text, option.quote) && meaningfulQuote(option.quote) && appearsIn(doc.text, option.value)
-        && figuresIn(option.value).every((f) => appearsIn(option.quote, f));
+        && figuresIn(option.value).every((f) => appearsIn(option.quote, f))
+        && !(c.kind === 'price' && c.offer && !priceBesideOffer(doc.text, c.offer, option.value, value.offers.map((o) => o.name)));
     });
-    const malformed = (c.kind !== 'price' && c.kind !== 'other') || (c.kind === 'price' && !named);
+    // The title and detail are labels for the owner: one stating a figure in no document is emptied, never reworded.
+    const badField = figuresIn(c.field).some((f) => !anywhere(f)), badDetail = figuresIn(c.detail).some((f) => !anywhere(f));
+    // What the owner is told was left out: never a title whose own figure could not be found.
+    const label = badField ? (named?.name ?? '') : c.field;
+    const malformed = (c.kind !== 'price' && c.kind !== 'other') || (c.kind === 'price' && !named) || (badField && c.kind !== 'price');
     const thinned = options.length < (c.options ?? []).length && options.length < 2;
     if (malformed || thinned) {
       const statesMoney = (c.options ?? []).some((o) => moneyAmounts(`${o.value} ${o.quote}`).length > 0);
@@ -397,11 +647,11 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
         // Still unrepairable unless the offer it was about is off the card altogether.
         else if (!conflictOffer(c, value.offers) || offers.some((o) => sameValue(o.name, conflictOffer(c, value.offers)!.name))) return null;
       }
-      leave('question', c.field);
+      leave('question', label);
       continue;
     }
     const { offer: _offer, options: _options, ...rest } = c;
-    conflicts.push({ ...rest, documentIds: c.documentIds.filter((id) => byId.has(id)),
+    conflicts.push({ ...rest, ...(badField ? { field: '' } : {}), ...(badDetail ? { detail: '' } : {}), documentIds: c.documentIds.filter((id) => byId.has(id)),
       // An offer name that is not on the card is emptied (only allowed for a question that is not about a price).
       ...(c.offer !== undefined ? { offer: named ? c.offer : null } : {}), ...(c.options !== undefined ? { options } : {}) });
   }
@@ -419,7 +669,6 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
   });
 
   // Free text carries no source line, so a field stating a figure in no document is emptied whole; a voice line is dropped.
-  const anywhere = (f: string) => appearsIn(everywhere, f);
   const freeText = (what: 'summary' | 'positioning', text: string | undefined): string | undefined => {
     if (text === undefined || figuresIn(text).every(anywhere)) return text;
     leave(what, text);
@@ -429,7 +678,13 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
   const voice = value.voice ? { ...value.voice, tone: lines('voice', value.voice.tone), do: lines('voice', value.voice.do), dont: lines('voice_dont', value.voice.dont), examples: lines('voice', value.voice.examples) } : undefined;
   const summary = freeText('summary', value.summary), positioning = freeText('positioning', value.positioning);
 
-  const repaired: T = { ...value, offers: pricedOffers, audiences, approvedClaims, conflicts,
+  // "Never say" lines are the model's: kept only when a document's own sentence states them (see `exclusionSupported`).
+  const exclusions = value.exclusions?.filter((line) => exclusionSupported(line, documents) || (leave('exclusion', line), false));
+  // The model's note of what it could not find is shown to the owner only, and never with a figure or price in it.
+  const missingFacts = value.missingFacts.filter(missingFactShowable);
+
+  const repaired: T = { ...value, offers: pricedOffers, audiences, approvedClaims, conflicts, missingFacts,
+    ...(exclusions !== undefined ? { exclusions } : {}),
     ...(value.sources !== undefined ? { sources: keptSources } : {}),
     ...(summary !== undefined ? { summary } : {}), ...(positioning !== undefined ? { positioning } : {}), ...(voice ? { voice } : {}) };
   return { value: repaired, leftOut };
@@ -440,7 +695,7 @@ export function repairProfileFacts<T extends ProfileFacts>(value: T, documents: 
  * names is on the card again (the same audience or claim, a summary or positioning, the same "avoid" line, a price on
  * that offer). Matching is exact (case and spacing aside); a line re-added in different words stays listed.
  */
-export function leftOutAfterEdit(leftOut: readonly ProfileLeftOut[] | undefined, card: Pick<BrandProfile, 'summary' | 'positioning' | 'audiences' | 'approvedClaims' | 'offers' | 'voice'>): ProfileLeftOut[] | undefined {
+export function leftOutAfterEdit(leftOut: readonly ProfileLeftOut[] | undefined, card: Pick<BrandProfile, 'summary' | 'positioning' | 'audiences' | 'approvedClaims' | 'offers' | 'voice' | 'exclusions'>): ProfileLeftOut[] | undefined {
   if (!leftOut) return undefined;
   const has = (items: readonly string[], text: string) => items.some((i) => sameValue(i, text));
   const offer = (name: string) => card.offers.find((o) => sameValue(o.name, name));
@@ -451,6 +706,7 @@ export function leftOutAfterEdit(leftOut: readonly ProfileLeftOut[] | undefined,
       case 'summary': return !card.summary.trim();
       case 'positioning': return !card.positioning.trim();
       case 'voice_dont': return !has(card.voice.dont, l.text);
+      case 'exclusion': return !has(card.exclusions, l.text);
       case 'price': return !offer(l.text)?.price;
       case 'offer': return !offer(l.text);
       default: return true;
@@ -475,7 +731,7 @@ export function cleanProvenance<T extends ProfileFacts>(value: T, documents: rea
     if (s.field !== 'audience' && s.field !== 'claim' && s.field !== 'voice' && s.field !== 'offer') continue;
     const doc = s.documentId ? byId.get(s.documentId) : undefined;
     // A source line is only ever shown when its quote is in that document and really carries the fact.
-    if (!doc || !appearsIn(doc.text, s.quote) || unsupportedBy(String(s.value ?? ''), s.quote)) continue;
+    if (!doc || !appearsIn(doc.text, s.quote) || unsupportedBy(String(s.value ?? ''), s.quote, s.field === 'claim' ? 'claim' : 'audience')) continue;
     sources.push({ field: s.field, value: clip(s.value, 400), documentId: doc.id, quote: clip(s.quote, 300) });
   }
   const conflicts = value.conflicts.map((c): ProfileConflict => {
@@ -546,7 +802,9 @@ export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>
     // Skipped only when a price question for this offer is already on the card; a different question about the same offer does not hide a price disagreement.
     if (value.conflicts.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
     const otherNames = value.offers.filter((o) => o !== offer).map((o) => o.name.replace(/\s+/g, ' ').trim().toLowerCase()).filter((n) => n.length >= 3);
-    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames) : [] })).filter((d) => d.prices.length > 0);
+    // A price counts here only when it is beside this offer's name under THE PRICE RULE, exactly as a price on the card must be.
+    const allOther = value.offers.filter((o) => o !== offer).map((o) => o.name);
+    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames).filter((p) => priceBesideOffer(d.text, offer.name, p.phrase, allOther)) : [] })).filter((d) => d.prices.length > 0);
     const disagree = perDoc.some((a, i) => perDoc.slice(i + 1).some((b) => !a.prices.some((p) => b.prices.some((q) => q.amount === p.amount))));
     if (!disagree) continue;
     const options: ProfileConflictOption[] = [];
@@ -571,6 +829,42 @@ export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents
   const held = new Set(conflicts.map((c) => priceConflictOffer(c, value.offers)).filter(Boolean));
   const offers = value.offers.map((o) => held.has(o) ? { ...o, price: null, description: withoutOtherPrices(o.description ?? '', null) } : o);
   return { ...value, offers, conflicts };
+}
+
+// ─── What a writing step may be given ────────────────────────────────────────
+
+/** An offer as a writing step sees it. Only these fields, ever. */
+export interface WritingOffer { readonly name: string; readonly description: string; readonly price: string | null; readonly url: string | null; readonly sourceDocumentId: string | null }
+
+/** An offer link a writing step may see: an absolute https address, or nothing. A website-door card's links were also checked against its own site. */
+export function writingUrl(url: string | null | undefined): string | null {
+  if (typeof url !== 'string' || !/^https:\/\/[^\s]+$/i.test(url)) return null;
+  try { return new URL(url).protocol === 'https:' ? url : null; } catch { return null; }
+}
+
+export function writingOffers(profile: Pick<BrandProfile, 'offers'>): WritingOffer[] {
+  return profile.offers.map((o) => ({ name: o.name, description: o.description, price: o.price ?? null, url: writingUrl(o.url), sourceDocumentId: o.sourceDocumentId ?? null }));
+}
+
+/**
+ * The one allowlist of profile fields that reach any writing prompt (planning, article, section, social, campaign).
+ * Never included: `missingFacts` (the model's own note of gaps, for the owner only), conflict titles and details (labels
+ * for the owner), `sources` and their quotes, `leftOut`, `strict`, confirmation fields, owner-settled price provenance and
+ * any offer link that is not https. An open question is passed only as the name of the offer on the card it is about
+ * (`offersWithOpenQuestions`), so the writer can stay away from it without reading words nobody checked.
+ */
+export function writingProfile(profile: BrandProfile): {
+  summary: string; audiences: readonly string[]; positioning: string; offers: WritingOffer[]; conversionPages: { url: string; label: string }[];
+  voice: { tone: readonly string[]; do: readonly string[]; dont: readonly string[]; examples: readonly string[] }; approvedClaims: readonly string[]; exclusions: readonly string[];
+  offersWithOpenQuestions: string[];
+} {
+  const open = [...new Set(profile.conflicts.map((c) => conflictOffer(c, profile.offers)?.name).filter((n): n is string => Boolean(n)))];
+  return {
+    summary: profile.summary, audiences: [...profile.audiences], positioning: profile.positioning, offers: writingOffers(profile),
+    conversionPages: profile.conversionPages.map((p) => ({ url: p.url, label: p.label })),
+    voice: { tone: [...profile.voice.tone], do: [...profile.voice.do], dont: [...profile.voice.dont], examples: [...profile.voice.examples] },
+    approvedClaims: [...profile.approvedClaims], exclusions: [...profile.exclusions], offersWithOpenQuestions: open,
+  };
 }
 
 // ─── The owner settles a conflict ────────────────────────────────────────────
@@ -665,6 +959,7 @@ const LEFT_OUT_LABEL: Record<ProfileLeftOut['what'], [string, DnaLeftOut['fix'],
   // The summary and positioning were the model's own words with a figure in them: they are named, not repeated.
   summary: ['The summary', 'card', false], positioning: ['The positioning line', 'setup', false],
   voice: ['The style note', 'documents', true], voice_dont: ['The “avoid” line', 'card', true], link: ['The link', 'documents', true],
+  exclusion: ['The “never say” line', 'card', true],
 };
 
 /** "The price of “Mentoring programme”". Plain words; the quoted part is the model's and is escaped wherever it is shown. */
@@ -674,6 +969,8 @@ export function leftOutLines(items: readonly ProfileLeftOut[] | undefined): DnaL
     if (!known) return [];
     if (!known[2]) return [{ label: known[0], fix: known[1] }];
     const whole = clip(item.text, 2000), text = whole.slice(0, 120).trim();
+    // A question whose own title could not be found word for word is named without it.
+    if (!text && item.what === 'question') return [{ label: 'One of the questions we found', fix: known[1] }];
     return [{ label: `${known[0]} “${text}${whole.length > 120 ? '…' : ''}”`, fix: known[1] }];
   });
 }
@@ -713,10 +1010,10 @@ export function brandDnaCard(profile: BrandProfile, documents: readonly Knowledg
     audiences: profile.audiences.map((a) => sourced('audience', a)), claims: profile.approvedClaims.map((c) => sourced('claim', c)),
     voice: { tone: profile.voice.tone, do: profile.voice.do, dont: profile.voice.dont }, never: profile.exclusions,
     conflicts: profile.conflicts.map((c, index): DnaConflict => ({
-      index, title: c.field, detail: c.detail,
+      index, title: c.field.trim() || (c.offer ? `${c.offer}: price` : 'A question about your details'), detail: c.detail,
       options: (c.options ?? []).map((o, i) => ({ index: i, value: o.value, source: from(o.documentId, o.quote)! })),
     })),
-    missing: profile.missingFacts, readFrom, unsourced, checked: profile.strict === true, leftOut: leftOutLines(profile.leftOut),
+    missing: profile.missingFacts.filter(missingFactShowable), readFrom, unsourced, checked: profile.strict === true, leftOut: leftOutLines(profile.leftOut),
   };
 }
 
