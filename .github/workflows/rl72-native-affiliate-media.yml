@@ -1,4 +1,7 @@
 name: RL72 native affiliate media review gate
+concurrency:
+  group: rl72-native-media-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 on:
   pull_request:
     branches: ['codex/relaunch72-platform-foundation']
