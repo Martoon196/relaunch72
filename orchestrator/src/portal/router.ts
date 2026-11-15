@@ -96,7 +96,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p.startsWith('/portal/api/media')) {
     if (!deps.media) return sendHtml(res, 503, '<h1>Media studio is not configured</h1>');
     const raw = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
-    return handleMediaApi(req, res, deps.media, tenantId, mediaCsrf(deps.sessionSecret, raw));
+    return handleMediaApi(req, res, deps.media, tenantId, mediaCsrf(deps.sessionSecret, raw), deps.sessionSecret);
   }
 
   if (p === '/portal' && method === 'GET') {
