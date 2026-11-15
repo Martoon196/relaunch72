@@ -71,7 +71,9 @@ BEGIN
     INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
   END LOOP;
 END $tables$;
-GRANT SELECT ON app.creative_media_video_policy TO r72_media_job_definer;
+-- Row locking for atomic budget admission needs UPDATE privilege; only the
+-- private SECURITY DEFINER has it, never the public/content runtime role.
+GRANT SELECT,UPDATE ON app.creative_media_video_policy TO r72_media_job_definer;
 GRANT SELECT,INSERT,UPDATE ON app.creative_media_video_jobs TO r72_media_job_definer;
 GRANT SELECT,INSERT ON app.creative_media_video_events TO r72_media_job_definer;
 CREATE TRIGGER creative_media_video_events_immutable BEFORE UPDATE OR DELETE ON app.creative_media_video_events
