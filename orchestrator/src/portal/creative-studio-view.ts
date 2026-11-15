@@ -15,6 +15,19 @@ export const artUrl = (shell: Shell, v: Pick<CreativeVersion, 'id' | 'render'>, 
 const MOTION_OPTIONS: [string, string][] = [['zoom_in', 'Slow zoom in'], ['zoom_out', 'Slow zoom out'], ['pan_left', 'Pan left'], ['pan_right', 'Pan right'], ['none', 'Still']];
 
 export const STYLE = `<style>
+.rl72-scene-editor{background:var(--card);border:1px solid var(--line);padding:12px;border-radius:10px;margin:12px 0}
+.rl72-scene-editor h4{margin:0 0 4px}.rl72-scenes{display:flex;gap:4px;min-height:62px}
+.rl72-scene-block{min-width:35px;flex-basis:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+ padding:9px 5px;border:1px solid var(--line);border-radius:5px;background:var(--bg);font-size:12px}
+.rl72-scene-block.selected{outline:2px solid var(--accent)}
+.rl72-scene-preview{aspect-ratio:16/9;background:linear-gradient(120deg,#0b1427,#293956);color:white;
+ display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:12px;
+ padding:18px;margin-top:10px;max-height:330px;border-radius:9px}
+.rl72-scene-preview strong{font-size:clamp(16px,3vw,27px)}
+.rl72-scene-preview span{font-size:13px;color:#dde3ee}
+.rl72-scene-tools{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.rl72-scene-editor input[type=range]{width:100%;accent-color:var(--accent)}
+
 .cs-hero{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-end;margin:0 0 16px}.cs-hero h1{margin:0}.cs-hero p{margin:4px 0 0}
 .cs-steps{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0;padding:0;list-style:none}.cs-steps li{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);background:var(--card)}
 .swatches{display:flex;gap:8px;flex-wrap:wrap}.swatch{display:flex;align-items:center;gap:6px;font-size:13px}.swatch i{display:inline-block;width:22px;height:22px;border-radius:6px;border:1px solid var(--line)}
@@ -224,7 +237,7 @@ ${bg.kind === 'image' && bg.origin === 'owner_upload' ? '<label class="small" st
       const video = c.videos.find((x) => x.version.placement === v.placement);
       const blocking = v.issues.some((i) => i.blocking);
       const fresh = video && video.version.variant.storyboard?.sourceStoryboardVersionId === v.id;
-      const sceneForm = `<details class="small"><summary>Edit scenes</summary><form method="post" action="${base(shell)}/v/${e(v.id)}/scenes">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="scene_count" value="${scenes.length + 1}">
+      const sceneForm = `<details class="small"><summary>Edit scenes</summary><form data-rl72-scene-editor method="post" action="${base(shell)}/v/${e(v.id)}/scenes">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="scene_count" value="${scenes.length + 1}">
 ${[...scenes, null].map((x, i) => `<fieldset><legend>${x ? `Scene ${i + 1}` : 'Add a scene (optional — leave blank to skip)'}</legend><label>On-screen text<input type="text" name="scene.${i}.headline" maxlength="90" value="${e(x?.headline ?? '')}"${x ? ' required' : ''}></label><label>Supporting line<input type="text" name="scene.${i}.body" maxlength="160" value="${e(x?.body ?? '')}"></label>
 <div class="row"><label>Seconds<select name="scene.${i}.duration">${Array.from({ length: 14 }, (_, k) => 1500 + k * 500).map((ms) => `<option value="${ms}"${ms === (x?.durationMs ?? 3000) ? ' selected' : ''}>${ms / 1000}</option>`).join('')}</select></label><label>Motion<select name="scene.${i}.motion">${MOTION_OPTIONS.map(([m, l]) => `<option value="${m}"${m === (x?.motion ?? 'zoom_in') ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
 ${c.concept.cta ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.cta" value="1"${x?.showCta ? ' checked' : ''}> Show the “${e(c.concept.cta)}” button</label>` : ''}<label>Voiceover script <span class="muted">(script only — no voice is generated)</span><textarea name="scene.${i}.script" maxlength="400" style="min-height:50px">${e(x?.script ?? '')}</textarea></label>${x ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.remove" value="1"> Remove this scene</label>` : ''}</fieldset>`).join('')}
@@ -251,7 +264,7 @@ ${v.issues.length ? `<ul class="issues">${v.issues.map((i) => `<li class="${i.bl
 ${rows.map((row) => `<section class="cmp-row"><h3>${e(row.label)} <span class="muted small">${PLACEMENTS[row.placement].use}</span></h3><div class="cmp" style="--cols:${cols}">${concepts.map((c) => figure(c.variants.find((v) => v.version.placement === row.placement && v.version.card === row.card))).join('')}</div></section>`).join('')}
 <h2>Video</h2><p class="muted small">Storyboards turn a concept's own copy into scenes. Videos are recorded on this server from an exact storyboard, silent with on-screen text, and checked for playback before they can be approved. No avatar, voice or video provider is used, and no customer endorsements may appear.</p>
 ${concepts.map(motion).join('')}
-${distributionSection(data.distribution ?? null)}`);
+${distributionSection(data.distribution ?? null)}`, '<script src="/portal/seo-blog/media-scene-timeline.js" defer></script>');
 }
 
 const STATUS_LABEL: Readonly<Record<StageEvidence['status'], string>> = { reached: 'Reached', waiting: 'Not yet', not_applicable: 'Not applicable', unknown: 'Not recorded', failed: 'Failed', stopped: 'Stopped' };
