@@ -39,30 +39,30 @@ test('claim, verify SHA256 and submit exactly once with SQL receipt',async()=>{
   assert.deepEqual(await submitApprovedMediaJob(workspace,job,ports),
     {state:'submitted',jobId:job,providerJobId:'1234567'});
   assert.deepEqual(events,['claim','provider','submitted']);
-  await assert.rejects(submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports),/already claimed/);
+  await assert.rejects(submitApprovedMediaJob(workspace,job,ports),/already claimed/);
   assert.deepEqual(events,['claim','provider','submitted']);
 });
 test('no paid provider call when exact owner-reviewed payload differs',async()=>{
   const {events,ports}=rig('ok',true);
-  const result=await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports);
+  const result=await submitApprovedMediaJob(workspace,job,ports);
   assert.equal(result.state,'failed');
   assert.deepEqual(events,['claim','failed']);
 });
 test('unknown provider result holds credits and cannot automatically replay',async()=>{
   const {events,ports}=rig('timeout');
-  assert.equal((await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports)).state,'outcome_unknown');
+  assert.equal((await submitApprovedMediaJob(workspace,job,ports)).state,'outcome_unknown');
   assert.deepEqual(events,['claim','provider','unknown']);
-  await assert.rejects(submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports),/already claimed/);
+  await assert.rejects(submitApprovedMediaJob(workspace,job,ports),/already claimed/);
   assert.equal(events.filter(x=>x==='provider').length,1);
 });
 test('a local provider-disable is a definite no-spend failure',async()=>{
   const {events,ports}=rig('disabled');
-  assert.equal((await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports)).state,'failed');
+  assert.equal((await submitApprovedMediaJob(workspace,job,ports)).state,'failed');
   assert.deepEqual(events,['claim','provider','failed']);
 });
 test('accepted provider response with lost database receipt is NOT resubmitted',async()=>{
   const {events,ports}=rig('receipt-failed');
-  assert.equal((await submitApprovedMediaJob(workspace,job,{kind:'vizard_clip',request},ports)).state,'outcome_unknown');
+  assert.equal((await submitApprovedMediaJob(workspace,job,ports)).state,'outcome_unknown');
   assert.deepEqual(events,['claim','provider','submitted','unknown']);
 });
 test('worker refuses wrong tenant and request digest before calling any provider',async()=>{
