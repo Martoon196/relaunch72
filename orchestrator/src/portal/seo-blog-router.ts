@@ -43,6 +43,7 @@ import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creati
 import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { creativeMediaReportsPage } from './creative-media-reports-view.js';
 import { creativeVideoSourcesPage } from './creative-media-video-sources-view.js';
+import { mediaWorkbenchPage } from './creative-media-workbench-view.js';
 import { videoByteRange } from './media-video-byte-range.js';
 import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
@@ -331,6 +332,31 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
           ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${total}`}:{})});
         res.end(method==='HEAD'?undefined:chunk);return;
       }
+      const outputStream=new RegExp(`^creative/outputs/(${UUID})/stream$`,'i').exec(rest);
+      if(outputStream){
+        const workbench=input.service.mediaWorkbenchFor?.(identity,input.requestId);
+        if(!workbench)throw new SeoBlogError(404,'Media outputs disabled');
+        const video=await workbench.outputs.load(brandId,outputStream[1]!.toLowerCase());
+        const range=videoByteRange(req.headers.range,video.bytes.byteLength);
+        const headers:Record<string,string>={
+          'content-type':video.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff',
+          'x-robots-tag':'noindex, nofollow','referrer-policy':'no-referrer',
+          'content-disposition':'inline; filename="rl72-private-output"','accept-ranges':'bytes',
+        };
+        if(range.kind==='invalid'){
+          res.writeHead(416,{...headers,'content-range':`bytes */${video.bytes.length}`});res.end();return;
+        }
+        const chunk=range.kind==='partial'?video.bytes.subarray(range.start,range.end+1):video.bytes;
+        res.writeHead(range.kind==='partial'?206:200,{...headers,'content-length':String(chunk.length),
+          ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${video.bytes.length}`}:{})});
+        res.end(method==='HEAD'?undefined:chunk);return;
+      }
+      if(rest==='creative/workbench'){
+        const w=input.service.mediaWorkbenchFor?.(identity,input.requestId);
+        if(!w)throw new SeoBlogError(404,'Media workbench disabled');
+        const [access,jobs,outputs]=await Promise.all([w.access.current(brandId),w.jobs.list(brandId),w.outputs.list(brandId)]);
+        return send(res,200,mediaWorkbenchPage(shell('creative'),{access,jobs,outputs}));
+      }
       if(rest==='creative/sources') {
         const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
         if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');
@@ -379,7 +405,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview,
           productPrefill, commerceSummary, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
           reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)),
-           videoSourcesEnabled:Boolean(input.service.mediaVideoSourcesFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+           videoSourcesEnabled:Boolean(input.service.mediaVideoSourcesFor?.(identity,input.requestId)),
+           mediaWorkbenchEnabled:Boolean(input.service.mediaWorkbenchFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
