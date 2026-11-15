@@ -7,6 +7,28 @@ import crypto from 'node:crypto';
 import { MediaEngine } from './engine.js';
 import { MediaError } from './store.js';
 
+export function publicAffiliatePath(secret: string, tid: string, cid: string, pid: string): string {
+  const message = tid + '|' + cid + '|' + pid;
+  const signature=crypto.createHmac('sha256',secret).update('affiliate:' + message).digest('hex');
+  return '/go/' + encodeURIComponent(tid) + '/' + encodeURIComponent(cid) + '/' + encodeURIComponent(pid) + '/' + signature;
+}
+/** Public, signed outbound links. No browser may supply an arbitrary destination. */
+export async function handleAffiliateRedirect(
+  req:IncomingMessage,res:ServerResponse,engine:MediaEngine,secret:string,
+):Promise<void> {
+  const pathname=new URL(req.url??'/', 'http://localhost').pathname;
+  const match=pathname.match(/^\/go\/([a-zA-Z0-9_-]{1,100})\/([a-zA-Z0-9-]{8,100})\/([a-zA-Z0-9-]{8,100})\/([a-f0-9]{64})$/);
+  if(req.method!=='GET'||!match){res.writeHead(404);res.end();return;}
+  const expected=publicAffiliatePath(secret,match[1]!,match[2]!,match[3]!).split('/').at(-1)!;
+  if(!crypto.timingSafeEqual(Buffer.from(match[4]!),Buffer.from(expected))){
+    res.writeHead(404);res.end();return;
+  }
+  try{
+    const url=await engine.outboundClick(match[1]!,match[2]!,match[3]!);
+    res.writeHead(302,{location:url,'cache-control':'no-store','referrer-policy':'no-referrer',
+      'x-content-type-options':'nosniff'});res.end();
+  }catch{res.writeHead(404);res.end();}
+}
 export function mediaCsrf(secret: string, signedSession: string): string {
   return crypto.createHmac('sha256', secret).update('media:' + signedSession).digest('hex');
 }
@@ -36,14 +58,18 @@ const id = '([a-zA-Z0-9-]{8,100})';
 
 export async function handleMediaApi(
   req: IncomingMessage, res: ServerResponse, engine: MediaEngine,
-  tenantId: string, expectedCsrf: string,
+  tenantId: string, expectedCsrf: string, signingSecret: string,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const method = req.method ?? 'GET';
   const p = url.pathname;
   try {
     if (method === 'GET' && p === '/portal/api/media') {
-      send(res,200,{ capabilities:engine.capabilities(), ...(await engine.list(tenantId)) });
+      const data=await engine.list(tenantId);
+      const campaigns=data.campaigns.map((c)=>({...c,products:c.products.map((p)=>({
+        ...p,trackedPath:p.affiliateUrl?publicAffiliatePath(signingSecret,tenantId,c.id,p.id):null,
+      }))}));
+      send(res,200,{ capabilities:engine.capabilities(), ...data, campaigns });
       return;
     }
     if (!['POST','PATCH'].includes(method)) throw new MediaError('Not found',404);
