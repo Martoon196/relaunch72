@@ -123,7 +123,7 @@ BEGIN
     RETURN jsonb_build_object('replayed',true,'id',existing.id,'state',existing.state);
   END IF;
   SELECT coalesce(sum(CASE WHEN state='completed' THEN actual_microusd
-    ELSE reserved_microusd END),0),count(*)::integer INTO reserved,pending
+    ELSE reserved_microusd END),0),count(*) FILTER (WHERE state IN ('reserved','claimed','submitted','outcome_unknown')) INTO reserved,pending
     FROM app.creative_media_video_jobs WHERE workspace_id=p_workspace
       AND (state IN('reserved','claimed','submitted','outcome_unknown','completed'))
       AND created_at>=date_trunc('month',clock_timestamp());
