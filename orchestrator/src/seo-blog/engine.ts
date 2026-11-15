@@ -18,7 +18,7 @@ import {
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import {
-  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, BRAND_DNA_RULES_VERSION, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
+  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, BRAND_DNA_RULES_VERSION, leftOutAfterEdit, pricingAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
   type BrandDnaCard, type BrandDnaJobPayload, type BrandDnaResult, type ConflictChoice,
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
@@ -867,7 +867,9 @@ export class SeoBlogEngine {
   }
 
   /** The owner corrects the card in their own words. Lines they did not change keep their source; new lines are theirs. */
-  async correctBrandDna(actor: Actor, brandId: string, expectedVersion: number, edits: { summary: string; audiences: readonly string[]; approvedClaims: readonly string[]; exclusions: readonly string[]; voiceDont: readonly string[] }): Promise<BrandProfile> {
+  async correctBrandDna(actor: Actor, brandId: string, expectedVersion: number, edits: { summary: string; audiences: readonly string[]; approvedClaims: readonly string[]; exclusions: readonly string[]; voiceDont: readonly string[];
+    /** Website door: the owner's price lines, by offer position; an offer not listed keeps its prices. */
+    pricing?: Readonly<Record<number, readonly string[]>> }): Promise<BrandProfile> {
     await this.brandFor(actor, brandId);
     const current = await this.store.latestProfile(brandId);
     if (!current || current.version !== expectedVersion) throw new SeoBlogError(409, 'This card changed while you were looking at it. Reload the page and try again.', 'stale_write');
@@ -876,7 +878,9 @@ export class SeoBlogEngine {
     const tidy = (lines: readonly string[]) => lines.map((l) => cleanText(l).replace(/\s+/g, ' ').slice(0, 400)).filter(Boolean).slice(0, 40);
     const audiences = tidy(edits.audiences), approvedClaims = tidy(edits.approvedClaims);
     const sources = sourcesAfterEdit(sourcesAfterEdit(current.sources, 'audience', current.audiences, audiences), 'claim', current.approvedClaims, approvedClaims);
-    return this.saveOwnerCard(actor, brandId, current, { summary, audiences, approvedClaims, exclusions: tidy(edits.exclusions), voice: { ...current.voice, dont: tidy(edits.voiceDont) }, sources },
+    const pricing = current.strict === true ? edits.pricing : undefined;
+    const offers = pricing && Object.keys(pricing).length ? current.offers.map((o, i) => (pricing[i] ? pricingAfterEdit(o, pricing[i]!.map((l) => cleanText(l))) : o)) : undefined;
+    return this.saveOwnerCard(actor, brandId, current, { summary, audiences, approvedClaims, exclusions: tidy(edits.exclusions), voice: { ...current.voice, dont: tidy(edits.voiceDont) }, sources, ...(offers ? { offers } : {}) },
       'profile.edited', `Brand DNA card corrected by the owner (version ${current.version + 1}). Confirm it to use it.`);
   }
 

@@ -202,6 +202,14 @@ const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'if
 const STRUCK_TAGS = new Set(['s', 'del', 'strike']);
 /** Inline tags: text on either side joins with no space. Every other tag separates words. */
 const INLINE_TAGS = new Set(['a', 'span', 'b', 'strong', 'i', 'em', 'u', 'small', 'mark', 'abbr', 'code', 'label', 'button']);
+/** Class or id name parts that make a link a button. */
+const BUTTON_PARTS = new Set(['btn', 'button', 'cta']);
+/** Action text: a button, a link styled as one, or anything inside a form (its controls and labels). */
+function actionElement(tag: string, attrs: string, tokens: readonly string[]): boolean {
+  if (tag === 'button') return true;
+  if (tag !== 'a') return false;
+  return /\brole\s*=\s*["']?button/i.test(attrs) || tokens.some((k) => k.split(/[-_]+/).some((part) => BUTTON_PARTS.has(part)));
+}
 /** Line elements that are one paragraph of their parent (an attribution is beside its quote when both share the parent). */
 const PARA_TAGS = new Set(['p', 'li', 'dt', 'dd', 'caption', 'figcaption', 'blockquote', 'address', 'pre']);
 /** Tags that end a line. */
@@ -230,7 +238,7 @@ const namedBy = (text: string) => (text.includes(',') || /^M[rsx]|^Miss|^Dr/.tes
 /** A short line naming who said the line above it: marks it only beside italics, quote marks or a star rating. */
 const ATTRIBUTION = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
 
-interface Segment { kind: 'heading' | 'item' | 'para' | 'row'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
+interface Segment { kind: 'heading' | 'item' | 'para' | 'row' | 'action'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
 interface Cell { segments: Segment[]; text: string }
 interface TableCtx { rows: Cell[][]; row: Cell[] | null; cell: Cell | null; quoted: boolean }
 
@@ -271,7 +279,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
   const html = capHtml(input);
   const lower = html.toLowerCase();
   const sink: string[][] = [[]];
-  const stack: { tag: string; quoted: boolean; stars: boolean }[] = [];
+  const stack: { tag: string; quoted: boolean; stars: boolean; action: boolean }[] = [];
   const open = new Map<string, number>(), overflow = new Map<string, number>();
   let quotedDepth = 0, struckDepth = 0, italicDepth = 0, starsDepth = 0;
   const headingLevels: number[] = [];
@@ -282,6 +290,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
   let sectionText = false, sectionSibling = false, siblingOpened = false;
   /** An inline tag was passed since the last text: a letter or digit on both sides gets a space between them. */
   let inlineEdge = false;
+  /** Inside action text (a button, a button link, a form), and the container depth of the last heading's card while it is open. */
+  let actionDepth = 0, cardDepth = -1, cardOpen = false;
   let buffer = '', bufferItalicOnly = true, bufferHasText = false;
   const tables: TableCtx[] = [];
   let lastSegment: Segment | null = null, containerSeq = 0;
@@ -296,7 +306,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
   const emit = (seg: Segment) => {
     const t = tables[tables.length - 1];
     if (t?.cell) { t.cell.segments.push(seg); return; }
-    const marker = seg.quoted ? '❝ ' : seg.kind === 'heading' ? `${'#'.repeat(Math.min(6, Math.max(1, seg.level)))} ` : seg.kind === 'item' ? '• ' : seg.kind === 'row' ? '| ' : '';
+    // Action text: "▸ " inside the card of the heading above it, "▹ " anywhere else.
+    const marker = seg.quoted ? '❝ ' : seg.kind === 'action' ? (seg.level ? '▸ ' : '▹ ') : seg.kind === 'heading' ? `${'#'.repeat(Math.min(6, Math.max(1, seg.level)))} ` : seg.kind === 'item' ? '• ' : seg.kind === 'row' ? '| ' : '';
     sink[sink.length - 1]!.push(marker + seg.text);
   };
   const flush = () => {
@@ -306,15 +317,15 @@ export function brandPageLines(input: string, dropChrome = false): string {
     buffer = ''; bufferItalicOnly = true; bufferHasText = false;
     if (!text) return;
     const level = headingLevels.length ? headingLevels[headingLevels.length - 1]! : 0;
-    let kind: Segment['kind'] = level ? 'heading' : itemDepth > 0 ? 'item' : 'para';
+    let kind: Segment['kind'] = actionDepth > 0 && !level ? 'action' : level ? 'heading' : itemDepth > 0 ? 'item' : 'para';
     // A typed bullet ("- Fixed prices", "• Insured") is a list item, never an attribution.
     const bullet = /^(?:[-–•*]|•)\s+(?=\S)/u.exec(text);
     if (kind === 'para' && bullet) { kind = 'item'; text = text.slice(bullet[0].length); }
     // Words the site itself starts with "#", "|" or "❝" are not our markers: an invisible character keeps them apart.
-    if (/^(?:#{1,6} |\| |❝ |• )/u.test(text)) text = `\u200B${text}`;
+    if (/^(?:#{1,6} |\| |❝ |• |▸ |▹ )/u.test(text)) text = `\u200B${text}`;
     // The section of customer words ends when the heading's own container closes (it is the element below the heading).
     // (The heading is still open here, so its container is the element below it; at the top level nothing closes it.)
-    if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; sectionText = false; sectionSibling = false; siblingOpened = false; }
+    if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; sectionText = false; sectionSibling = false; siblingOpened = false; cardDepth = stack.length - 2; cardOpen = true; }
     else if (quotedSection) sectionText = true;
     // The element that holds this line beside its siblings: a paragraph's (or list item's) parent, else the block itself.
     const container = currentContainer();
@@ -333,7 +344,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
         if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) lines[lines.length - 1] = `❝ ${prev.text}`;
       }
     }
-    const seg: Segment = { kind, level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
+    const seg: Segment = { kind, level: kind === 'action' ? (cardOpen ? 1 : 0) : level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
     lastSegment = seg;
     emit(seg);
   };
@@ -341,7 +352,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
     if (struckDepth > 0) return;
     if (inlineEdge && t) {
       inlineEdge = false;
-      if (/[\p{L}\p{N}]$/u.test(buffer) && /^[\p{L}\p{N}]/u.test(t)) buffer += ' ';
+      // Also a closing bracket or sentence punctuation straight before a letter: "(£1,575 in total)Or 3 payments".
+      if ((/[\p{L}\p{N}]$/u.test(buffer) && /^[\p{L}\p{N}]/u.test(t)) || (/[)\].,;:!?]$/u.test(buffer) && /^\p{L}/u.test(t))) buffer += ' ';
     }
     if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; }
     buffer += t;
@@ -395,12 +407,14 @@ export function brandPageLines(input: string, dropChrome = false): string {
     }
     const t = tables[tables.length - 1];
     if (!closing) {
+      const isAction = tag === 'form' || ((tag === 'button' || tag === 'a') && actionElement(tag, attrs, tag === 'a' ? classTokens(attrs) : []));
+      if (isAction) flush();
       if (tag === 'table') { flush(); tables.push({ rows: [], row: null, cell: null, quoted: quotedDepth > 0 }); }
       else if (t && tag === 'tr') { closeRow(t); t.row = []; }
       else if (t && (tag === 'td' || tag === 'th')) { closeCell(t); if (!t.row) t.row = []; flush(); t.cell = { segments: [], text: '' }; }
       else if (LINE_TAGS.has(tag)) flush();
       else if (!INLINE_TAGS.has(tag)) addText(' ');
-      else inlineEdge = true;
+      else if (!isAction) inlineEdge = true;
       if (tag === 'sup' || tag === 'sub') addText(' ');
       if (VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
       if (stack.length >= NEST_LIMIT) { overflow.set(tag, (overflow.get(tag) ?? 0) + 1); continue; }
@@ -408,7 +422,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
       const quoted = QUOTED_TAGS.has(tag) || quotedByAttrs(tag, attrs, tokens);
       const stars = tokens.some((k) => STAR_TOKENS.has(k));
       if (stars) starContainers.add(currentContainer());
-      stack.push({ tag, quoted, stars });
+      stack.push({ tag, quoted, stars, action: isAction });
+      if (isAction) actionDepth++;
       if (quotedSection && sectionSibling && !siblingOpened && stack.length === quotedSectionDepth + 1) siblingOpened = true;
       open.set(tag, (open.get(tag) ?? 0) + 1);
       if (quoted) quotedDepth++;
@@ -431,6 +446,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
     while (stack.length) {
       const x = stack.pop()!;
       open.set(x.tag, open.get(x.tag)! - 1);
+      if (x.action) { flush(); actionDepth--; }
       if (x.quoted) quotedDepth--;
       if (x.stars) starsDepth--;
       if (STRUCK_TAGS.has(x.tag)) struckDepth--;
@@ -439,6 +455,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
       if (x.tag === 'li') itemDepth--;
       if (LINE_TAGS.has(x.tag) && !/^h[1-6]$/.test(x.tag)) containers.pop();
       if (x.tag === 'table' && tables.length) closeTable();
+      // The last heading's card ends when the container that held the heading closes.
+      if (cardOpen && cardDepth >= 0 && stack.length <= cardDepth) cardOpen = false;
       // A section of customer words ends when the container that held its heading closes. A heading alone in its container
       // (a page builder's heading widget) covers the next sibling container too.
       if (quotedSection && !sectionSibling && stack.length <= quotedSectionDepth) {

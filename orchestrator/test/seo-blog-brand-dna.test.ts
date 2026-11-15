@@ -240,7 +240,7 @@ test('website address only: the site is read and a proposed card cites the pages
   assert.ok(!documents.some((d) => /Post words|Sign in to your account/.test(d.text ?? '')), 'a blog post and the sign-in page are not brand sources');
   const pricing = documents.find((d) => d.title === 'Pricing page')!;
   assert.equal(profile.offers[0]!.price, '£49 per month'); assert.equal(profile.offers[0]!.sourceDocumentId, pricing.id);
-  assert.deepEqual(profile.exclusions, ['Tax advice'], 'a "never say" topic suggestion is kept'); assert.equal(profile.rulesVersion, 2);
+  assert.deepEqual(profile.exclusions, ['Tax advice'], 'a "never say" topic suggestion is kept'); assert.equal(profile.rulesVersion, 3);
   assert.deepEqual(model.seen[0]!.map((d) => d.page).sort(), [`${SITE}/`, `${SITE}/about`, `${SITE}/pricing`], 'the model is told which documents are website pages');
 
   const state = await h.engine.brandDna(OWNER, brand.id);
@@ -914,7 +914,7 @@ test('Brand setup’s "Extract profile" is sent the prompt it always was and ret
   const setupPrompt = loadPrompt('seo-blog-profile.md'), doorPrompt = loadPrompt('seo-blog-profile-site.md');
   assert.equal(setupPrompt.header.version, '1.1.0'); assert.equal(setupPrompt.sha256, 'f17838886613cc298a85d4d0422729606c64a94d1c72867c0cfb2c2bda18f94d', 'byte for byte the prompt in use before Brand DNA');
   assert.doesNotMatch(setupPrompt.body, /`sources`|`quote`|`kind`/); assert.equal(doorPrompt.header.stage, setupPrompt.header.stage);
-  assert.match(doorPrompt.body, /reviews, testimonials[^.]*\) are NOT the brand's own claims/); assert.match(doorPrompt.body, /Every conflict must give `kind`/); assert.equal(doorPrompt.header.version, '1.4.0'); assert.match(doorPrompt.body, /"# " to "###### " a heading/);
+  assert.match(doorPrompt.body, /reviews, testimonials[^.]*\) are NOT the brand's own claims/); assert.match(doorPrompt.body, /Every conflict must give `kind`/); assert.equal(doorPrompt.header.version, '1.5.0'); assert.match(doorPrompt.body, /"# " to "###### " a heading/);
   assert.match(doorPrompt.body, /An approved claim is ONE WHOLE SENTENCE copied exactly/); assert.match(doorPrompt.body, /One offer, one price/);
 
   const h = harness(); seedSite(h);

@@ -10,6 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { Brand, BrandProfile, KnowledgeDocument, ProfileOffer } from '../seo-blog/types.js';
+import { offerForWriting } from '../seo-blog/types.js';
 import type { BrandKit, CreativePurpose, CreativeSource, Palette, CreativeTypography } from './types.js';
 
 export const NEUTRAL_PALETTE: Palette = Object.freeze({ primary: '#3a4a63', accent: '#f4f6f8', dark: '#121820', light: '#ffffff' });
@@ -84,7 +85,7 @@ export function resolveCreativeContext(input: {
     profileVersion: profile?.version ?? null, factsSha: profile?.factsSha ?? null, confirmed: usable,
     positioning: profile?.positioning ?? '', summary: profile?.summary ?? '',
     voice: Object.freeze({ tone: profile?.voice.tone ?? [], do: profile?.voice.do ?? [], dont: profile?.voice.dont ?? [] }),
-    audiences: profile?.audiences ?? [], offers: profile?.offers ?? [], approvedClaims: profile?.approvedClaims ?? [],
+    audiences: profile?.audiences ?? [], offers: (profile?.offers ?? []).map(offerForWriting), approvedClaims: profile?.approvedClaims ?? [],
     restricted: Object.freeze([...(profile?.exclusions ?? []), ...(kit?.restrictedPhrases ?? [])]),
     destinations: profile?.conversionPages ?? [],
     typography: kit?.typography ?? 'inter',

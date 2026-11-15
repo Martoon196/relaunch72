@@ -218,7 +218,7 @@ test('prices: round-2 layouts on tagged pages (prices.mts "new")', () => {
   assert.deepEqual(p(`<table><tr><td>Gas Safety Certificate CP12</td><td>£70</td></tr><tr><td>Boiler Service</td><td>Per Visit £85</td></tr></table><p>Clarity Session Standard £150</p>`, [['Gas Safety Certificate', '£70'], ['Boiler Service', '£85'], ['Clarity Session', '£150']]),
     { 'Gas Safety Certificate': 'card £70', 'Boiler Service': 'card £85', 'Clarity Session': 'card £150' });
   assert.deepEqual(p(`<h3>Pro Plan</h3><p>£49 per month or £490 per year.</p><h3>Starter</h3><p>£19 per month</p>`, [['Pro Plan', '£490 per year'], ['Starter', '£19 per month']]),
-    { 'Pro Plan': 'asked £49 per month / £490 per year', Starter: 'card £19 per month' }, 'more than one price in its own card: the owner is asked, nothing is picked');
+    { 'Pro Plan': 'card £49 per month', Starter: 'card £19 per month' }, 'rules v3: a monthly and a yearly price are both standard (the first stated is the price); nothing is asked');
   assert.deepEqual(p(`<h3>Full Management</h3><p>12% of monthly rent (inc. VAT)</p>`, [['Full Management', '12% of monthly rent (inc. VAT)']]), { 'Full Management': 'card 12% of monthly rent (inc. VAT)' });
   const bracket = holdConflictedPrices(card({ offers: [offer('Full Management', null)] }), [D('d1', tagged('<h3>Full Management</h3><p>12% of monthly rent (inc. VAT) or 10% of monthly rent (inc. VAT) for two homes</p>'))]);
   assert.deepEqual(bracket.conflicts[0]!.options!.map((o) => o.value), ['12% of monthly rent (inc. VAT)', '10% of monthly rent (inc. VAT)'], 'an option keeps its closing bracket');
@@ -228,7 +228,9 @@ test('price questions: the page’s own candidates replace the model’s answers
   // E: a single-answer model question cannot steer the owner.
   const one = door(card({ offers: [offer('Pro Plan', null)], conflicts: [{ field: 'Pro Plan: price', detail: 'Which price applies', documentIds: ['d1'], kind: 'price', offer: 'Pro Plan',
     options: [{ value: 'was £99', documentId: 'd1', quote: 'Pro Plan was £99 now £49 per month.' }, { value: 'now £49 per month', documentId: 'd1', quote: 'Pro Plan was £99 now £49 per month.' }] }] }), [D('d1', tagged('<h3>Pro Plan</h3><p>Pro Plan was £99 now £49 per month.</p>'))]);
-  assert.deepEqual(one.final.conflicts.map((c) => c.options!.map((o) => o.value)), [['was £99', 'now £49 per month']]);
+  // Rules v3: "was £X now £Y" is a standard price and a special offer, so the page answers the model's question.
+  assert.deepEqual(one.final.conflicts, []);
+  assert.deepEqual(one.final.offers[0]!.pricing!.lines.map((l) => [l.role, l.text]), [['standard', 'was £99'], ['special', 'now £49 per month']]);
   // D: a junk extra offer does not hide the second price.
   const page = [D('d1', tagged('<h3>Pro Plan</h3><p>£49 per month, plus a £199 setup fee.</p>'))];
   const honest = door(card({ offers: [offer('Pro Plan', '£49 per month')] }), page), steered = door(card({ offers: [offer('Pro Plan', '£49 per month'), offer('plus', null)] }), page);
@@ -519,7 +521,9 @@ test('fuzz: 4,000 cards over tagged and one-line text; the repair adds nothing, 
       assert.ok(strings.has(JSON.stringify(s)), `seed ${i}: added or reworded ${JSON.stringify(s)}`);
     const { offerNames: _n, ...kept } = rep.value;
     const held = holdConflictedPrices(cleanProvenance(kept, docs, true), docs);
-    for (const o of held.offers) assert.ok(o.price === null || offers.some((x) => x.name === o.name && x.price === o.price), `seed ${i}: price picked`);
+    // Rules v3: a price is the model's, or the first standard line of the structure the page states (copied from a document).
+    for (const o of held.offers) assert.ok(o.price === null || offers.some((x) => x.name === o.name && x.price === o.price)
+      || (o.pricing?.lines.find((l) => l.role === 'standard' || l.role === 'free')?.text === o.price && docs.some((d) => withoutMarkers(d.text).includes(o.price!))), `seed ${i}: price picked`);
   }
   t.diagnostic(`${repaired} repaired, ${refused} refused, ${removed} with lines left out`);
   assert.ok(repaired > 2000 && removed > 1000);

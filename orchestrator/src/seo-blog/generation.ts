@@ -17,7 +17,7 @@ import { loadPrompt, type LoadedPrompt } from '../stages/prompt.js';
 import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
-import { SeoBlogError } from './types.js';
+import { conflictForWriting, offerForWriting, SeoBlogError } from './types.js';
 import { withoutMarkers } from './brand-dna-rules.js';
 import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSources, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
@@ -333,7 +333,12 @@ export async function extractProfile(llm: LlmClient, input: {
   // The website door's provenance rule applies to its own cards only; Setup keeps the rule it always had.
   const cleaned = cleanProvenance(knownProfileFields(result.value), docs, input.strict === true);
   if (!input.strict) return { ...result, value: cleaned };
-  const priced = holdConflictedPrices(cleaned, docs);
+  const priced = holdConflictedPrices(cleaned, docs, { leftOut });
+  // A price the page's structure now gives is no longer listed as left out.
+  // A price question the repair took off is not "left out" when the page's price structure answers it.
+  const structured = priced.offers.some((o) => o.pricing);
+  leftOut = leftOut.filter((l) => !(l.what === 'question' && structured && (/\bprices?\b/i.test(l.text) || priced.offers.some((o) => o.pricing && l.text.toLowerCase().includes(o.name.toLowerCase())))));
+  leftOut = leftOut.filter((l) => l.what !== 'price' || !priced.offers.some((o) => o.name.trim().toLowerCase() === l.text.trim().toLowerCase() && Boolean(o.price || o.pricing)));
   // The lines each tied price was read from, decided over the offer list the check used, for the card to show.
   const lines = priceLineSources(result.value, docs, { website: input.website }).filter((s) => priced.offers.some((o) => o.name === s.value && o.price && o.sourceDocumentId === s.documentId));
   const held = lines.length ? { ...priced, sources: [...(priced.sources ?? []), ...lines] } : priced;
@@ -415,9 +420,10 @@ export function researchForPrompt(short:Map<string,ResearchSource>):unknown[] {
 
 export function profileForPrompt(profile: BrandProfile): Record<string, unknown> {
   return {
-    summary: profile.summary, audiences: profile.audiences, positioning: profile.positioning, offers: profile.offers,
+    // The price structure (rules v3) never reaches a writer: offers and questions keep their earlier shape.
+    summary: profile.summary, audiences: profile.audiences, positioning: profile.positioning, offers: profile.offers.map(offerForWriting),
     conversionPages: profile.conversionPages, voice: profile.voice, approvedClaims: profile.approvedClaims,
-    exclusions: profile.exclusions, unresolvedConflicts: profile.conflicts, missingFacts: profile.missingFacts,
+    exclusions: profile.exclusions, unresolvedConflicts: profile.conflicts.map(conflictForWriting), missingFacts: profile.missingFacts,
   };
 }
 
