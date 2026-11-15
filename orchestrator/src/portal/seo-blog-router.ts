@@ -44,6 +44,9 @@ import { creativeMediaProductsPage } from './creative-media-products-view.js';
 import { creativeMediaReportsPage } from './creative-media-reports-view.js';
 import { creativeVideoSourcesPage } from './creative-media-video-sources-view.js';
 import { mediaWorkbenchPage } from './creative-media-workbench-view.js';
+import { creativeMediaEditorPage } from './creative-media-editor-view.js';
+import { MEDIA_CUT_EDITOR_SCRIPT } from './media-cut-editor.js';
+import { checkVideoEditPlan } from '../creative-studio/media-edit-plan.js';
 import { videoByteRange } from './media-video-byte-range.js';
 import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
@@ -178,6 +181,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/creative-job-status.js`) return send(res, 200, CREATIVE_JOB_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/media-scene-timeline.js`) return send(res, 200, MEDIA_SCENE_TIMELINE_SCRIPT, 'text/javascript; charset=utf-8');
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/media-cut-editor.js`) return send(res,200,MEDIA_CUT_EDITOR_SCRIPT,'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
@@ -351,6 +355,13 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
           ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${video.bytes.length}`}:{})});
         res.end(method==='HEAD'?undefined:chunk);return;
       }
+      if(rest==='creative/edits'){
+        const editor=input.service.mediaEditFor?.(identity,input.requestId);
+        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
+        if(!editor||!sources)throw new SeoBlogError(404,'Private media editor disabled');
+        const [library,projects]=await Promise.all([sources.list(brandId),editor.list(brandId)]);
+        return send(res,200,creativeMediaEditorPage(shell('creative'),library,projects,()=>randomUUID()));
+      }
       if(rest==='creative/workbench'){
         const w=input.service.mediaWorkbenchFor?.(identity,input.requestId);
         if(!w)throw new SeoBlogError(404,'Media workbench disabled');
@@ -406,7 +417,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
           productPrefill, commerceSummary, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
           reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)),
            videoSourcesEnabled:Boolean(input.service.mediaVideoSourcesFor?.(identity,input.requestId)),
-           mediaWorkbenchEnabled:Boolean(input.service.mediaWorkbenchFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+           mediaWorkbenchEnabled:Boolean(input.service.mediaWorkbenchFor?.(identity,input.requestId)),
+           mediaEditorEnabled:Boolean(input.service.mediaEditFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
@@ -628,6 +640,18 @@ async function handlePost(
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
       const commandId = f('commandId') ?? '';
+      if(parts[1]==='edits'&&parts.length===2){
+        const editor=input.service.mediaEditFor?.(identity,input.requestId);
+        if(!editor)throw new SeoBlogError(404,'Private video editor disabled');
+        const [sourceId,sourceSha256]=(f('source')??'').split(':');
+        let plan:unknown;
+        try{plan=JSON.parse(f('planJson')??'');}
+        catch{throw new SeoBlogError(400,'Timeline JSON is not valid');}
+        await editor.save({workspaceId:brandId,commandId,expectedRevision:int(f('expectedRevision'),'timeline revision'),
+          ...(f('projectId')?{projectId:f('projectId')!}:{}),
+          sourceId:sourceId??'',sourceSha256:sourceSha256??'',plan:checkVideoEditPlan(plan)});
+        return ok(home+'/edits','Private timeline version saved; no render, provider or publication started.');
+      }
       if (parts[1] === 'sources' && parts.length === 2) {
          const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
          if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');

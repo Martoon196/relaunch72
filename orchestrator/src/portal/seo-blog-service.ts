@@ -34,6 +34,7 @@ import { PgCreativeVideoSources } from '../creative-studio/media-video-source-pg
 import { PgMediaAccessOwner } from '../creative-studio/media-access-pg-store.js';
 import { PgVideoAdmissionOwner } from '../creative-studio/media-admission-pg-store.js';
 import { PgMediaVideoOutputOwner } from '../creative-studio/media-video-output-owner.js';
+import { PgMediaEditStore } from '../creative-studio/media-edit-pg-store.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 
@@ -54,6 +55,7 @@ export interface PortalSeoBlogService {
   mediaReportsFor?(identity: PortalSessionIdentity, requestId: string): PgAmazonTrackingReports | null;
   /** Signed-in workspace owner only; stored footage is never provider-eligible until probed. */
   mediaVideoSourcesFor?(identity: PortalSessionIdentity, requestId: string): PgCreativeVideoSources | null;
+  mediaEditFor?(identity:PortalSessionIdentity,requestId:string):PgMediaEditStore|null;
   mediaWorkbenchFor?(identity:PortalSessionIdentity,requestId:string):{
    access:PgMediaAccessOwner;jobs:PgVideoAdmissionOwner;outputs:PgMediaVideoOutputOwner;
   }|null;
@@ -132,6 +134,12 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       return new PgCreativeVideoSources(contentCommandPool,{
         kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId,
       });
+    },
+    mediaEditFor(identity,requestId){
+      if(env.CREATIVE_STUDIO_ENABLED?.trim()!=='true'||env.RL72_MEDIA_EDITOR_ENABLED?.trim()!=='true')return null;
+      return new PgMediaEditStore(contentCommandPool,{kind:'user',
+        userId:identity.userId,requestId,sessionToken:identity.sessionToken,
+        selectedWorkspaceId:identity.workspaceId});
     },
     mediaWorkbenchFor(identity,requestId){
       if(env.CREATIVE_STUDIO_ENABLED?.trim()!=='true'||env.RL72_MEDIA_WORKBENCH_ENABLED?.trim()!=='true')return null;
