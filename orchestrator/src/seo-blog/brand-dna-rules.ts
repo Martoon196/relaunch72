@@ -75,8 +75,9 @@ const NOT_FACT = /\b(?:myths?|misconceptions?|lies?|false|untrue|wrong|mistakes?
 const NOT_YET = /\bworking towards\b|\bask(?:ed)? about\b|\boften ask\b|\blooking into\b|\bconsidering\b|\bcoming soon\b|\blaunching soon\b/u;
 /** "will soon": only in the clause that holds the audience or offer name ("…landlords in Kent and will soon open in Sussex"). */
 const WILL_SOON = /\bwill soon\b/u;
-/** A list's introduction that says the list is about the reader's problems, other people, or what is not here yet. */
-const PAIN = /\bdo you\b|\bdoes your\b|\bare you\b|\bis your\b|\bhave you\b|\btired of\b|\bfed up\b|\bstruggling\b|\bworried\b|\bsound(?:s)? familiar\b|\bsick of\b|\bfrustrated\b|\bagents who\b|\bother (?:agents|companies|firms|businesses)\b|\bunlike\b|\bmistakes\b|\bpitfalls\b|\bmyths?\b|\bcoming soon\b|\blaunching soon\b|\bplanned\b|\bin development\b/u;
+/** A list's introduction that says the list is about the reader's problems, other people, or what is not here yet.
+ * A question to the reader counts only when it opens a sentence ("Do you…?", "Are you…?"), so "What do you get?" is a plain heading. */
+const PAIN = /(?:^|[.!?]\s+)[^\p{L}\p{N}]*(?:do you|does your|are you|is your|have you)\b|\btired of\b|\bfed up\b|\bstruggling\b|\bworried\b|\bsound(?:s)? familiar\b|\bsick of\b|\bfrustrated\b|\bagents who\b|\bother (?:agents|companies|firms|businesses)\b|\bunlike\b|\bmistakes\b|\bpitfalls\b|\bmyths?\b|\bcoming soon\b|\blaunching soon\b|\bplanned\b|\bin development\b/u;
 const lowerBasis = (text: string) => basisText(text).toLowerCase();
 /** True when a piece of text holds a negation or an unreliability word (the lists above, "not yet" words included). */
 export const unreliable = (text: string) => { const t = lowerBasis(text); return NEGATION.test(t) || NOT_FACT.test(t) || NOT_YET.test(t); };

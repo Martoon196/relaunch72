@@ -141,6 +141,10 @@ test('lists: a question alone does not refuse a list; second-person or complaint
   for (const lead of ['Does your agent:', 'Do you get:', 'Are you still waiting for:', 'Is your agent:', 'Have you had:', 'Tired of agents who:', 'Sound familiar?', 'Unlike other agents, we never:', 'Five myths:', 'Coming soon', 'Launching soon:', 'Planned for next year:', 'In development:'])
     assert.ok(!onPage({ html: `<p>${lead}</p><ul><li>Online rent statements</li></ul>` }, { claims: ['Online rent statements'] }).kept('Online rent statements'), lead);
   assert.ok(!onPage({ html: '<h3>Coming soon</h3><ul><li>Online rent statements</li></ul>' }, { claims: ['Online rent statements'] }).kept('Online rent statements'));
+  // A question to the reader counts only where it opens a sentence: these are ordinary benefit headings.
+  for (const lead of ['What do you get?', 'What do you get:', 'Here is what you get when you are with us:'])
+    assert.ok(onPage({ html: `<h2>${lead}</h2><ul><li>Online rent statements</li></ul>` }, { claims: ['Online rent statements'] }).kept('Online rent statements'), lead);
+  assert.ok(!onPage({ html: '<p>Tell us what you need. Do you want it all done for you?</p><ul><li>Online rent statements</li></ul>' }, { claims: ['Online rent statements'] }).kept('Online rent statements'));
 });
 
 test('"will soon" refuses an audience or offer name only in its own clause; "coming soon" and "launching soon" anywhere in the sentence', () => {
