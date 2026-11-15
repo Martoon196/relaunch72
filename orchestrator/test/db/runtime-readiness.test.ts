@@ -17,6 +17,7 @@ import { PP_FOLLOWUP_CHECKSUM, PP_FOLLOWUP_MIGRATION } from '../../src/db/pp-fol
 import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-block-schema.js';
 import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
 import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src/db/email-connection-schema.js';
+import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src/db/email-protection-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -596,12 +597,41 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
   await assert.rejects(capable([...through146,{filename:oauth.filename,checksum:oauth.checksum}]),/migration not present|not a contiguous prefix/);
 });
 
-test('"Connect email" 155 cutover requires the exact applied MHP content workspace attach 154 and nothing beyond it', async()=>{
+test('"Connect email" release 2 (156) cutover requires the exact applied "Connect email" 155 and nothing beyond it', async()=>{
   const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,156);
+  assert.deepEqual(all[155],{filename:EMAIL_PROTECTION_MIGRATION,checksum:EMAIL_PROTECTION_CHECKSUM});
+  assert.deepEqual(all[154],{filename:EMAIL_CONNECTION_MIGRATION,checksum:EMAIL_CONNECTION_CHECKSUM});
+  const through155=all.slice(0,155), protection=all[155]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through155); await capable(all);
+  await assert.rejects(capable(all.slice(0,154)),/schema is behind by 2/);
+  await assert.rejects(capable([...through155,{...protection,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,154),protection]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...through155.slice(0,154),{...through155[154]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...through155.slice(0,153),{...through155[153]!,checksum:'0'.repeat(64)},through155[154]!]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0157_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('"Connect email" 155 binary stays ready after the exact additive release 2 (156) and nothing else', async()=>{
+  const directory=await prefixDirectory(155,'connect155-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,155);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[155]!]);
+  await assert.rejects(check([...rows,{...all[155]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0157_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(check([...rows,all[155]!,{filename:'0157_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('"Connect email" 155 cutover requires the exact applied MHP content workspace attach 154 and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).slice(0,155).map(({filename,checksum})=>({filename,checksum}));
+  const connectDirectory=await prefixDirectory(155,'connect155-cutover');
   assert.equal(all.length,155);
   assert.deepEqual(all[154],{filename:EMAIL_CONNECTION_MIGRATION,checksum:EMAIL_CONNECTION_CHECKSUM});
   const through154=all.slice(0,154), connect=all[154]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),connectDirectory,{});
   await capable(through154); await capable(all);
   await assert.rejects(capable(all.slice(0,153)),/schema is behind by 2/);
   await assert.rejects(capable([...through154,{...connect,checksum:'0'.repeat(64)}]),/checksum changed/);

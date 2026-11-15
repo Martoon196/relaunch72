@@ -168,6 +168,7 @@ export interface PostgresPortalConfig {
   followupFlows?: PostgresPortalDeps['followupFlows'];
   seoBlog?: PostgresPortalDeps['seoBlog'];
   emailConnections?: PostgresPortalDeps['emailConnections'];
+  emailSending?: PostgresPortalDeps['emailSending'];
   releasedSeoMedia?: PostgresPortalDeps['releasedSeoMedia'];
   seoBlogVaultReady?: boolean;
   webinars?: import('../webinars/service.js').PgWebinarService;
@@ -280,6 +281,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     followupFlows: cfg.followupFlows,
     seoBlog: cfg.seoBlog,
     emailConnections: cfg.emailConnections,
+    emailSending: cfg.emailSending,
     releasedSeoMedia: cfg.releasedSeoMedia,
     seoBlogVaultReady: cfg.seoBlogVaultReady,
     webinars: cfg.webinars,

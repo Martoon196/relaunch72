@@ -11,9 +11,25 @@ import type { EmailBounceConfig, EmailBounceSource } from './config.js';
 import type { EmailBlockLedger, OwnerLiftResult } from './ledger.js';
 import type { EmailPurpose, EmailSendDecision, EmailSendGuard, LastingBlockReason } from './policy.js';
 import { EMAIL_HEALTH_WINDOW_DAYS, EmailGuardUnavailableError, strongestReason } from './policy.js';
-import { createPostmarkBounceApi, type PostmarkBounceApi } from './postmark-api.js';
+import { createPostmarkBounceApi, type PostmarkBounceApi, type PostmarkBouncePage } from './postmark-api.js';
 import type { PostmarkBounceRow } from './postmark-events.js';
 import { EmailBlockRegistry } from './registry.js';
+import { deletePostmarkSuppressions, readPostmarkSuppression } from './postmark-suppressions.js';
+
+/**
+ * Where a stored connection's bounces, complaints and unsubscribes are counted (sender protection, 0156). Called once
+ * per provider event from the webhook and for every row of the hourly read; must be idempotent on the event key and
+ * throw when it could not record (the webhook then asks Postmark to retry).
+ */
+export type EmailCounterSink = (input: { readonly workspaceId: string; readonly kind: 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
+  readonly key: string; readonly at: number }) => Promise<unknown>;
+/**
+ * What Postmark's side of "This address works now" did: 'deleted' (a hard-bounce suppression was deleted, and every
+ * stream that suppressed the address was cleared), 'failed' (Postmark kept it somewhere: not a hard bounce there, or
+ * the delete failed), 'unavailable' (Postmark could not be reached), 'not_bounced' (no stream suppressed it at all),
+ * 'none' (no server to ask).
+ */
+export type ProviderReactivation = 'deleted' | 'failed' | 'unavailable' | 'not_bounced' | 'none';
 
 const DAY = 86_400_000;
 const PAGE_SIZE = 500;
@@ -45,7 +61,7 @@ export type SuppressionPersister = (stream: string, rows: readonly { email: stri
 const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
 export async function sweepPostmarkSource(input: { source: EmailBounceSource; api: PostmarkBounceApi; registry: EmailBlockRegistry; now: number;
-  persist?: SuppressionPersister }): Promise<SweepResult> {
+  persist?: SuppressionPersister; counter?: EmailCounterSink }): Promise<SweepResult> {
   const { source, api, registry, now } = input;
   let ledgerFailed = 0, ledgerSkipped = 0;
   // One day either side covers the provider reporting dates in its own time zone.
@@ -56,10 +72,12 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
     try {
       const suppressions = await api.suppressions(stream);
       const bounces: PostmarkBounceRow[] = [];
+      const counted: NonNullable<PostmarkBouncePage['counted']>[number][] = [];
       // Postmark's limits: count <= 500 and count + offset <= 10,000.
       for (let offset = 0, more = true; more; offset += PAGE_SIZE) {
         const page = await api.bounces(stream, from, to, offset, PAGE_SIZE);
         bounces.push(...page.rows);
+        counted.push(...(page.counted ?? []));
         more = page.received === PAGE_SIZE && offset + page.received < page.total;
         if (more && offset + 2 * PAGE_SIZE > MAX_OFFSET) { truncated++; more = false; }
       }
@@ -69,6 +87,12 @@ export async function sweepPostmarkSource(input: { source: EmailBounceSource; ap
       suppressionCount += suppressions.length; bounceCount += bounces.length;
       // The read itself succeeded; a failed durable write is reported on its own and written again next time.
       if (input.persist) { try { ledgerSkipped += await input.persist(stream, suppressions); } catch { ledgerFailed++; } }
+      // A stored connection's counters: every counted row once, under the same key the webhook uses.
+      if (input.counter && source.connection) {
+        for (const row of counted) {
+          try { await input.counter({ workspaceId: source.workspaceId, kind: row.kind, key: row.key, at: row.at }); } catch { ledgerFailed++; break; }
+        }
+      }
     } catch {
       failed++;
       registry.readFailed(source.workspaceId, source.key, stream, kind);
@@ -95,6 +119,9 @@ export interface EmailBounceSourceLoader {
 const SOURCE_KEY = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 const SOURCE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+/** How close Postmark's reactivation must follow our own delete (or the owner's lift) to be read as ours. */
+export const OWN_DELETE_WINDOW_MS = 10 * 60_000;
+
 export class EmailBounceService {
   readonly registry: EmailBlockRegistry;
   /** The sources from configuration (EMAIL_BOUNCE_SOURCES and each brand's built-in default), fixed at start. */
@@ -107,9 +134,13 @@ export class EmailBounceService {
   private readonly effects = new Map<string, EmailBounceEffects>();
   private readonly running = new Map<string, Promise<SweepResult>>();
   private readonly lastSwept = new Map<string, number>();
+  /** Our own Postmark deletes ("This address works now"), by workspace, stream and address: when each was asked for. */
+  private readonly ownDeletes = new Map<string, number>();
   private readonly now: () => number;
   private readonly apiFor: (source: EmailBounceSource) => PostmarkBounceApi | null;
   private readonly log: (line: string) => void;
+  private counter: EmailCounterSink | null = null;
+  private readonly suppressionFetch: typeof fetch;
   /** The durable ledger (0153), or null when this service has no database. */
   readonly ledger: EmailBlockLedger | null;
   /**
@@ -119,7 +150,8 @@ export class EmailBounceService {
   readonly guard: EmailSendGuard;
 
   constructor(input: { config: EmailBounceConfig; now?: () => number; apiFor?: (source: EmailBounceSource) => PostmarkBounceApi | null;
-    registry?: EmailBlockRegistry; log?: (line: string) => void; ledger?: EmailBlockLedger | null }) {
+    registry?: EmailBlockRegistry; log?: (line: string) => void; ledger?: EmailBlockLedger | null; suppressionFetch?: typeof fetch }) {
+    this.suppressionFetch = input.suppressionFetch ?? fetch;
     this.now = input.now ?? Date.now;
     this.registry = input.registry ?? new EmailBlockRegistry(this.now);
     this.configuredSources = input.config.sources;
@@ -177,6 +209,44 @@ export class EmailBounceService {
   dynamicSourceKeys(): readonly string[] { return [...this.dynamic.keys()]; }
 
   setSourceLoader(loader: EmailBounceSourceLoader | null): void { this.loader = loader; }
+  /** Sender protection's counters for stored connections (0156). Absent: nothing is counted, exactly as before. */
+  setCounter(counter: EmailCounterSink | null): void { this.counter = counter; }
+  get counterSink(): EmailCounterSink | null { return this.counter; }
+
+  /**
+   * Postmark's side of "This address works now": deletes the address's suppression on every stream of every source in
+   * force for this workspace that has a server token (a stored connection and an environment-configured server alike).
+   * 'deleted' only when every stream answered Deleted; 'failed' when Postmark kept it on any stream (a spam complaint
+   * can never be deleted there); 'unavailable' when Postmark could not be reached; 'none' when there is no server to ask.
+   */
+  async reactivateAtProvider(workspaceId: string, email: string): Promise<ProviderReactivation> {
+    const address = email.trim().toLowerCase();
+    const targets = this.sources.filter(source => source.workspaceId === workspaceId.toLowerCase() && source.token)
+      .flatMap(source => [...source.streams.keys()].map(stream => ({ token: source.token!, stream })));
+    if (!targets.length) return 'none';
+    let failed = false, unreachable = false, deleted = 0;
+    for (const target of targets) {
+      try {
+        // Read first: only a HARD BOUNCE suppression is deleted. An unsubscribe or a spam report is never touched.
+        const reason = await readPostmarkSuppression({ token: target.token, stream: target.stream, email: address, fetcher: this.suppressionFetch });
+        if (reason === null) continue;
+        if (reason !== 'HardBounce') { failed = true; continue; }
+        // Noted before the call: Postmark's reactivation webhook can arrive before its answer does.
+        const mark = `${workspaceId.toLowerCase()}\u0000${target.stream}\u0000${address}`;
+        this.ownDeletes.set(mark, this.now());
+        if ((await deletePostmarkSuppressions({ token: target.token, stream: target.stream, emails: [address], fetcher: this.suppressionFetch })).get(address) === 'deleted') deleted++;
+        else { failed = true; this.ownDeletes.delete(mark); }
+      } catch { unreachable = true; }
+    }
+    this.log(JSON.stringify({ event: 'email.bounces.provider_reactivation', level: failed || unreachable ? 'warn' : 'info', streams: targets.length, deleted, failed, unreachable }));
+    return failed ? 'failed' : unreachable ? 'unavailable' : deleted > 0 ? 'deleted' : 'not_bounced';
+  }
+  /** Whether THIS process asked Postmark to delete this address's suppression on this stream within OWN_DELETE_WINDOW_MS of at. */
+  ownDeleteNear(workspaceId: string, stream: string, email: string, at: number): boolean {
+    const asked = this.ownDeletes.get(`${workspaceId.toLowerCase()}\u0000${stream}\u0000${email.trim().toLowerCase()}`);
+    for (const [mark, when] of this.ownDeletes) if (this.now() - when > OWN_DELETE_WINDOW_MS) this.ownDeletes.delete(mark);
+    return asked !== undefined && asked <= at + 60_000 && at - asked <= OWN_DELETE_WINDOW_MS;
+  }
   get sourceLoader(): EmailBounceSourceLoader | null { return this.loader; }
 
   /**
@@ -262,7 +332,7 @@ export class EmailBounceService {
     // A webhook-only source has nothing to read; that is a configuration choice, not a failed read to retry.
     if (!api) return Promise.resolve({ streams: 0, failed: 0, suppressions: 0, bounces: 0 });
     const persist = this.persister(source);
-    const run = sweepPostmarkSource({ source, api, registry: this.registry, now: this.now(), ...(persist ? { persist } : {}) })
+    const run = sweepPostmarkSource({ source, api, registry: this.registry, now: this.now(), ...(persist ? { persist } : {}), ...(this.counter ? { counter: this.counter } : {}) })
       .then(result => { this.lastSwept.set(source.key, this.now()); return result; })
       .finally(() => { this.running.delete(source.key); });
     this.running.set(source.key, run);

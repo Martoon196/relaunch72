@@ -35,7 +35,7 @@
  * changes domain or disconnects, so unverified claims do not pile up. A verified one is kept.
  *
  * Nothing at Postmark is touched until the owner has agreed to the current email rules. Nothing here sends email:
- * mode stays 'off' (release 2 adds test and live).
+ * the mode (off, test, live), the test and the protection live in email-protection/ (release 2, migration 0156).
  */
 import { randomBytes } from 'node:crypto';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';

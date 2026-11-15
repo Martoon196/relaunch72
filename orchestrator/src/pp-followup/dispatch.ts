@@ -2,7 +2,7 @@ import { normalizePpEmail, type PpMarketingConfig } from './config.js';
 import { ppUnsubscribeUrl, renderPpFollowupEmail } from './content.js';
 import { PpNotSentError, type PpFollowupSender, type PpRecipientGuard } from './mail.js';
 import { decideRecipient, type EmailSendDecision } from '../email-bounces/policy.js';
-import type { PpFollowupOutcome, PpFollowupQueue } from './repository.js';
+import type { PpFollowupLease, PpFollowupOutcome, PpFollowupQueue } from './repository.js';
 
 export interface PpFollowupDispatchInput {
   readonly queue: PpFollowupQueue; readonly sender: PpFollowupSender; readonly unsubscribeSecret: string;
@@ -12,6 +12,21 @@ export interface PpFollowupDispatchInput {
   readonly onSenderRefused?: () => void;
   /** Addresses that bounced, complained or unsubscribed at Postmark are refused before a dispatch proof is written. */
   readonly recipients?: PpRecipientGuard;
+  /**
+   * Sending through a stored email connection (0156): at most `limit` emails this sweep, each reserved in the database
+   * BEFORE its dispatch proof (so caps and holds apply across every instance) and settled after. A refused reservation
+   * hands the lease back without spending an attempt and stops the sweep; nobody is stopped. Absent: exactly as before.
+   */
+  readonly allowance?: PpSendAllowance;
+  /** The business's real name and postal address, printed in every email (stored connections only). */
+  readonly footer?: { readonly businessName: string; readonly postalAddress: string };
+}
+export interface PpSendAllowance {
+  readonly limit: number;
+  reserve(lease: PpFollowupLease): Promise<string>;
+  settle(lease: PpFollowupLease, accepted: boolean): Promise<void>;
+  /** Called once when a reservation was refused (the reason the database gave). */
+  onHold?(reason: string): void;
 }
 export interface PpFollowupDispatchResult { readonly sent: number; readonly failed: number; readonly unknown: number }
 
@@ -29,15 +44,18 @@ const LEASE_MARGIN_MS = 11_000;
  * `failed` counts definite non-sends; `unknown` counts held runs.
  */
 export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): Promise<PpFollowupDispatchResult> {
-  let sent = 0, failed = 0, unknown = 0, senderRefused = false;
+  let sent = 0, failed = 0, unknown = 0, senderRefused = false, held = false;
+  const allowance = input.allowance;
+  let budget = allowance ? Math.max(0, Math.trunc(allowance.limit)) : Infinity;
   const now = () => input.now?.() ?? Date.now();
   const expiring = (leaseUntil: string) => Date.parse(leaseUntil) <= now() + LEASE_MARGIN_MS;
   // Waited for before anything is claimed, so it never eats into a lease. After the first read of Postmark's lists it returns at once.
   await input.recipients?.guard.whenReady();
-  for (let page = 0; page < 4 && !input.stopped?.() && !senderRefused; page++) {
-    const batch = await input.queue.claim(25, 120, input.config.testRecipients);
+  for (let page = 0; page < 4 && !input.stopped?.() && !senderRefused && !held && budget > 0; page++) {
+    const size = Math.min(25, budget);
+    const batch = await input.queue.claim(size, 120, input.config.testRecipients);
     for (const lease of batch) {
-      if (input.stopped?.() || senderRefused) break;
+      if (input.stopped?.() || senderRefused || held || budget <= 0) break;
       // Checked before any proof: an unspent lease simply runs out and the step is claimed again.
       if (expiring(lease.leaseUntil)) { failed++; continue; }
       const to = normalizePpEmail(lease.email);
@@ -56,27 +74,45 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
       if (decision.blocked) {
         failed++; try { await input.queue.settle(lease, 'undeliverable', null); } catch { /* the lease runs out and the step is refused again */ } continue;
       }
+      // The stored connection's allowance, taken BEFORE the proof: a hold hands the lease back with no attempt spent.
+      let reserved = false;
+      if (allowance) {
+        let outcome: string;
+        // A hold is not a failure: nothing is counted as "not sent" for it.
+        try { outcome = await allowance.reserve(lease); }
+        catch { held = true; break; }
+        if (outcome !== 'ok') {
+          held = true;
+          try { await input.queue.settle(lease, 'deferred', null); } catch { /* the lease runs out and the step is claimed again later */ }
+          try { allowance.onHold?.(outcome); } catch { /* telemetry only */ }
+          break;
+        }
+        reserved = true; budget--;
+      }
+      const release = async (accepted: boolean) => { if (reserved) { reserved = false; await allowance!.settle(lease, accepted).catch(() => undefined); } };
       let proofIssued = false, handedOff = false, accepted = false;
       try {
         const prepared = await input.queue.prepare(lease);
-        if (!prepared) continue;
+        if (!prepared) { await release(false); continue; }
         proofIssued = true;
         if (normalizePpEmail(prepared.email) !== to || expiring(prepared.leaseUntil)) throw new PpNotSentError('sender');
         const unsubscribe = ppUnsubscribeUrl(input.config.unsubscribeOrigin, input.unsubscribeSecret, prepared.contactPointId);
         const rendered = renderPpFollowupEmail({ canonicalContent: prepared.canonicalContent, contentSha256: prepared.contentSha256,
           displayName: prepared.displayName, label: input.config.fromName, link: input.config.link, unsubscribe,
-          productName: input.config.fromName, unsubscribeOrigin: input.config.unsubscribeOrigin });
+          productName: input.config.fromName, unsubscribeOrigin: input.config.unsubscribeOrigin, ...(input.footer ? { footer: input.footer } : {}) });
         handedOff = true;
         const reference = await input.sender.sendRendered({ id: prepared.id, email: to, tag: 'pp_followup', rendered, contactPointId: prepared.contactPointId });
         accepted = true;
+        await release(true);
         await input.queue.settle(lease, 'accepted', reference); sent++;
       } catch (error) {
-        if (!proofIssued) { failed++; continue; }
+        if (!proofIssued) { await release(false); failed++; continue; }
         // Certain that nothing went out: Postmark said no, or the failure happened before the provider call.
         const definite: PpFollowupOutcome | null = accepted ? null
           : error instanceof PpNotSentError ? ({ sender: 'deferred', message: 'rejected', recipient: 'undeliverable' } as const)[error.scope]
           : !handedOff ? 'rejected' : null;
         if (definite) {
+          await release(false);
           try {
             await input.queue.settle(lease, definite, null); failed++;
             if (definite === 'deferred' && handedOff) senderRefused = true;
@@ -87,7 +123,7 @@ export async function dispatchPpFollowupEmails(input: PpFollowupDispatchInput): 
         try { await input.queue.unknown(lease); } catch { /* the unresolved proof still fences a retry */ }
       }
     }
-    if (batch.length < 25) break;
+    if (batch.length < size) break;
   }
   if (senderRefused) { try { input.onSenderRefused?.(); } catch { /* telemetry only */ } }
   return { sent, failed, unknown };

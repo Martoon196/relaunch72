@@ -12,6 +12,7 @@ import { PP_FOLLOWUP_MIGRATION, PP_FOLLOWUP_CHECKSUM } from './pp-followup-schem
 import { EMAIL_BLOCK_MIGRATION, EMAIL_BLOCK_CHECKSUM } from './email-block-schema.js';
 import { SEO_BLOG_ATTACH_MIGRATION, SEO_BLOG_ATTACH_CHECKSUM } from './seo-blog-attach-schema.js';
 import { EMAIL_CONNECTION_MIGRATION, EMAIL_CONNECTION_CHECKSUM } from './email-connection-schema.js';
+import { EMAIL_PROTECTION_MIGRATION, EMAIL_PROTECTION_CHECKSUM } from './email-protection-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -309,6 +310,12 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[153]?.checksum===SEO_BLOG_ATTACH_CHECKSUM
       && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM
       && applied.get(EMAIL_CONNECTION_MIGRATION)===EMAIL_CONNECTION_CHECKSUM) applied.delete(EMAIL_CONNECTION_MIGRATION);
+  // Successor bridge, the same shape again: a build whose bundled migrations end exactly at 155 stays ready after the
+  // exact additive 156. It helps only a 155-file build that contains this code; the released 155 build (1a9e516) does not have it.
+  if (migrations.length===155 && migrations[154]?.filename===EMAIL_CONNECTION_MIGRATION
+      && migrations[154]?.checksum===EMAIL_CONNECTION_CHECKSUM
+      && applied.get(EMAIL_CONNECTION_MIGRATION)===EMAIL_CONNECTION_CHECKSUM
+      && applied.get(EMAIL_PROTECTION_MIGRATION)===EMAIL_PROTECTION_CHECKSUM) applied.delete(EMAIL_PROTECTION_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -387,6 +394,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===EMAIL_CONNECTION_MIGRATION && pending[0]?.checksum===EMAIL_CONNECTION_CHECKSUM
       && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM
       && applied.get(EMAIL_BLOCK_MIGRATION)===EMAIL_BLOCK_CHECKSUM) return;
+  // "Connect email" release 2 (156) is capable only after the exact "Connect email" 155 is applied. While 156 is pending,
+  // PP's follow-up email is sent exactly as before, nothing is counted and the sending controls are not offered.
+  if (migrations.length===156 && migrations[155]?.filename===EMAIL_PROTECTION_MIGRATION
+      && migrations[154]?.filename===EMAIL_CONNECTION_MIGRATION && pending.length===1
+      && pending[0]?.filename===EMAIL_PROTECTION_MIGRATION && pending[0]?.checksum===EMAIL_PROTECTION_CHECKSUM
+      && applied.get(EMAIL_CONNECTION_MIGRATION)===EMAIL_CONNECTION_CHECKSUM
+      && applied.get(SEO_BLOG_ATTACH_MIGRATION)===SEO_BLOG_ATTACH_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

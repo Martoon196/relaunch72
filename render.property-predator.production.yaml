@@ -426,13 +426,19 @@ services:
       # Postmark ACCOUNT token (Postmark: Account > API Tokens) and a 32-byte
       # base64 key that seals the saved server token and webhook secret. Losing
       # or changing the key is recoverable: the owner presses Repair on the email
-      # page (a new webhook secret and webhook are made). Sends
-      # nothing in this release. Names only; values are set in the dashboard.
+      # page (a new webhook secret and webhook are made). From release 2
+      # (0156) a connected business sends PP follow-up email through it, test
+      # first, live after the founder's approval. Names only; set in the dashboard.
       - key: EMAIL_CONNECT
         sync: false
       - key: POSTMARK_ACCOUNT_TOKEN
         sync: false
       - key: EMAIL_CONNECTION_KEY
+        sync: false
+      # Sender protection (migration 0156): where the founder's alert emails go
+      # (paused, switched off, ready to go live, account trip-wire). Sent through
+      # POSTMARK_SERVER_TOKEN and EMAIL_FROM. Names only; set in the dashboard.
+      - key: EMAIL_PROTECTION_FOUNDER_EMAIL
         sync: false
 
       # Mailgun EU INGRESS slots only. The public web service never receives the

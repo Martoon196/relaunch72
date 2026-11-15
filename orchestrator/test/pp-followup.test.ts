@@ -315,13 +315,15 @@ test('portal readiness and executable follow the composed sender; Start rechecks
 const FLOW_ITEM = '92c4f5a3-b08f-4de1-a4a2-8192a3b4c5d6', FLOW_VERSION = 'a3d506b4-c190-4ef2-b5b3-92a3b4c5d6e7', EMAIL_ITEM = 'b4e617c5-d2a1-4f03-86c4-a3b4c5d6e7f8', EMAIL_VERSION = 'c5f728d6-e3b2-4014-97d5-b4c5d6e7f809';
 const FLOW_RUN: PpFollowupRun = { id: OTHER, contentItemId: FLOW_ITEM, contentVersionId: FLOW_VERSION, contactId: POINT, contactPointId: POINT, email: 'ann@example.com', displayName: 'Ann Smith',
   state: 'active', position: 0, dueAt: '2026-11-12T10:00:00.000Z', reason: null, createdAt: '2026-11-11T10:00:00.000Z', lastAcceptedAt: null, inFlight: false, unknownProofId: null, steps: [] };
-function flowPage(over: { mode?: 'off' | 'test' | 'live'; ready?: boolean; problems?: string[]; runs?: PpFollowupRun[]; permitted?: number; search?: string; contacts?: number; blockers?: string[]; delivery?: boolean } = {}): string {
+function flowPage(over: { mode?: 'off' | 'test' | 'live'; ready?: boolean; problems?: string[]; runs?: PpFollowupRun[]; permitted?: number; search?: string; contacts?: number; blockers?: string[]; delivery?: boolean;
+  held?: boolean; banner?: { tone: 'alert' | 'notice' | 'ok'; title: string; text: string } | null } = {}): string {
   const ready = over.ready ?? true, runs = over.runs ?? [];
   const contacts = Array.from({ length: over.contacts ?? 1 }, (_unused, index) => ({ contactId: POINT, contactPointId: POINT, displayName: `Person ${index + 1}`, email: `person${index + 1}@example.com`, inOpenRun: false }));
   const snapshot = { brand: { productName: 'Property Predator', primaryColor: '#123b48', accentColor: '#e8a33d' }, catalog: { items: [] }, messageChoices: [], workspaceId: PP_FOLLOWUP_WORKSPACE_ID, campaign: PP_FOLLOWUP_CAMPAIGN,
     readiness: { email: ready, sms: false, whatsapp: false, reply: false, booked: false, purchased: false }, executable: ready,
     ...(over.delivery === false ? {} : { delivery: { mode: over.mode ?? 'live', problems: over.problems ?? [], search: over.search ?? '',
-      database: { campaign: PP_FOLLOWUP_CAMPAIGN, permitted: over.permitted ?? 12, contactMatches: 1, contacts, runs, runMatches: runs.length, runCount: runs.length } } }) };
+      database: { campaign: PP_FOLLOWUP_CAMPAIGN, permitted: over.permitted ?? 12, contactMatches: 1, contacts, runs, runMatches: runs.length, runCount: runs.length },
+      ...(over.held ? { held: true } : {}), ...(over.banner ? { banner: over.banner } : {}) } }) };
   const definition = { schema: 'growthhq.followup-sequence/v2', brand: 'pp', campaign: PP_FOLLOWUP_CAMPAIGN, title: 'Welcome', expiryHours: 24, entry: { mode: 'manual', source: 'manual_owner' },
     stopOn: { reply: false, booked: false, purchased: false }, steps: [
       { key: 's1', kind: 'email', contentItemId: EMAIL_ITEM, contentVersionId: EMAIL_VERSION, contentSha256: sha }, { key: 's2', kind: 'wait', minutes: 1440 },
@@ -414,4 +416,18 @@ test('the operator overview never carries a recipient name or address, in the pi
   assert.doesNotMatch(text, /ann@example\.com|Ann Smith|displayName|"email":"/u);
   assert.equal(overview.delivery.database.contacts, undefined); assert.equal(overview.delivery.database.permitted, 1);
   assert.deepEqual(overview.delivery.database.runs.map(run => [run.id, run.state, run.position]), [[OTHER, 'active', 0]], 'progress stays visible');
+});
+
+test('S-4: a held page says "The note at the top says why." only when there is a note; a held, due run says it is waiting instead of a moving time', async () => {
+  const { holdBanner } = await import('../src/email-protection/owner.js');
+  const banner = holdBanner('cap', { dailyCap: 50, hourlyCap: 13, liveDay: 50, liveHour: 2, mode: 'live' });
+  const noted = flowPage({ held: true, banner, runs: [FLOW_RUN] });
+  assert.match(noted, /Today&#39;s limit of 50 emails has been reached\. The rest go tomorrow\./u);
+  assert.match(noted, /Email sending is on hold\.<\/strong> People you start wait and get these emails when it goes again\. The note at the top says why\./u);
+  assert.doesNotMatch(flowPage({ held: true, runs: [FLOW_RUN] }), /The note at the top says why/u, 'no note: never the sentence');
+  assert.match(noted, /<p>Waiting: email sending is on hold\.<\/p>/u);
+  assert.doesNotMatch(noted, /Next email:/u);
+  // Not held: the time, exactly as before; a held run due later still shows its time.
+  assert.match(flowPage({ runs: [FLOW_RUN] }), /Next email: /u);
+  assert.match(flowPage({ held: true, banner, runs: [{ ...FLOW_RUN, dueAt: '2026-11-13T10:00:00.000Z' }] }), /Next email: /u);
 });
