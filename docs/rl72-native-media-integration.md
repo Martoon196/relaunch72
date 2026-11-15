@@ -87,3 +87,11 @@ This branch now includes an **owner-session authenticated** `/creative/sources` 
 6. Merchant-authorised special links and verifiable click/commission analytics, plus standalone signup/entitlement/credit accounting built on the same tenant and account infrastructure. No invented sales or earnings.
 
 Source intake is a useful, tested slice, not a production-eligible ingestion-to-publishing chain. Keep PR draft; no provider charge, live publish, deployment or merge.
+
+
+## Upstream foundation merge and migration collision resolution
+
+Canonical `codex/relaunch72-platform-foundation` independently added `0156_email_sending_protection.sql` while this draft was in progress.
+This draft now includes that exact upstream migration unchanged and moves RL72 Media Engine's seven new migrations forward **one number** to `0157`–`0163`, preserving a contiguous sequence.
+The renamed media SQL bodies are semantically unchanged (the original comments may refer to the earlier working number).
+The PR branch includes a merge parent pointing at upstream commit `8eca59d3bfefa3c0fcc4d74d4cb02621768f5a71` and preserves upstream email protection settings. **Never overwrite upstream/Claude changes to make CI green.**
