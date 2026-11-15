@@ -131,7 +131,9 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const replay=await owner.reserve(request);
       assert.equal(replay.replayed,true);
       assert.equal(replay.id,jobId);
-      await assert.rejects(owner.reserve({...request,commandId:randomUUID(),jobId:randomUUID()}),/budget|cap/iu);
+      const anotherCommand=randomUUID();
+      await assert.rejects(owner.reserve({...request,commandId:anotherCommand,jobId:randomUUID(),
+        request:{...mediaRequest,commandId:anotherCommand}}),/budget|cap/iu);
       assert.equal((await owner.list(a.brand.id)).length,1);
       assert.deepEqual(await crossed.list(b.brand.id),[]);
       // SQL worker leases are single-claim; only submitted jobs can settle,
