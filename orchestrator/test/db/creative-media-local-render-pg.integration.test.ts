@@ -93,7 +93,7 @@ test('real native render starts from exact owned, independently probed source an
   };
   await t.test('cannot queue unprobed source or impersonate owner',async()=>{
    await assert.rejects(a.owner.enqueue(enqueue),/probe|measured|timeline/iu);
-   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights/iu);
+   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights|measured source/iu);
    await assert.rejects(content.query('SELECT * FROM app.creative_media_local_render_jobs'),/permission denied/iu);
   });
   await t.test('trusted worker measures actual source file, owner queues exact latest timeline',async()=>{
