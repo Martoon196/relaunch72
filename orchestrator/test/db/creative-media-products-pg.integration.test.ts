@@ -126,6 +126,11 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       assert.deepEqual(await owner.list(a.brand.id),[]);
       await assert.rejects(crossed.list(a.brand.id),/session|owner|permission/iu);
       await assert.rejects(content.query('SELECT * FROM app.creative_media_video_jobs'),/permission denied/iu);
+      // Operator provisioning proof: paid API is blocked without an active same-workspace grant.
+      await admin.query(`INSERT INTO app.creative_media_access_grants
+        (workspace_id,tier,source,valid_from,valid_until,max_job_microusd,monthly_video_microusd)
+        VALUES($1,'agency_client','operator_trial',now()-interval '1 day',
+          now()+interval '7 days',750000,1000000)`,[a.brand.id]);
       await admin.query('INSERT INTO app.creative_media_video_policy(workspace_id,enabled,monthly_microusd,per_job_microusd,max_pending) VALUES($1,true,1000000,750000,1)',[a.brand.id]);
       const first=await owner.reserve(request);
       assert.equal(first.replayed,false);
