@@ -20,7 +20,8 @@ test('worker principal cannot use source owner store',async()=>{
 
 test('source page is signed-in CSRF form and promises no external effects',async()=>{
   const {creativeVideoSourcesPage}=await import('../src/portal/creative-media-video-sources-view.js');
-  const shell={csrf:'test-csrf',brand:{id:'11111111-1111-4111-8111-111111111111'},tab:'creative'} as never;
+  const shell={csrf:'test-csrf',brands:[],applicationName:'Relaunch72',creativeAvailable:true,
+    brand:{id:'11111111-1111-4111-8111-111111111111',name:'Example Brand'},tab:'creative'} as never;
   const html=creativeVideoSourcesPage(shell,[],'22222222-2222-4222-8222-222222222222');
   assert.match(html,/multipart\/form-data/);
   assert.match(html,/rightsConfirmed/);
