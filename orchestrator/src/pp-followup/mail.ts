@@ -42,7 +42,9 @@ const scopeOf = (code: unknown): 'sender' | 'message' | 'recipient' =>
  * ErrorCode 0 acceptance. A definite refusal (HTTP 4xx, or an explicit non-zero ErrorCode) throws
  * PpNotSentError; everything uncertain throws a plain error and is treated by the dispatcher as unknown.
  */
-export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeof fetch = fetch, recipients?: PpRecipientGuard): PpFollowupSender {
+export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeof fetch = fetch, recipients?: PpRecipientGuard,
+  options: { /** A stored connection's sender name (any characters but < > " \ and controls) is sent quoted. */ quotedName?: boolean } = {}): PpFollowupSender {
+  const fromHeader = options.quotedName ? `"${config.fromName}" <${config.from}>` : `${config.fromName} <${config.from}>`;
   return {
     refusesAddress: (email: string) => refusesReservedRecipient(fetcher, email),
     async sendRendered(item) {
@@ -69,7 +71,7 @@ export function createPpPostmarkSender(config: PpMarketingConfig, fetcher: typeo
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
         headers: { 'content-type': 'application/json', accept: 'application/json', 'X-Postmark-Server-Token': config.token },
         body: JSON.stringify({
-          From: `${config.fromName} <${config.from}>`, To: to, ReplyTo: config.replyTo, Subject: item.rendered.subject,
+          From: fromHeader, To: to, ReplyTo: config.replyTo, Subject: item.rendered.subject,
           HtmlBody: item.rendered.html, TextBody: item.rendered.text, MessageStream: config.stream, Tag: item.tag,
           TrackOpens: false, TrackLinks: 'None',
           Headers: [

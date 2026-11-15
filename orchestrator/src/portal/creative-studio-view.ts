@@ -15,19 +15,6 @@ export const artUrl = (shell: Shell, v: Pick<CreativeVersion, 'id' | 'render'>, 
 const MOTION_OPTIONS: [string, string][] = [['zoom_in', 'Slow zoom in'], ['zoom_out', 'Slow zoom out'], ['pan_left', 'Pan left'], ['pan_right', 'Pan right'], ['none', 'Still']];
 
 export const STYLE = `<style>
-.rl72-scene-editor{background:var(--card);border:1px solid var(--line);padding:12px;border-radius:10px;margin:12px 0}
-.rl72-scene-editor h4{margin:0 0 4px}.rl72-scenes{display:flex;gap:4px;min-height:62px}
-.rl72-scene-block{min-width:35px;flex-basis:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
- padding:9px 5px;border:1px solid var(--line);border-radius:5px;background:var(--bg);font-size:12px}
-.rl72-scene-block.selected{outline:2px solid var(--accent)}
-.rl72-scene-preview{aspect-ratio:16/9;background:linear-gradient(120deg,#0b1427,#293956);color:white;
- display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:12px;
- padding:18px;margin-top:10px;max-height:330px;border-radius:9px}
-.rl72-scene-preview strong{font-size:clamp(16px,3vw,27px)}
-.rl72-scene-preview span{font-size:13px;color:#dde3ee}
-.rl72-scene-tools{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
-.rl72-scene-editor input[type=range]{width:100%;accent-color:var(--accent)}
-
 .cs-hero{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-end;margin:0 0 16px}.cs-hero h1{margin:0}.cs-hero p{margin:4px 0 0}
 .cs-steps{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0;padding:0;list-style:none}.cs-steps li{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);background:var(--card)}
 .swatches{display:flex;gap:8px;flex-wrap:wrap}.swatch{display:flex;align-items:center;gap:6px;font-size:13px}.swatch i{display:inline-block;width:22px;height:22px;border-radius:6px;border:1px solid var(--line)}
@@ -75,65 +62,18 @@ export function creativeOverviewPage(shell: Shell, data: {
   /** Images generated from this brand's typed briefs, usable as backgrounds (no new provider call). */
   readonly generatedImages?: readonly { id: string; label: string; previewUrl: string }[];
   readonly generation?: Readonly<{ available: boolean; enabled: boolean; remaining: number }>;
-  readonly productCatalogueEnabled?: boolean;
-  readonly reportImportEnabled?: boolean;
-  readonly videoSourcesEnabled?: boolean;
-  readonly mediaWorkbenchEnabled?: boolean;
-  readonly mediaEditorEnabled?: boolean;
-  readonly commerceSummary?: {
-    readonly products: number;
-    readonly latestReport: null | {
-      readonly start: string; readonly end: string;
-      readonly knownEarningsMinor: number; readonly unknownRows: number;
-      readonly unallocatedEarningsMinor: number;
-    };
-  };
-  readonly productPrefill?: Pick<import('../creative-studio/media-product-pg-store.js').AffiliateMediaProductRecord, 'product_name' | 'merchant_name' | 'network'> | null;
   /** Milestone 5: general patterns the same person shared from their other brands (never evidence for this brand). */
   readonly otherPatterns?: readonly import('../creative-studio/learning.js').PatternRow[] | null;
 }): string {
   const c = data.context, pre = data.prefill ?? new URLSearchParams();
-  const productPrefill = data.productPrefill;
   const radios = (name: string, options: [string, string][], checked: string) => options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${e(v)}"${v === checked ? ' checked' : ''}> ${e(l)}</label>`).join('');
-  const fmtGBP = (p: number) => '£' + (p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const cs = data.commerceSummary;
-  const commerceDashboard = (data.productCatalogueEnabled || data.reportImportEnabled) && cs
-    ? '<section class="card"><h2>Affiliate Commerce</h2><div class="grid">'
-      + '<div><strong>' + cs.products + '</strong><div class="small muted">Products in private catalogue</div></div>'
-      + '<div><strong>' + (cs.latestReport ? fmtGBP(cs.latestReport.knownEarningsMinor) : '—') + '</strong>'
-      + '<div class="small muted">Known merchant-reported earnings' + (cs.latestReport ? ' · ' + e(cs.latestReport.start) + '–' + e(cs.latestReport.end) : '') + '</div></div>'
-      + '<div><strong>' + (cs.latestReport ? fmtGBP(cs.latestReport.unallocatedEarningsMinor) : '—') + '</strong>'
-      + '<div class="small muted">Others / unallocated earnings</div></div>'
-      + '<div><strong>' + (cs.latestReport ? cs.latestReport.unknownRows : '—') + '</strong>'
-      + '<div class="small muted">Earnings rows unknown (not zero)</div></div>'
-      + '</div><p class="small muted">Last imported report only; overlapping reports are not summed. No product-specific sales attribution is assumed.</p></section>' : '';
-  const catalogue = data.productCatalogueEnabled
-    ? '<p><a class="button secondary" href="'+base(shell)+'/products">Manage affiliate products</a></p>' : '';
-  const reports = data.reportImportEnabled
-    ? '<p><a class="button secondary" href="'+base(shell)+'/reports">Import Amazon earnings reports</a></p>' : '';
-  const editor=data.mediaEditorEnabled
-    ? '<p><a class="button secondary" href="'+base(shell)+'/edits">Edit video timelines</a></p>' : '';
-  const workbench=data.mediaWorkbenchEnabled
-    ? '<p><a class="button secondary" href="'+base(shell)+'/workbench">Media workbench &amp; usage</a></p>' : '';
-  const sources = data.videoSourcesEnabled
-    ? '<p><a class="button secondary" href="'+base(shell)+'/sources">Private video sources</a></p>' : '';
-  const form = `${commerceDashboard}<section class="card" aria-labelledby="new-h">${catalogue}${reports}${sources}${workbench}${editor}<h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
+  const form = `<section class="card" aria-labelledby="new-h"><h2 id="new-h">Create images</h2>${!data.rendererReady ? '<p class="notice bad">The artwork renderer is not installed on this server, so no artwork can be produced yet.</p>' : ''}
 <form class="cs-form" method="post" action="${base(shell)}/draft" enctype="multipart/form-data">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.commandId)}">
-${pre.get('brief') ? '<p class="notice small">Pre-filled from a campaign proposal concept. Model-written copy is checked against approved facts like any brief.</p>' : ''}<fieldset><legend>1 · What is it for?</legend><div class="choice">${radios('purpose', CREATIVE_PURPOSES.map((p) => [p, PURPOSE_LABELS[p]]), productPrefill ? 'product_promotion' : CREATIVE_PURPOSES.includes(pre.get('purpose') as never) ? pre.get('purpose')! : 'advert')}</div></fieldset>
-<fieldset><legend>2 · What is it about?</legend><div class="choice">${radios('source_kind', [['offer', 'An approved offer'], ['article', 'An article'], ['brief', 'A short brief'], ['affiliate_product', 'An affiliate product (manual review required)']], (productPrefill || pre.get('source_kind') === 'affiliate_product') ? 'affiliate_product' : pre.get('source_kind') === 'brief' || !c.offers.length ? 'brief' : 'offer')}</div>
+${pre.get('brief') ? '<p class="notice small">Pre-filled from a campaign proposal concept. Model-written copy is checked against approved facts like any brief.</p>' : ''}<fieldset><legend>1 · What is it for?</legend><div class="choice">${radios('purpose', CREATIVE_PURPOSES.map((p) => [p, PURPOSE_LABELS[p]]), CREATIVE_PURPOSES.includes(pre.get('purpose') as never) ? pre.get('purpose')! : 'advert')}</div></fieldset>
+<fieldset><legend>2 · What is it about?</legend><div class="choice">${radios('source_kind', [['offer', 'An approved offer'], ['article', 'An article'], ['brief', 'A short brief']], pre.get('source_kind') === 'brief' || !c.offers.length ? 'brief' : 'offer')}</div>
 <div class="row"><div><label for="cs-offer">Offer</label><select id="cs-offer" name="offer">${c.offers.length ? c.offers.map((o) => `<option value="${e(o.name)}">${e(o.name)}${o.price ? ` — ${e(o.price)}` : ''}</option>`).join('') : '<option value="">No offers in the confirmed profile</option>'}</select></div>
 <div><label for="cs-article">Article</label><select id="cs-article" name="article">${data.articles.filter((a) => a.currentVersionId).map((a) => `<option value="${e(a.id)}">${e(a.title)}</option>`).join('') || '<option value="">No articles yet</option>'}</select></div></div>
-<label for="cs-brief">Brief <span class="muted">(used when “A short brief” is chosen; figures you type are flagged for confirmation)</span></label><textarea id="cs-brief" name="brief" maxlength="1200" style="min-height:70px" placeholder="What should the artwork say, in your own words?">${e(pre.get('brief') ?? '')}</textarea>
-<div class="card" style="margin-top:14px"><strong>Affiliate product intake</strong> <span class="pill warn">Private drafts only</span>
-<p class="small muted">Choose “Product promotion” and “An affiliate product” above. This uses the existing brand-approved landing page, local Creative Studio renderer and exact-version approval. It does not validate or issue an Amazon Special Link, claim a commission, or publish.</p>
-<div class="row"><div><label for="af-product">Product name</label><input id="af-product" type="text" name="affiliate_product_name" maxlength="100" placeholder="Owner-checked product name" value="${e(productPrefill?.product_name ?? '')}"></div>
-<div><label for="af-merchant">Merchant</label><input id="af-merchant" type="text" name="affiliate_merchant_name" maxlength="80" placeholder="Owner-checked merchant name" value="${e(productPrefill?.merchant_name ?? '')}"></div></div>
-<label for="af-network">Affiliate programme</label><select id="af-network" name="affiliate_network"><option value="amazon_associates"${productPrefill?.network === 'other' ? '' : ' selected'}>Amazon Associates</option><option value="other"${productPrefill?.network === 'other' ? ' selected' : ''}>Other affiliate programme</option></select>
-<p class="small muted">Before creating Amazon artwork, set #ad and “As an Amazon Associate I earn from qualifying purchases” in the brand's required creative-kit disclosure. Non-Amazon artwork needs #ad. Review the programme's actual rules for each site and platform.</p>
-<label><input type="checkbox" name="affiliate_product_reviewed" value="on"> I independently checked the product and merchant details. No price, result, review or product benefit is asserted by this template.</label>
-<label><input type="checkbox" name="affiliate_channel_eligible" value="on"> I checked that this brand's selected destination/site and intended channel are eligible for my affiliate programme.</label>
-<label><input type="checkbox" name="affiliate_rights_confirmed" value="on"> I have the rights to use any supplied images or footage, and I will review the final artwork before sharing.</label>
-</div></fieldset>
+<label for="cs-brief">Brief <span class="muted">(used when “A short brief” is chosen; figures you type are flagged for confirmation)</span></label><textarea id="cs-brief" name="brief" maxlength="1200" style="min-height:70px" placeholder="What should the artwork say, in your own words?">${e(pre.get('brief') ?? '')}</textarea></fieldset>
 <fieldset><legend>3 · Who and where?</legend><div class="row"><div><label for="cs-aud">Audience</label><select id="cs-aud" name="audience"><option value="">General audience</option>${c.audiences.map((a) => `<option value="${e(a)}"${a === pre.get('audience') ? ' selected' : ''}>${e(a)}</option>`).join('')}<option value="__custom">Other…</option></select><input type="text" name="audience_custom" maxlength="80" placeholder="Other audience (optional)" aria-label="Other audience"></div>
 <div><label for="cs-dest">Destination</label><select id="cs-dest" name="destination"><option value="">No link (organic post)</option>${c.destinations.map((d) => `<option value="${e(d.url)}"${d.url === pre.get('destination') ? ' selected' : ''}>${e(d.label)} — ${e(d.url)}</option>`).join('')}</select></div></div>
 <p class="small muted">Only approved conversion pages from the confirmed profile can be used. Adverts and product promotions need one.</p>
@@ -246,7 +186,7 @@ ${bg.kind === 'image' && bg.origin === 'owner_upload' ? '<label class="small" st
       const video = c.videos.find((x) => x.version.placement === v.placement);
       const blocking = v.issues.some((i) => i.blocking);
       const fresh = video && video.version.variant.storyboard?.sourceStoryboardVersionId === v.id;
-      const sceneForm = `<details class="small"><summary>Edit scenes</summary><form data-rl72-scene-editor method="post" action="${base(shell)}/v/${e(v.id)}/scenes">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="scene_count" value="${scenes.length + 1}">
+      const sceneForm = `<details class="small"><summary>Edit scenes</summary><form method="post" action="${base(shell)}/v/${e(v.id)}/scenes">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="scene_count" value="${scenes.length + 1}">
 ${[...scenes, null].map((x, i) => `<fieldset><legend>${x ? `Scene ${i + 1}` : 'Add a scene (optional — leave blank to skip)'}</legend><label>On-screen text<input type="text" name="scene.${i}.headline" maxlength="90" value="${e(x?.headline ?? '')}"${x ? ' required' : ''}></label><label>Supporting line<input type="text" name="scene.${i}.body" maxlength="160" value="${e(x?.body ?? '')}"></label>
 <div class="row"><label>Seconds<select name="scene.${i}.duration">${Array.from({ length: 14 }, (_, k) => 1500 + k * 500).map((ms) => `<option value="${ms}"${ms === (x?.durationMs ?? 3000) ? ' selected' : ''}>${ms / 1000}</option>`).join('')}</select></label><label>Motion<select name="scene.${i}.motion">${MOTION_OPTIONS.map(([m, l]) => `<option value="${m}"${m === (x?.motion ?? 'zoom_in') ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
 ${c.concept.cta ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.cta" value="1"${x?.showCta ? ' checked' : ''}> Show the “${e(c.concept.cta)}” button</label>` : ''}<label>Voiceover script <span class="muted">(script only — no voice is generated)</span><textarea name="scene.${i}.script" maxlength="400" style="min-height:50px">${e(x?.script ?? '')}</textarea></label>${x ? `<label style="font-weight:400"><input type="checkbox" name="scene.${i}.remove" value="1"> Remove this scene</label>` : ''}</fieldset>`).join('')}
@@ -273,7 +213,7 @@ ${v.issues.length ? `<ul class="issues">${v.issues.map((i) => `<li class="${i.bl
 ${rows.map((row) => `<section class="cmp-row"><h3>${e(row.label)} <span class="muted small">${PLACEMENTS[row.placement].use}</span></h3><div class="cmp" style="--cols:${cols}">${concepts.map((c) => figure(c.variants.find((v) => v.version.placement === row.placement && v.version.card === row.card))).join('')}</div></section>`).join('')}
 <h2>Video</h2><p class="muted small">Storyboards turn a concept's own copy into scenes. Videos are recorded on this server from an exact storyboard, silent with on-screen text, and checked for playback before they can be approved. No avatar, voice or video provider is used, and no customer endorsements may appear.</p>
 ${concepts.map(motion).join('')}
-${distributionSection(data.distribution ?? null)}`, '<script src="/portal/seo-blog/media-scene-timeline.js" defer></script>');
+${distributionSection(data.distribution ?? null)}`);
 }
 
 const STATUS_LABEL: Readonly<Record<StageEvidence['status'], string>> = { reached: 'Reached', waiting: 'Not yet', not_applicable: 'Not applicable', unknown: 'Not recorded', failed: 'Failed', stopped: 'Stopped' };

@@ -4,6 +4,11 @@ import { affiliateDisclosureProblem, affiliateProductBrief } from '../src/creati
 import { CreativeStudioService } from '../src/creative-studio/service.js';
 import type { CreativeBrandContext } from '../src/creative-studio/brand-context.js';
 
+// A media-only test process explicitly enables the opt-in parser hook.
+const priorMediaFlag=process.env.CREATIVE_MEDIA;
+process.env.CREATIVE_MEDIA='enabled';
+test.after(()=>{if(priorMediaFlag===undefined)delete process.env.CREATIVE_MEDIA;
+  else process.env.CREATIVE_MEDIA=priorMediaFlag;});
 const amazonDisclosure = '#ad As an Amazon Associate I earn from qualifying purchases.';
 const context = {
   confirmed: true,

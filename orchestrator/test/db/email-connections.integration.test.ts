@@ -33,7 +33,10 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
   const extraPools: pg.Pool[] = [];
   try {
     await resetIdentityTables(admin);
-    await ownerQuery(admin, 'DELETE FROM app_private.email_connections').catch(() => undefined);
+    // A clean slate (0156's tables first, when the database has them).
+    for (const table of ['email_send_events', 'email_protection_alerts', 'email_sending_controls', 'email_account_events', 'email_protection_events', 'email_connection_events', 'email_connections']) {
+      await ownerQuery(admin, `DELETE FROM app_private.${table}`).catch(() => undefined);
+    }
     const org = randomUUID(), otherOrg = randomUUID();
     const owner = randomUUID(), admin2 = randomUUID(), billingOwner = randomUUID(), stranger = randomUUID();
     await ownerQuery(admin, `DO $s$ BEGIN
@@ -157,13 +160,18 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     const privileges = await ownerQuery<{ t: string; p: string }>(admin, `SELECT c.relname AS t,string_agg(privilege_type,',' ORDER BY privilege_type) AS p
       FROM information_schema.role_table_grants g JOIN pg_class c ON c.relname=g.table_name WHERE g.grantee='r72_email_connection_definer' AND g.table_schema='app_private'
       GROUP BY c.relname ORDER BY 1`);
-    assert.deepEqual(privileges, [{ t: 'email_connection_events', p: 'INSERT,SELECT' }, { t: 'email_connections', p: 'INSERT,SELECT' }, { t: 'email_protection_events', p: 'INSERT,SELECT' }]);
+    // 0156 adds its own tables to this definer; these three keep exactly their 0155 table privileges.
+    assert.deepEqual(privileges.filter(row => ['email_connection_events', 'email_connections', 'email_protection_events'].includes(row.t)),
+      [{ t: 'email_connection_events', p: 'INSERT,SELECT' }, { t: 'email_connections', p: 'INSERT,SELECT' }, { t: 'email_protection_events', p: 'INSERT,SELECT' }]);
     await expectPostgresError(ownerQuery(admin, `INSERT INTO app_private.email_protection_events(workspace_id,kind,numbers,actor_kind) VALUES($1,'x','{"to":"a@b.co"}','system')`, [PP]), '23514');
     const definerColumns = await ownerQuery<{ c: string }>(admin, `SELECT column_name AS c FROM information_schema.column_privileges WHERE grantee='r72_email_connection_definer'
       AND table_name='email_connections' AND privilege_type='UPDATE' ORDER BY 1`);
-    for (const forbidden of ['mode', 'test_recipients', 'protection_state', 'daily_cap', 'hourly_cap', 'go_live_approved_at', 'workspace_id', 'created_by_user_id']) {
-      assert.equal(definerColumns.some(r => r.c === forbidden), false, `${forbidden} cannot be changed by any function in this release`);
+    // 0155 granted no function the right to change the protection groundwork; 0156 grants exactly these (and never the keys).
+    const at0156 = (await ownerQuery<{ v: boolean }>(admin, "SELECT to_regprocedure('app_private.email_sending_config(uuid)') IS NOT NULL AS v"))[0]!.v;
+    for (const column of ['mode', 'test_recipients', 'protection_state', 'protection_reason', 'protection_since', 'daily_cap', 'hourly_cap', 'warmup_started_at', 'go_live_approved_by', 'go_live_approved_at']) {
+      assert.equal(definerColumns.some(r => r.c === column), at0156, `${column}: writable only from 0156`);
     }
+    for (const forbidden of ['workspace_id', 'created_by_user_id']) assert.equal(definerColumns.some(r => r.c === forbidden), false, forbidden);
 
     // Disconnect forgets both secrets and the webhook; the sources read then has nothing.
     await store.disconnect(ownerToken, PP);

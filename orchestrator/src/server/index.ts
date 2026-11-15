@@ -37,7 +37,9 @@ import { startMhpKitJobs } from '../mhp/kit-service.js';
 import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
 import { createPostmarkBounceWebhook } from '../email-bounces/webhook.js';
 import { createPpPostmarkSender } from '../pp-followup/mail.js';
-import { startPpFollowupDispatcher } from '../pp-followup/dispatch.js';
+import { startPpFollowupDelivery } from '../pp-followup/delivery.js';
+import { resolveSendingPlan } from '../email-protection/sending.js';
+import { PP_MARKETING_DEFAULT_LINK } from '../pp-followup/config.js';
 import { PP_FOLLOWUP_WORKSPACE_ID } from '../pp-followup/repository.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
@@ -665,6 +667,7 @@ async function main(): Promise<void> {
         followupFlows: postgresPortal.followupFlows,
         seoBlog: postgresPortal.seoBlog,
         emailConnections: postgresPortal.emailConnections,
+        emailSending: postgresPortal.emailSending,
         releasedSeoMedia: postgresPortal.releasedSeoMedia,
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
         webinars: postgresPortal.webinars,
@@ -1081,14 +1084,43 @@ async function main(): Promise<void> {
   if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
   // PP follow-ups use the same bounce handler: blocked addresses are refused before a proof and again at the sender.
   const ppRecipients = emailBounces?.hasWorkspace(PP_FOLLOWUP_WORKSPACE_ID) ? { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } : undefined;
-  const stopPpFollowup = ppFollowup?.config
-    ? startPpFollowupDispatcher({ queue: ppFollowup.queue, sender: createPpPostmarkSender(ppFollowup.config, fetch, ppRecipients), unsubscribeSecret: cfg.sessionSecret, config: ppFollowup.config,
-        recipients: ppRecipients,
-        onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') }, {
-        onResult: result => { if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} not sent (retried or failed by rule), ${result.unknown} held for an owner decision.`); },
+  // Release 2 of "Connect email": PP's stored connection, when it is in charge, is read every sweep (its own server token,
+  // sender and stream; every send reserved against the caps and holds first). Otherwise the environment sender runs
+  // exactly as before; with neither, nothing is sent.
+  const ppConnectionLink = (() => { try { const u = new URL(process.env.PP_MARKETING_LINK?.trim() || PP_MARKETING_DEFAULT_LINK); return u.protocol === 'https:' && !u.username && !u.password ? u.href : null; } catch { return null; } })();
+  const ppConnectionOrigin = (() => { try { const u = new URL(process.env.PORTAL_BASE_URL?.trim() ?? ''); return u.protocol === 'https:' ? u.origin : null; } catch { return null; } })();
+  const emailProtection = postgresPortal?.emailProtection;
+  let ppHold: string | null = null;
+  const stopPpFollowup = ppFollowup && (ppFollowup.config || (emailProtection && postgresPortal?.emailProtectionStore && ppConnectionLink && ppConnectionOrigin))
+    ? startPpFollowupDelivery({ queue: ppFollowup.queue, unsubscribeSecret: cfg.sessionSecret,
+        ...(ppFollowup.config ? { env: { sender: createPpPostmarkSender(ppFollowup.config, fetch, ppRecipients), config: ppFollowup.config,
+          ...(ppRecipients ? { recipients: ppRecipients } : {}),
+          onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') } } : {}),
+        ...(postgresPortal?.emailProtectionStore && ppConnectionLink && ppConnectionOrigin ? { connection: {
+          plan: () => resolveSendingPlan(postgresPortal.emailProtectionStore!, postgresPortal.emailSendingVault ?? null, PP_FOLLOWUP_WORKSPACE_ID,
+            { allowed: postgresPortal.storedSendingAllowed === true }),
+          store: postgresPortal.emailProtectionStore, link: ppConnectionLink, unsubscribeOrigin: ppConnectionOrigin,
+          ...(emailBounces && postgresPortal.emailBounceHandling ? { recipients: { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } } : {}),
+          afterSend: (workspaceId: string) => emailProtection?.soon(workspaceId) } } : {}) }, {
+        onResult: result => {
+          const hold = result.sender === 'hold' ? result.hold ?? 'hold' : null;
+          if (hold !== ppHold) {
+            ppHold = hold;
+            console.info(JSON.stringify({ event: 'pp.followup.sender', sender: result.sender, ...(hold ? { hold } : {}) }));
+            if (hold === 'switched_off_here') console.warn('PP follow-up emails are held: the stored email connection is set to test or live, but EMAIL_CONNECT is not enabled or EMAIL_BOUNCE_HANDLING is off here.');
+          }
+          if (result.failed || result.unknown) console.warn(`PP follow-up emails: ${result.sent} sent, ${result.failed} not sent (retried or failed by rule), ${result.unknown} held for an owner decision.`);
+        },
         onError: () => console.warn('PP follow-up email dispatch is temporarily unavailable; runs wait.'),
       })
     : () => {};
+  // Sender protection: judged every 5 minutes (and after each counted event), alert emails through the platform's own
+  // transactional sender (POSTMARK_SERVER_TOKEN, EMAIL_FROM) to the business owners and EMAIL_PROTECTION_FOUNDER_EMAIL.
+  if (emailProtection && postmarkToken) {
+    const from = process.env.EMAIL_FROM?.trim() || 'Relaunch72 <hello@relaunch72.com>';
+    emailProtection.setMailer({ send: async message => { await makePostmark(postmarkToken).send({ from, to: message.to, subject: message.subject, textBody: message.text, htmlBody: message.html, messageStream: 'outbound' }); } });
+  }
+  const stopEmailProtection = emailProtection?.start() ?? (() => {});
   // Webinar messages and Cloudflare reconciliation. Job claims are lease-based, so
   // several web instances can run this safely; WEBINAR_WORKER_ENABLED=false turns it off.
   const webinarWorker = process.env.WEBINAR_WORKER_ENABLED?.trim() === 'false' ? undefined : postgresPortal?.webinarWorker;
@@ -1122,6 +1154,7 @@ async function main(): Promise<void> {
     stopEmailConnectionSources();
     stopLeadRelayFeed();
     stopPpFollowup();
+    stopEmailProtection();
     webinarWorker?.stop();
     postgresPortal?.webinarStudio?.stopAll();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);

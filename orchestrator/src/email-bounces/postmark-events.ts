@@ -3,6 +3,7 @@
  * records, from a webhook or from its API. Nothing here does IO.
  */
 
+import { createHash } from 'node:crypto';
 import { normalizeBounceEmail, type EmailFactKind } from './policy.js';
 
 /**
@@ -56,6 +57,8 @@ export interface PostmarkAddressEvent {
    * it, so it changes who is blocked but must not be counted as a second bounce.
    */
   readonly counts: boolean;
+  /** SubscriptionChange only: who changed it (Postmark: Recipient, Customer or Admin). */
+  readonly origin?: string | null;
 }
 export type PostmarkWebhookReading =
   | { readonly outcome: 'event'; readonly event: PostmarkAddressEvent }
@@ -106,7 +109,8 @@ export function readPostmarkWebhook(payload: unknown): PostmarkWebhookReading {
     if (!kind) return { outcome: 'ignored', why: 'suppression_reason' };
     // Postmark gives a subscription change no ID of its own.
     return { outcome: 'event', event: Object.freeze({ eventId: `subscription:${stream}:${email}:${at}:${payload.SuppressSending ? kind : 'on'}`,
-      kind, email, stream, serverId, at, metadata: metadata(payload.Metadata), counts: false }) };
+      kind, email, stream, serverId, at, metadata: metadata(payload.Metadata), counts: false,
+      origin: typeof payload.Origin === 'string' && /^[A-Za-z]{1,20}$/u.test(payload.Origin) ? payload.Origin : null }) };
   }
   // Delivery, open and click records carry nothing this handler acts on.
   return { outcome: 'ignored', why: 'record_type' };
@@ -127,4 +131,66 @@ export function readPostmarkSuppressionRow(row: unknown): PostmarkSuppressionRow
   if (!record(row)) return null;
   const email = normalizeBounceEmail(row.EmailAddress), kind = classifyPostmarkSuppression(row.SuppressionReason);
   return email && kind ? Object.freeze({ email, kind, at: instant(row.CreatedAt) }) : null;
+}
+
+/**
+ * Sender protection's counters (0156): which Postmark bounce Types count, and ONE key per Postmark event, used by the
+ * webhook and the hourly read alike, so the same event is counted once whichever reads it first and however each
+ * reads it for blocking. Postmark counts every bounce "highlighted in red" towards its 10% line and does not publish
+ * that list, so we count the wider set that says a delivery failed:
+ *   hard_bounce  HardBounce, BadEmailAddress, and any other Type Postmark switched off (Inactive)
+ *   soft_bounce  SoftBounce, DnsError, Unknown, DMARCPolicy (not switched off)
+ *   blocked      Blocked, SpamNotification (not switched off): counted toward SLOWED only, never toward a pause, a
+ *                switch-off, the sample or the account lines
+ *   complaint    SpamComplaint
+ *   unsubscribe  Unsubscribe and ManuallyDeactivated bounce records, and a SubscriptionChange to ManualSuppression
+ * Not counted: Transient (a delay Postmark is still retrying), AutoResponder, AddressChange, Subscribe, OpenRelayTest,
+ * VirusNotification, ChallengeVerification, Unconfirmed, SMTPApiError, InboundError, TemplateRenderingFailed (they say
+ * nothing about delivery to the person), unless Postmark switched the address off. The webhook and the hourly read
+ * both use this one function.
+ * Key: "bounce:<Postmark ID>" for a bounce or complaint; an unsubscribe is "unsub:" and a digest of the stream and the
+ * address (never the address), the same from a bounce record and a subscription change.
+ */
+export type PostmarkCounterKind = 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
+const COUNT_HARD = new Set(['HardBounce', 'BadEmailAddress']);
+const COUNT_SOFT = new Set(['SoftBounce', 'DnsError', 'Unknown', 'DMARCPolicy']);
+const COUNT_BLOCKED = new Set(['Blocked', 'SpamNotification']);
+const COUNT_UNSUBSCRIBE = new Set(['Unsubscribe', 'ManuallyDeactivated']);
+export function postmarkCounterKind(type: unknown, inactive: unknown): PostmarkCounterKind | null {
+  if (type === 'SpamComplaint') return 'complaint';
+  if (typeof type !== 'string') return null;
+  if (COUNT_UNSUBSCRIBE.has(type)) return 'unsubscribe';
+  if (COUNT_HARD.has(type) || inactive === true) return 'hard_bounce';
+  if (COUNT_SOFT.has(type)) return 'soft_bounce';
+  if (COUNT_BLOCKED.has(type)) return 'blocked';
+  return null;
+}
+const unsubscribeKey = (stream: string, email: string): string => `unsub:${createHash('sha256').update(`${stream}\u0000${email}`).digest('hex').slice(0, 40)}`;
+export interface PostmarkCounted { readonly kind: PostmarkCounterKind; readonly key: string; readonly at: number; readonly stream: string; readonly serverId: string | null }
+
+/** The counter one authenticated webhook body adds, or null. */
+export function readPostmarkCounter(payload: unknown): PostmarkCounted | null {
+  if (!record(payload)) return null;
+  const stream = typeof payload.MessageStream === 'string' && STREAM.test(payload.MessageStream) ? payload.MessageStream : null;
+  if (!stream) return null;
+  const serverId = identifier(payload.ServerID);
+  if (payload.RecordType === 'Bounce' || payload.RecordType === 'SpamComplaint') {
+    const id = identifier(payload.ID), at = instant(payload.BouncedAt), email = normalizeBounceEmail(payload.Email);
+    const kind = payload.RecordType === 'SpamComplaint' ? 'complaint' : postmarkCounterKind(payload.Type, payload.Inactive);
+    if (!id || at === null || !kind || !email) return null;
+    return { kind, key: kind === 'unsubscribe' ? unsubscribeKey(stream, email) : `bounce:${id}`, at, stream, serverId };
+  }
+  if (payload.RecordType === 'SubscriptionChange' && payload.SuppressSending === true && payload.SuppressionReason === 'ManualSuppression') {
+    const email = normalizeBounceEmail(payload.Recipient), at = instant(payload.ChangedAt);
+    return email && at !== null ? { kind: 'unsubscribe', key: unsubscribeKey(stream, email), at, stream, serverId } : null;
+  }
+  return null;
+}
+/** The counter one row of GET /bounces adds (the stream is the one that was read), or null. */
+export function readPostmarkCounterRow(row: unknown, stream: string): Omit<PostmarkCounted, 'serverId' | 'stream'> | null {
+  if (!record(row)) return null;
+  const id = identifier(row.ID), at = instant(row.BouncedAt), email = normalizeBounceEmail(row.Email);
+  const kind = row.Type === 'SpamComplaint' ? 'complaint' : postmarkCounterKind(row.Type, row.Inactive);
+  if (!id || at === null || !kind || !email) return null;
+  return { kind, key: kind === 'unsubscribe' ? unsubscribeKey(stream, email) : `bounce:${id}`, at };
 }

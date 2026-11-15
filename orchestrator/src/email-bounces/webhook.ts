@@ -29,6 +29,11 @@ import type { EmailBounceSource } from './config.js';
 import { factBlockReason } from './policy.js';
 import { parsePostmarkJson, readPostmarkWebhook } from './postmark-events.js';
 import type { EmailBounceService } from './service.js';
+import { readPostmarkCounter } from './postmark-events.js';
+import { OWN_DELETE_WINDOW_MS } from './service.js';
+
+/** A reactivation that is not the recipient's own, this long after an owner's lift for the address, is still ours. */
+const OWNER_LIFT_WINDOW_MS = 24 * 60 * 60_000;
 
 export const POSTMARK_BOUNCE_WEBHOOK_PREFIX = '/api/provider-webhooks/postmark/';
 export const POSTMARK_BOUNCE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
@@ -176,7 +181,18 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
         if (source.connection) log(JSON.stringify({ event: 'email.bounces.webhook_unreadable_ignored', source: source.key, bytes: size }));
         send(res, source.connection ? 200 : 400, source.connection ? { received: true, outcome: 'ignored' } : { error: 'invalid_event' }); return true;
       }
-      if (reading.outcome === 'ignored') { send(res, 200, { received: true, outcome: 'ignored' }); return true; }
+      // Sender protection's counter for a stored connection's own server and stream (0156), whatever the blocking reads.
+      const counter = readPostmarkCounter(payload);
+      const countIt = async (): Promise<void> => {
+        if (!source.connection || !service.counterSink || !counter || !source.serverId || counter.serverId !== source.serverId || !source.streams.has(counter.stream)) return;
+        await service.counterSink({ workspaceId: source.workspaceId, kind: counter.kind, key: counter.key, at: counter.at });
+      };
+      if (reading.outcome === 'ignored') {
+        // A bounce that blocks nobody (a Blocked, a DnsError ...) still counts for sender protection (postmarkCounterKind).
+        try { await countIt(); }
+        catch { send(res, 503, { error: 'temporarily_unavailable' }, { 'retry-after': '60' }); return true; }
+        send(res, 200, { received: true, outcome: 'ignored' }); return true;
+      }
       const event = reading.event;
       if (source.connection && (!source.serverId || event.serverId !== source.serverId)) {
         // Postmark's sample event (or another server's event on our address): answered 200, nothing recorded.
@@ -196,9 +212,26 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
       let blocked = false;
       try {
         if (event.kind === 'resubscribed') {
-          service.registry.release(source.workspaceId, source.key, event.stream, event.email);
-          // The provider's explicit re-subscribe lifts a durable unsubscribe from this source; never a bounce or complaint.
-          await service.ledger?.lift({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, eventId: event.eventId, at: event.at });
+          // Our own "This address works now" deletes a hard-bounce suppression at Postmark, which Postmark then reports as a
+          // reactivation. That is not the person re-subscribing: a reactivation on this stream within 10 minutes of our
+          // own delete (asked by this process), or of the owner's lift of a hard bounce for this address on a source we
+          // hold the token for (the delete may have been asked by another instance), lifts nothing else, whatever its
+          // Origin says; on that ledger fallback, one not by the recipient within 24 hours of the lift is ours too. A
+          // read that fails answers 503 and Postmark retries: an unsubscribe is never lifted unchecked.
+          let ours = service.ownDeleteNear(source.workspaceId, event.stream, event.email, event.at);
+          if (!ours && source.token && service.ledger) {
+            const cleared = (await service.ledger.decide(source.workspaceId, event.email, 'service'))?.cleared.hard_bounce;
+            // Within 10 minutes of the lift, whatever its Origin; or, unless the recipient did it themselves, within 24
+            // hours (a second press later, after Postmark could not be reached, may be handled by another process).
+            ours = cleared !== undefined && cleared <= event.at + 60_000
+              && (event.at - cleared <= OWN_DELETE_WINDOW_MS || (event.origin !== 'Recipient' && event.at - cleared <= OWNER_LIFT_WINDOW_MS));
+          }
+          if (ours) log(JSON.stringify({ event: 'email.bounces.webhook_own_reactivation', source: source.key }));
+          else {
+            service.registry.release(source.workspaceId, source.key, event.stream, event.email);
+            // The provider's explicit re-subscribe lifts a durable unsubscribe from this source; never a bounce or complaint.
+            await service.ledger?.lift({ workspaceId: source.workspaceId, sourceKey: source.key, email: event.email, eventId: event.eventId, at: event.at });
+          }
         } else {
           const result = service.registry.record(source.workspaceId, { sourceKey: source.key, stream: event.stream, id: event.eventId,
             kind: event.kind, email: event.email, at: event.at }, event.counts);
@@ -222,6 +255,7 @@ export function createPostmarkBounceWebhook(input: { service: EmailBounceService
             stillBlocks = !(cleared !== undefined && cleared >= event.at);
           }
           if (lasting && stillBlocks) await service.effectsFor(source.workspaceId)?.onMarketingBlock({ email: event.email, reason: lasting, metadata: event.metadata });
+          await countIt();
         }
       } catch {
         // Not remembered: Postmark's retry repeats the lasting effect. The in-process block already holds.

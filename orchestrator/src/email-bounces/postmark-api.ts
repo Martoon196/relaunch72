@@ -5,13 +5,15 @@
  * recipients, so no error ever carries one.
  */
 
-import { parsePostmarkJson, readPostmarkBounceRow, readPostmarkSuppressionRow, type PostmarkBounceRow, type PostmarkSuppressionRow } from './postmark-events.js';
+import { parsePostmarkJson, readPostmarkBounceRow, readPostmarkCounterRow, readPostmarkSuppressionRow, type PostmarkBounceRow, type PostmarkSuppressionRow } from './postmark-events.js';
 
 export class PostmarkReadError extends Error {
   constructor(readonly status: number | null) { super('Postmark could not be read'); }
 }
 
-export interface PostmarkBouncePage { readonly total: number; readonly rows: readonly PostmarkBounceRow[]; readonly received: number }
+export interface PostmarkBouncePage { readonly total: number; readonly rows: readonly PostmarkBounceRow[]; readonly received: number;
+  /** Sender protection's counters for these rows (see postmark-events readPostmarkCounterRow). */
+  readonly counted?: readonly NonNullable<ReturnType<typeof readPostmarkCounterRow>>[] }
 export interface PostmarkStreamTotals { readonly sent: number | null; readonly bounced: number | null; readonly complaints: number | null }
 export interface PostmarkBounceApi {
   suppressions(stream: string): Promise<readonly PostmarkSuppressionRow[]>;
@@ -68,7 +70,8 @@ export function createPostmarkBounceApi(token: string, fetcher: typeof fetch = f
       const body = await get(`/bounces?${query.toString()}`);
       if (!record(body) || !Array.isArray(body.Bounces)) throw new PostmarkReadError(null);
       const total = count(body.TotalCount) ?? body.Bounces.length;
-      return { total, received: body.Bounces.length, rows: body.Bounces.map(readPostmarkBounceRow).filter((row): row is PostmarkBounceRow => row !== null) };
+      return { total, received: body.Bounces.length, rows: body.Bounces.map(readPostmarkBounceRow).filter((row): row is PostmarkBounceRow => row !== null),
+        counted: body.Bounces.map(row => readPostmarkCounterRow(row, stream)).filter((row): row is NonNullable<typeof row> => row !== null) };
     },
     async totals(stream: string, fromDate: string, toDate: string) {
       const query = new URLSearchParams({ fromdate: fromDate, todate: toDate, messagestream: stream });

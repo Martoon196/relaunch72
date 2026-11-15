@@ -40,15 +40,6 @@ import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
-import { creativeMediaProductsPage } from './creative-media-products-view.js';
-import { creativeMediaReportsPage } from './creative-media-reports-view.js';
-import { creativeVideoSourcesPage } from './creative-media-video-sources-view.js';
-import { mediaWorkbenchPage } from './creative-media-workbench-view.js';
-import { creativeMediaEditorPage } from './creative-media-editor-view.js';
-import { MEDIA_CUT_EDITOR_SCRIPT } from './media-cut-editor.js';
-import { checkVideoEditPlan } from '../creative-studio/media-edit-plan.js';
-import { videoByteRange } from './media-video-byte-range.js';
-import { MEDIA_SCENE_TIMELINE_SCRIPT } from './media-scene-timeline.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
@@ -180,8 +171,6 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const method = req.method ?? 'GET';
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/creative-job-status.js`) return send(res, 200, CREATIVE_JOB_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
-  if (method === 'GET' && path === `${SEO_BLOG_BASE}/media-scene-timeline.js`) return send(res, 200, MEDIA_SCENE_TIMELINE_SCRIPT, 'text/javascript; charset=utf-8');
-  if (method === 'GET' && path === `${SEO_BLOG_BASE}/media-cut-editor.js`) return send(res,200,MEDIA_CUT_EDITOR_SCRIPT,'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
@@ -314,76 +303,6 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
-      const sourceStream=new RegExp(`^creative/sources/(${UUID})/stream$`,'i').exec(rest);
-      if(sourceStream) {
-        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
-        if(!sources)throw new SeoBlogError(404,'Private video sources are disabled');
-        const video=await sources.load(brandId,sourceStream[1]!.toLowerCase());
-        const total=video.bytes.byteLength,range=videoByteRange(req.headers.range,total);
-        const headers:Record<string,string>={
-          'content-type':video.mime,'cache-control':'private, no-store',
-          'x-content-type-options':'nosniff','x-robots-tag':'noindex, nofollow',
-          'referrer-policy':'no-referrer','accept-ranges':'bytes',
-          'content-disposition':'inline; filename="rl72-private-source"',
-        };
-        if(range.kind==='invalid'){
-          res.writeHead(416,{...headers,'content-range':`bytes */${total}`});
-          res.end();return;
-        }
-        const chunk=range.kind==='partial'?video.bytes.subarray(range.start,range.end+1):video.bytes;
-        const status=range.kind==='partial'?206:200;
-        res.writeHead(status,{...headers,'content-length':String(chunk.byteLength),
-          ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${total}`}:{})});
-        res.end(method==='HEAD'?undefined:chunk);return;
-      }
-      const outputStream=new RegExp(`^creative/outputs/(${UUID})/stream$`,'i').exec(rest);
-      if(outputStream){
-        const workbench=input.service.mediaWorkbenchFor?.(identity,input.requestId);
-        if(!workbench)throw new SeoBlogError(404,'Media outputs disabled');
-        const video=await workbench.outputs.load(brandId,outputStream[1]!.toLowerCase());
-        const range=videoByteRange(req.headers.range,video.bytes.byteLength);
-        const headers:Record<string,string>={
-          'content-type':video.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff',
-          'x-robots-tag':'noindex, nofollow','referrer-policy':'no-referrer',
-          'content-disposition':'inline; filename="rl72-private-output"','accept-ranges':'bytes',
-        };
-        if(range.kind==='invalid'){
-          res.writeHead(416,{...headers,'content-range':`bytes */${video.bytes.length}`});res.end();return;
-        }
-        const chunk=range.kind==='partial'?video.bytes.subarray(range.start,range.end+1):video.bytes;
-        res.writeHead(range.kind==='partial'?206:200,{...headers,'content-length':String(chunk.length),
-          ...(range.kind==='partial'?{'content-range':`bytes ${range.start}-${range.end}/${video.bytes.length}`}:{})});
-        res.end(method==='HEAD'?undefined:chunk);return;
-      }
-      if(rest==='creative/edits'){
-        const editor=input.service.mediaEditFor?.(identity,input.requestId);
-        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
-        if(!editor||!sources)throw new SeoBlogError(404,'Private media editor disabled');
-        const [library,projects]=await Promise.all([sources.list(brandId),editor.list(brandId)]);
-        return send(res,200,creativeMediaEditorPage(shell('creative'),library,projects,()=>randomUUID()));
-      }
-      if(rest==='creative/workbench'){
-        const w=input.service.mediaWorkbenchFor?.(identity,input.requestId);
-        if(!w)throw new SeoBlogError(404,'Media workbench disabled');
-        const [access,jobs,outputs]=await Promise.all([w.access.current(brandId),w.jobs.list(brandId),w.outputs.list(brandId)]);
-        return send(res,200,mediaWorkbenchPage(shell('creative'),{access,jobs,outputs}));
-      }
-      if(rest==='creative/sources') {
-        const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
-        if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');
-        return send(res,200,creativeVideoSourcesPage(shell('creative'),await sources.list(brandId),randomUUID()));
-      }
-      if (rest === 'creative/reports') {
-        const importer=input.service.mediaReportsFor?.(identity,input.requestId);
-        if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
-        return send(res,200,creativeMediaReportsPage(shell('creative'),await importer.list(brandId),randomUUID()));
-      }
-      if (rest === 'creative/products') {
-        const products = input.service.mediaProductsFor?.(identity, input.requestId);
-        if (!products) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
-        return send(res, 200, creativeMediaProductsPage(shell('creative'),
-          await products.list(brandId), randomUUID(), () => randomUUID()));
-      }
       if (rest === 'creative') {
         const overview = await studio.overview(actor.userId, brandId);
         const saved = await savedWithPreview();
@@ -392,33 +311,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const generatedImages = (generated?.state.generations ?? []).slice(0, 12).map((g) => ({ id: g.id, label: `Generated ${g.createdAt.slice(0, 10)} (${g.width}×${g.height})`,
           previewUrl: generatedUrl(g.id) }));
         const generation = { available: studio.generationAvailable, enabled: generated?.brand.settings.studioImages?.enabled === true, remaining: 0 };
-        const productCatalogue=input.service.mediaProductsFor?.(identity,input.requestId);
-        const earningsImport=input.service.mediaReportsFor?.(identity,input.requestId);
-        const [allProducts,allReports]=await Promise.all([
-          productCatalogue?productCatalogue.list(brandId):Promise.resolve([]),
-          earningsImport?earningsImport.list(brandId):Promise.resolve([]),
-        ]);
-        // Latest uploaded date range only: adding overlapping snapshots would fabricate a larger earnings total.
-        const latestReport=allReports[0]??null;
-        const commerceSummary={
-          products:allProducts.length,
-          latestReport:latestReport?{
-            start:latestReport.reportStart,end:latestReport.reportEnd,
-            knownEarningsMinor:latestReport.summary.knownEarningsMinor,
-            unknownRows:latestReport.summary.unknownEarningsRows,
-            unallocatedEarningsMinor:latestReport.summary.unallocatedEarningsMinor,
-          }:null,
-        };
-        const productId=url.searchParams.get('product_id');
-        const mediaCatalogue=input.service.mediaProductsFor?.(identity,input.requestId);
-        const productPrefill=productId && mediaCatalogue
-          ? await mediaCatalogue.get(brandId,productId) : null;
-        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview,
-          productPrefill, commerceSummary, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
-          reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)),
-           videoSourcesEnabled:Boolean(input.service.mediaVideoSourcesFor?.(identity,input.requestId)),
-           mediaWorkbenchEnabled:Boolean(input.service.mediaWorkbenchFor?.(identity,input.requestId)),
-           mediaEditorEnabled:Boolean(input.service.mediaEditFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+        return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview, otherPatterns, generatedImages, generation, prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
@@ -640,68 +533,6 @@ async function handlePost(
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
       const commandId = f('commandId') ?? '';
-      if(parts[1]==='edits'&&parts.length===2){
-        const editor=input.service.mediaEditFor?.(identity,input.requestId);
-        if(!editor)throw new SeoBlogError(404,'Private video editor disabled');
-        const [sourceId,sourceSha256]=(f('source')??'').split(':');
-        let plan:unknown;
-        try{plan=JSON.parse(f('planJson')??'');}
-        catch{throw new SeoBlogError(400,'Timeline JSON is not valid');}
-        await editor.save({workspaceId:brandId,commandId,expectedRevision:int(f('expectedRevision'),'timeline revision'),
-          ...(f('projectId')?{projectId:f('projectId')!}:{}),
-          sourceId:sourceId??'',sourceSha256:sourceSha256??'',plan:checkVideoEditPlan(plan)});
-        return ok(home+'/edits','Private timeline version saved; no render, provider or publication started.');
-      }
-      if (parts[1] === 'sources' && parts.length === 2) {
-         const sources=input.service.mediaVideoSourcesFor?.(identity,input.requestId);
-         if(!sources)throw new SeoBlogError(404,'Private video source intake is not enabled');
-         if(!form.file?.data.length)throw new SeoBlogError(400,'Choose an MP4 or WebM source');
-         await sources.upload({workspaceId:brandId,commandId,bytes:form.file.data,
-           fileName:form.file.filename,rights:(f('rights')??'') as 'owned'|'licensed',
-           evidenceSha256:f('evidenceSha256')||null,rightsConfirmed:f('rightsConfirmed')==='1'});
-         return ok(home+'/sources','Video saved privately. Duration, playback and source rights still require review.');
-       }
-       if (parts[1] === 'reports' && parts.length === 2) {
-        const importer=input.service.mediaReportsFor?.(identity,input.requestId);
-        if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
-        const file=form.file;
-        if(!file?.data.length || !/\.(?:txt|csv)$/iu.test(file.filename) ||
-          file.data.length>2_000_000)
-          throw new SeoBlogError(400,'Upload an Amazon .txt or .csv report no larger than 2 MB');
-        let text:string;
-        try{text=new TextDecoder('utf-8',{fatal:true}).decode(file.data);}
-        catch{throw new SeoBlogError(400,'Report must be UTF-8 text');}
-        await importer.save({
-          workspaceId:brandId,commandId,originalText:text,
-          reportStart:f('reportStart')??'',reportEnd:f('reportEnd')??'',
-        });
-        return ok(home+'/reports','Merchant report imported. Unknown earnings remain unknown; no sales were invented.');
-      }
-      if (parts[1] === 'products' && parts.length === 2) {
-        const catalogue = input.service.mediaProductsFor?.(identity, input.requestId);
-        if (!catalogue) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
-        await catalogue.save({
-          workspaceId: brandId,
-          ...(f('productId') ? { productId: f('productId')! } : {}),
-          commandId: f('commandId') ?? '',
-          expectedRevision: int(f('expectedRevision'), 'product version'),
-          product: {
-            network: (f('network') ?? '') as 'amazon_associates' | 'other',
-            merchantName: f('merchantName') ?? '',
-            productName: f('productName') ?? '',
-            productUrl: f('productUrl') ?? '',
-            affiliateUrl: f('affiliateUrl') || null,
-            sourceRights: (f('sourceRights') ?? '') as 'original' | 'owned' | 'licensed' | 'none',
-            evidenceSha256: f('evidenceSha256') || null,
-            productReviewed: f('productReviewed') === '1',
-            channelEligible: f('channelEligible') === '1',
-            mediaRightsConfirmed: f('mediaRightsConfirmed') === '1',
-            disclosureVersion: f('disclosureVersion') ?? '',
-          },
-        });
-        return ok(home + '/products','Private product revision saved. No merchant or publishing action was performed.');
-      }
-
       // Rendering runs in the background worker as a durable job; this request only records it (and stores any uploaded
       // background), then sends the owner to the task page, which follows the job and opens the result when it is ready.
       const queued = async (operation: Parameters<typeof studio.enqueueRender>[3]) => {

@@ -7,11 +7,11 @@
  * durable article-image pipeline, owner uploads, or a neutral background.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { affiliateProductBrief } from './affiliate-product.js';
 import type { SeoBlogStore } from '../seo-blog/store.js';
 import { SeoBlogError, type Article, type ArticleVersion, type Job } from '../seo-blog/types.js';
 import { essentialGaps, resolveCreativeContext, type ContextGap, type CreativeBrandContext } from './brand-context.js';
 import { clip, copyIssues, COPY_LIMITS, draftConcepts, factsCorpus, type ArticleSourceText } from './concepts.js';
-import { affiliateProductBrief } from './affiliate-product.js';
 import { verifyCreativeImage, CreativeImageError, type VerifiedImage } from './image-input.js';
 import { isPlacementId, PLACEMENTS, type PlacementId } from './placements.js';
 import { MOTIONS, parseHex, RendererUnavailableError, VIDEO_LIMITS, type ArtworkInput, type ArtworkRenderer, type MotionId } from './renderer.js';
@@ -269,6 +269,17 @@ export class CreativeStudioService {
   // ─── Requests ─────────────────────────────────────────────────────────────
   parseRequest(context: CreativeBrandContext, raw: Readonly<Record<string, string | readonly string[] | undefined>>): CreativeRequest {
     const one = (k: string) => { const v = raw[k]; return typeof v === 'string' ? v : Array.isArray(v) ? String(v[0] ?? '') : ''; };
+    // Isolated, opt-in media hook: the existing offer/article/brief branches stay byte-for-byte unchanged.
+    if (one('source_kind') === 'affiliate_product') {
+      if (process.env.CREATIVE_MEDIA !== 'enabled') throw new SeoBlogError(403, 'Affiliate media intake is disabled.');
+      if (one('purpose') !== 'product_promotion') throw new SeoBlogError(400, 'Choose Product promotion for an affiliate product.');
+      const brief = affiliateProductBrief(context, {
+        productName: one('affiliate_product_name'), merchantName: one('affiliate_merchant_name'),
+        network: one('affiliate_network'), productReviewed: one('affiliate_product_reviewed'),
+        channelEligible: one('affiliate_channel_eligible'), rightsConfirmed: one('affiliate_rights_confirmed'),
+      });
+      return this.parseRequest(context, { ...raw, source_kind: 'brief', brief });
+    }
     const purpose = one('purpose') as CreativePurpose;
     if (!CREATIVE_PURPOSES.includes(purpose)) throw new SeoBlogError(400, 'Choose what the artwork is for.');
     const placementsRaw = raw.placements; const list = typeof placementsRaw === 'string' ? [placementsRaw] : [...(placementsRaw ?? [])];
@@ -288,14 +299,7 @@ export class CreativeStudioService {
       if (brief.length < 10) throw new SeoBlogError(400, 'Write a short brief of at least a sentence.');
       if (/https?:\/\/|www\./iu.test(brief)) throw new SeoBlogError(400, 'Leave links out of the brief; choose an approved destination instead.');
       source = { kind: 'brief', text: brief };
-    } else if (sourceKind === 'affiliate_product') {
-      if (purpose !== 'product_promotion') throw new SeoBlogError(400, 'Choose Product promotion for an affiliate product.');
-      source = { kind: 'brief', text: affiliateProductBrief(context, {
-        productName: one('affiliate_product_name'), merchantName: one('affiliate_merchant_name'),
-        network: one('affiliate_network'), productReviewed: one('affiliate_product_reviewed'),
-        channelEligible: one('affiliate_channel_eligible'), rightsConfirmed: one('affiliate_rights_confirmed'),
-      }) };
-    } else throw new SeoBlogError(400, 'Choose an offer, an article, a brief or an affiliate product.');
+    } else throw new SeoBlogError(400, 'Choose an offer, an article or a written brief.');
     const audienceChoice = one('audience');
     const audience = audienceChoice === '__custom' ? text(one('audience_custom'), 80) || null : context.audiences.includes(audienceChoice) ? audienceChoice : null;
     const destinationUrl = one('destination');
