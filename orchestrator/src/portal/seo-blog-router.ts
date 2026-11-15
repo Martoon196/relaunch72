@@ -41,6 +41,7 @@ import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.j
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { creativeMediaProductsPage } from './creative-media-products-view.js';
+import { creativeMediaReportsPage } from './creative-media-reports-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
 import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
@@ -304,6 +305,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const generatedUrl = (generationId: string) => `${SEO_BLOG_BASE}/b/${brandId}/creative/generated/${generationId}.jpg`;
       const savedWithPreview = async () => (await input.service.creativeSavedImages?.(identity, input.requestId, engine, brandId)) ?? [];
+      if (rest === 'creative/reports') {
+        const importer=input.service.mediaReportsFor?.(identity,input.requestId);
+        if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
+        return send(res,200,creativeMediaReportsPage(shell('creative'),await importer.list(brandId),randomUUID()));
+      }
       if (rest === 'creative/products') {
         const products = input.service.mediaProductsFor?.(identity, input.requestId);
         if (!products) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
@@ -323,7 +329,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const productPrefill=productId && mediaCatalogue
           ? await mediaCatalogue.get(brandId,productId) : null;
         return send(res, 200, creativeOverviewPage(shell('creative'), { ...overview,
-          productPrefill, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
+          productPrefill, otherPatterns, generatedImages, generation, productCatalogueEnabled: Boolean(input.service.mediaProductsFor?.(identity,input.requestId)),
+          reportImportEnabled: Boolean(input.service.mediaReportsFor?.(identity,input.requestId)), prefill: url.searchParams, savedImages: saved.map((x) => ({ ...x, previewUrl: x.previewAssetId ? `${SEO_BLOG_BASE}/b/${brandId}/media/${x.previewAssetId}/${x.previewSha256}.jpg` : null })), commandId: randomUUID() }));
       }
       // ── Typed-brief image generation ──
       const media = (assetId: string, sha: string) => `${SEO_BLOG_BASE}/b/${brandId}/media/${assetId}/${sha}.jpg`;
@@ -544,6 +551,22 @@ async function handlePost(
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
+      if (parts[1] === 'reports' && parts.length === 2) {
+        const importer=input.service.mediaReportsFor?.(identity,input.requestId);
+        if(!importer)throw new SeoBlogError(404,'Affiliate earnings import is not enabled');
+        const file=form.file;
+        if(!file?.data.length || !/\.(?:txt|csv)$/iu.test(file.filename) ||
+          file.data.length>2_000_000)
+          throw new SeoBlogError(400,'Upload an Amazon .txt or .csv report no larger than 2 MB');
+        let text:string;
+        try{text=new TextDecoder('utf-8',{fatal:true}).decode(file.data);}
+        catch{throw new SeoBlogError(400,'Report must be UTF-8 text');}
+        await importer.save({
+          workspaceId:brandId,commandId,originalText:text,
+          reportStart:f('reportStart')??'',reportEnd:f('reportEnd')??'',
+        });
+        return ok(home+'/reports','Merchant report imported. Unknown earnings remain unknown; no sales were invented.');
+      }
       if (parts[1] === 'products' && parts.length === 2) {
         const catalogue = input.service.mediaProductsFor?.(identity, input.requestId);
         if (!catalogue) throw new SeoBlogError(404, 'Affiliate catalogue is not enabled for this workspace.');
