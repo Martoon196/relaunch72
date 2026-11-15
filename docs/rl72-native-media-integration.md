@@ -125,3 +125,7 @@ The `PgMediaOutputProbeWorker` and `PgMediaOutputReviewOwner` services in `media
 5. Do **not** map `reviewed_private` into `creative-studio/service.ts`'s existing public distribution or campaign approval path. Future release requires separate exactly-scoped content approval and publisher policy through the canonical Zernio/social rails
 
 Tests: `orchestrator/test/media-output-review.test.ts`, `creative-media-output-review-view.test.ts`, and disposable `db/creative-media-output-review-pg.integration.test.ts`. The integration test injects a **synthetic video probe result** strictly to check DB immutability, authorisation and replay semantics. It does not claim a genuine decoded provider clip.
+
+### Isolated CLI entry point (not scheduled or deployed)
+
+The existing owned `orchestrator/src/workers/creative-media/cli.ts` now accepts a **manual-only** `probe-output <workspaceUuid> <outputUuid>` command alongside `probe`, `submit` and `reconcile`. It uses the same `r72_worker` database role and `PgMediaOutputProbeWorker` technical receipt functions, never a browser route. It requires `RL72_MEDIA_WORKER_ENABLED=true` and `CREATIVE_MEDIA=enabled`. It needs **neither** paid-provider-submission permission nor social publication permission and does not invoke Vizard or Shotstack. Claude must validate the worker service configuration and ffprobe sandbox before any operator enablement.

@@ -2,6 +2,7 @@
  * Explicit CLI for the ONE canonical Creative Studio, no second data store.
  * Usage:
  *   npm --prefix orchestrator run media:worker -- probe <workspace-uuid> <source-uuid>
+ *   npm --prefix orchestrator run media:worker -- probe-output <workspace-uuid> <output-uuid>
  *   npm --prefix orchestrator run media:worker -- submit <workspace-uuid> <job-uuid>
  *   npm --prefix orchestrator run media:worker -- reconcile <workspace-uuid> <job-uuid>
  * Default OFF. Every invocation is scoped to one workspace and one job.
@@ -11,6 +12,7 @@ import '../../config.js';
 import { randomUUID } from 'node:crypto';
 import { createWorkerDatabasePool } from '../../db/pool.js';
 import { PgVideoSourceProbeWorker } from '../../creative-studio/media-source-probe.js';
+import { PgMediaOutputProbeWorker } from '../../creative-studio/media-output-review.js';
 import { PgVideoAdmissionWorker } from '../../creative-studio/media-admission-pg-store.js';
 import { submitApprovedMediaJob } from '../../creative-studio/media-work-executor.js';
 import { VizardVideoProvider, ShotstackVideoProvider } from '../../creative-studio/media-providers.js';
@@ -30,6 +32,12 @@ async function main():Promise<void>{
     if(action==='probe'){
       const result=await new PgVideoSourceProbeWorker(pool,requestId).run(workspaceId!,id!);
       console.log('private video technical probe:',result.status,result.replayed?'already recorded':'new receipt');
+      return;
+    }
+    if(action==='probe-output'){
+      const result=await new PgMediaOutputProbeWorker(pool,requestId).probe(workspaceId!,id!);
+      console.log('private provider output technical probe:',result.status,
+        result.replayed?'existing receipt':'new receipt');
       return;
     }
     const vizard=new VizardVideoProvider(process.env.RL72_MEDIA_VIZARD_API_KEY??'',
