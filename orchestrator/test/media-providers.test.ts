@@ -58,7 +58,10 @@ test('Vizard submits exact provider payload with server-side secret and creates 
     return new Response(JSON.stringify({code:2000,projectId:17861706}),{status:200});
   };
   const v=new VizardVideoProvider('private-credential',true,http as typeof fetch);
-  await assert.rejects(v.submit({...youtube,sourceUrl:'https://evil.example/video.mp4'},permit('vizard_clip')),/approved RL72 storage/);
+  const unauthorized={...youtube,sourceUrl:'https://evil.example/video.mp4'};
+  await assert.rejects(v.submit(unauthorized,permit('vizard_clip')),/changed since owner approval/);
+  const explicitReview={...permit('vizard_clip'),...mediaRequestDigests(unauthorized)};
+  await assert.rejects(v.submit(unauthorized,explicitReview),/approved RL72 storage/);
   assert.equal(requests.length,0);
   const id=await v.submit(youtube,permit('vizard_clip'));
   assert.equal(id,'17861706');
@@ -109,7 +112,7 @@ test('changed timeline is invalidated and cannot spend render credits',async()=>
   const http=async()=>{count++;return new Response('{}');};
   const s=new ShotstackVideoProvider('key',true,'stage',http as typeof fetch);
   assert.throws(()=>assertShotstackEdit({...renderReq,edit:{...edit,output:{format:'gif'}}}),/differs from/);
-  await assert.rejects(s.submit({...renderReq,edit:{...edit,output:{format:'gif'}}},permit('shotstack_render')),/differs from/);
+  await assert.rejects(s.submit({...renderReq,edit:{...edit,output:{format:'gif'}}},permit('shotstack_render')),/changed since owner approval/);
   assert.equal(count,0);
 });
 
