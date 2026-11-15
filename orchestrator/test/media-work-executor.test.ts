@@ -13,7 +13,7 @@ const request:ClipJobRequest={
 function rig(mode:'ok'|'timeout'|'disabled'|'receipt-failed'='ok',changeRequest=false){
   const events:string[]=[];
   const digests=mediaRequestDigests(request);
-  const claim={id:job,commandId,claimToken:token,kind:'vizard_clip' as const,
+  const claim={id:job,commandId:command,claimToken:token,kind:'vizard_clip' as const,
     payloadSha:changeRequest?'a'.repeat(64):digests.payloadSha256,rightsSha:digests.rightsSha256,
     reservedMicrousd:500000,approvedBy:id('555555555555'),
     approvedAt:'2026-11-15T10:00:00Z',validUntil:'2099-01-01T00:00:00Z'};
