@@ -10,6 +10,7 @@ import pg from 'pg';
 import { PgSeoBlogStore } from '../../src/seo-blog/pg-store.js';
 import { PgCreativeMediaProductStore, type AffiliateMediaProductInput } from '../../src/creative-studio/media-product-pg-store.js';
 import { fixtureBrand } from '../rl72-method-fixtures.js';
+import { PgAmazonTrackingReports } from '../../src/creative-studio/amazon-report-pg-store.js';
 
 const raw = process.env.RL72_METHODS_PG_TEST_URL;
 const skip = !raw || process.env.RELAUNCH72_DATABASE_INTEGRATION !== 'explicit-disposable-run'
@@ -90,6 +91,23 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       assert.throws(()=>a.store.save({workspaceId:a.brand.id,expectedRevision:0,product:{
         ...data,sourceRights:'licensed',mediaRightsConfirmed:true,evidenceSha256:null,
       }}),/evidence/iu);
+    });
+    await t.test('Amazon earnings report import uses the same owner workspace and never fabricates a sale',async()=>{
+      const report='Tracking ID\tClicks\tEarnings\nshop-21\t40\t£8.50\nOthers\t-\t£1.50\nhidden\t-\t-\n';
+      const ours=new PgAmazonTrackingReports(content,a.principal);
+      const other=new PgAmazonTrackingReports(content,b.principal);
+      const input={workspaceId:a.brand.id,reportStart:'2026-11-01',reportEnd:'2026-11-15',
+        originalText:report,commandId:randomUUID()};
+      const first=await ours.save(input);
+      assert.equal(first.replayed,false);
+      assert.equal((await ours.save(input)).replayed,true);
+      const summaries=await ours.list(a.brand.id);
+      assert.equal(summaries.length,1);
+      assert.equal(summaries[0]?.summary.knownEarningsMinor,1000);
+      assert.equal(summaries[0]?.summary.unallocatedEarningsMinor,150);
+      assert.equal(summaries[0]?.summary.unknownEarningsRows,1);
+      assert.deepEqual(await other.list(b.brand.id),[]);
+      await assert.rejects(other.list(a.brand.id),/session|permission|owner|denied/iu);
     });
     await t.test('unauthenticated direct SQL function never reveals catalogue',async()=>{
       await assert.rejects(content.query("SELECT app_private.creative_media_product_command($1,NULL,'list','{}'::jsonb)",
