@@ -488,3 +488,14 @@ test('a full repair for a business already approved and live does not ask for Go
   assert.doesNotMatch(response.body, /press Go live/iu);
   assert.deepEqual(h.repairLines().map(l => [l.outcome, l.reason]), [['remade', 'not_listed']]);
 });
+
+test('webhook addresses: a trailing slash, host case or a spelled-out default port is the same place; anything else is not', async () => {
+  const { sameWebhookAddress } = await import('../src/email-connections/webhook-check.js');
+  const ours = 'https://hq.example.test/api/provider-webhooks/postmark/conn-abc';
+  for (const same of [ours, `${ours}/`, 'https://HQ.Example.Test/api/provider-webhooks/postmark/conn-abc', 'https://hq.example.test:443/api/provider-webhooks/postmark/conn-abc'])
+    assert.equal(sameWebhookAddress(same, ours), true, same);
+  for (const other of ['https://hq.example.test/api/provider-webhooks/postmark/conn-abd', 'http://hq.example.test/api/provider-webhooks/postmark/conn-abc',
+    'https://evil.example.test/api/provider-webhooks/postmark/conn-abc', `${ours}?x=1`, `${ours}#f`, 'https://u:p@hq.example.test/api/provider-webhooks/postmark/conn-abc',
+    'https://hq.example.test:8443/api/provider-webhooks/postmark/conn-abc', 'https://hq.example.test/api/provider-webhooks/postmark/CONN-ABC', '', null, 'not a url'])
+    assert.equal(sameWebhookAddress(other, ours), false, String(other));
+});

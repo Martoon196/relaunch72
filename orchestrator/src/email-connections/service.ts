@@ -48,7 +48,7 @@ import { EmailConnectionAbsentError, EmailConnectionForbiddenError, type DomainO
   type EmailConnectionStore, type RunLock, type StepOutcome } from './store.js';
 import { EMAIL_TERMS_VERSION } from './terms.js';
 import type { EmailBounceSource } from '../email-bounces/index.js';
-import { confirmBounceWebhook, webhookCheckLine } from './webhook-check.js';
+import { confirmBounceWebhook, sameWebhookAddress, webhookCheckLine } from './webhook-check.js';
 
 export const BROADCAST_STREAM = 'broadcast';
 const LOCK_WAIT_MS = 20_000;
@@ -405,7 +405,7 @@ export class EmailConnectionService {
       // 4. Webhook.
       await intend('webhook');
       const url = connectionWebhookUrl(config.webhookOrigin, business);
-      const existing = (await serverApi.listWebhooks(BROADCAST_STREAM)).filter(hook => hook.url === url);
+      const existing = (await serverApi.listWebhooks(BROADCAST_STREAM)).filter(hook => sameWebhookAddress(hook.url, url));
       let webhook = existing.find(hook => hook.username === business.sourceKey && hook.password === secret && hook.status === 'verified') ?? null;
       // Ours by address but with another secret, or marked unverified by Postmark: replaced, never adopted.
       for (const stale of existing) if (stale !== webhook) await serverApi.deleteWebhook(stale.id).catch(error => { if (!missing(error)) throw error; });
@@ -579,7 +579,7 @@ export class EmailConnectionService {
         line({ outcome: 'not_repaired', reason: 'list_failed', ...failure(error) });
         throw new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'busy');
       }
-      if (listed && listed.url === url) {
+      if (listed && sameWebhookAddress(listed.url, url)) {
         const check = await confirmBounceWebhook({ webhookId: state.webhookId, stream, expectedUrl: url, token: async () => serverToken, api: this.serverApi });
         this.log(webhookCheckLine('email.connections.bounce_repair', ws, check));
         // Each message names a button the page shows in that state: Go live once connected, Check while waiting for it.

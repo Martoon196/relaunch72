@@ -27,6 +27,20 @@ export interface WebhookCheck {
 const errorFields = (error: unknown): { category: string; httpStatus: number | null } => error instanceof PostmarkAccountError
   ? { category: error.category, httpStatus: error.status } : { category: 'unexpected', httpStatus: null };
 
+/** Whether two webhook addresses are the same place: same scheme, host, port and path (a trailing slash, the host's
+ * letter case and a spelled-out default port do not make a different address). Query, fragment or credentials on
+ * either side never match. Anything unparseable matches only when the two strings are identical. */
+export function sameWebhookAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  try {
+    const x = new URL(a), y = new URL(b);
+    if (x.username || x.password || y.username || y.password || x.search || y.search || x.hash || y.hash) return false;
+    const path = (u: URL) => u.pathname.replace(/\/+$/u, '');
+    return x.protocol === y.protocol && x.host === y.host && path(x) === path(y);
+  } catch { return false; }
+}
+
 /**
  * The stored webhook must be listed at OUR bounce address (expectedUrl). Listed there with Status verified: confirmed.
  * Listed there but unverified, or with no Status field: one verify call, confirmed only on a documented pass; an answer
@@ -48,7 +62,7 @@ export async function confirmBounceWebhook(input: { webhookId: number | null; st
   if (!hook) return { confirmed: false, reason: 'not_listed' };
   const statusPresent = hook.statusPresent ?? hook.status !== null;
   // Our id, but Postmark would post somewhere else: that tells us nothing, whatever its Status says.
-  if (hook.url !== input.expectedUrl) return { confirmed: false, reason: 'other_address', statusPresent };
+  if (!sameWebhookAddress(hook.url, input.expectedUrl)) return { confirmed: false, reason: 'other_address', statusPresent };
   if (hook.status === 'verified') return { confirmed: true, reason: 'listed_verified', statusPresent };
   let result;
   try { result = await input.api(token).verifyWebhook(hook.id); }
@@ -60,7 +74,7 @@ export async function confirmBounceWebhook(input: { webhookId: number | null; st
   let again;
   try { again = (await input.api(token).listWebhooks(input.stream)).find(item => item.id === input.webhookId); }
   catch (error) { return { confirmed: false, reason: 'verify_unrecognised', ...unrecognised, ...errorFields(error) }; }
-  return again && again.url === input.expectedUrl && again.status === 'verified' ? { confirmed: true, reason: 'verified_after_relist', ...unrecognised }
+  return again && sameWebhookAddress(again.url, input.expectedUrl) && again.status === 'verified' ? { confirmed: true, reason: 'verified_after_relist', ...unrecognised }
     : { confirmed: false, reason: 'verify_unrecognised', ...unrecognised };
 }
 
