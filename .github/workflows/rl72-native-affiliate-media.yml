@@ -9,6 +9,8 @@ on:
       - 'orchestrator/src/portal/creative-studio-view.ts'
       - 'orchestrator/test/affiliate-creative.test.ts'
       - 'orchestrator/test/media-providers.test.ts'
+      - 'orchestrator/test/db/creative-media-products-pg.integration.test.ts'
+      - 'orchestrator/src/db/migrations/0156_creative_media_products.sql'
       - 'orchestrator/test/creative-studio*.test.ts'
       - '.github/workflows/rl72-native-affiliate-media.yml'
 permissions:
@@ -53,4 +55,4 @@ jobs:
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts
+        run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts test/db/creative-media-products-pg.integration.test.ts
