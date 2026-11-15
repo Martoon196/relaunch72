@@ -1,6 +1,6 @@
 import type { PlatformModuleId } from '../platform/modules.js';
 
-export type PortalProductProfileId = 'relaunch72' | 'property_predator_growth' | 'martin_howard_property';
+export type PortalProductProfileId = 'relaunch72' | 'property_predator_growth' | 'martin_howard_property' | 'affiliate_studio';
 
 export interface PortalThemeTokens {
   canvas: string;
@@ -202,6 +202,44 @@ export const RELAUNCH72_PRODUCT_PROFILE = createProfile({
   ],
 });
 
+/**
+ * Standalone affiliate storefront: presentation only. Uses the SAME canonical
+ * PostgreSQL tenants, Creative Studio, brand/asset stores and permission model
+ * as Relaunch72. The host selects the profile from a trusted environment
+ * variable, never from a visitor-controlled URL or cookie.
+ */
+export const AFFILIATE_STUDIO_PROFILE = createProfile({
+  id: 'affiliate_studio',
+  productName: 'RL72 Affiliate Studio',
+  compactMark: 'R72',
+  suiteLabel: 'Creator Commerce',
+  home: {
+    eyebrow: 'Creator Commerce',
+    title: 'Create content that earns its keep.',
+    summary: 'Develop original product stories, review video and artwork, and manage campaigns with evidence and control.',
+  },
+  auth: {
+    lead: 'Sign in to your private affiliate creator workspace.',
+    storyKicker: 'Make. Repurpose. Review.',
+    storyTitle: 'One studio for every product story.',
+    storyBody: 'Research products, create truthful media and prepare reviewed affiliate campaigns without juggling disconnected tools.',
+  },
+  theme: {
+    canvas: '#080b16', panel: '#121729', panelSubtle: '#0b1020', panelStrong: '#1b2237',
+    ink: '#f5f3fb', muted: '#b9bfd0', faint: '#939caf', line: '#2a3249', lineStrong: '#3b4961',
+    accent: '#ffbe76', accentDeep: '#ffbe76', accentSoft: '#37291f',
+    nav: '#090e1c', navRaised: '#151b2f', navLine: '#283149', navText: '#f7f4fb', navMuted: '#afb8cf',
+  },
+  visibleNavigation: ['overview', 'content', 'analytics', 'settings'],
+  moduleLabels: { overview: 'Dashboard', content: 'Create', analytics: 'Results', settings: 'Account' },
+  journeyBlueprints: [],
+  readinessRails: [
+    { id:'content', label:'Creative Studio', summary:'Generate product-focused drafts and review exact assets.', state:'foundation' },
+    { id:'social', label:'Social distribution', summary:'Connect and authorise channels before publishing.', state:'planned' },
+    { id:'inbox', label:'Affiliate tracking', summary:'Count real outbound clicks separately from merchant-confirmed sales.', state:'planned' },
+  ],
+});
+
 export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
   id: 'property_predator_growth',
   productName: 'PropertyPredator',
@@ -312,6 +350,7 @@ export const MHP_MARKETING_WORKSPACE_PROFILE = createProfile({
 
 const PROFILES: Readonly<Record<PortalProductProfileId, PortalProductProfile>> = Object.freeze({
   relaunch72: RELAUNCH72_PRODUCT_PROFILE,
+  affiliate_studio: AFFILIATE_STUDIO_PROFILE,
   property_predator_growth: PROPERTY_PREDATOR_GROWTH_PROFILE,
   martin_howard_property: MARTIN_HOWARD_PROPERTY_PROFILE,
 });
