@@ -10,7 +10,7 @@ const context = {
   disclosure: amazonDisclosure,
   audiences: ['Homeowners'],
   destinations: [{ url: 'https://example.org/review', label: 'Product guide' }],
-} as CreativeBrandContext;
+} as unknown as CreativeBrandContext;
 
 const input = {
   productName: 'Acme Cordless Drill', merchantName: 'Acme Store', network: 'amazon_associates',
