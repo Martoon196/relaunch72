@@ -18,7 +18,7 @@ import {
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
 import {
-  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
+  BRAND_DNA_MESSAGES, BRAND_DNA_MIN_WORDS, BRAND_DNA_RULES_VERSION, leftOutAfterEdit, BRAND_DNA_STAGE, brandDnaCard, brandDnaPayload, isBrandDnaJob, settleConflict, sourcesAfterEdit, websiteDocuments,
   type BrandDnaCard, type BrandDnaJobPayload, type BrandDnaResult, type ConflictChoice,
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
@@ -552,7 +552,7 @@ export class SeoBlogEngine {
       const sameInputs = inputs.sha === p.inputSha && (s.profile?.version ?? 0) === p.baseVersion && sha256(s.profile) === p.baseProfileSha;
       if (!s.requesterAllowed || !sameInputs) return { job: this.profileHold(updated, !s.requesterAllowed ? 'requester_changed' : 'inputs_changed', !s.requesterAllowed ? 'The requesting owner no longer manages this brand. Result retained; no profile was replaced.' : 'Guidance or profile changed during extraction. Result retained; current edits were not replaced.', now), write: true, usage };
       const profile: BrandProfile = { ...actual.value, brandId: job.brandId, version: p.baseVersion + 1, knowledge: this.knowledgeRefs(inputs.documents),
-        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation, ...(strict ? { strict: true as const } : {}) };
+        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation, ...(strict ? { strict: true as const, rulesVersion: BRAND_DNA_RULES_VERSION } : {}) };
       // The website pages this card was built from become brand documents here, in the same write as the card, and not before.
       const { staged: _held, ...settled } = p;
       return { job: { ...updated, state: 'done', leaseOwner: null, leaseExpiresAt: null, payload: { ...settled, receipt: actual, resultVersion: profile.version }, error: null, progress: `Profile version ${profile.version} is ready. Review and confirm it.`, updatedAt: now }, write: true, profile, usage,

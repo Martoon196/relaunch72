@@ -197,7 +197,8 @@ export interface ProfileConflict {
 
 /** Where one fact on the profile was read. `documentId` null means the owner typed or chose it themselves. */
 export interface ProfileFactSource {
-  readonly field: 'offer' | 'audience' | 'claim' | 'voice' | 'settled';
+  /** 'price' (website door only): `value` is the offer's name and `quote` the lines the price rule tied its price to. */
+  readonly field: 'offer' | 'audience' | 'claim' | 'voice' | 'settled' | 'price';
   readonly value: string;
   readonly documentId: string | null;
   readonly quote: string | null;
@@ -208,9 +209,11 @@ export interface ProfileFactSource {
  * Kept so the owner is told plainly what is missing and can add it themselves. Never sent to any writing step.
  */
 export interface ProfileLeftOut {
-  readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'summary' | 'positioning' | 'voice' | 'voice_dont' | 'link';
+  readonly what: 'price' | 'offer' | 'offer_detail' | 'audience' | 'claim' | 'question' | 'summary' | 'positioning' | 'voice' | 'voice_dont' | 'link' | 'exclusion';
   /** The offer name, audience, claim, question or removed words, as the model gave them. Untrusted: always escaped. */
   readonly text: string;
+  /** For a price the page writes differently: the page's own price expression, so the owner can add it in one go. */
+  readonly found?: string;
 }
 
 export interface BrandProfile {
@@ -241,6 +244,12 @@ export interface BrandProfile {
    * against its source. Such a card cannot be confirmed with an open question or once it is out of date.
    */
   readonly strict?: true;
+  /**
+   * Website door only: the version of the Brand DNA rules this card was checked under (see BRAND_DNA_RULES_VERSION).
+   * Absent on cards checked before versions were recorded; such a card is re-filtered for writing and the card page asks
+   * for a fresh read.
+   */
+  readonly rulesVersion?: number;
   /** Hash over product facts and approved claims only — the factual invalidation key. */
   readonly factsSha: string;
   readonly source: 'extracted' | 'owner_edited';
