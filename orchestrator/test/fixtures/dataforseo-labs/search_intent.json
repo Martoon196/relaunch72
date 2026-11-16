@@ -1,0 +1,87 @@
+{
+ "_fixture_source": "Example response copied from https://docs.dataforseo.com/v3/dataforseo_labs-google-search_intent-live/ (retrieved 2026-11-16). Unmodified apart from this note",
+ "version": "0.1.20260917",
+ "status_code": 20000,
+ "status_message": "Ok.",
+ "time": "0.1141 sec.",
+ "cost": 0.01248,
+ "tasks_count": 1,
+ "tasks_error": 0,
+ "tasks": [
+  {
+   "id": "09181049-1535-0541-0000-867d010f8906",
+   "status_code": 20000,
+   "status_message": "Ok.",
+   "time": "0.0866 sec.",
+   "cost": 0.01248,
+   "result_count": 1,
+   "path": [
+    "v3",
+    "dataforseo_labs",
+    "google",
+    "search_intent",
+    "live"
+   ],
+   "data": {
+    "api": "dataforseo_labs",
+    "function": "search_intent",
+    "se_type": "google",
+    "keywords": [
+     "login page",
+     "transmitter",
+     "albert einstein",
+     "pizza new york"
+    ]
+   },
+   "result": [
+    {
+     "items_count": 4,
+     "items": [
+      {
+       "keyword": "login page",
+       "keyword_intent": {
+        "label": "navigational",
+        "probability": 0.9999
+       },
+       "secondary_keyword_intents": null
+      },
+      {
+       "keyword": "transmitter",
+       "keyword_intent": {
+        "label": "transactional",
+        "probability": 0.5211
+       },
+       "secondary_keyword_intents": [
+        {
+         "label": "informational",
+         "probability": 0.3911
+        }
+       ]
+      },
+      {
+       "keyword": "albert einstein",
+       "keyword_intent": {
+        "label": "informational",
+        "probability": 0.9934
+       },
+       "secondary_keyword_intents": null
+      },
+      {
+       "keyword": "pizza new york",
+       "keyword_intent": {
+        "label": "transactional",
+        "probability": 0.3796
+       },
+       "secondary_keyword_intents": [
+        {
+         "label": "informational",
+         "probability": 0.3354
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
