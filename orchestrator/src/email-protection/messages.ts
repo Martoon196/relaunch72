@@ -130,9 +130,10 @@ export function ownerBanner(input: OwnerBannerInput): Banner | null {
   if (input.ownerPaused) return { tone: 'notice', title: 'You have paused your marketing emails',
     text: 'Nothing marketing goes until you press Resume; everything is waiting. Send a test to me still works.' };
   if (input.waitingApproval) return { tone: 'notice', title: 'Waiting for approval',
-    text: input.willEmail ? 'Waiting for approval. We will email you.' : 'Waiting for approval. Check this page for the answer.' };
+    text: input.willEmail ? 'Waiting for approval from the platform owner, which is usually quick. We will email you when it is done; nothing else is needed from you.'
+      : 'Waiting for approval from the platform owner, which is usually quick. Check back on your email page for the answer; nothing else is needed from you.' };
   if (input.mode === 'live' && input.needsApproval) return { tone: 'notice', title: 'Your new sending address needs approval',
-    text: 'Your sending address changed, so it needs our approval again. Press Go live to ask. Your marketing emails are waiting until then.' };
+    text: 'Your sending address changed, so it needs our approval again. Open your email page and follow the steps to go live again. Your marketing emails are waiting until then.' };
   if (input.mode === 'live' && input.needsTest) return { tone: 'notice', title: 'Send a test first',
     text: 'Your email was connected again, so send a test to yourself before your marketing emails go again. They are waiting until then.' };
   if (input.state === 'slowed') return { tone: 'notice', title: 'We have slowed your marketing emails',

@@ -154,7 +154,7 @@ test('"Send a test to me" replayed: "already sent" only when the first attempt w
   const identity = { sessionToken: OWNER, userId: PP_WS, workspaceId: PP_WS } as never;
   store.reserveAnswer = 'replayed_refused';
   assert.deepEqual(await service.sendTest(identity, connection, 'cmd'), { ok: false, message: SENDING_MESSAGES.testReplayedRefused });
-  assert.equal(SENDING_MESSAGES.testReplayedRefused, 'That test did not go the first time. Refresh this page and press Send a test to me again.');
+  assert.equal(SENDING_MESSAGES.testReplayedRefused, 'That test did not go the first time. Refresh this page and send the test again.');
   store.reserveAnswer = 'replayed_unknown';
   assert.deepEqual(await service.sendTest(identity, connection, 'cmd'), { ok: false, message: SENDING_MESSAGES.testUnknown });
   store.reserveAnswer = 'replayed';

@@ -460,7 +460,7 @@ test('B1: a domain already in the shared account is never adopted, whatever fail
   // An unverified foreign domain is not adopted either (no run of ours ever started creating it).
   const u = harness();
   u.postmark.domains.push({ id: 6, name: DOMAIN, returnPath: `pm-bounces.${DOMAIN}`, dkimVerified: false, returnPathVerified: false });
-  await assert.rejects(u.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === 'That domain is already in use. If it is yours, contact support.');
+  await assert.rejects(u.service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.domainInUse);
   await assert.rejects(u.service.continue(owner));
   assert.equal((await u.store.state(OWNER_SESSION, PP_WS)).domainId, null);
   // It appears between our list and our create (512): someone else's, never adopted.
@@ -509,18 +509,18 @@ test('Check answers in exactly the four plain sentences, from Postmark\'s verifi
   const dns: { txt: Record<string, string[][]>; cname: Record<string, string[]> } = { txt: {}, cname: {} };
   const setup = async () => { dns.txt = {}; dns.cname = {}; const h = harness({ resolver: fakeResolver(dns) }); await h.service.connect(owner, FORM); return h; };
   let h = await setup();
-  assert.equal((await h.service.check(owner)).message, 'Not found yet. This can take up to 48 hours; press Check again later.');
+  assert.equal((await h.service.check(owner)).message, 'Not found yet. Records can take from a few minutes to a few hours to show up after they are added (very rarely up to 2 days). You can close this page and come back; press Check again later.');
   h = await setup();
   dns.txt[`${h.postmark.domains[0]!.id}pm._domainkey.${DOMAIN}`] = [['k=rsa; p=WRONG']];
-  assert.equal((await h.service.check(owner)).message, 'The TXT record\'s value doesn\'t match. Copy it again from this page.');
+  assert.equal((await h.service.check(owner)).message, 'Record 1 is there, but its Value doesn\'t match. Copy the Value again from this page and replace the old one.');
   h = await setup();
   dns.cname[`${h.config.vault!.returnPathLabel(PP_WS, DOMAIN)}.${DOMAIN}`] = ['elsewhere.example.net'];
-  assert.equal((await h.service.check(owner)).message, 'The CNAME record\'s value doesn\'t match. Copy it again from this page.');
+  assert.equal((await h.service.check(owner)).message, 'Record 2 is there, but its Value doesn\'t match. Copy the Value again from this page and replace the old one.');
   h = await setup();
   h.postmark.domains[0]!.dkimVerified = true;
-  assert.equal((await h.service.check(owner)).message, 'Found 1 of 2: the CNAME record is missing.');
+  assert.equal((await h.service.check(owner)).message, 'Found 1 of 2. Record 2 is not found yet. Records can take from a few minutes to a few hours to show up; press Check again later.');
   h.postmark.domains[0]!.dkimVerified = false; h.postmark.domains[0]!.returnPathVerified = true;
-  assert.equal((await h.service.check(owner)).message, 'Found 1 of 2: the TXT record is missing.');
+  assert.equal((await h.service.check(owner)).message, 'Found 1 of 2. Record 1 is not found yet. Records can take from a few minutes to a few hours to show up; press Check again later.');
   // Our look-up says found, Postmark says not yet: Postmark wins (not connected).
   h = await setup();
   const id = h.postmark.domains[0]!.id;
@@ -823,7 +823,7 @@ test('only sender protection (release 2) reads the connection, its mode and its 
   await walk(root);
   // Release 2: the stored connection is read for sending only through email-protection/ (the plan the PP follow-up
   // delivery asks for each sweep), and shown on the owner's page.
-  const allowed = (file: string) => file.includes('/email-connections/') || file.includes('/email-protection/') || /\/portal\/email-connection-(?:router|view)\.ts$/u.test(file);
+  const allowed = (file: string) => file.includes('/email-connections/') || file.includes('/email-protection/') || /\/portal\/email-connection-(?:router|view|progress)\.ts$/u.test(file);
   const pattern = /app_private\.email_connection|email_connections|email_protection_events|protection_state|go_live_approved|warmup_started_at|terms_accepted|termsAccepted|goLiveApproved|warmupStartedAt|protectionState|EmailConnection(?:Service|Store|BounceSources)|email-connections\//u;
   const readers: string[] = [];
   for (const file of files) {

@@ -1,16 +1,18 @@
 /**
  * /portal/email: the owner's "Connect email" screens (Property Predator's portal only, for now).
  *
- *   GET  /portal/email              the page for the current state (?business=<id> must name an allowed business)
+ *   GET  /portal/email              the page for the current state (?business=<id> must name an allowed business; ?agree=yes is
+ *                                   step 1's tick, carried to step 2's form and recorded only when Connect is pressed)
  *   GET  /portal/email/copy.js      the Copy buttons (progressive enhancement)
  *   POST /portal/email/connect      csrf, commandId, fromName, fromAddress, replyTo, agree (the email rules tick)
  *   POST /portal/email/continue     csrf, commandId
- *   POST /portal/email/check        csrf, commandId
+ *   POST /portal/email/check        csrf, commandId, [auto=yes: the page's own once-a-minute check, which never repairs]
  *   POST /portal/email/disconnect   csrf, commandId (also "Start again")
  *   POST /portal/email/use-domain   csrf, commandId (the platform founder only: take over a domain already in the account)
  *   POST /portal/email/repair-bounces csrf, commandId ("Repair bounce reporting": offered after Go live could not confirm the bounce webhook)
  * Release 2 (sending, 0156; offered only once the connection is verified and the database has 0156):
- *   POST /portal/email/details      csrf, commandId, businessName, postalAddress, testList
+ *   POST /portal/email/details      csrf, commandId, businessName, postalAddress, testList, [then=test: "Save and send me a test",
+ *                                   the details saved first, then one test, one answer]
  *   POST /portal/email/test-send    csrf, commandId ("Send a test to me")
  *   POST /portal/email/go-live      csrf, commandId (the first time: asks the founder)
  *   POST /portal/email/start-test   csrf, commandId (mode off -> test: the stored connection takes over this business's follow-up email)
@@ -28,7 +30,6 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import type { PostgresPortalDeps } from './router.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import { FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
-import { EMAIL_CONNECT_BUSINESSES } from '../email-connections/config.js';
 import { EMAIL_CONNECTION_MESSAGES, EmailConnectionError, type EmailConnectionService } from '../email-connections/service.js';
 import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, renderFounderProtectionPage,
   type EmailConnectionPageInput } from './email-connection-view.js';
@@ -68,7 +69,7 @@ async function readForm(req: IncomingMessage, required: readonly string[], optio
 
 export async function handleEmailConnection(req: IncomingMessage, res: ServerResponse, url: URL, input: {
   portal: Pick<PostgresPortalDeps, 'productProfile' | 'portalBaseUrl' | 'sessionSecret'>;
-  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'> & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
+  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain' | 'eligibility'> & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
   identity: PortalSessionIdentity | null;
   /** Release 2's sending controls; absent: the page is exactly release 1's. */
   sending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
@@ -103,14 +104,16 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     if (path === BASE) {
       if (req.method !== 'GET') throw new RouteError(405, STALE);
       const keys = [...url.searchParams.keys()];
-      if (keys.some(key => key !== 'business') || url.searchParams.getAll('business').length > 1) throw new RouteError(400, STALE);
+      if (keys.some(key => key !== 'business' && key !== 'agree') || url.searchParams.getAll('business').length > 1 || url.searchParams.getAll('agree').length > 1
+          || (url.searchParams.has('agree') && url.searchParams.get('agree') !== 'yes')) throw new RouteError(400, STALE);
       const business = url.searchParams.get('business');
       // The Business picker offers only the businesses allowed to connect email (Property Predator for now), and only
       // the one this session has selected; another id is refused.
-      if (business !== null && (!EMAIL_CONNECT_BUSINESSES.some(item => item.workspaceId === business) || business !== identity.workspaceId)) {
+      // Exactly an allowed id as listed (lower case): another spelling of it is refused, as before.
+      if (business !== null && (service.eligibility.business(business)?.workspaceId !== business || business !== identity.workspaceId)) {
         throw new RouteError(404, EMAIL_CONNECTION_MESSAGES.notAllowed);
       }
-      send(res, 200, await page()); return true;
+      send(res, 200, await page(url.searchParams.get('agree') === 'yes' ? { agreed: true } : {})); return true;
     }
     if (req.method !== 'POST') throw new RouteError(405, STALE);
     if (url.search || req.headers.origin !== origin.origin || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new RouteError(403, STALE);
@@ -128,7 +131,7 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     }
     if ((SENDING_ACTIONS as readonly string[]).includes(action)) {
       const sendingAction = action as typeof SENDING_ACTIONS[number];
-      const fields = sendingAction === 'details' ? await readForm(req, ['csrf', 'commandId', 'businessName', 'postalAddress', 'testList'])
+      const fields = sendingAction === 'details' ? await readForm(req, ['csrf', 'commandId', 'businessName', 'postalAddress', 'testList'], ['then'])
         : sendingAction === 'works-now' ? await readForm(req, ['csrf', 'commandId', 'email']) : await readForm(req, ['csrf', 'commandId']);
       if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, fields.get('csrf') ?? '') || !UUID.test(fields.get('commandId') ?? '')) throw new RouteError(403, STALE);
       const view = await service.view(identity);
@@ -140,11 +143,18 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       if ((sendingAction === 'start-test' && state.mode !== 'off') || (sendingAction === 'back-to-test' && state.mode !== 'live')) {
         send(res, 409, await page({ message: { text: SENDING_MESSAGES.notFromHere, ok: false } })); return true;
       }
-      const result: SendingResult = sendingAction === 'details' ? await sending.saveDetails(identity, details!)
+      if (sendingAction === 'details' && fields.has('then') && fields.get('then') !== 'test') throw new RouteError(400, STALE);
+      // "Save and send me a test": the details are saved first; only when that worked is the test sent, with this
+      // page's commandId (so a double submit sends once). One answer: the save's refusal, or the test's result.
+      const saveThenTest = sendingAction === 'details' && fields.get('then') === 'test';
+      const saved: SendingResult | null = sendingAction === 'details' ? await sending.saveDetails(identity, details!) : null;
+      const result: SendingResult = sendingAction === 'details' ? (saved!.ok && saveThenTest ? await sending.sendTest(identity, state, fields.get('commandId')!) : saved!)
         : sendingAction === 'test-send' ? await sending.sendTest(identity, state, fields.get('commandId')!)
           : sendingAction === 'works-now' ? await sending.liftAddress(identity, (fields.get('email') ?? '').slice(0, 320))
             : await sending.command(identity, state, sendingAction === 'go-live' ? 'live' : sendingAction === 'back-to-test' || sendingAction === 'start-test' ? 'test' : sendingAction);
-      send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && !result.ok ? { sendingForm: details } : {}),
+      const tested = result.ok && (sendingAction === 'test-send' || saveThenTest);
+      send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && saved && !saved.ok ? { sendingForm: details } : {}),
+        ...(tested ? { testSent: true } : {}),
         ...(result.bounceRepair && service.repairBounceReporting ? { offerBounceRepair: true } : {}) }));
       return true;
     }
@@ -152,23 +162,29 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     if (action === 'repair-bounces' && !service.repairBounceReporting) throw new RouteError(404, STALE);
     const fields = action === 'connect'
       ? await readForm(req, ['csrf', 'commandId', 'fromName', 'fromAddress', 'replyTo'], ['agree'])
-      : await readForm(req, ['csrf', 'commandId']);
+      : action === 'check' ? await readForm(req, ['csrf', 'commandId'], ['auto']) : await readForm(req, ['csrf', 'commandId']);
     if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, fields.get('csrf') ?? '') || !UUID.test(fields.get('commandId') ?? '')) throw new RouteError(403, STALE);
+    if (fields.has('auto') && fields.get('auto') !== 'yes') throw new RouteError(400, STALE);
     const typed = action === 'connect' ? { fromName: (fields.get('fromName') ?? '').slice(0, 200), fromAddress: (fields.get('fromAddress') ?? '').slice(0, 300),
       replyTo: (fields.get('replyTo') ?? '').slice(0, 300) } : undefined;
     try {
       const result = action === 'connect' ? await service.connect(identity, { ...typed!, agreed: fields.get('agree') === 'yes' })
         : action === 'continue' ? await service.continue(identity)
-          : action === 'check' ? await service.check(identity)
+          : action === 'check' ? await service.check(identity, fields.get('auto') === 'yes' ? { repair: false } : {})
             : action === 'use-domain' ? await service.useExistingDomain(identity)
               : action === 'repair-bounces' ? await service.repairBounceReporting!(identity) : await service.disconnect(identity);
-      send(res, 200, await page({ message: { text: result.message, ok: result.ok }, ...(result.bounceRepair ? { offerBounceRepair: true } : {}) }));
+      // An automatic check that learnt nothing new (nothing written, still waiting): the page's script keeps its place.
+      const quiet = action === 'check' && fields.get('auto') === 'yes' && result.unchanged === true;
+      send(res, 200, await page({ message: { text: result.message, ok: result.ok }, ...(result.bounceRepair ? { offerBounceRepair: true } : {}), ...(quiet ? { autoQuiet: true } : {}) }));
     } catch (error) {
       if (!(error instanceof EmailConnectionError)) throw error;
       // A refusal is shown on the page itself, with what the owner typed kept in the form.
       if (error.status === 403 || error.code === 'off') throw new RouteError(error.status, error.message);
       send(res, error.status, await page({ message: { text: error.message, ok: false }, ...(typed ? { form: typed } : {}),
+        // The tick travels with the address form; a refusal for it (and only that) goes back to step 1.
+        ...(typed && fields.get('agree') === 'yes' && error.code !== 'terms' ? { agreed: true } : {}),
         ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}),
+        ...(error.code === 'domain_in_use' ? { clash: true } : {}),
         // A repair that failed (busy, refused, interrupted) leaves bounce reporting unconfirmed: the button stays.
         ...(action === 'repair-bounces' ? { offerBounceRepair: true } : {}) }));
     }
