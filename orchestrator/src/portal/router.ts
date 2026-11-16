@@ -22,7 +22,7 @@ import { handleEmailConnection } from './email-connection-router.js';
 import type { EmailConnectionService } from '../email-connections/service.js';
 import type { OwnerSendingService } from '../email-protection/owner.js';
 /** Whether this business may use Connect email: asked of the eligibility the platform composed into the service (none: no). */
-export const emailConnectionBusinessAllowed = (deps: PostgresPortalDeps, workspaceId: string): boolean => deps.emailConnections?.eligibility.allowed(workspaceId) === true;
+export const emailConnectionBusinessAllowed = (deps: PostgresPortalDeps, workspaceId: string): boolean => deps.emailConnections?.eligibility?.allowed(workspaceId) === true;
 import { readEmailEntry, type EmailEntryStatus } from './email-connection-progress.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';

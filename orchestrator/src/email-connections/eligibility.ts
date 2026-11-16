@@ -3,7 +3,20 @@
  *
  * Stage 1 (this file): one implementation, staticEligibility, backed by exactly the constant list below (Property
  * Predator only). Stage 2 (a database allow-list, migration 0157) adds a second implementation and passes it in from
- * portal/postgres-platform.ts instead; no other file needs to change for that.
+ * portal/postgres-platform.ts instead. That swap moves every decision that used the old list, but stage 2 has more to do
+ * than the swap (an independent review listed these):
+ *   - PgEmailConnectionStore.otherConnectionHolds throws once two businesses are allowed: replace it with the SQL read.
+ *   - The product-profile gate ('property_predator_growth' in portal/router.ts, email-connection-router.ts and
+ *     growth-home.ts) and the refusal text that names Property Predator sit outside this seam.
+ *   - The workspace pins in migrations 0155, 0156 and 0153, and EMAIL_LEDGER_WORKSPACES for durable blocks.
+ *   - Removal from the list is NOT a stop: the send path never asks the list, and a running process keeps a removed
+ *     business's bounce source while a restarted one drops it. Removal must first switch sending off, and the bounce
+ *     source should follow the stored row, not the list.
+ *   - Never compose with an empty or not-yet-loaded list (Property Predator's bounce webhook would answer 404 while it
+ *     keeps sending); a failed refresh keeps the last good list.
+ *   - The lock pool is sized once at start-up; ids in the list must be lower case.
+ *   - Make `eligibility` required in the four constructors that fall back to staticEligibility today, so a missed
+ *     consumer is a compile error (the store's fallback fails open: "no other business holds this domain").
  *
  * The methods are synchronous ON PURPOSE. They are called on request paths (the home page's entry, the email page and
  * its ?business= check, every Connect step, Go live's webhook check) and on the bounce webhook's path (handles(), the
