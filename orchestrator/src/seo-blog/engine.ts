@@ -67,6 +67,8 @@ export interface Actor {
 interface PlanExecution {
   readonly search: SearchProvider;
   readonly metrics?: KeywordProvider;
+  /** True once a search-numbers request in this run was skipped or failed (the wrapper still answers with no rows). */
+  readonly numbersUnavailable?: () => boolean;
   readonly research?: ResearchBundle;
   readonly modelResult?: JsonCallResult<PlannedCluster>;
   readonly planId: string;
@@ -76,7 +78,12 @@ interface PlanExecution {
   commit(plan: TopicPlan, briefs: readonly ArticleBrief[]): Promise<void>;
 }
 
-import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin } from './method-packs.js';
+import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
+import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
+
+/** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
+const NUMBERS_UNAVAILABLE = new WeakSet<object>();
+const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
 import { confirmedVisualInputs, type EditorialFormat } from './method-evidence.js';
 
@@ -124,6 +131,10 @@ export interface EngineDeps {
   readonly publishers: PublisherRegistry;
   readonly vault: SeoBlogCredentialVault | null;
   readonly keywords?: KeywordProvider | null;
+  /** SEO_BLOG_REQUIRE_FULL_ENGINE: planning and writing stop with a neutral message rather than produce a weaker article. Off by default. */
+  readonly requireFullEngine?: boolean;
+  /** Read-only method assignments for the strict setting when the method switch is off (to tell an expected method from none). */
+  readonly methodAssignments?: Pick<MethodStore, 'snapshot'>;
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
@@ -381,10 +392,12 @@ export class SeoBlogEngine {
     if (generation === 'unavailable') missing.push('Connect a writing model API key (server configuration).');
     if (!budgets) missing.push('Set monthly writing and research budgets.');
     if (destination !== 'connected') missing.push('Connect and verify the website for publishing.');
+    const numbersReady = !this.deps.requireFullEngine || this.deps.keywords?.mode === 'live';
+    if (!numbersReady) missing.push('Search numbers need to be switched on before planning (server set-up).');
     return {
       website: Boolean(brand.website), knowledge: docs.length, unreadableKnowledge: all.filter((d) => d.active && ['unreadable', 'unsupported', 'rejected'].includes(d.status)).length,
       profile: profileState, inventory: Boolean(inventory), research, generation, budgets, destination,
-      canPlan: profileState === 'confirmed' && research && generation !== 'unavailable' && budgets,
+      canPlan: profileState === 'confirmed' && research && generation !== 'unavailable' && budgets && numbersReady,
       missing,
     };
   }
@@ -1070,7 +1083,7 @@ export class SeoBlogEngine {
         usage:{brandId:claim.brandId,kind:'search_calls',amount:1,at:now,reference:`research:${run.logicalRunId}:${nonce}`}};
     });
     if(cached) return cached;
-    if(metricsSkipped) return {hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null};
+    if(metricsSkipped) return unavailableNumbers({hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null});
     if(!nonce || reserved.state!=='running') throw new ResearchUnavailableError('Research is held. See the programme status for the next action.');
     let receipt:ResearchSearchReceipt|null=null; let diagnostic:ResearchDiagnostic|null=null; let cost:number|null=supplierTask?.providerReportedCost??null; let waiting=false;
     try {
@@ -1108,7 +1121,7 @@ export class SeoBlogEngine {
       return this.programmeHeld(s,next,nextRun,diagnostic?.retryable?'retries_exhausted':diagnostic?.category??'unknown',diagnostic ? `${diagnostic.summary} ${diagnostic.retryable?'The bounded retry allowance or search ceiling is exhausted. Explicit owner resume is required.':diagnostic.remedy}` : 'Research outcome is unknown. Review before resuming.',diagnostic);
     });
     let saved:Job; try{saved=await save();}catch{saved=await save();}
-    if(kind==='metrics' && !receipt && saved.state==='running' && saved.leaseOwner===claim.leaseOwner && saved.attempts===claim.attempts) return {hits:[],keywordMetrics:[],taskId:null,providerReportedCost:cost};
+    if(kind==='metrics' && !receipt && saved.state==='running' && saved.leaseOwner===claim.leaseOwner && saved.attempts===claim.attempts) return unavailableNumbers({hits:[],keywordMetrics:[],taskId:null,providerReportedCost:cost});
     if(!receipt || saved.state!=='running' || saved.leaseOwner!==claim.leaseOwner || saved.attempts!==claim.attempts) throw new ResearchUnavailableError('Research is paused. Open programme status for the saved outcome.');
     return receipt;
   }
@@ -1129,6 +1142,7 @@ export class SeoBlogEngine {
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
       if(!run.modelReceipt&&!this.deps.llm) return this.programmeHeld(s,withRun,run,'configuration','The writing model is not configured. No new supplier or model call was started.');
       if(!run.research&&this.deps.search.mode!=='live') return this.programmeHeld(s,withRun,run,'configuration','Source research is not configured. Connect the research provider before a new planning intent.');
+      if(this.deps.requireFullEngine&&!run.research&&!run.modelReceipt&&this.deps.keywords?.mode!=='live') return this.programmeHeld(s,withRun,run,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers);
       const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
       const hold=s.brand.settings.programme?.researchHold??legacy;
       const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
@@ -1143,11 +1157,16 @@ export class SeoBlogEngine {
     if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
     const run=programmeRun(ready)!;
     const p=ready.payload;
+    let numbersUnavailable=false;
     try {
       await this.runPlan(claim.brandId,{focus:(p.focus as string|null)??null,excluded:(p.excluded as string[])??[],sourceArticleUrl:(p.sourceArticleUrl as string|null)??null,requestedBy:typeof p.requestedBy==='string'?p.requestedBy:undefined},{
         planId:run.logicalRunId,provenance:{logicalRunId:run.logicalRunId,inputSha:run.snapshot.sha,structureSha:run.snapshot.structureSha,structureVersion:run.snapshot.structureVersion,root:run.snapshot.root,categoryLabels:run.snapshot.categoryLabels,authority},
         search:{id:this.deps.search.id,mode:this.deps.search.mode,search:async(query,options)=>[...(await this.programmeSearch(claim,authority,query,options)).hits]},
-        ...(this.deps.keywords?.mode==='live'?{metrics:{mode:'live' as const,metrics:async(queries: string[])=>[...(await this.programmeSearch(claim,authority,queries.join('\n'),{locale:brand.locale,limit:queries.length},'metrics',async()=>({hits:[],keywordMetrics:(await this.deps.keywords!.metrics(queries)).filter((m)=>m.source!=='mock'),taskId:null,providerReportedCost:null}))).keywordMetrics??[]]}}:{}),
+        ...(this.deps.keywords?.mode==='live'?{metrics:{mode:'live' as const,metrics:async(queries: string[])=>{
+          const answer=await this.programmeSearch(claim,authority,queries.join('\n'),{locale:brand.locale,limit:queries.length},'metrics',async()=>({hits:[],keywordMetrics:(await this.deps.keywords!.metrics(queries)).filter((m)=>m.source!=='mock'),taskId:null,providerReportedCost:null}));
+          if(NUMBERS_UNAVAILABLE.has(answer)) numbersUnavailable=true;
+          return [...answer.keywordMetrics??[]];
+        }},numbersUnavailable:()=>numbersUnavailable}:{}),
         research:run.research,modelResult:run.modelReceipt,
         beforeModel:async(research)=>{
           let permitted=false;
@@ -1205,6 +1224,7 @@ export class SeoBlogEngine {
         }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
+        if(error instanceof EngineIncompleteError) return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
       });
     }
@@ -1239,6 +1259,13 @@ export class SeoBlogEngine {
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm the current brand profile before planning.', 'not_ready');
     if(!execution?.modelResult) await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
     if(!execution) await this.requireBudget(brand, 'search_calls', USAGE_ESTIMATES.searchPerPlan);
+    const strict = this.deps.requireFullEngine === true;
+    // The strict setting checks everything it can before anything is spent.
+    if (strict && !execution?.modelResult && !execution?.research) {
+      if (this.deps.search.mode !== 'live') throw new EngineIncompleteError('research');
+      if (this.deps.keywords?.mode !== 'live') throw new EngineIncompleteError('numbers');
+    }
+    if (strict && !execution?.modelResult && (await this.methodState(brandId, 'planning')) === 'inactive') throw new EngineIncompleteError('method');
     let inventory = await this.store.getInventory(brandId);
     if (brand.website && (!inventory || Date.parse(this.now()) - Date.parse(inventory.fetchedAt) > 24 * 3600_000)) {
       inventory = await this.refreshInventory(brandId);
@@ -1249,12 +1276,20 @@ export class SeoBlogEngine {
       categories: (brand.settings.programme?.structure?.categories ?? []).map((c) => c.label),
       limit: USAGE_ESTIMATES.searchPerPlan,
     });
-    const research = execution?.research ?? await researchQueries({
+    let research = execution?.research ?? await researchQueries({
       queries: seeds, search: execution?.search??this.deps.search, transport: this.deps.transport,
       locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: execution ? execution.metrics??null : this.deps.keywords ?? null,
     });
+    // A skipped or failed numbers request answers with no rows; record it as unavailable, not as "no data".
+    if (!execution?.research && execution?.numbersUnavailable?.() && research.numbers !== 'off') research = { ...research, numbers: 'unavailable' };
     if (!execution && research.searchCalls > 0) await this.store.recordUsage({ brandId, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: 'plan' });
     if (research.sources.length === 0) throw new ResearchUnavailableError('Research returned no usable sources. Planning paused; nothing was invented.');
+    const planNumbers = research.numbers ?? (research.keywordMetrics.some((m) => typeof m.volume === 'number') ? 'measured' : this.deps.keywords?.mode === 'live' ? 'no_data' : 'off');
+    if (strict && !execution?.modelResult) {
+      // "The supplier answered and has no data" goes on; a request that failed or was skipped does not.
+      if (planNumbers === 'unavailable' || planNumbers === 'off') throw new EngineIncompleteError('numbers');
+      if (research.sources.length < MIN_PLAN_SOURCES) throw new EngineIncompleteError('thin_research');
+    }
     const planned = await this.store.listBriefs(brandId);
     const articles = await this.store.listArticles(brandId);
     if(execution && !execution.modelResult) await execution.beforeModel(research);
@@ -1268,6 +1303,9 @@ export class SeoBlogEngine {
     const short = new Map(research.sources.map((s, i) => [`S${i + 1}`, s]));
     const cluster = [result.value.pillar, ...result.value.supporting];
     const planReceipt=result.record.methodReceiptId&&this.deps.methods?await this.deps.methods.store.receipt(brandId,result.record.methodReceiptId):null;
+    const planMethod = result.record.methodReceiptId ? 'active' as const : await this.methodState(brandId, 'planning').catch(() => 'not_recorded' as never);
+    const stampAt = this.now();
+    const planStamp = engineStamp({ strict, research: 'live', numbers: planNumbers, method: planMethod, methodReceiptId: result.record.methodReceiptId ?? null, at: stampAt });
     const formatDecisions=(planReceipt?.sidecar?.decisions as {formatPerArticle?:{slug:string;formatId:string;rationale:string}[]}|undefined)?.formatPerArticle;
     const slugToId = new Map(cluster.map((a) => [a.slug, randomUUID()]));
     const comparable: import('./dedupe.js').PlannedComparable[] = [
@@ -1297,6 +1335,7 @@ export class SeoBlogEngine {
         duplicate,
         status: duplicate.verdict === 'skip' || duplicate.verdict === 'update_existing' ? 'postponed' : 'planned',
         suggestedAtUtc: null, articleId: null,
+        engine: { ...planStamp, numbers: briefNumbers(planNumbers, Boolean(metric)) },
       };
       comparable.push({ id: brief.id, title: brief.workingTitle, targetQuery: brief.targetQuery, slug: brief.slug, sibling: true });
       briefs.push(brief);
@@ -1317,6 +1356,7 @@ export class SeoBlogEngine {
       briefIds: briefs.map((b) => b.id), sources: research.sources,
       inputs: { focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl },
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
+      engine: planStamp,
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
     if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
@@ -1470,6 +1510,15 @@ export class SeoBlogEngine {
       const version=completed.currentVersionId?await this.store.getVersion(brandId,completed.currentVersionId):null;
       if(version)await this.queueAutomaticArticleImage(brand,completed,version,profile);
       return completed;
+    }
+    if (this.deps.requireFullEngine) {
+      // Strict: a brief planned without search numbers, or a business whose writing method is expected but not active, stops here.
+      const gap = brief.engine && (brief.engine.numbers === 'off' || brief.engine.numbers === 'unavailable') ? 'planned_without_numbers' as const
+        : (await this.methodState(brandId, 'blog')) === 'inactive' ? 'method' as const : null;
+      if (gap) {
+        await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: ENGINE_GAP_MESSAGE[gap].slice(0, 300) }).catch(() => undefined);
+        throw new EngineIncompleteError(gap);
+      }
     }
     if (brief.status !== 'generating') await this.store.saveBrief({ ...brief, status: 'generating', articleId: article.id });
     if (article.editorialState !== 'writing') article = await this.store.updateArticle({ ...article, editorialState: 'writing' });
@@ -1662,6 +1711,9 @@ export class SeoBlogEngine {
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
       generation, contentSha, promotionPack,
+      engine: engineStamp({ strict: this.deps.requireFullEngine === true, research: brief.engine?.research ?? 'not_recorded', numbers: brief.engine?.numbers ?? 'not_recorded',
+        method: !generation ? 'not_used' : generation.methodReceiptId ? 'active' : await this.methodState(brand.id, 'blog').catch(() => 'not_recorded' as never),
+        methodReceiptId: generation?.methodReceiptId ?? null, at: this.now() }),
     };
     const checks = await this.checkVersion(brand, version);
     // A new version always invalidates the old approval; review-required articles return to Needs approval.
@@ -2126,6 +2178,21 @@ export class SeoBlogEngine {
     const brief = await this.store.getBrief(brandId, article.briefId);
     if (!version || !profile || !brief) throw new SeoBlogError(409, 'The article’s history is incomplete.');
     return { article, version, profile, brief };
+  }
+
+  /**
+   * The writing method for a business and step, without running it: 'off' when the method switch is off and no
+   * assignment can be read; 'not_assigned' when the business has none (the house standard applies, as for clients);
+   * 'inactive' when it is assigned but would not run (switched off for the deployment, or nothing selected for this
+   * step); 'active' when it would run.
+   */
+  private async methodState(brandId: string, stage: 'planning' | 'blog'): Promise<import('./types.js').EngineMethodState> {
+    const reader = this.deps.methods?.store ?? this.deps.methodAssignments;
+    if (!reader) return 'off';
+    const snapshot = await reader.snapshot(brandId);
+    if (!snapshot.assignment) return 'not_assigned';
+    if (!this.deps.methods) return 'inactive';
+    try { return resolveMethods(snapshot, [stage]).packs.length ? 'active' : 'inactive'; } catch { return 'inactive'; }
   }
 
   private async methodLlm(brand:Brand,profile:BrandProfile,stage:'planning'|'blog'|'revision'|'social',assetRef:string,sources:readonly ResearchSource[],preserveReceiptId?:string|null,copyRequested=false,editorialFormat?:EditorialFormat):Promise<LlmClient>{
