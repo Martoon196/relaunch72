@@ -75,7 +75,7 @@ export function resolveCreativeContext(input: {
   const suggestedColours = [...new Set([...visual.matchAll(/#[0-9a-f]{6}\b/giu)].map((m) => m[0].toLowerCase()))].slice(0, 8);
   const decorativeGaps: ContextGap[] = [];
   if (!kit) decorativeGaps.push({ field: 'palette', detail: 'No brand colours are confirmed for creative work, so a neutral grey-blue fallback palette is used and labelled.', action: 'Confirm brand colours in the creative kit.' });
-  if (!kit?.logo) decorativeGaps.push({ field: 'logo', detail: 'No approved logo file is on record, so the brand name is set in plain text instead. A logo is never drawn by a model.', action: 'Upload the approved logo (PNG or JPEG).' });
+  if (!kit?.logo) decorativeGaps.push({ field: 'logo', detail: 'No approved logo file is on record, so the brand name is set in plain text instead. A logo is never drawn automatically.', action: 'Upload the approved logo (PNG or JPEG).' });
   if (!visual) decorativeGaps.push({ field: 'visual_guidance', detail: 'No visual guidance document is active.', action: 'Optional: add visual guidance in Setup.' });
   const contextSha256 = sha(JSON.stringify({ recipe: 'creative-context-v1', brandId: brand.id, brandName: brand.name,
     profileVersion: profile?.version ?? null, factsSha: profile?.factsSha ?? null, confirmedAt: profile?.confirmedAt ?? null,

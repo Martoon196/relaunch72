@@ -11,6 +11,8 @@ import { base, STYLE } from './creative-studio-view.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 import type { EnquirySettings } from '../creative-studio/pg-store.js';
 import { ENQUIRY_LIMITS, ENQUIRY_ROUTE, enquiryEmbedSnippet } from '../creative-studio/enquiry-capture.js';
+import { ownerWords } from '../seo-blog/owner-words.js';
+import { founderView, technicalDetail } from './owner-detail.js';
 
 const e = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, (c) => `&#${c.charCodeAt(0)};`);
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro % 10_000 ? 4 : 2)}`;
@@ -28,12 +30,12 @@ function settingsCard(shell: Shell, brand: Brand, state: GenerationState, policy
   return `<section class="card" id="generation-settings"><h2>Allowances</h2>
 <ul class="small"><li><strong>Studio image generation:</strong> ${enabled ? `on, ${unlimited(brand.settings, 'studioImages') ? 'Unlimited' : `up to ${perMonth} per UTC month`}` : 'off'} (${state.usage.studioImagesCounted} counted this month${state.usage.studioUnresolved ? `, ${state.usage.studioUnresolved} awaiting reconciliation` : ''}).</li>
 <li><strong>Brand image allowance</strong> (shared with blog images, set in <a href="${SEO_BLOG_BASE}/b/${e(brand.id)}/publishing#campaign-images">Publishing</a>): ${state.usage.brandImagesThisMonth} of ${unlimited(brand.settings, 'images') ? 'Unlimited' : brand.settings.budgets.imagesPerMonth} used this month.</li>
-<li><strong>Platform image policy</strong> (operator-controlled): ${open ? 'open' : 'closed — no paid image can start'}. ${providerConfigured ? '' : 'The image provider is not configured on this server.'}</li></ul>
+<li><strong>Platform image policy</strong> (operator-controlled): ${open ? 'open' : 'closed — no paid image can start'}. ${providerConfigured ? '' : 'Image generation is not connected on this server.'}</li></ul>
 <form method="post" action="${base(shell)}/generate/settings" class="cs-form">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${brand.rowVersion}">
 <label><input type="checkbox" name="enabled" value="1"${enabled ? ' checked' : ''} style="width:auto"> Allow paid images from typed briefs for this brand</label>
 <label for="gen-per-month">Studio images per UTC month (0 = none)</label>${unlimited(brand.settings, 'studioImages') ? `<input name="perMonth" type="hidden" value="${perMonth}"><output id="gen-per-month">Unlimited</output>` : `<input id="gen-per-month" name="perMonth" type="number" min="0" max="${brand.settings.operatorLimits?.studioImages ?? 1000}" value="${perMonth}">`}
 <button class="secondary" type="submit">Save allowance</button>
-<p class="small muted">A writing (model-token) allowance is not an image allowance. Each studio image also uses one of the brand image allowance above and is reserved against the platform’s monthly limit. Saving this never starts a request.</p></form></section>`;
+<p class="small muted">The writing allowance is not an image allowance. Each studio image also uses one of the brand image allowance above and is reserved against the platform’s monthly limit. Saving this never starts a request.</p></form></section>`;
 }
 
 function briefForm(shell: Shell, briefId: string | null, references: readonly ReferenceChoice[], brief: CreativeBrief | null): string {
@@ -70,19 +72,19 @@ export function briefPage(shell: Shell, data: { brand: Brand; briefId: string; v
   const lastIntent = attempted?.intentId ?? null;
   const gens = data.state.generations.filter((g) => g.briefId === data.briefId);
   const cost = `<div class="cost"><strong>Before you generate</strong><dl>
-<dt>Paid requests</dt><dd>${est.paidGenerations} image</dd><dt>Model</dt><dd>${e(est.model)} · quality ${e(est.quality)} (set by the platform policy)</dd>
+<dt>Paid requests</dt><dd>${est.paidGenerations} image</dd>${founderView(shell) ? `<dt>Model</dt><dd>${e(est.model)} · quality ${e(est.quality)} (set by the platform policy)</dd>` : ''}
 <dt>Size</dt><dd>${e(SIZE_LABEL[est.size])}</dd><dt>Reference images</dt><dd>${est.references}</dd>
 <dt>Reserved against the platform limit</dt><dd>${est.reservedMicrousd === null ? 'Not available (paid images are not enabled)' : `${usd(est.reservedMicrousd)} (a fixed reservation set by the operator; it is not the charge and does not cap it)`}</dd>
-<dt>Exact cost</dt><dd>${e(est.exactCost)}</dd>
+<dt>Exact cost</dt><dd>${e(ownerWords(est.exactCost))}</dd>
 <dt>Brand image allowance</dt><dd>${est.brandAllowance.unlimited ? 'Unlimited' : `${est.brandAllowance.remaining} of ${est.brandAllowance.limit} left this month`}</dd>
 <dt>Studio image allowance</dt><dd>${est.studioAllowance.enabled ? `${est.studioAllowance.unlimited ? 'Unlimited' : `${est.studioAllowance.remaining} of ${est.studioAllowance.limit} left this month`}` : 'off'}${est.studioAllowance.unresolved ? ` (${est.studioAllowance.unresolved} awaiting reconciliation still count)` : ''}</dd></dl>
-${est.blockers.length ? `<ul class="blockers small">${est.blockers.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}</div>`;
+${est.blockers.length ? `<ul class="blockers small">${est.blockers.map((b) => `<li>${e(ownerWords(b))}</li>`).join('')}</ul>` : ''}</div>`;
   const requestForm = active ? `<p role="status" data-creative-job="${e(active.id)}" data-endpoint="${base(shell)}/jobs/${e(active.id)}">${pill(active.state)} <span data-job-detail>${e(active.progress)}</span></p><p class="small muted">You can leave this page; the request continues on the server and survives restarts.</p><noscript><p class="small"><a href="">Refresh to check progress</a></p></noscript>`
     : `<form method="post" action="${base(shell)}/generate/${e(data.briefId)}/request">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="version" value="${current.version}">
 ${lastIntent ? `<input type="hidden" name="replacesIntentId" value="${e(lastIntent)}"><label><input type="checkbox" name="confirmedNewIntent" value="1" required style="width:auto"> I want another paid image for this same brief version. The earlier one stays on record.</label>` : `<label><input type="checkbox" name="confirm" value="1" required style="width:auto"> Use one paid image from this brand’s allowances.</label>`}
 <button type="submit"${est.blockers.length ? ' disabled' : ''}>${lastIntent ? 'Generate another image (new paid request)' : 'Generate image (1 paid request)'}</button></form>`;
-  const history = jobs.filter((j) => j !== active).map((j) => `<li>${pill(j.state)} ${e(new Date(j.createdAt).toISOString().slice(0, 16).replace('T', ' '))} UTC · ${e(j.error ?? j.progress)}${j.paidAttemptStarted ? '' : ' <span class="small muted">(no paid request started)</span>'}</li>`).join('');
-  const results = gens.length ? `<div class="gen-grid">${gens.map((g) => `<figure><img src="${e(data.previewUrl(g.id))}" alt="Image generated from brief “${e(brief.title)}” version ${g.briefVersion}" width="${g.width}" height="${g.height}" loading="lazy"><figcaption class="small"><span class="pill">AI-generated · not approved</span> version ${g.briefVersion} · ${g.width}×${g.height} · ${e(g.createdAt.slice(0, 10))}${g.data.usage ? '' : ' · provider usage not reported'}<br><a class="button" href="${base(shell)}?bg=generated:${e(g.id)}#new-h">Create artwork from this image</a></figcaption></figure>`).join('')}</div>`
+  const history = jobs.filter((j) => j !== active).map((j) => `<li>${pill(j.state)} ${e(new Date(j.createdAt).toISOString().slice(0, 16).replace('T', ' '))} UTC · ${e(ownerWords(j.error ?? j.progress))}${j.paidAttemptStarted ? '' : ' <span class="small muted">(no paid request started)</span>'}${technicalDetail(shell, [j.error ?? j.progress], ownerWords(j.error ?? j.progress))}</li>`).join('');
+  const results = gens.length ? `<div class="gen-grid">${gens.map((g) => `<figure><img src="${e(data.previewUrl(g.id))}" alt="Image generated from brief “${e(brief.title)}” version ${g.briefVersion}" width="${g.width}" height="${g.height}" loading="lazy"><figcaption class="small"><span class="pill">AI-generated · not approved</span> version ${g.briefVersion} · ${g.width}×${g.height} · ${e(g.createdAt.slice(0, 10))}${g.data.usage ? '' : ' · usage not reported by the image service'}<br><a class="button" href="${base(shell)}?bg=generated:${e(g.id)}#new-h">Create artwork from this image</a></figcaption></figure>`).join('')}</div>`
     : '<p class="muted">No image generated from this brief yet.</p>';
   return layout(shell, 'Image brief', `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}/generate">← All briefs</a></p><h1>${e(brief.title)}</h1>
 <p class="muted">Version ${current.version} · ${e(SIZE_LABEL[brief.size])} · ${brief.references.length} reference image(s) · visual guidance ${brief.useVisualGuidance ? 'on' : 'off'}</p>
@@ -127,8 +129,8 @@ export function renderTaskPage(shell: Shell, data: { job: Job; label: string; re
   const { job } = data, live = job.state === 'queued' || job.state === 'running';
   const status = live
     ? `<p role="status" data-creative-job="${e(job.id)}" data-endpoint="${base(shell)}/jobs/${e(job.id)}">${pill(job.state)} <span data-job-detail>${e(job.progress)}</span></p>
-<p class="small muted">The work runs on the server and survives restarts. You can leave this page and come back from the Creative studio or Tasks. Rendering is local: no provider is called and nothing is charged.</p><noscript><p><a href="">Refresh to check progress</a></p></noscript>`
-    : `<p>${pill(job.state)} ${e(job.error ?? job.progress)}</p><p class="small muted">Nothing was published or approved.</p>${['blocked', 'failed'].includes(job.state) && data.retryable
+<p class="small muted">The work runs on the server and survives restarts. You can leave this page and come back from the Creative studio or Tasks. Rendering is local: no outside service is used and nothing is charged.</p><noscript><p><a href="">Refresh to check progress</a></p></noscript>`
+    : `<p>${pill(job.state)} ${e(ownerWords(job.error ?? job.progress))}</p>${technicalDetail(shell, [job.error ?? job.progress], ownerWords(job.error ?? job.progress))}<p class="small muted">Nothing was published or approved.</p>${['blocked', 'failed'].includes(job.state) && data.retryable
       ? `<form method="post" action="${base(shell)}/task/${e(job.id)}/retry" class="cs-form">${csrfField(shell.csrf)}<button class="secondary" type="submit">Try again</button> <span class="small muted">Replays the same request after you have fixed what stopped it. Rendering is local; nothing is charged.</span></form>` : ''}`;
   return layout(shell, data.label, `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><h1>${e(data.label)}</h1>
 <section class="card">${status}</section>${live ? `<script src="${SEO_BLOG_BASE}/creative-job-status.js" defer></script>` : ''}`);
