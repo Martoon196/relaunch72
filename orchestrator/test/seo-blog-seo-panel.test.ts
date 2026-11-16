@@ -6,7 +6,8 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { editorPage, ARTICLE_FOLDS } from '../src/portal/seo-blog-article-view.js';
-import { SEO_PANEL_END, SEO_PANEL_START } from '../src/portal/seo-blog-seo-panel.js';
+import { articleSeoScore, SEO_PANEL_CSS, SEO_PANEL_END, SEO_PANEL_START } from '../src/portal/seo-blog-seo-panel.js';
+import { seoNextSteps } from '../src/seo-blog/seo-score.js';
 import { OWNER } from './seo-blog-fixtures.js';
 import { websiteFixture } from './seo-blog-website-fixtures.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
@@ -93,6 +94,64 @@ test('the checks: failures first, each with what to do, linked to the existing c
   // A live article's address cannot change, so no link offers it.
   const live = panelOf(editorPage(fx.shell(), { ...fx.pageData('published'), articleBrief: sp.brief({ targetQuery: 'zebra crossing' }) }));
   assert.doesNotMatch(live, /Edit the page address/);
+});
+
+test('the report leads with the three changes worth most and the score they reach; everything else is folded away', () => {
+  for (const shell of [fx.shell(), newLook()]) {
+    const d = { ...fx.pageData('ready'), articleBrief: sp.brief(), open: ['seo'] };
+    const html = panelOf(editorPage(shell, d));
+    const s = articleSeoScore(fx.brand, { article: d.article, articleBrief: d.articleBrief, destinations: d.destinations }, d.version!);
+    const next = seoNextSteps(s);
+    assert.ok(next.to > next.from);
+    assert.match(html, new RegExp(`<h4 class="sp-sub sp-lead">Three things would take this from ${s.score} to ${next.to}</h4>`));
+    // The three are shown open, in a list straight after the lead; the rest sit in folds.
+    const top = /<ul class="sp-checks sp-top">([\s\S]*?)<\/ul>/.exec(html)![1]!;
+    assert.equal(top.match(/<li class="sp-check/g)?.length, 3);
+    for (const c of next.checks) assert.ok(top.includes(c.name.replace(/&/g, '&amp;')), c.name);
+    assert.match(html, /<details class="sp-done sp-rest"><summary>Everything else to improve \(\d+\)<\/summary>/);
+    assert.match(html, /<details class="sp-done sp-parts"><summary>Score by part<\/summary>/);
+    assert.match(html, /<details class="sp-done"><summary>Already good \(\d+\)<\/summary>/);
+    // Nothing outside the lead and its three is open: every other check is inside a fold.
+    const card = /<section class="sp-card sp-wide sp-score"[\s\S]*?<\/section>/.exec(html)![0];
+    const open = card.replace(/<details[\s\S]*?<\/details>/g, '');
+    assert.equal(open.match(/<li class="sp-check/g)?.length, 3);
+    const v = visible(html);
+    assert.ok(v.indexOf('Three things would take this') < v.indexOf('Everything else to improve'));
+    assert.ok(v.indexOf('Not yet (') < v.indexOf('Nearly there ('));
+  }
+});
+
+test('the lead says plainly when a must-fix issue holds the score, and every check passing says so', () => {
+  const v = fx.version(3, sp.strongBody());
+  const held = fx.article({ currentVersionId: v.id, checks: { versionId: v.id, contentSha: v.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-13T09:00:00.000Z', status: 'blocked', issues: [fx.critical] } as never });
+  const html = panelOf(editorPage(newLook(), { ...fx.pageData('ready'), version: v, versions: [v], article: held, articleBrief: sp.measured(), open: ['seo'] }));
+  assert.match(html, /SEO report: 59 out of 100/);
+  assert.match(visible(html), /1 thing needs fixing before it goes out, so the score stays at 59 or below until it is fixed\./);
+  assert.match(html, /<h4 class="sp-sub sp-lead">The (?:three|two|one) things? that would help most<\/h4>|<h4 class="sp-sub sp-lead">The thing that would help most<\/h4>/);
+});
+
+test('dark mode: the tick, cross and "!" use the card colour on their coloured circle, so they read in both themes', () => {
+  assert.match(SEO_PANEL_CSS, /\.sp-mark\{[^}]*color:var\(--card\)/);
+  assert.doesNotMatch(SEO_PANEL_CSS, /\.sp-mark\{[^}]*color:#fff/);
+});
+
+test('the score is worked out once per page view: the summary line and the report share it', () => {
+  const d = { article: fx.article(), articleBrief: sp.brief(), destinations: [fx.destination] };
+  const v = fx.versions[2]!;
+  const a = articleSeoScore(fx.brand, d, v);
+  assert.equal(articleSeoScore(fx.brand, d, v), a, 'the same objects give the same result without scoring again');
+  assert.notEqual(articleSeoScore(fx.brand, { ...d }, v), a, 'new page data is scored afresh');
+  const html = editorPage(fx.shell(), { ...fx.pageData('ready'), articleBrief: sp.brief() });
+  const line = /SEO score (\d+) out of 100<\/span>/.exec(html)![1];
+  const fold = /SEO report: (\d+) out of 100/.exec(html)![1];
+  assert.equal(line, fold);
+});
+
+test('an article with no sub-headings is not offered "Edit the sub-headings"', () => {
+  const b = fx.body({ sections: [] });
+  const v = fx.version(3, b);
+  const html = panelOf(editorPage(fx.shell(), { ...fx.pageData('ready'), version: v, versions: [v], article: fx.article({ currentVersionId: v.id }), articleBrief: sp.brief(), open: ['seo'] }));
+  assert.doesNotMatch(html, /Edit the sub-headings/);
 });
 
 test('every state, both looks, every kind of brief: no main action, no form or field, no dashes, no supplier, method or model name', () => {

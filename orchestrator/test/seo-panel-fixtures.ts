@@ -37,3 +37,30 @@ export function strongBody(): ArticleBody {
     image: { kind: 'brand_asset', url: 'https://www.martinhowardproperty.example/images/terrace.jpg', alt: 'An investor about to appraise a property deal on a terraced street', provenance: '', width: 1536, height: 1024 },
   } as ArticleBody;
 }
+
+/**
+ * The gaming case from the score review: two-word nonsense sentences built to tick every box. The phrase stands alone
+ * as a sentence and a heading, five headings, the brief's questions copied as headings and answered "So yes. But go.",
+ * one link to the home page, one link anywhere, a one-word button, and the phrase as the picture description.
+ * `repeat` pads it by repeating the same text.
+ */
+export function nonsenseBody(phrase = 'appraise a property deal', questions: readonly string[] = brief().relatedQuestions, repeat = 1): ArticleBody {
+  const filler = 'So go. But big. Then win. So yes. But go. Then run. So fast. But now. Then stop. So good.';
+  const cap = phrase.charAt(0).toUpperCase() + phrase.slice(1);
+  const text = (k: number) => Array.from({ length: k }, () => filler).join(' ');
+  return {
+    ...fx.body(),
+    title: cap, seoTitle: `${cap}: so go, but big, then win now`, metaDescription: `${cap}. So go. But big. Then win. ${cap}. So yes. But go. Then run. So fast.`, slug: phrase.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    intro: `${cap}. ${text(1)} See [home](https://www.martinhowardproperty.example/) and [this](https://example.org/x).`,
+    sections: [
+      { id: 'n1', heading: cap, body: `${cap}. ${text(2 * repeat)}` },
+      ...questions.slice(0, 3).map((q, i) => ({ id: `n${i + 2}`, heading: q, body: `So yes. But go. ${text(repeat)}` })),
+      { id: 'n5', heading: 'So go', body: text(repeat) },
+    ],
+    faqs: questions.slice(0, 3).map((q) => ({ q, a: 'So yes. But go.' })),
+    conclusion: `${cap}. ${text(1)}`,
+    cta: { label: 'Go', url: 'https://example.org/anything' },
+    citations: [],
+    image: { kind: 'brand_asset', url: 'https://www.martinhowardproperty.example/a.jpg', alt: phrase, provenance: '', width: 1200, height: 800 },
+  } as ArticleBody;
+}

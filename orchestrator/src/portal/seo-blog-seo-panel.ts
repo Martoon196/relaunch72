@@ -8,7 +8,7 @@
  */
 
 import type { Article, ArticleBrief, ArticleVersion, Brand, Destination } from '../seo-blog/types.js';
-import { SEO_GROUP_LABELS, seoScore, type SeoCheck, type SeoFix, type SeoScore } from '../seo-blog/seo-score.js';
+import { SEO_GROUP_LABELS, seoNextSteps, seoScore, type SeoCheck, type SeoFix, type SeoScore } from '../seo-blog/seo-score.js';
 import { SEO_BLOG_BASE } from './seo-blog-view.js';
 import { escapeHtml as e } from './ui.js';
 
@@ -29,12 +29,20 @@ function addressOf(a: Article, v: ArticleVersion): string | null {
   return v.websiteTarget?.target.canonicalUrl ?? a.publishedUrl ?? v.promotionPack?.canonicalUrl ?? null;
 }
 
+/** One score per page view: the summary line and the report share it (keyed by the very objects of this render). */
+const scored = new WeakMap<ArticleVersion, { readonly b: Brand; readonly d: SeoPanelData; readonly s: SeoScore }>();
+
 /** The scored result for this version, with the site's own addresses for telling internal links from outside ones. */
 export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): SeoScore {
-  const hosts = [b.website, addressOf(d.article, v), d.article.publishedUrl, ...d.destinations.map((x) => x.publicBaseUrl)];
+  const hit = scored.get(v);
+  if (hit && hit.b === b && hit.d === d) return hit.s;
+  const self = addressOf(d.article, v);
+  const hosts = [b.website, self, d.article.publishedUrl, ...d.destinations.map((x) => x.publicBaseUrl)];
   // The existing quality checks count only when they ran on exactly this version.
   const checkIssues = d.article.checks && d.article.checks.versionId === v.id ? d.article.checks.issues : null;
-  return seoScore(d.articleBrief ?? null, v.body, { siteHosts: hosts, checkIssues });
+  const s = seoScore(d.articleBrief ?? null, v.body, { siteHosts: hosts, selfUrl: self, checkIssues });
+  scored.set(v, { b, d, s });
+  return s;
 }
 
 const tone = (score: number) => (score >= 80 ? 'sp-hi' : score >= 50 ? 'sp-mid' : 'sp-lo');
@@ -141,7 +149,7 @@ function fixLink(fix: SeoFix | null, base: string, v: ArticleVersion, a: Article
     address: editable && !a.publishedUrl ? [`${base}?edit=1#google`, 'Edit the page address'] : null,
     'picture-description': editable ? [`${base}?edit=1#google`, 'Edit the picture description'] : null,
     opening: editable ? [`${base}?edit=1#opening`, 'Edit the opening paragraph'] : null,
-    headings: editable ? [`${base}?edit=1${firstPart ? `#part-${firstPart}` : ''}`, 'Edit the sub-headings'] : null,
+    headings: editable && firstPart ? [`${base}?edit=1#part-${firstPart}`, 'Edit the sub-headings'] : editable ? [`${base}?open=rewrite#rewrite`, 'Ask for a rewrite'] : null,
     text: editable ? [`${base}?edit=1`, 'Edit the article'] : null,
     links: editable ? [`${base}?edit=1`, 'Edit the article'] : null,
     rewrite: [`${base}?open=rewrite#rewrite`, 'Ask for a rewrite'],
@@ -158,17 +166,34 @@ function checkItem(c: SeoCheck, label: string, base: string, v: ArticleVersion, 
   return `<li class="sp-check sp-${c.result}"><span class="sp-mark" aria-hidden="true"></span><div><p class="sp-name"><span class="sp-group">${e(label)}</span><strong>${e(c.name)}</strong> <span class="sp-tag">${MARK[c.result]}</span></p><p class="sp-found">${e(c.found)}</p>${c.todo ? `<p class="sp-todo"><span class="sp-label">What to do:</span> ${e(c.todo)}${fixLink(c.fix, base, v, a)}</p>` : ''}</div></li>`;
 }
 
-function scoreCard(s: SeoScore, base: string, v: ArticleVersion, a: Article): string {
+const COUNT_WORDS = ['No things', 'One thing', 'Two things', 'Three things', 'Four things', 'Five things'];
 
+/** The lead: the few changes worth most, with the score they would reach together; everything else folded away. */
+function leadBlock(s: SeoScore, base: string, v: ArticleVersion, a: Article): string {
   const todo = s.checks.filter((c) => c.result !== 'pass');
-  const notYet = todo.filter((c) => c.result === 'fail'), nearly = todo.filter((c) => c.result === 'partly');
+  if (!todo.length) return '<p class="sp-sub">Every check passes.</p>';
+  const next = seoNextSteps(s, 3);
+  const top = next.checks;
+  const held = Boolean(s.cap && s.uncapped > s.cap.limit);
+  const headline = top.length && next.to > next.from
+    ? `${COUNT_WORDS[top.length]} would take this from ${next.from} to ${next.to}`
+    : top.length ? `${top.length === 1 ? 'The thing' : `The ${COUNT_WORDS[top.length]!.toLowerCase()}`} that would help most` : 'What is left to improve';
+  const capNote = s.cap && (held || next.to >= s.cap.limit) ? `<p class="ap-note sp-cap">${e(s.cap.reason)}</p>` : '';
+  const rest = todo.filter((c) => !top.includes(c));
+  const notYet = rest.filter((c) => c.result === 'fail'), nearly = rest.filter((c) => c.result === 'partly');
+  const list = (cs: readonly SeoCheck[]) => cs.map((c) => checkItem(c, SEO_GROUP_LABELS[c.group], base, v, a)).join('');
+  return `<h4 class="sp-sub sp-lead">${e(headline)}</h4>${capNote}${top.length ? `<ul class="sp-checks sp-top">${list(top)}</ul>` : ''}
+${rest.length ? `<details class="sp-done sp-rest"><summary>Everything else to improve (${rest.length})</summary>${notYet.length ? `<h4 class="sp-sub">Not yet (${notYet.length})</h4><ul class="sp-checks">${list(notYet)}</ul>` : ''}${nearly.length ? `<h4 class="sp-sub">Nearly there (${nearly.length})</h4><ul class="sp-checks">${list(nearly)}</ul>` : ''}</details>` : ''}`;
+}
+
+function scoreCard(s: SeoScore, base: string, v: ArticleVersion, a: Article): string {
   const done = s.checks.filter((c) => c.result === 'pass');
   const pts = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
   return `<section class="sp-card sp-wide sp-score" aria-labelledby="sp-score"><h3 id="sp-score" class="ap-sr">SEO score</h3>
 <div class="sp-head"><div class="sp-dial ${tone(s.score)}" style="--sp-v:${s.score}" role="img" aria-label="SEO score ${s.score} out of 100"><span><b>${s.score}</b><small>out of 100</small></span></div>
 <div class="sp-head-text"><p class="sp-verdict">${e(verdict(s.score))}</p><p class="ap-note">SEO score ${s.score} out of 100. ${SAME_KIND}</p>${s.leftOut.length ? `<p class="ap-note">Left out because they cannot be checked for this article: ${e(s.leftOut.join('; '))}. The rest are scored out of 100.</p>` : ''}</div></div>
-<ul class="sp-groups">${s.parts.map((g) => `<li><span class="sp-gname">${e(g.label)}</span><span class="sp-bar" aria-hidden="true"><i style="width:${Math.round((g.points * 100) / g.weight)}%"></i></span><span class="sp-gpts">${pts(g.points)} of ${g.weight}</span></li>`).join('')}</ul>
-${todo.length ? '' : '<p class="sp-sub">Every check passes.</p>'}${notYet.length ? `<h4 class="sp-sub">Not yet (${notYet.length})</h4><ul class="sp-checks">${notYet.map((c) => checkItem(c, SEO_GROUP_LABELS[c.group], base, v, a)).join('')}</ul>` : ''}${nearly.length ? `<h4 class="sp-sub">Nearly there (${nearly.length})</h4><ul class="sp-checks">${nearly.map((c) => checkItem(c, SEO_GROUP_LABELS[c.group], base, v, a)).join('')}</ul>` : ''}
+${leadBlock(s, base, v, a)}
+<details class="sp-done sp-parts"><summary>Score by part</summary><ul class="sp-groups">${s.parts.map((g) => `<li><span class="sp-gname">${e(g.label)}</span><span class="sp-bar" aria-hidden="true"><i style="width:${Math.round((g.points * 100) / g.weight)}%"></i></span><span class="sp-gpts">${pts(g.points)} of ${g.weight}</span></li>`).join('')}</ul></details>
 ${done.length ? `<details class="sp-done"><summary>Already good (${done.length})</summary><ul class="sp-checks">${done.map((c) => checkItem(c, SEO_GROUP_LABELS[c.group], base, v, a)).join('')}</ul></details>` : ''}</section>`;
 }
 
@@ -209,7 +234,7 @@ export const SEO_PANEL_CSS = `
 .sp-checks{list-style:none;margin:0;padding:0}
 .sp-check{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .sp-check p{margin:0 0 3px}
-.sp-mark{flex:none;width:24px;height:24px;margin-top:1px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff}
+.sp-mark{flex:none;width:24px;height:24px;margin-top:1px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:var(--card)}
 .sp-pass .sp-mark{background:var(--ok)}.sp-pass .sp-mark::before{content:"\\2713"}
 .sp-partly .sp-mark{background:var(--warn)}.sp-partly .sp-mark::before{content:"!"}
 .sp-fail .sp-mark{background:var(--bad)}.sp-fail .sp-mark::before{content:"\\2715"}
@@ -218,7 +243,8 @@ export const SEO_PANEL_CSS = `
 .sp-pass .sp-tag{color:var(--ok)}.sp-partly .sp-tag{color:var(--warn)}.sp-fail .sp-tag{color:var(--bad)}
 .sp-found{color:var(--ink)}.sp-todo{color:var(--muted)}.sp-todo .sp-label{color:var(--ink)}
 .sp-fix{font-weight:600;white-space:nowrap}
-.sp-done{margin-top:10px}.sp-done>summary{cursor:pointer;font-weight:600;color:var(--accent);padding:6px 0}
+.sp-done{margin-top:10px}.sp-done>summary{cursor:pointer;font-weight:600;color:var(--accent);padding:10px 0;min-height:24px}
+.sp-lead{font-size:17px;margin:4px 0 6px}.sp-cap{margin:0 0 6px!important}.sp-parts .sp-groups{margin-top:6px}
 .sp-pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:700;font-size:14px;color:var(--ink);background:color-mix(in srgb,var(--sp-c) 14%,var(--card));border:1px solid color-mix(in srgb,var(--sp-c) 45%,transparent)}
 .sp-line a{font-weight:600}
 @media(max-width:700px){
