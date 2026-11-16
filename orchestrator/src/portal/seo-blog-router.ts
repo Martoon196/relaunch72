@@ -47,6 +47,8 @@ import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
+import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
+import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount } from './content-area-pages.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -60,6 +62,8 @@ export interface SeoBlogRouteInput {
   /** Whether provider OAuth callbacks return to this host; connection starts only where they complete. */
   readonly socialConnectHere?: boolean;
   readonly socialConnectHost?: string;
+  /** The content area preview switch; defaults to the CONTENT_AREA_PREVIEW environment variable ("enabled" = allowed). */
+  readonly contentAreaPreview?: string;
 }
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -189,6 +193,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const actor: Actor = { userId: identity.userId };
   const engine: SeoBlogEngine = input.service.engineFor(identity, input.requestId);
   const csrf = portalCsrfToken(input.sessionSecret, identity.sessionToken);
+  // The new look: only when the server allows it AND this browser chose it. Otherwise nothing below changes.
+  const previewAllowed = contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW);
+  const previewOn = previewAllowed && contentAreaCookieOn(req);
   const brandMatch = BRAND_PATH.exec(path);
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
@@ -212,6 +219,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const form: FormData = multipart ? parseMultipartForm(body, contentType) : { fields: new URLSearchParams(body.toString('utf8')), file: null };
       const f = (name: string) => form.fields.get(name);
       if (!verifyPortalCsrf(input.sessionSecret, identity.sessionToken, f('_csrf') ?? undefined)) throw new SeoBlogError(403, 'Your form expired. Refresh the page and try again.');
+      if (previewAllowed && path === CONTENT_AREA_LOOK_PATH) {
+        const secure = !/^(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(String(req.headers.host ?? ''));
+        res.writeHead(303, { location: contentAreaBack(f('back')), 'cache-control': 'no-store', 'set-cookie': contentAreaCookie(f('look') === 'new', secure) });
+        res.end(); return;
+      }
       if (path === `${SEO_BLOG_BASE}/limits`) {
         const limits = input.service.limitsFor?.(identity, input.requestId);
         if (!limits || !(await limits.allowed())) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
@@ -244,6 +256,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const messages = readMessage(input.sessionSecret, url);
     const limits = input.service.limitsFor?.(identity, input.requestId);
     const limitsAvailable = limits ? await limits.allowed() : false;
+    if (previewAllowed && path === CONTENT_AREA_LOOK_PATH) return send(res, 200, lookPage(csrf, previewOn, contentAreaBack(url.searchParams.get('back')), brands));
     if (path === `${SEO_BLOG_BASE}/limits`) {
       if (!limits || !limitsAvailable) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
       return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
@@ -274,7 +287,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
+    const previewNeeds = previewOn ? await Promise.all([engine.listArticles(actor, brandId), engine.listDestinations(actor, brandId)])
+      .then(([rows, sites]) => needsYouCount(brand, rows, sites, new Date().toISOString())).catch(() => 0) : 0;
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -394,6 +410,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
     if (rest === 'dna') return send(res, 200, brandDnaPage({ ...shell('setup'), switchTo: 'dna' }, await engine.brandDna(actor, brandId), randomUUID()));
+    if (previewOn) {
+      const page = await contentAreaPage(engine, actor, brand, rest, url, shell);
+      if (page !== null) return send(res, 200, page);
+    }
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -480,6 +500,26 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const status = known ? error.status : 503;
     return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to your businesses</a></p></main></body></html>`);
   }
+}
+
+/** The preview's own screens (Home, Calendar month, Articles list, Results); null means the existing page renders, in the shell. */
+async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell): Promise<string | null> {
+  const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !url.searchParams.has('view') ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results' : null;
+  if (!page) return null;
+  const [articles, destinations, jobs, plans] = await Promise.all([engine.listArticles(actor, brand.id), engine.listDestinations(actor, brand.id), engine.listJobs(actor, brand.id), engine.listPlans(actor, brand.id)]);
+  const data = { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), now: new Date().toISOString() };
+  if (page === 'home') {
+    const dnaConfirmed = articles.length ? true : (await engine.brandDnaStatus(actor, brand.id).catch(() => undefined)) === 'confirmed';
+    return contentHomePage(shell('overview'), { ...data, dnaConfirmed });
+  }
+  if (page === 'calendar') {
+    const requested = url.searchParams.get('date') ?? '';
+    const month = (/^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : utcToLocal(data.now, brand.timezone).date).slice(0, 7);
+    return contentCalendarPage(shell('calendar'), { ...data, month });
+  }
+  if (page === 'articles') return contentArticlesPage(shell('articles'), data);
+  const s = shell('overview');
+  return contentResultsPage({ ...s, preview: { ...s.preview!, place: 'results' } }, data);
 }
 
 async function handlePost(
