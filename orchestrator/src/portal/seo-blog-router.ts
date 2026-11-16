@@ -47,6 +47,10 @@ import { brandDnaPage } from './brand-dna-view.js';
 import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
+import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
+import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, type ContentAreaData, type FillFacts } from './content-area-pages.js';
+import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
+import type { TopicPlan } from '../seo-blog/types.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -60,6 +64,8 @@ export interface SeoBlogRouteInput {
   /** Whether provider OAuth callbacks return to this host; connection starts only where they complete. */
   readonly socialConnectHere?: boolean;
   readonly socialConnectHost?: string;
+  /** The content area preview switch; defaults to the CONTENT_AREA_PREVIEW environment variable ("enabled" = allowed). */
+  readonly contentAreaPreview?: string;
 }
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -180,6 +186,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
     return;
   }
+  // The preview shell's small script (closes its menus on Escape or a tap outside); absent while the preview is not allowed.
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/content-area.js` && contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW)) return send(res, 200, CONTENT_AREA_SCRIPT, 'text/javascript; charset=utf-8');
   if (path === `${SEO_BLOG_BASE}/calendar.js`) {
     send(res, 200, CALENDAR_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -189,6 +197,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const actor: Actor = { userId: identity.userId };
   const engine: SeoBlogEngine = input.service.engineFor(identity, input.requestId);
   const csrf = portalCsrfToken(input.sessionSecret, identity.sessionToken);
+  // The new look: only when the server allows it AND this browser chose it. Otherwise nothing below changes.
+  const previewAllowed = contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW);
+  const previewOn = previewAllowed && contentAreaCookieOn(req);
   const brandMatch = BRAND_PATH.exec(path);
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
@@ -212,6 +223,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const form: FormData = multipart ? parseMultipartForm(body, contentType) : { fields: new URLSearchParams(body.toString('utf8')), file: null };
       const f = (name: string) => form.fields.get(name);
       if (!verifyPortalCsrf(input.sessionSecret, identity.sessionToken, f('_csrf') ?? undefined)) throw new SeoBlogError(403, 'Your form expired. Refresh the page and try again.');
+      // Only someone who manages at least one business may switch the look; anyone else gets today's 404.
+      if (previewAllowed && path === CONTENT_AREA_LOOK_PATH && (await engine.listBrands(actor)).length > 0) {
+        const secure = !/^(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(String(req.headers.host ?? ''));
+        res.writeHead(303, { location: contentAreaBack(f('back')), 'cache-control': 'no-store', 'set-cookie': contentAreaCookie(f('look') === 'new', secure) });
+        res.end(); return;
+      }
       if (path === `${SEO_BLOG_BASE}/limits`) {
         const limits = input.service.limitsFor?.(identity, input.requestId);
         if (!limits || !(await limits.allowed())) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
@@ -244,6 +261,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const messages = readMessage(input.sessionSecret, url);
     const limits = input.service.limitsFor?.(identity, input.requestId);
     const limitsAvailable = limits ? await limits.allowed() : false;
+    if (previewAllowed && path === CONTENT_AREA_LOOK_PATH && brands.length > 0) return send(res, 200, lookPage(csrf, previewOn, contentAreaBack(url.searchParams.get('back')), brands));
     if (path === `${SEO_BLOG_BASE}/limits`) {
       if (!limits || !limitsAvailable) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
       return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
@@ -274,7 +292,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true });
+    // Read once per page for the badge and reused by the preview's own screens.
+    const previewData = previewOn ? await loadContentArea(engine, actor, brandId).catch(() => null) : null;
+    const previewNeeds = previewData ? needsYouCount(brand, previewData) : 0;
+    const previewAutopilot = previewData ? contentAreaAutopilot(brand, previewData, previewData.fill) : undefined;
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}) } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -394,6 +417,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
     if (rest === 'dna') return send(res, 200, brandDnaPage({ ...shell('setup'), switchTo: 'dna' }, await engine.brandDna(actor, brandId), randomUUID()));
+    if (previewOn) {
+      const page = await contentAreaPage(engine, actor, brand, rest, url, shell, previewData);
+      if (page !== null) return send(res, 200, page);
+    }
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -480,6 +507,34 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const status = known ? error.status : 503;
     return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to your businesses</a></p></main></body></html>`);
   }
+}
+
+/** The preview's own screens (Home, Calendar month, Articles list, Results); null means the existing page renders, in the shell. */
+type ContentAreaLoaded = ContentAreaData & { readonly plans: readonly TopicPlan[]; readonly fill: FillFacts };
+/** Everything the shell and its screens read, once per page (all read-only); what the engine checks before it writes for an empty day counts as "no" when it cannot be read. */
+async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: string): Promise<ContentAreaLoaded> {
+  const [articles, destinations, jobs, plans, readiness, usage, dna] = await Promise.all([engine.listArticles(actor, brandId), engine.listDestinations(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId),
+    engine.readiness(actor, brandId).catch(() => null), engine.usage(actor, brandId).catch(() => null), engine.brandDnaStatus(actor, brandId).catch(() => undefined)]);
+  const planList = plans.map((p) => p.plan);
+  return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList } };
+}
+
+async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null): Promise<string | null> {
+  // A move or schedule made in the existing diary comes back with its message: it returns to that diary, not the month view.
+  const diary = url.searchParams.has('view') || url.searchParams.has('n') || url.searchParams.has('e');
+  const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !diary ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results' : null;
+  if (!page) return null;
+  const data = loaded ?? await loadContentArea(engine, actor, brand.id);
+  if (page === 'home') return contentHomePage(shell('overview'), data);
+  if (page === 'calendar') {
+    const requested = url.searchParams.get('date') ?? '';
+    const today = (() => { try { return utcToLocal(data.now, brand.timezone).date; } catch { return data.now.slice(0, 10); } })();
+    const month = (/^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : today).slice(0, 7);
+    return contentCalendarPage(shell('calendar'), { ...data, month });
+  }
+  if (page === 'articles') return contentArticlesPage(shell('articles'), data);
+  const s = shell('overview');
+  return contentResultsPage({ ...s, preview: { ...s.preview!, place: 'results' } }, data);
 }
 
 async function handlePost(
