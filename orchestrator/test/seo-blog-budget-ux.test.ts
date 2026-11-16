@@ -13,11 +13,11 @@ async function brandFixture(ceiling: number, used = 0) {
   if (used) await h.store.recordUsage({ brandId: brand.id, kind: 'model_tokens', amount: used, at: h.clock.now(), reference: 'fixture-existing-usage' });
   return { h, brand: await h.engine.getBrand(OWNER, brand.id) };
 }
-function shell(brand: Awaited<ReturnType<typeof brandFixture>>['brand']): Shell {
-  return { brand, brands: [brand], tab: 'setup', csrf: 'fixture', notice: null, error: null };
+function shell(brand: Awaited<ReturnType<typeof brandFixture>>['brand'], founder = false): Shell {
+  return { brand, brands: [brand], tab: 'setup', csrf: 'fixture', notice: null, error: null, ...(founder ? { limitsAvailable: true } : {}) };
 }
-async function setup(f: Awaited<ReturnType<typeof brandFixture>>) {
-  return setupPage(shell(f.brand), { documents: await f.h.engine.listKnowledge(OWNER, f.brand.id), profile: null, inventory: null, destinations: [], publishers: [], vaultReady: true, usage: await f.h.engine.usage(OWNER, f.brand.id) });
+async function setup(f: Awaited<ReturnType<typeof brandFixture>>, founder = false) {
+  return setupPage(shell(f.brand, founder), { documents: await f.h.engine.listKnowledge(OWNER, f.brand.id), profile: null, inventory: null, destinations: [], publishers: [], vaultReady: true, usage: await f.h.engine.usage(OWNER, f.brand.id) });
 }
 test('zero ceiling, exhausted ceiling and insufficient headroom have distinct accurate budget reasons before any provider call', async () => {
   for (const [ceiling, used, reason] of [[0, 0, 'not configured'], [10_000, 10_000, 'monthly ceiling reached'], [10_000, 0, 'insufficient headroom']] as const) {
@@ -33,12 +33,16 @@ test('zero ceiling, exhausted ceiling and insufficient headroom have distinct ac
   }
 });
 test('profile panel explains the actual zero-used10k ceiling14k estimate4k shortfall and links to its own writing setting', async () => {
-  const f = await brandFixture(10_000); const html = await setup(f);
+  const f = await brandFixture(10_000); const html = await setup(f, true);
+  // The owner reads it in articles; the raw figures are the founder's Technical detail (neutral words release).
+  const client = await setup(f);
+  assert.match(client, /There is not enough left this month for another article\. Reading your business details needs less than one article’s worth\. There is not enough left this month for it\./);
+  assert.doesNotMatch(client.replace(/<style[\s\S]*?<\/style>/g, ''), /Monthly ceiling 10,000|writing units/);
   for (const text of ['Used 0', 'Monthly ceiling 10,000', 'Remaining 10,000', 'estimate: 14,000', 'Shortfall: 4,000', 'monthly ceiling for this action: 14,000']) assert.ok(html.includes(text), text);
   assert.ok(html.includes(`/b/${f.brand.id}/publishing#writing-budget`));
   assert.match(html, /disabled aria-describedby="profile-budget-help"/);
   assert.doesNotMatch(html, /budget for this brand is used up/);
-  const other = await brandFixture(1_000_000, 2_500); const otherHtml = await setup(other);
+  const other = await brandFixture(1_000_000, 2_500); const otherHtml = await setup(other, true);
   assert.match(otherHtml, /Used 2,500/); assert.match(otherHtml, /Remaining 997,500/);
   assert.doesNotMatch(otherHtml, /disabled aria-describedby="profile-budget-help"/);
 });

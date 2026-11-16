@@ -30,7 +30,28 @@ import { overviewPage, type Shell } from '../src/portal/seo-blog-view.js';
 import type { PortalSeoBlogService } from '../src/portal/seo-blog-service.js';
 import { OWNER } from './seo-blog-fixtures.js';
 import { websiteFixture } from './seo-blog-website-fixtures.js';
-import { call, identity, type Rendered } from './content-area-shell-fixtures.js';
+import { articleId as showcaseArticle, BRAND_ID as SHOWCASE_BRAND, call, identity, showcase, type Rendered } from './content-area-shell-fixtures.js';
+import jpeg from 'jpeg-js';
+import { createHash } from 'node:crypto';
+import { CreativeStudioService } from '../src/creative-studio/service.js';
+import { MemoryCreativeLibraryStore } from '../src/creative-studio/store.js';
+import { CreativeGeneration } from '../src/creative-studio/generation-service.js';
+import type { GenerationState, GenerationStore } from '../src/creative-studio/generation-store.js';
+import type { ArtworkInput, ArtworkRenderer, RenderedArtwork } from '../src/creative-studio/renderer.js';
+import { harness } from './seo-blog-fixtures.js';
+import { creativeBrand, HEARTH } from './creative-studio-fixtures.js';
+import { editorPage } from '../src/portal/seo-blog-article-view.js';
+import * as fx from './seo-blog-article-page-fixtures.js';
+import * as sp from './seo-panel-fixtures.js';
+import { MethodController } from '../src/seo-blog/method-packs.js';
+import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
+import { CampaignCreator } from '../src/seo-blog/campaign-creator.js';
+import { MemorySeoBlogStore } from '../src/seo-blog/store.js';
+import { UnconfiguredSearchProvider } from '../src/seo-blog/research.js';
+import { FakeWeb } from './seo-blog-fixtures.js';
+import { fixtureBrand } from './rl72-method-fixtures.js';
+import { UpgradeFixtureModel, upgradeSnapshot, campaignBrief, MemoryCreatorFixture } from './rl72-upgrade-fixtures.js';
+import { nativeCsrf, nativeIdentity, nativeSeoCall } from './seo-blog-native-request.js';
 
 // The tests choose the look themselves; the build machine's own setting must not decide it.
 delete process.env.CONTENT_AREA_PREVIEW;
@@ -119,6 +140,8 @@ function assertClean(failures: string[], surface: string, body: string, contentT
 
 // ─── Fixtures: a real engine with realistic raw records ─────────────────────
 
+/** Realistic raw image-generation failure text (supplier, model id and maker). */
+const IMAGE_ERROR = 'OpenAI image request failed for gpt-image-2: 429 {"error":{"type":"rate_limit_exceeded","message":"Rate limit reached"}}. The image provider may still have charged.';
 const SDK_ERROR = 'The writing model could not be reached (529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CWf9QmAnthropicX"}). Nothing was changed.';
 const METHOD_ERROR = 'Assigned method hash changed: blog-writing';
 const REJECTION = 'The assigned production methods could not produce a valid draft. blog.figures-cited-exactly: "62% of landlords" has no source id; blog.answer-in-the-open: first paragraph does not answer the query';
@@ -224,6 +247,174 @@ async function publisherPayloads(f: Awaited<ReturnType<typeof scene>>): Promise<
   return [...sent.map((s, i) => [`content API payload ${i + 1}`, s] as [string, string]), ['WordPress payload', new WordPressPublisher().payload(inputs[0]!)]];
 }
 
+
+// ─── Creative studio, campaign creators, the SEO report and the allowance states ───
+
+/** Labelled stub renderer: real tiny JPEG bytes (no browser). */
+class StubRenderer implements ArtworkRenderer {
+  readonly version = 'test-stub-renderer';
+  available() { return true; }
+  async renderBatch(inputs: readonly ArtworkInput[]): Promise<RenderedArtwork[]> {
+    return inputs.map((input) => {
+      const bytes = Buffer.from(jpeg.encode({ data: Buffer.alloc(8 * 8 * 4, 120), width: 8, height: 8 }, 90).data);
+      const out = { mime: 'image/jpeg' as const, sha256: createHash('sha256').update(bytes).digest('hex'), width: input.placement.width, height: input.placement.height, contrast: { headline: 8 }, scrimAlpha: 0.42, headlineSize: 80, issues: [] };
+      Object.defineProperty(out, 'bytes', { enumerable: false, get: () => Buffer.from(bytes) });
+      return out as unknown as RenderedArtwork;
+    });
+  }
+}
+
+async function creativeScene(founder: boolean) {
+  const h = harness();
+  const hearth = await creativeBrand(h, HEARTH);
+  const briefId = randomUUID(), jobId = randomUUID(), now = h.clock.now();
+  const state: GenerationState = {
+    briefs: [{ id: briefId, version: 1, data: { title: 'Calm kitchen morning', text: 'A bright modern kitchen in morning light', size: '1536x1024', references: [], useVisualGuidance: true }, createdBy: OWNER.userId, createdAt: now }],
+    generations: [], attempts: [],
+    jobs: [{ id: jobId, state: 'failed', briefId, briefVersion: 1, intentId: randomUUID(), progress: 'Stopped.', error: IMAGE_ERROR, paidAttemptStarted: true, createdAt: now, updatedAt: now }],
+    usage: { brandImagesThisMonth: 0, brandUnresolvedEarlier: 0, studioImagesCounted: 0, studioUnresolved: 0, period: '2026-11' },
+  };
+  const store = { state: async () => state } as unknown as GenerationStore;
+  const generation = new CreativeGeneration({ store, brands: h.store, providerConfigured: false,
+    policy: async () => ({ version: 1, sha256: 'p'.repeat(64), enabled: false, model: 'gpt-image-2', quality: 'medium', maxConcurrency: 0, monthlyMicrousd: 0, perAttemptMicrousd: 0, admissionEpoch: 1 }) });
+  const studio = new CreativeStudioService({ library: new MemoryCreativeLibraryStore(), brands: h.store, renderer: new StubRenderer(), renderJobs: h.store, generation,
+    savedImages: { list: async () => [], load: async () => { throw new Error('unused'); } } });
+  const svc = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null, creativeEnabled: true, creativeFor: () => studio, creativeSavedImages: async () => [],
+    limitsFor: () => ({ allowed: async () => founder, list: async () => [] }) } as unknown as PortalSeoBlogService;
+  const set = await studio.draft(OWNER.userId, hearth.brand.id, randomUUID(), { purpose: 'advert', source_kind: 'offer', offer: 'Annual boiler service', audience: '', destination: HEARTH.pages[0]!.url, placements: ['square'], concepts: '1' }, { kind: 'neutral' });
+  // A render task through the router, then stopped with raw text.
+  const { portalCsrfToken } = await import('../src/portal/session.js');
+  const csrf = portalCsrfToken('s'.repeat(48), identity(OWNER.userId).sessionToken);
+  const R = `/portal/seo-blog/b/${hearth.brand.id}/creative`;
+  const posted = await call(svc, identity(OWNER.userId), 'POST', `${R}/draft`, { form: { _csrf: csrf, commandId: randomUUID(), background: 'neutral', purpose: 'advert', source_kind: 'offer', offer: 'Annual boiler service', audience: '', destination: HEARTH.pages[0]!.url, placements: 'square', concepts: '1' } });
+  const jobs = (h.store as unknown as { jobs: Map<string, Job> }).jobs;
+  const taskId = /\/creative\/task\/([0-9a-f-]{36})/.exec(posted.headers.location ?? '')?.[1];
+  const render = taskId ? jobs.get(taskId) : undefined;
+  assert.ok(render, `a render task is on record (${posted.status} ${posted.headers.location ?? ''} ${[...jobs.values()].map((j) => j.kind).join(',')})`);
+  jobs.set(render!.id, { ...render!, state: 'failed', error: IMAGE_ERROR, progress: 'Stopped.' });
+  const out: [string, Rendered][] = [];
+  for (const [look, opts] of [['old look', {}], ['new look', NEW]] as const) {
+    for (const [name, path] of [['creative', R], ['creative generate', `${R}/generate`], ['creative brief', `${R}/generate/${briefId}`], ['creative kit', `${R}/kit`], ['creative enquiries', `${R}/enquiries`],
+      ['creative set', `${R}/s/${set.setId}`], ['creative task', `${R}/task/${render!.id}`], ['creative jobs (JSON)', `${R}/jobs/${render!.id}`]] as const)
+      out.push([`${look} · ${name}`, await call(svc, identity(OWNER.userId), 'GET', path, opts)]);
+  }
+  return out;
+}
+
+/** The campaign creators (email and request kit): list, review, text export and JSON export, approved. */
+async function creatorScene(founder: boolean) {
+  const f = fixtureBrand('home'), blogs = new MemorySeoBlogStore(), actor = f.profile.confirmedBy!;
+  const created = await blogs.createBrand({ commandId: randomUUID(), actorId: actor, name: f.brand.name, slug: 'fixture-' + randomUUID(), website: f.brand.website, now: f.profile.createdAt });
+  const brand = await blogs.updateBrand({ ...created.brand, settings: f.brand.settings });
+  const profile = { ...f.profile, brandId: brand.id }; await blogs.saveProfile(profile);
+  const methods = new MemoryMethodStore(); methods.snapshots.set(brand.id, upgradeSnapshot(brand.id));
+  const controller = new MethodController(methods, true), model = new UpgradeFixtureModel(), store = new MemoryCreatorFixture(methods);
+  const creator = new CampaignCreator(store, blogs, controller, model);
+  const engine = new SeoBlogEngine({ store: blogs, methods: controller, creatorStore: store, llm: model, search: new UnconfiguredSearchProvider(), transport: new FakeWeb(), publishers: new Map(), vault: null });
+  const who = nativeIdentity(actor), base = `/portal/seo-blog/b/${brand.id}/campaigns`;
+  const out: [string, Rendered][] = [];
+  const get = async (name: string, path: string) => { for (const [look, preview] of [['old look', false], ['new look', true]] as const) {
+    const r = await nativeSeoCall(engine, { who, method: 'GET', path, founder, ...(preview ? { headers: { cookie: 'r72_content_look=new' }, preview: true } : {}) });
+    out.push([`${look} · ${name}`, { status: r.status, headers: r.headers, body: r.body }]);
+  } };
+  await get('campaign creators', base);
+  for (const kind of ['email', 'advocacy'] as const) {
+    let r = await creator.create(actor, brand.id, randomUUID(), campaignBrief(profile, kind));
+    r = await creator.approve(actor, brand.id, r.id, r.rowVersion, r.version!.contentSha, true);
+    await get(`${kind} campaign review`, `${base}/${r.id}`);
+    await get(`${kind} campaign text export`, `${base}/${r.id}/export`);
+    await get(`${kind} campaign JSON export`, `${base}/${r.id}/export?format=json`);
+  }
+  // The founder-only pack controls refuse a client's post exactly like an action that does not exist.
+  const csrf = nativeCsrf(who);
+  for (const action of ['update', 'disable', 'activate', 'nothing-here'])
+    out.push([`POST methods/${action}`, await nativeSeoCall(engine, { who, method: 'POST', path: `/portal/seo-blog/b/${brand.id}/methods/${action}`, fields: { _csrf: csrf, revision: '1', packId: ['email-writing'] }, founder }).then((r) => ({ status: r.status, headers: r.headers, body: r.body }))]);
+  out.push(['POST unknown action', await nativeSeoCall(engine, { who, method: 'POST', path: `/portal/seo-blog/b/${brand.id}/nothing-here`, fields: { _csrf: csrf }, founder }).then((r) => ({ status: r.status, headers: r.headers, body: r.body }))]);
+  return { out, methods, brand };
+}
+
+test('Creative studio pages, their task page and job JSON stay neutral for a client, old look and new', async () => {
+  const failures: string[] = [];
+  const all = await creativeScene(false);
+  for (const [name, r] of all) assertClean(failures, name, r.body, r.headers['content-type'] ?? 'text/html');
+  if (failures.length) assert.fail(`Client-visible leaks (${failures.length}):\n${failures.join('\n')}`);
+  const pick = (n: string) => all.find(([k]) => k === n)![1];
+  for (const look of ['old look', 'new look']) for (const n of ['creative', 'creative generate', 'creative brief', 'creative kit', 'creative set', 'creative task', 'creative jobs (JSON)']) assert.equal(pick(`${look} · ${n}`).status, 200, `${look} · ${n} renders`);
+  has(pick('old look · creative task').body, /Image generation could not finish/, 'the task page says what happened in plain words');
+  has(pick('old look · creative jobs (JSON)').body, /"detail":"Image generation could not finish/);
+  has(pick('old look · creative brief').body, /Image generation could not finish/);
+  // The founder reads the raw text underneath.
+  const founder = new Map(await creativeScene(true));
+  has(founder.get('old look · creative task')!.body, /<summary>Technical detail<\/summary>[\s\S]*gpt-image-2/);
+  has(founder.get('old look · creative brief')!.body, /<summary>Technical detail<\/summary>[\s\S]*gpt-image-2/);
+});
+
+test('campaign creators, their review pages and both exports stay neutral for a client; a client cannot post to Production rules', async () => {
+  const failures: string[] = [];
+  const { out: all, methods, brand } = await creatorScene(false);
+  for (const [name, r] of all) assertClean(failures, name, r.body, r.headers['content-type'] ?? 'text/html');
+  for (const [name, r] of all) for (const field of ['methodReceiptId', 'receipt', 'promptVersion', 'tokensIn', 'packId', '_method_sidecar']) if (r.body.includes(field)) failures.push(`${name}: carries stored field ${field}`);
+  if (failures.length) assert.fail(`Client-visible leaks (${failures.length}):\n${failures.join('\n')}`);
+  const pick = (n: string) => all.find(([k]) => k === n)![1];
+  for (const look of ['old look', 'new look']) for (const kind of ['email', 'advocacy']) for (const n of ['campaign review', 'campaign text export', 'campaign JSON export']) assert.equal(pick(`${look} · ${kind} ${n}`).status, 200, `${look} · ${kind} ${n}`);
+  has(pick('old look · email campaign JSON export').body, /"kind": "email"/);
+  const unknown = pick('POST unknown action');
+  for (const action of ['update', 'disable', 'activate', 'nothing-here']) {
+    const r = pick(`POST methods/${action}`);
+    assert.equal(r.status, unknown.status, `POST methods/${action}: same status as an unknown action`);
+    assert.equal(r.body, unknown.body, `POST methods/${action}: same answer as an unknown action`);
+  }
+  assert.equal(unknown.status, 404);
+  assert.equal((await methods.snapshot(brand.id)).assignment!.revision, 1, 'nothing changed');
+  // The founder keeps full use.
+  const founder = new Map((await creatorScene(true)).out);
+  assert.equal(founder.get('POST methods/update')!.status, 303);
+});
+
+test('the SEO report in every state, and the allowance and "Write it now" states, stay neutral for a client', async () => {
+  const failures: string[] = [];
+  const newLook = () => ({ ...fx.shell(), preview: { needsYou: 1, path: '/x' } }) as ReturnType<typeof fx.shell>;
+  const briefs = { measured: sp.measured(), unmeasured: sp.brief(), none: null, 'measured without numbers': sp.brief({ demand: { kind: 'measured', volume: null, competition: null, provider: 'dataforseo', retrievedAt: 'not a date' } as never }) };
+  for (const [look, shell] of [['old look', fx.shell], ['new look', newLook]] as const) {
+    for (const [state, b] of Object.entries(briefs)) for (const open of [[], ['seo']]) {
+      const html = editorPage(shell(), { ...fx.pageData('ready'), articleBrief: b, open });
+      assertClean(failures, `${look} · SEO report (${state}${open.length ? ', open' : ''})`, html);
+      assert.ok(html.includes('r72-seo-panel'), `${look} · ${state}: the report is there`);
+    }
+  }
+  // Allowance states through the router, with the engine's full refusal text on the stopped task.
+  const full = 'Writing allowance: monthly ceiling reached. Used 2,000,000; ceiling 2,000,000; remaining 0 model tokens. Action estimate 32,000; shortfall 32,000. Minimum estimated monthly ceiling 2,032,000. Review Publishing settings before retrying.';
+  const B = `/portal/seo-blog/b/${SHOWCASE_BRAND}`;
+  for (const [state, usage] of [['enough now ("Write it now")', 412_000], ['still waiting', 1_990_000]] as const) {
+    const s = showcase('calm', {});
+    s.jobs[0] = { ...s.jobs[0]!, state: 'blocked', error: full };
+    s.usage = { model_tokens: usage, search_calls: 3, images: 0 };
+    for (const [look, opts] of [['old look', {}], ['new look', NEW]] as const) {
+      for (const [name, path] of [['home', `${B}/overview`], ['articles', `${B}/articles`], ['article', `${B}/articles/${showcaseArticle(13)}`], ['calendar', `${B}/calendar?date=2026-11-16`]] as const) {
+        const r = await call(s.service, identity(), 'GET', path, opts);
+        assertClean(failures, `${look} · ${state} · ${name}`, r.body);
+        if (state.startsWith('enough') && name !== 'calendar' && !(look === 'old look' && name === 'home')) has(r.body, /Write it now/, `${look} · ${name}: "Write it now"`);
+      }
+    }
+  }
+  if (failures.length) assert.fail(`Client-visible leaks (${failures.length}):\n${failures.join('\n')}`);
+});
+
+test('the writing allowance is said in articles for a client, from the engine\'s own per-article estimate; the units stay in Technical detail', async () => {
+  const f = await scene();
+  const all = new Map(await surfaces(f, false));
+  const founder = new Map(await surfaces(f, true));
+  const used = (await f.h.engine.usage(OWNER, f.brand.id)).model_tokens;
+  const left = Math.floor((2_000_000 - used) / 32_000);
+  for (const look of ['old look', 'new look']) {
+    if (look === 'old look') has(all.get(`${look} · overview`)!.body, new RegExp(`enough left this month for about ${left} more articles`));
+    hasNot(readable(all.get(`${look} · overview`)!.body, 'text/html'), /writing units/, `${look}: no units on the client overview`);
+    hasNot(readable(all.get(`${look} · topics`)!.body, 'text/html'), /writing units/, `${look}: no units on the client topics page`);
+    hasNot(readable(all.get(`${look} · setup`)!.body, 'text/html'), /writing units/, `${look}: no units on the client setup page`);
+    if (look === 'old look') has(founder.get(`${look} · overview`)!.body, /<summary>Technical detail<\/summary><p class="muted">Writing units: [\d,]+ of 2,000,000 used/);
+  }
+});
+
 // ─── The tests ───────────────────────────────────────────────────────────────
 
 test('the banned list is built from the code and covers every kind of term', () => {
@@ -237,7 +428,7 @@ test('the banned list is built from the code and covers every kind of term', () 
 test('the dictionary turns raw supplier, model, method and rejection text into neutral sentences, and leaves neutral text alone', () => {
   for (const raw of [SDK_ERROR, METHOD_ERROR, REJECTION, UNCERTAIN, 'Unavailable capability: email-writing', 'Method release has no private-use approval: blog-writing@0.1.1', 'Connect a writing model API key (server configuration).', 'Connect a research provider (server configuration).',
     ...[40101, 40103, 40100, 40104, 40200, 40203, 40204].map((c) => { const d = researchDiagnostic(c); return `${d.summary} ${d.remedy}`; }), 'Applying the saved planning result; no new model call.',
-    'Writing allowance: monthly ceiling reached. Used 2,000,000; ceiling 2,000,000; remaining 0 model tokens.', 'x: The DataForSEO account requires verification.']) {
+    'Writing allowance: monthly ceiling reached. Used 2,000,000; ceiling 2,000,000; remaining 0 model tokens.', 'x: The DataForSEO account requires verification.', IMAGE_ERROR]) {
     const words = ownerWords(raw);
     assert.equal(revealsInternals(words), false, `${raw} → ${words}`);
     assert.deepEqual(offences(words, 'text/plain'), [], `${raw} → ${words}`);

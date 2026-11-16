@@ -159,16 +159,16 @@ test('same campaign command never repeats a paid call; a changed brief cannot re
 test('owner admin controls persist individual pack choices and all-off without deleting drafts or spending',async()=>{
  const f=await creatorFixture(),who=nativeIdentity(f.actor),csrf=nativeCsrf(who),base='/portal/seo-blog/b/'+f.brand.id;
  const draft=await f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile)),calls=f.model.requests.length;
- let response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/update',fields:{_csrf:csrf,revision:'1',packId:['email-writing']}});
+ let response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/update',fields:{_csrf:csrf,revision:'1',packId:['email-writing']},founder:true});
  assert.equal(response.status,303);assert.doesNotMatch(response.headers.location!,/\?e=/);
  let snapshot=await f.methods.snapshot(f.brand.id);assert.deepEqual(snapshot.assignment!.pins.map(p=>p.packId).sort(),['email-writing','production-core']);
  response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/campaigns'});assert.match(response.body,/Request kits are switched off/);assert.match(response.body,/Create email campaign/);
- response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/disable',fields:{_csrf:csrf,revision:'2'}});assert.equal(response.status,303);
+ response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/disable',fields:{_csrf:csrf,revision:'2'},founder:true});assert.equal(response.status,303);
  snapshot=await f.methods.snapshot(f.brand.id);assert.equal(snapshot.assignment!.pins.length,0);assert.equal(snapshot.assignment!.revision,3);
  response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods'});assert.equal(response.status,404,'Production rules is founder-only');
  response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods',founder:true});assert.match(response.body,/All production packs off/);
  await assert.rejects(f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile)),/Activate/);assert.equal(f.model.requests.length,calls);assert.equal((await f.creator.get(f.actor,f.brand.id,draft.id)).id,draft.id);
- response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/activate',fields:{_csrf:csrf,revision:'2',creators:'1'}});assert.match(response.headers.location!,/\?e=/);assert.equal((await f.methods.snapshot(f.brand.id)).assignment!.pins.length,0);
+ response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/activate',fields:{_csrf:csrf,revision:'2',creators:'1'},founder:true});assert.match(response.headers.location!,/\?e=/);assert.equal((await f.methods.snapshot(f.brand.id)).assignment!.pins.length,0);
 });
 test('owner edit clears approval and changing the profile holds export',async()=>{
  const f=await creatorFixture();let r=await f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile));

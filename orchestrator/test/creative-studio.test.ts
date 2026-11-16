@@ -316,7 +316,7 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
   const service: PortalSeoBlogService = { ...disabled, creativeEnabled: true, creativeFor: () => studio, creativeSavedImages: async () => [] };
   const page = await call(service, owner, 'GET', base);
   assert.equal(page.status, 200);
-  for (const text of ['Creative studio', 'Create images', 'Annual boiler service — £89', 'Book a service', 'Neutral fallback', 'no provider call and no image-generation charge']) assert.ok(page.body.includes(text), text);
+  for (const text of ['Creative studio', 'Create images', 'Annual boiler service — £89', 'Book a service', 'Neutral fallback', 'no outside service is used and nothing is charged']) assert.ok(page.body.includes(text), text);
   assert.ok(!page.body.includes('Scheduling demonstration'), 'no other brand facts on the page');
   const form = { ...offerForm('Annual boiler service', HEARTH.pages[0]!.url, { concepts: '2' }), commandId: randomUUID(), background: 'neutral' };
   for (const refused of [await call(service, owner, 'POST', `${base}/draft`, form), await call(service, owner, 'POST', `${base}/draft`, { ...form, _csrf: csrf }, { origin: 'https://evil.example' })]) {
