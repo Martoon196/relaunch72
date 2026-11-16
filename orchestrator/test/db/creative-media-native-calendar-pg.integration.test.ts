@@ -158,7 +158,7 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
    assert.equal(paid,0,'Local rendering must not create a paid provider reservation');
   });
   const extra:pg.Pool[]=[];
-  const offset=async(value:string)=>{if(process.env.RL72_MEDIA_CLOCK_CONTAINER)execFileSync('docker',['exec','-u','0',process.env.RL72_MEDIA_CLOCK_CONTAINER,'sh','-c',"printf '%s\\n' '"+value+"' > /tmp/rl72-native-clock"]);else await writeFile(process.env.RL72_MEDIA_CLOCK_FILE!,value+'\n');};
+  const offset=async(value:string)=>{if(process.env.RL72_MEDIA_CLOCK_CONTAINER)execFileSync('docker',['exec','-u','postgres',process.env.RL72_MEDIA_CLOCK_CONTAINER,'sh','-c',"printf '%s\\n' '"+value+"' > /tmp/rl72-native-clock"]);else await writeFile(process.env.RL72_MEDIA_CLOCK_FILE!,value+'\n');};
   try{
    const login=async(role:string)=>{await admin.query(`ALTER ROLE ${role} PASSWORD 'local-methods-test-only'`);const u=new URL(uri);u.username=role;u.password='local-methods-test-only';const pool=new pg.Pool({connectionString:u.toString(),max:2});extra.push(pool);return pool;};
    const adapter=await login('r72_content_adapter'),planning=await login('r72_public_social_command'),zernio=await login('r72_zernio_social_command'),social=await login('r72_owned_social_worker_command'),offline=await login('r72_worker');
