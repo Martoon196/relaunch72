@@ -58,6 +58,11 @@ export function marketForLocale(locale: string): LabsMarket {
   return { locationCode: LABS_LOCATION_FOR_LOCALE[locale] ?? 2826, languageCode: (locale.slice(0, 2) || 'en').toLowerCase() };
 }
 
+/** The market for a locale in the supported table, or null: a locale outside it is never measured as another country. */
+export function supportedMarketForLocale(locale: string): LabsMarket | null {
+  return Object.hasOwn(LABS_LOCATION_FOR_LOCALE, locale) ? marketForLocale(locale) : null;
+}
+
 export type LabsCallStatus = 'ok' | 'no_data' | 'pending' | 'failed';
 
 export interface LabsCallResult<Row> {

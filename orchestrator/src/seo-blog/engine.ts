@@ -13,7 +13,7 @@ import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
-  extractProfile, GenerationUnavailableError, GenerationRejectedError, CampaignGenerationRejectedError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
+  extractProfile, GenerationUnavailableError, GenerationRejectedError, CampaignGenerationRejectedError, proposeCluster, PLAN_SCHEMA_V2_VERSION, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
   type PlannedArticle, type PlannedCluster, type JsonCallResult,
 } from './generation.js';
 import { buildInventory, linkableUrls, sameSite } from './inventory.js';
@@ -71,6 +71,8 @@ interface PlanExecution {
   readonly numbersUnavailable?: () => boolean;
   /** The keyword shortlist saved on the planning task when it started (so a resumed run searches the same phrases). */
   readonly shortlist?: readonly ShortlistRow[];
+  /** The secondary-only candidates saved with it (so a resumed run binds against exactly the ids the planner saw). */
+  readonly secondary?: readonly ShortlistRow[];
   readonly research?: ResearchBundle;
   readonly modelResult?: JsonCallResult<PlannedCluster>;
   readonly planId: string;
@@ -82,12 +84,12 @@ interface PlanExecution {
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
 import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
-import { marketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
+import { marketForLocale, supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
-import { bindBriefs, briefSeo, planningGuidance, planningShortlist, type ShortlistRow } from './keyword-planning.js';
-import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall } from './keyword-fill.js';
+import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, type PlanningCandidates, type ShortlistRow } from './keyword-planning.js';
+import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, poolInMarket, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
@@ -1142,7 +1144,7 @@ export class SeoBlogEngine {
     const brand=await this.store.getBrand(claim.brandId); if(!brand) throw new SeoBlogError(404,'Brand not found.');
     const profile=await this.store.latestProfile(claim.brandId); const authority=programmeAuthorityFor(claim,brand,profile);
     // Keyword-first planning: the shortlist is fixed when the task starts, so a resumed run searches the same phrases.
-    const shortlistNow=this.keywordListsReady&&claim.payload.keywordShortlist===undefined?await this.currentShortlist(claim.brandId):null;
+    const candidatesNow=this.keywordListsReady&&claim.payload.keywordShortlist===undefined?await this.currentCandidates(claim.brandId):null;
     let ready=await this.programmeTransaction(claim,authority,(s)=>{
       const current=s.job;if(!current) throw new SeoBlogError(404,'Planning task not found.');
       if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
@@ -1150,7 +1152,7 @@ export class SeoBlogEngine {
       const unreceiptedLegacyClaim=!run&&current.attempts>1;
       const source=programmeInputSnapshot(s,authority);
       if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
-      const withRun={...current,payload:{...current.payload,programme:run,...(shortlistNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:shortlistNow}:{})}};
+      const withRun={...current,payload:{...current.payload,programme:run,...(candidatesNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:candidatesNow.primary,...(candidatesNow.secondary.length?{keywordSecondary:candidatesNow.secondary}:{})}:{})}};
       if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
@@ -1183,6 +1185,7 @@ export class SeoBlogEngine {
         }},numbersUnavailable:()=>numbersUnavailable}:{}),
         research:run.research,modelResult:run.modelReceipt,
         ...(Array.isArray(ready.payload.keywordShortlist)?{shortlist:ready.payload.keywordShortlist as ShortlistRow[]}:{}),
+        ...(Array.isArray(ready.payload.keywordSecondary)?{secondary:ready.payload.keywordSecondary as ShortlistRow[]}:{}),
         beforeModel:async(research)=>{
           let permitted=false;
           ready=await this.programmeTransaction(claim,authority,(s)=>{
@@ -1288,8 +1291,11 @@ export class SeoBlogEngine {
     const pages = inventory?.pages ?? [];
     // Keyword-first planning (SEO_BLOG_KEYWORD_POOL): research runs on the shortlisted measured phrases.
     // Read back from the store: a website refresh just above returns the pages without the list it keeps.
-    const keywordPool = this.keywordListsReady ? (await this.store.getInventory(brandId))?.keywordPool ?? null : null;
-    const shortlist = execution ? execution.shortlist ?? [] : keywordPool ? await this.currentShortlist(brandId) : [];
+    // Read through the one shape check; a list measured for another country is never used for this business.
+    const storedList = this.keywordListsReady ? (await this.store.getInventory(brandId))?.keywordPool ?? null : null;
+    const keywordPool = storedList && poolInMarket(storedList, supportedMarketForLocale(brand.locale)) ? storedList : null;
+    const candidates: PlanningCandidates = execution ? { primary: execution.shortlist ?? [], secondary: execution.secondary ?? [] } : keywordPool ? await this.currentCandidates(brandId) : { primary: [], secondary: [] };
+    const shortlist = candidates.primary;
     const seeds = shortlist.length ? shortlist.slice(0, USAGE_ESTIMATES.searchPerPlan).map((r) => r.phrase) : researchQuerySeeds({
       focus: payload.focus, audiences: profile.audiences, positioning: profile.positioning,
       categories: (brand.settings.programme?.structure?.categories ?? []).map((c) => c.label),
@@ -1313,9 +1319,12 @@ export class SeoBlogEngine {
     const articles = await this.store.listArticles(brandId);
     if(execution && !execution.modelResult) await execution.beforeModel(research);
     const planId = execution?.planId??randomUUID();
+    // Measured candidates go to the planner with ids (contract v2); with none, the original prompt and contract, unchanged.
+    const ids = shortlist.length ? candidateIds(candidates) : null;
     const result = execution?.modelResult ?? await proposeCluster(await this.methodLlm(brand,profile,'planning','plan:'+planId,research.sources), {
       brandName: brand.name, profile, inventory: pages, sources: research.sources,
-      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null,planningGuidance(shortlist)].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
+      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
+      ...(ids ? { keywordCandidates: { targetIds: [...ids].filter(([, v]) => v.target).map(([k]) => k), allIds: [...ids.keys()], block: candidatesForPrompt(candidates) } } : {}),
     });
     if(execution) { if(!execution.modelResult) await execution.recordModel(result); }
     else await this.recordGeneration(brandId, result.record, 'plan');
@@ -1333,14 +1342,16 @@ export class SeoBlogEngine {
     ];
     const usedSlugs = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
     const briefs: ArticleBrief[] = [];
-    const bound = keywordPool || shortlist.length ? bindBriefs(cluster.map((item) => ({ key: item.slug, targetQuery: item.target_query, workingTitle: item.working_title })), shortlist) : null;
+    // Bound by the ids the planner returned, never by similarity; unknown or repeated ids are stripped.
+    const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids })), candidates) : null;
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
       let slug = item.slug;
       for (let n = 2; usedSlugs.has(slug); n++) slug = `${item.slug}-${n}`.slice(0, 80);
       usedSlugs.add(slug);
-      const metric = research.keywordMetrics.find((m) => m.keyword.toLowerCase() === item.target_query.toLowerCase() && m.volume !== null);
-      const seo = bound && keywordPool ? briefSeo({ targetQuery: item.target_query, workingTitle: item.working_title, bound: bound.get(item.slug) ?? null, pool: keywordPool!, now: this.now() }) : null;
+      // With measured candidates, a brief's number comes only from the candidate it chose by id.
+      const metric = shortlist.length ? undefined : research.keywordMetrics.find((m) => m.keyword.toLowerCase() === item.target_query.toLowerCase() && m.volume !== null);
+      const seo = binding && keywordPool ? briefSeo({ targetQuery: item.target_query, binding: binding.bound.get(item.slug) ?? { primary: null, secondary: [] }, pool: keywordPool, now: this.now() }) : null;
       const seoMeasured = seo?.primary.basis === 'measured' && seo.primary.searches !== null;
       const brief: ArticleBrief = {
         ...(execution ? {programme:execution.provenance} : {}),
@@ -1360,7 +1371,8 @@ export class SeoBlogEngine {
         duplicate,
         status: duplicate.verdict === 'skip' || duplicate.verdict === 'update_existing' ? 'postponed' : 'planned',
         suggestedAtUtc: null, articleId: null,
-        engine: { ...planStamp, numbers: briefNumbers(planNumbers, Boolean(metric) || seoMeasured) },
+        // With measured candidates offered, a brief that chose none is honestly "not measured" (no_data), whatever the plan-level numbers did.
+        engine: { ...planStamp, numbers: ids && !seoMeasured ? 'no_data' : briefNumbers(planNumbers, Boolean(metric) || seoMeasured) },
         ...(seo ? { seo } : {}),
       };
       comparable.push({ id: brief.id, title: brief.workingTitle, targetQuery: brief.targetQuery, slug: brief.slug, sibling: true });
@@ -1383,6 +1395,7 @@ export class SeoBlogEngine {
       inputs: { focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl },
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
       engine: planStamp,
+      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0 } } : {}),
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
     if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
@@ -2231,17 +2244,23 @@ export class SeoBlogEngine {
     return (await this.store.getInventory(brandId))?.keywordPool ?? null;
   }
 
-  /** The planning shortlist from the stored list now, leaving out phrases existing briefs already target. */
-  private async currentShortlist(brandId: string): Promise<ShortlistRow[]> {
-    const [inventory, briefs] = await Promise.all([this.store.getInventory(brandId), this.store.listBriefs(brandId)]);
-    const used = briefs.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => b.seo?.primary.phrase).filter((p): p is string => Boolean(p));
-    return planningShortlist(inventory?.keywordPool ?? null, used, this.now());
+  /**
+   * The planning candidates from the stored list now: up to seven phrases a brief may target and further measured
+   * phrases offered only as secondary phrases. Leaves out phrases existing briefs already target and their near
+   * duplicates. Empty when the list is measured for another country, or the business's country is not supported.
+   */
+  private async currentCandidates(brandId: string): Promise<PlanningCandidates> {
+    const [brand, inventory, briefs] = await Promise.all([this.store.getBrand(brandId), this.store.getInventory(brandId), this.store.listBriefs(brandId)]);
+    const pool = inventory?.keywordPool ?? null;
+    if (!brand || !pool || !poolInMarket(pool, supportedMarketForLocale(brand.locale))) return { primary: [], secondary: [] };
+    const used = briefs.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => b.seo?.primary.phrase).filter((p): p is string => typeof p === 'string');
+    return planningCandidates(pool, used, this.now());
   }
 
   /** What autopilot would plan next from the list (read only). */
   async keywordNextUp(actor: Actor, brandId: string): Promise<ShortlistRow[]> {
     await this.brandFor(actor, brandId);
-    return this.keywordListsReady ? this.currentShortlist(brandId) : [];
+    return this.keywordListsReady ? [...(await this.currentCandidates(brandId)).primary] : [];
   }
 
   private keywordChoices(brand: Brand): KeywordChoices | null {

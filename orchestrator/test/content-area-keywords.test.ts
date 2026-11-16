@@ -32,7 +32,7 @@ export function row(phrase: string, o: Partial<StoredKeywordRow> = {}): StoredKe
 }
 const pool = (rows: StoredKeywordRow[], o: Partial<InventoryKeywordPool> = {}): InventoryKeywordPool => ({ schema: 1, locationCode: 2826, languageCode: 'en', builtAt: '2026-11-01T00:00:00.000Z', rows, state: 'measured', ledger: { entries: [], months: {} }, ...o });
 const brief = (id: string, phrase: string, status: ArticleBrief['status'], searches: number | null = 400, basis: 'measured' | 'none' = 'measured'): ArticleBrief => ({ ...fx_brief(id), status,
-  seo: { schema: 1, primary: { phrase, searches, difficulty: 20, intent: 'informational', basis, parent: null, parentSearches: null, measuredMonth: '2026-10', measuredAt: '2026-11-01T00:00:00.000Z', locationCode: 2826, candidateId: null }, secondary: [], questions: [], cluster: null, why: null } } as ArticleBrief);
+  seo: { schema: 2, primary: { phrase, searches, difficulty: 20, intent: 'informational', basis, parent: null, parentSearches: null, measuredMonth: '2026-10', measuredAt: '2026-11-01T00:00:00.000Z', locationCode: 2826, candidateId: null }, secondary: [], questions: [], cluster: null, why: null } } as ArticleBrief);
 function fx_brief(id: string): ArticleBrief {
   return { id, planId: 'p1', brandId: fx.BRAND_ID, role: 'supporting', slug: id, workingTitle: id, targetQuery: `${id}?`, searchIntent: 'learn', relatedQuestions: [], angle: '', outline: [], keyPoints: [], cta: null, internalLinks: [], whyFit: '',
     demand: { kind: 'qualitative', rationale: '' }, sourceIds: [], duplicate: { verdict: 'distinct', score: 0, against: null, againstKind: null, advice: '' }, status: 'planned', suggestedAtUtc: null, articleId: null } as ArticleBrief;

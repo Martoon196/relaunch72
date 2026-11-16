@@ -100,6 +100,11 @@ export function cachedFor(pool: InventoryKeywordPool | null | undefined, call: F
   return hit && freshness(hit.at, now, call.freshness) === 'fresh' ? hit : null;
 }
 
+/** Whether a list was measured for this market (a number measured for one country is never used for another). */
+export function poolInMarket(pool: Pick<StoredKeywordPool, 'locationCode' | 'languageCode'> | null | undefined, market: LabsMarket | null): boolean {
+  return !!pool && !!market && pool.locationCode === market.locationCode && pool.languageCode === market.languageCode;
+}
+
 /** The stored pool for a business, or an empty one in its market. */
 export function storedPool(inventory: WebsiteInventory | null | undefined, market: LabsMarket): InventoryKeywordPool {
   const pool = inventory?.keywordPool;
