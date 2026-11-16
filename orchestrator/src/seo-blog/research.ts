@@ -14,7 +14,8 @@ import { parseHtmlPage } from './html.js';
 import { topicTokens } from './dedupe.js';
 import { sameSite } from './inventory.js';
 import type { FetchTransport } from './safe-fetch.js';
-import type { ResearchSource } from './types.js';
+import type { EngineNumbersState, ResearchSource } from './types.js';
+import { numbersState, researchCredentials } from './engine-stamp.js';
 import { SeoBlogError } from './types.js';
 import type { KeywordMetric, KeywordProvider } from '../keyword/types.js';
 import { researchDiagnostic, type ResearchDiagnostic, type ResearchSearchReceipt } from './programme.js';
@@ -156,10 +157,9 @@ export class DataForSeoSerpProvider implements SearchProvider {
 }
 
 export function configuredSearchProvider(env: NodeJS.ProcessEnv = process.env): SearchProvider {
-  const login = env.SEO_BLOG_DATAFORSEO_LOGIN ?? env.DATAFORSEO_LOGIN ?? '';
-  const password = env.SEO_BLOG_DATAFORSEO_PASSWORD ?? env.DATAFORSEO_PASSWORD ?? '';
-  if (env.SEO_BLOG_RESEARCH_PROVIDER === 'none' || !login || !password) return new UnconfiguredSearchProvider();
-  return new DataForSeoSerpProvider(login, password);
+  const credentials = researchCredentials(env);
+  if (env.SEO_BLOG_RESEARCH_PROVIDER === 'none' || !credentials) return new UnconfiguredSearchProvider();
+  return new DataForSeoSerpProvider(credentials.login, credentials.password);
 }
 
 const PRIMARY_HOSTS = [
@@ -203,6 +203,8 @@ export interface ResearchBundle {
   readonly searchCalls: number;
   readonly notes: string[];
   readonly keywordMetrics: KeywordMetric[];
+  /** How the search numbers went (absent on bundles saved before it was recorded). */
+  readonly numbers?: EngineNumbersState;
 }
 
 /** Search for customer subjects, not ambiguous commercial plan names or a pitch.
@@ -325,13 +327,15 @@ export async function researchQueries(input: {
     }
   }
   let keywordMetrics: KeywordMetric[] = [];
+  let failed = false;
   if (input.keywordProvider && input.keywordProvider.mode === 'live') {
     try {
       // Only genuine provider rows are kept; mock metrics never become demand evidence.
       keywordMetrics = (await input.keywordProvider.metrics([...input.queries].slice(0, 20))).filter((m) => m.source !== 'mock');
     } catch {
+      failed = true;
       notes.push('Keyword metrics were unavailable; demand is assessed qualitatively.');
     }
   }
-  return { sources, searchCalls, notes, keywordMetrics };
+  return { sources, searchCalls, notes, keywordMetrics, numbers: numbersState(input.keywordProvider, { failed, metrics: keywordMetrics }) };
 }

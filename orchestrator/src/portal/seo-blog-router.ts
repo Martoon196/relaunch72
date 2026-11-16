@@ -49,6 +49,8 @@ import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
+import { contentKeywordsPage } from './content-area-keywords.js';
+import type { KeywordChoices } from '../seo-blog/keyword-store-shape.js';
 import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, contentBusinessesPage, businessLine, writtenNeedsCount, contentErrorPage, needsQueue, type ContentAreaData, type FillFacts } from './content-area-pages.js';
 import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
 import { CONTENT_AREA_FONT_PATH, contentAreaFont } from './content-area-fonts.js';
@@ -354,7 +356,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return at < 0 ? undefined : { index: at + 1, total: ids.length, next: ids[at + 1] ? `${SEO_BLOG_BASE}/b/${brandId}/articles/${ids[at + 1]}` : null };
     })() : undefined;
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
-      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}), ...(previewQueue ? { queue: previewQueue } : {}) } } : {}) });
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}), ...(previewQueue ? { queue: previewQueue } : {}), ...(engine.keywordListsReady ? { keywords: true } : {}) } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -594,9 +596,16 @@ async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: str
 async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null): Promise<string | null> {
   // A move or schedule made in the existing diary comes back with its message: it returns to that diary, not the month view.
   const diary = url.searchParams.has('view') || url.searchParams.has('n') || url.searchParams.has('e');
-  const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !diary ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results' : null;
+  const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !diary ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results'
+    : rest === 'keywords' && engine.keywordListsReady ? 'keywords' : null;
   if (!page) return null;
   const data = loaded ?? await loadContentArea(engine, actor, brand.id);
+  if (page === 'keywords') {
+    // Read only: the stored list, the briefs and articles already loaded; a view never spends.
+    const [pool, nextUp] = await Promise.all([engine.keywordList(actor, brand.id), engine.keywordNextUp(actor, brand.id)]);
+    const choices = ((brand.settings.programme ?? {}) as { keywordChoices?: KeywordChoices }).keywordChoices ?? null;
+    return contentKeywordsPage(shell('overview'), brand, { pool, choices, briefs: data.briefs, articles: data.articles, jobs: data.jobs, nextUp, now: data.now });
+  }
   if (page === 'home') return contentHomePage(shell('overview'), data);
   if (page === 'calendar') {
     const requested = url.searchParams.get('date') ?? '';
