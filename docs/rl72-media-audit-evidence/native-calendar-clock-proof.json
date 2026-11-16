@@ -1,0 +1,22 @@
+{
+  "daysElapsed": 3,
+  "plannerCreated": true,
+  "originalAttestationsExpired": true,
+  "proofTtlMinutes": 15,
+  "triggerFired": true,
+  "withdrawalBlocked": true,
+  "expiryBlocked": true,
+  "erasedFutureCancelled": true,
+  "scopeDenied": true,
+  "replicationRoleBypass": false,
+  "providerCalls": 0,
+  "postgresVersion": "18.7",
+  "elapsedClock": "libfaketime in disposable postgres process only; normal Node clock",
+  "canonicalMigrationsApplied": 157,
+  "mediaDraftsApplied": 23,
+  "localExistingMediaTestsPassed": 29,
+  "nativeCalendarTestsPassed": 4,
+  "skipped": 0,
+  "canonicalFunctionsReplaced": false,
+  "manuallyInsertedSocialJobs": false
+}

@@ -34,7 +34,9 @@ const draftFiles=[
   "private-object-sources.sql",
   "native-video-release.sql",
   "affiliate-link-distribution.sql",
-  "media-retention.sql"
+  "media-retention.sql",
+  "native-video-jit.sql",
+  "native-video-planner.sql"
 ];
 const client=new pg.Client({connectionString:DATABASE});
 await client.connect();

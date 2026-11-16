@@ -16,6 +16,14 @@ CREATE TABLE app.creative_media_video_release_withdrawals (
  FOREIGN KEY(workspace_id,job_id) REFERENCES app.property_predator_owned_social_jobs(workspace_id,id),
  FOREIGN KEY(workspace_id,content_version_id) REFERENCES app.company_content_versions(workspace_id,id)
 );
+CREATE TABLE app.creative_media_native_call_checks(workspace_id uuid NOT NULL,job_id uuid NOT NULL,content_version_id uuid NOT NULL,checked_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(workspace_id,job_id,content_version_id),FOREIGN KEY(workspace_id,job_id) REFERENCES app.property_predator_owned_social_jobs(workspace_id,id),FOREIGN KEY(workspace_id,content_version_id) REFERENCES app.company_content_versions(workspace_id,id));
+ALTER TABLE app.creative_media_native_call_checks ENABLE ROW LEVEL SECURITY;ALTER TABLE app.creative_media_native_call_checks FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON app.creative_media_native_call_checks FROM PUBLIC,r72_worker,r72_web,r72_content_command,r72_owned_social_worker_command;
+CREATE POLICY native_call_checks_owner ON app.creative_media_native_call_checks FOR ALL TO r72_owner USING(true) WITH CHECK(true);
+CREATE POLICY native_call_checks_worker ON app.creative_media_native_call_checks FOR INSERT TO r72_media_job_definer WITH CHECK(workspace_id=app_private.current_workspace_id());
+GRANT INSERT ON app.creative_media_native_call_checks TO r72_media_job_definer;
+CREATE TRIGGER native_call_checks_immutable BEFORE UPDATE OR DELETE ON app.creative_media_native_call_checks FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
+INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app','creative_media_native_call_checks','workspace_id');
 DO $t$ DECLARE t text; BEGIN
  FOREACH t IN ARRAY ARRAY['creative_media_video_releases','creative_media_video_release_withdrawals'] LOOP
   EXECUTE format('ALTER TABLE app.%I ENABLE ROW LEVEL SECURITY',t);EXECUTE format('ALTER TABLE app.%I FORCE ROW LEVEL SECURITY',t);
@@ -32,6 +40,9 @@ DO $t$ DECLARE t text; BEGIN
   EXECUTE format('GRANT SELECT ON app.%I TO r72_media_job_definer,r72_creative_studio_definer',t);
  END LOOP;
 END $t$;
+GRANT SELECT ON app.public_social_revalidation_jobs,app.public_social_revalidation_proof_media TO r72_media_job_definer;
+CREATE POLICY native_video_revalidation_read ON app.public_social_revalidation_jobs FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id());
+CREATE POLICY native_video_proof_media_read ON app.public_social_revalidation_proof_media FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id());
 GRANT EXECUTE ON FUNCTION app_private.seo_blog_brand(uuid) TO r72_media_job_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
 SET LOCAL ROLE r72_media_job_definer;
@@ -61,7 +72,7 @@ BEGIN
   OR v.blob_storage_key IS DISTINCT FROM 'rl72-native-video/'||p_workspace::text||'/'||o.id::text||'/'||o.sha256||'.mp4'
   OR encode(v.brand_sha256,'hex') IS DISTINCT FROM encode(public.digest(to_jsonb(app_private.seo_blog_brand(p_workspace))::text,'sha256'),'hex')
   OR EXISTS(SELECT 1 FROM app.company_content_versions newer WHERE workspace_id=p_workspace AND content_item_id=v.content_item_id AND version_number>v.version_number)
-  OR NOT EXISTS(SELECT 1 FROM app.company_content_source_attestations a WHERE a.workspace_id=p_workspace AND a.content_version_id=v.id AND a.content_sha256=v.content_sha256 AND a.blob_sha256=v.blob_sha256 AND a.brand_sha256=v.brand_sha256 AND a.checked_at<=clock_timestamp() AND a.expires_at>clock_timestamp())
+  OR (NOT EXISTS(SELECT 1 FROM app.company_content_source_attestations a WHERE a.workspace_id=p_workspace AND a.content_version_id=v.id AND a.content_sha256=v.content_sha256 AND a.blob_sha256=v.blob_sha256 AND a.brand_sha256=v.brand_sha256 AND a.checked_at<=clock_timestamp() AND a.expires_at>clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM app.public_social_revalidation_proof_media pm JOIN app.public_social_revalidation_jobs rj ON rj.workspace_id=pm.workspace_id AND rj.current_proof_id=pm.proof_id AND rj.state IN('verified','materialized') JOIN app.property_predator_owned_social_jobs sj ON sj.workspace_id=pm.workspace_id AND sj.planning_intent_id=pm.intent_id WHERE sj.workspace_id=p_workspace AND sj.id=p_job AND pm.content_version_id=v.id AND pm.content_sha256=v.content_sha256 AND pm.blob_sha256=v.blob_sha256 AND pm.brand_sha256=v.brand_sha256 AND pm.checked_at<=clock_timestamp() AND pm.expires_at>clock_timestamp()))
   OR NOT EXISTS(SELECT 1 FROM app.property_predator_owned_social_job_media m JOIN app.company_content_approval_decisions d ON d.workspace_id=m.workspace_id AND d.id=m.approval_decision_id AND d.approval_request_id=m.approval_request_id AND d.content_version_id=v.id AND d.content_sha256=v.content_sha256 AND d.decision='approved'
     JOIN app.company_content_approval_requests req ON req.workspace_id=d.workspace_id AND req.id=d.approval_request_id
     WHERE m.workspace_id=p_workspace AND m.job_id=p_job AND m.content_version_id=v.id
@@ -76,9 +87,9 @@ RETURNS TABLE(sha256 text,raw_bytes bytea) LANGUAGE plpgsql VOLATILE SECURITY DE
 BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR NOT app_private.creative_media_video_ready(p_workspace,p_job,p_version,true)
   OR NOT EXISTS(SELECT 1 FROM app.property_predator_owned_social_jobs WHERE workspace_id=p_workspace AND id=p_job AND state IN('leased','calling') AND lease_expires_at>clock_timestamp()) THEN RAISE EXCEPTION 'Current exact video release and worker lease required' USING ERRCODE='42501'; END IF;
- RETURN QUERY SELECT o.sha256,b.bytes FROM app.creative_media_video_releases g JOIN app.creative_media_local_render_outputs o ON o.workspace_id=g.workspace_id AND o.id=g.output_id
+ RETURN QUERY SELECT o.sha256,b.bytes FROM app.company_content_versions v JOIN app.creative_media_local_render_outputs o ON o.workspace_id=v.workspace_id AND o.id=(v.content_body::jsonb->'video'->>'outputId')::uuid
   JOIN app.seo_blog_blobs b ON b.workspace_id=o.workspace_id AND b.id=o.blob_id
-  WHERE g.workspace_id=p_workspace AND g.job_id=p_job AND g.content_version_id=p_version AND o.sha256=encode(public.digest(b.bytes,'sha256'),'hex') AND o.byte_length=octet_length(b.bytes);
+  WHERE v.workspace_id=p_workspace AND v.id=p_version AND o.sha256=encode(public.digest(b.bytes,'sha256'),'hex') AND o.byte_length=octet_length(b.bytes);
 END $f$;
 CREATE FUNCTION app_private.creative_media_video_call_guard() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE media record;
@@ -86,6 +97,7 @@ BEGIN
  IF NEW.state='calling' AND OLD.state IS DISTINCT FROM 'calling' THEN
   FOR media IN SELECT v.id FROM app.property_predator_owned_social_job_media m JOIN app.company_content_versions v ON v.workspace_id=m.workspace_id AND v.id=m.content_version_id WHERE m.workspace_id=NEW.workspace_id AND m.job_id=NEW.id AND v.source_system='relaunch72.private-video' LOOP
    IF NOT app_private.creative_media_video_ready(NEW.workspace_id,NEW.id,media.id,true) THEN RAISE EXCEPTION 'Native video release withdrawn or stale' USING ERRCODE='55000'; END IF;
+   INSERT INTO app.creative_media_native_call_checks(workspace_id,job_id,content_version_id) VALUES(NEW.workspace_id,NEW.id,media.id) ON CONFLICT DO NOTHING;
   END LOOP;
  END IF;RETURN NEW;
 END $f$;

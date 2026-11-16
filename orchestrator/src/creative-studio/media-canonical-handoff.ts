@@ -47,7 +47,15 @@ export class PgLocalVideoCanonicalHandoff {
   const adapter=runner(this.adapterPool),commands=runner(this.commandPool);
   await adapter.run(context,async()=>{}, {readOnly:true,serializable:false});
   const draft=await new CompanyContentService({transactionRunner:adapter}).createVersion(context,localVideoDraftCommand(input,manifest!));
-  const approval=await new CompanyContentService({transactionRunner:commands}).requestApproval(context,{commandKey:'media-video-review:'+input.commandId,contentItemId:draft.contentItemId,contentVersionId:draft.contentVersionId,reviewNote:'Review this exact private video, caption and platform. Publication requires the canonical video adapter and separate owner release.'});
-  return {draft,approval,state:'pending_canonical_review' as const,providerEffects:false as const};
+  const approval=await new CompanyContentService({transactionRunner:commands}).requestApproval(context,{commandKey:'media-video-review:'+input.commandId,contentItemId:draft.contentItemId,contentVersionId:draft.contentVersionId,reviewNote:'Review this exact private video, caption and platform. Publication requires the canonical video adapter and canonical scheduling.'});
+  const videoCommand=localVideoDraftCommand(input,manifest!);
+  const postDraft=await new CompanyContentService({transactionRunner:adapter}).createVersion(context,{
+   ...videoCommand,commandKey:'media-caption:'+input.commandId,kind:'social_post',contentMimeType:'text/plain',content:input.caption,
+   source:{system:'relaunch72.private-video-post',itemId:draft.contentVersionId,version:draft.contentSha256},
+   blob:{storageKey:'rl72-native-caption/'+input.workspaceId+'/'+input.commandId+'.txt',sha256:sha(input.caption)},
+   metadata:{nativeVideoVersionId:draft.contentVersionId,network:input.platform,outputId:input.outputId},
+  });
+  const postApproval=await new CompanyContentService({transactionRunner:commands}).requestApproval(context,{commandKey:'media-caption-review:'+input.commandId,contentItemId:postDraft.contentItemId,contentVersionId:postDraft.contentVersionId,reviewNote:'Canonical accompanying caption for the exact native video.'});
+  return {draft,approval,postDraft,postApproval,state:'pending_canonical_review' as const,providerEffects:false as const};
  }
 }

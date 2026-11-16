@@ -1,12 +1,12 @@
 # Independent media audit repair status
 
-PR #108 remains a draft. The branch is not approved for integration or live release. Review current code and CI; earlier green runs at 52173b7 do not validate these repairs.
+PR #108 remains a draft for Claude’s independent review and integration. Both previously open proof gates now have executable tests and local evidence. Exact-head CI status is recorded in the PR. No media routes, production migrations or external effects were activated.
 
 | Finding | Repair / remaining proof |
 | --- | --- |
-| 1. Renderer memory | Sequential per-clip encoding + concat demuxer, Linux child address-space/CPU limits, RSS watchdog, input codec/resolution whitelist. Synthetic moving 180-second 1080p stress completed under 1.5 GiB with 193,524 KiB combined sampled peak RSS (see committed evidence). **Real camera-footage proof remains missing.** |
+| 1. Renderer memory | Sequential encoding/demuxer concat and limits retained. Continuous three-minute live-action HD footage, letterboxed to 1920×1080 without upscaling or looping, passed the 1.5 GiB combined RSS watchdog. Actual decoded frame count: 4,320. Source provenance, preparation and measurements are committed; CI repeats the benchmark. |
 | 2. Worker | Default-off supervised offline loop, token lease heartbeat, fenced retries (three attempts), SQL queue and stored-output caps. Requires genuine PG tests and operator service supervision before enabling. |
-| 3. Zernio | The old fake social job fixture with `session_replication_role=replica` was removed. **Canonical planner → multi-day scheduled video → actual calling trigger is not proved and the fresh-attestation adapter is not implemented.** The 15-minute canonical freshness rule remains; do not extend it or mount this path. |
+| 3. Zernio | Implemented native caption/video pair, native source adapter into canonical planning tables, existing connected-account enqueue and scoped JIT proof. Disposable PG clock advances three days; old planning attestations expire, fresh proof lasts exactly 15 minutes, real canonical begin-call reaches the enabled BEFORE UPDATE trigger. Withdrawal, expiry, erasure and cross-workspace cases are tested. No fake job inserts, disabled constraints, modified canonical functions or provider calls. |
 | 4. Signup/billing | Removed standalone signup, its provisioning grant draft and UI, and separate Stripe checkout/webhook/receipt rail. Canonical paid-order and billing integration belongs to Claude. |
 | 5. Deletion | Added owner tombstones, source-derived local-output takedown, bounded worker payload erasure and automatic staging/media/click retention. External provider and backup erasure still require canonical integration/operations. |
 | 6. Owner screens | Replaced typed evidence hashes with document selection, removed displayed hashes and micro-USD labels, mandatory burned-in #ad, removed redundant video authorize action in favour of canonical approval. Private evidence checks remain preparatory. |
@@ -14,10 +14,15 @@ PR #108 remains a draft. The branch is not approved for integration or live rele
 | 8. Docs/drafts | All three docs rewritten around actual unmounted modules. Superseded resumable draft/store/UI removed. No production migration numbers assigned or changed. |
 | 9. Click beacon | Stable server-source/page/day nonce, constant-time application HMAC validation, dedicated backend record capability, cap index, 30-day retention; signing secret removed from SQL. Distributed scripted traffic remains possible; label counts unverified. |
 
-## Required follow-up evidence
+## Evidence and remaining integration work
 
-1. Run actual multi-minute 1080p camera footage under the stated memory limit. The available stress fixture is synthetic; do not relabel it real footage. The existing harness accepts `RL72_MEDIA_MEMORY_SOURCE` for a private local source.
-2. Implement just-in-time canonical source revalidation, preserving 15-minute attestations and all exact version/brand/media checks. Prove planner-created jobs scheduled days ahead can reach calling with all FK/check/triggers enabled, and stale/withdrawn/erased media cannot. No fake job insertion, disabled triggers or replication-role bypass is acceptable evidence.
-3. Independently review new maintenance privileges, bounded erasure retries, failure recovery, source-hash trust boundary and retention policy before mounting any component.
+- `docs/rl72-media-audit-evidence/live-action-1080p-memory.json`: normal Node JIT benchmark, source hashes, decoded frames and exact limits.
+- `docs/rl72-media-audit-evidence/live-action-strict-address-space-memory.json`: additional strict 1.5 GiB address-space run with Node JIT disabled; distinct from normal worker-mode evidence.
+- `docs/rl72-media-audit-evidence/native-calendar-clock-proof.json`: local genuine-role PostgreSQL journey receipt.
+- `orchestrator/test/tools/media-real-footage-memory.sh`: repeatable live-action benchmark. Film footage is a private technical fixture, never an affiliate advertisement or published asset.
+- `orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts`: actual planner → enqueue → elapsed-clock → JIT → lease → calling test, with call-check receipt produced by the real trigger.
+- The workflow’s `native-calendar-clock` job repeats the clock journey and real-footage benchmark independently of ordinary regressions.
 
-No live provider accounts, messages, charges, setup emails, migrations or deployment effects form part of this repair run.
+Claude still consolidates/applies draft SQL, mounts the prepared routes/adapters, configures durable storage and real accounts, reviews the change and performs live end-to-end verification. Native calendar support matches the existing canonical Instagram/LinkedIn rail. Account inventory/webhook data in integration tests are explicit provider fixtures, not live OAuth proof.
+
+No production deployment, provider publication, signup email or charge was performed.

@@ -1,0 +1,48 @@
+{
+  "exitCode": 0,
+  "aggregateRssWatchdogLimitKiB": 1572864,
+  "aggregateLimitKilled": false,
+  "aggregatePeakRssKiB": 194076,
+  "elapsedSeconds": 44.16,
+  "samples": 874,
+  "outerAddressSpaceLimitBytes": 1610612736,
+  "ffmpegAddressSpaceLimitBytes": 1073741824,
+  "input": "Tears of Steel (Blender CC-BY 3.0), continuous original 60-240 seconds; 1920x800 picture letterboxed to 1920x1080, 24 fps, AAC audio. No upscale, looping or byte padding.",
+  "timeline": "0-90 s plus 90-180 s, landscape, #ad, speed 1",
+  "rendererReceipts": [
+    {
+      "probe": {
+        "status": "verified_technical",
+        "checkerVersion": "rl72-ffprobe-v1",
+        "durationMs": 180000,
+        "width": 1920,
+        "height": 1080,
+        "frameRate": 24,
+        "videoCodec": "h264",
+        "audioPresent": true
+      }
+    },
+    {
+      "sourceSha256": "2d61d913b4fc84908157524aa98512cd8a546653591a142c9a12961727e31e50",
+      "bytes": 14207337,
+      "durationMs": 180023,
+      "sha256": "b03675bec3b684dc939a5d82df4db4fe534e34dcfe6e883d9e178c70b53dfe05"
+    }
+  ],
+  "download": {
+    "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_1080p.mov.zip",
+    "archiveSha256": "d87a41de040d3814dbde143e9ab85ef122caf22265f660b0bebf476cd8b357a5",
+    "credit": "(CC) Blender Foundation / mango.blender.org \u2014 Tears of Steel (2012)",
+    "licence": "https://creativecommons.org/licenses/by/3.0/",
+    "sourceTerms": "https://mango.blender.org/about/",
+    "purpose": "private technical benchmark; no source/export distribution"
+  },
+  "decodedFrames": {
+    "width": 1920,
+    "height": 1080,
+    "avg_frame_rate": "24/1",
+    "nb_read_frames": "4320"
+  },
+  "nodeJitEnabled": false,
+  "nodeMaxOldSpaceMiB": 128
+}
