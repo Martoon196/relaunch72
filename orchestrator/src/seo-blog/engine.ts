@@ -33,7 +33,7 @@ import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
 import { researchQueries, researchQuerySeeds, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
-import { nextPublishingSlot, ownSlot, publishingSite, soonSlot } from './publishing-plan.js';
+import { nextPublishingSlot, ownSlot, plannedSiteGone, publishingSite, soonSlot } from './publishing-plan.js';
 import type { SeoBlogStore } from './store.js';
 import { EXISTING_WORKSPACE, namesExistingWorkspace } from './existing-workspace.js';
 import { StaleWriteError } from './store.js';
@@ -92,12 +92,22 @@ export interface ApproveAndScheduleResult {
   readonly kept: boolean;
   /** Whole minutes from the press to the time it goes out. */
   readonly minutesAway: number;
+  /** The same press arrived again after it had already worked: nothing new was written. */
+  readonly replayed: boolean;
+  /** It goes to a different website from the one its earlier time was set on. */
+  readonly siteChanged: boolean;
 }
 
 /** Where and when "Approve and publish" would put an article now. */
 export interface PublishingPlan {
   readonly site: { readonly id: string; readonly label: string } | null;
   readonly websites: number;
+  /** Connected or not: with more than one on record, the page names the website. */
+  readonly websitesOnRecord?: number;
+  /** The article's time is on a website that is no longer connected (it is never moved silently). */
+  readonly goneSite?: { readonly id: string; readonly label: string };
+  /** Where it could go instead, named on its own button. */
+  readonly alternative?: { readonly site: { readonly id: string; readonly label: string }; readonly slot: import('./publishing-plan.js').PlannedSlot | null } | null;
   readonly slot: import('./publishing-plan.js').PlannedSlot | null;
   readonly paused: boolean;
   readonly now: string;
@@ -2305,9 +2315,17 @@ export class SeoBlogEngine {
     const destinations = await this.store.listDestinations(brandId);
     const connected = destinations.filter((d) => d.status === 'connected');
     const now = this.now();
+    const others = await this.store.listArticles(brandId);
+    const gone = plannedSiteGone(article, destinations);
+    if (gone) {
+      // Planned on a website that is no longer connected: never moved silently. The page names both websites.
+      const alt = publishingSite({ schedule: null }, brand, destinations, now);
+      return { site: null, goneSite: { id: gone.id, label: gone.label }, alternative: alt ? { site: { id: alt.id, label: alt.label }, slot: nextPublishingSlot({ id: article.id, schedule: null }, brand, others, alt.id, now) } : null,
+        websites: connected.length, websitesOnRecord: destinations.length, slot: null, paused: brand.settings.pauseAll, now, rowVersion: article.rowVersion };
+    }
     const site = publishingSite(article, brand, destinations, now);
-    const slot = site ? nextPublishingSlot(article, brand, await this.store.listArticles(brandId), site.id, now) : null;
-    return { site: site ? { id: site.id, label: site.label } : null, websites: connected.length, slot, paused: brand.settings.pauseAll, now, rowVersion: article.rowVersion };
+    const slot = site ? nextPublishingSlot(article, brand, others, site.id, now) : null;
+    return { site: site ? { id: site.id, label: site.label } : null, websites: connected.length, websitesOnRecord: destinations.length, slot, paused: brand.settings.pauseAll, now, rowVersion: article.rowVersion };
   }
 
   /**
@@ -2327,18 +2345,29 @@ export class SeoBlogEngine {
     const article = await this.store.getArticle(brandId, articleId);
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
     if (!article.currentVersionId || article.currentVersionId !== input.versionId) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
-    if (input.rowVersion !== undefined && input.rowVersion !== null && input.rowVersion !== article.rowVersion) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
+    const now = this.now();
+    const version = await this.store.getVersion(brandId, article.currentVersionId);
+    if (!version) throw new SeoBlogError(409, 'The article’s history is incomplete.');
+    const minutesAway = (at: string) => Math.max(1, Math.round((Date.parse(at) - Date.parse(now)) / 60_000));
+    const label = async (id: string) => (await this.store.getDestination(brandId, id))?.label ?? 'your website';
+    // The same press a second time (a double click, or the page pressed again after it worked): the same answer.
+    const s0 = article.schedule;
+    if (s0 && approvalIsCurrent(article, version) && !article.hold && article.delivery !== 'published' && Date.parse(s0.publishAtUtc) > Date.parse(now) && (!input.destinationId || input.destinationId === s0.destinationId)) {
+      const same = input.when === 'now' ? s0.setBy === actor.userId && Date.parse(now) - Date.parse(s0.setAt) < 5 * 60_000 && Date.parse(s0.publishAtUtc) - Date.parse(s0.setAt) < 3 * 3_600_000
+        : input.when !== 'next' && s0.localDate === input.when.localDate.trim() && s0.localTime === input.when.localTime.trim();
+      // Same confirmation as the first press: "Approved." when that press is what approved it (approval and time set together).
+      if (same) return { approvedNow: input.when !== 'now' && Math.abs(Date.parse(s0.setAt) - Date.parse(article.approval!.approvedAt)) < 10_000, replayed: true, localDate: s0.localDate, localTime: s0.localTime, publishAtUtc: s0.publishAtUtc, destinationLabel: await label(s0.destinationId), siteChanged: false, paused: false, kept: true, minutesAway: minutesAway(s0.publishAtUtc) };
+    }
     if (article.hold?.reason === 'owner') throw new SeoBlogError(409, 'You asked for this article not to go out. Choose “Allow it to go out” first.');
     if (brand.settings.pauseAll) throw new SeoBlogError(409, 'Publishing is paused for this business. Switch it back on first.', 'paused');
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is going onto your website right now.');
     if (article.delivery === 'unknown') throw new SeoBlogError(409, 'We are still checking whether the last attempt reached your website. Try again once that is settled.');
     if (article.delivery === 'published' && article.publishedVersionId === article.currentVersionId) throw new SeoBlogError(409, 'This article is already live on your website.');
-    const now = this.now();
+    if (input.rowVersion !== undefined && input.rowVersion !== null && input.rowVersion !== article.rowVersion) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
     const destinations = await this.store.listDestinations(brandId);
     const site = publishingSite(article, brand, destinations, now, input.destinationId || null);
     if (!site) throw new SeoBlogError(409, 'Your website is not connected yet, so nothing can go out. Connect it in Brand setup first.', 'destination');
-    const version = await this.store.getVersion(brandId, article.currentVersionId);
-    if (!version) throw new SeoBlogError(409, 'The article’s history is incomplete.');
+    const siteChanged = Boolean(article.schedule && article.schedule.destinationId !== site.id);
     let slot: { localDate: string; localTime: string; publishAtUtc: string; kept: boolean } | null;
     if (input.when === 'now') slot = soonSlot(now, brand.timezone);
     else if (input.when === 'next' || input.when.planned) {
@@ -2352,19 +2381,22 @@ export class SeoBlogEngine {
     const approvedNow = !approvalIsCurrent(article, version);
     const previousApproval = article.approval;
     if (approvedNow) await this.approve(actor, brandId, articleId, input.versionId);
-    const minutesAway = (at: string) => Math.max(1, Math.round((Date.parse(at) - Date.parse(now)) / 60_000));
-    if (slot.kept) return { approvedNow, localDate: slot.localDate, localTime: slot.localTime, publishAtUtc: slot.publishAtUtc, destinationLabel: site.label, paused: false, kept: true, minutesAway: minutesAway(slot.publishAtUtc) };
+    if (slot.kept) return { approvedNow, replayed: false, siteChanged, localDate: slot.localDate, localTime: slot.localTime, publishAtUtc: slot.publishAtUtc, destinationLabel: site.label, paused: false, kept: true, minutesAway: minutesAway(slot.publishAtUtc) };
     const fresh = (await this.store.getArticle(brandId, articleId))!;
     try {
       // Scheduling: the existing step (row version, delivery state, existing website, a time in the future).
       const scheduled = await this.schedule(actor, brandId, articleId, fresh.rowVersion, { localDate: slot.localDate, localTime: slot.localTime, destinationId: site.id });
-      return { approvedNow, localDate: scheduled.schedule!.localDate, localTime: scheduled.schedule!.localTime, publishAtUtc: scheduled.schedule!.publishAtUtc, destinationLabel: site.label, paused: false, kept: false, minutesAway: minutesAway(scheduled.schedule!.publishAtUtc) };
+      return { approvedNow, replayed: false, siteChanged, localDate: scheduled.schedule!.localDate, localTime: scheduled.schedule!.localTime, publishAtUtc: scheduled.schedule!.publishAtUtc, destinationLabel: site.label, paused: false, kept: false, minutesAway: minutesAway(scheduled.schedule!.publishAtUtc) };
     } catch (error) {
       if (approvedNow) {
         const latest = await this.store.getArticle(brandId, articleId);
         if (latest?.approval?.versionId === input.versionId && latest.approval.approvedBy === actor.userId) {
-          await this.store.updateArticle({ ...latest, approval: previousApproval }).catch(() => undefined);
-          await this.log(brandId, actor.userId, 'article.approval_withdrawn', 'The approval was taken back because the article could not be scheduled.', articleId).catch(() => undefined);
+          const undone = await this.store.updateArticle({ ...latest, approval: previousApproval }).then(() => true, () => false);
+          if (undone) await this.log(brandId, actor.userId, 'article.approval_withdrawn', 'The approval was taken back because the article could not be scheduled.', articleId).catch(() => undefined);
+          else {
+            await this.log(brandId, actor.userId, 'article.approval_withdraw_failed', 'The article could not be scheduled, and taking the approval back also failed: it is approved with no time.', articleId).catch(() => undefined);
+            throw new SeoBlogError(409, 'It is approved but has no time. Choose a time, or use More › Don’t publish this.', 'approved_without_time');
+          }
         }
       }
       throw error;

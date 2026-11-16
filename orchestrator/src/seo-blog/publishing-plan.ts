@@ -21,9 +21,20 @@ export function publishingSite<T extends Site>(article: Pick<Article, 'schedule'
     return chosen;
   }
   void now;
+  const gone = plannedSiteGone(article, destinations);
+  if (gone) throw new SeoBlogError(409, `This was planned for ${gone.label}, which is not connected any more. Reconnect it, or choose to publish it on another website.`, 'site_gone');
   return connected.find((d) => d.id === article.schedule?.destinationId)
     ?? connected.find((d) => d.id === brand.settings.programme?.structure?.destinationId)
     ?? connected[0] ?? null;
+}
+
+/** The website the article's time is set on, when that website is no longer connected. */
+export function plannedSiteGone<T extends Site>(article: Pick<Article, 'schedule'>, destinations: readonly T[]): { id: string; label: string } | null {
+  const id = article.schedule?.destinationId;
+  if (!id) return null;
+  const d = destinations.find((x) => x.id === id);
+  if (d && d.status === 'connected') return null;
+  return { id, label: d?.label ?? 'a website that was removed' };
 }
 
 export interface PlannedSlot { readonly localDate: string; readonly localTime: string; readonly publishAtUtc: string; readonly kept: boolean }

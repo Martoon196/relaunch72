@@ -13,11 +13,11 @@
 import { randomUUID } from 'node:crypto';
 import { sha256 } from '../seo-blog/engine.js';
 import { citationNumbers, renderMarkdown } from '../seo-blog/render.js';
-import { withoutCitations } from '../seo-blog/citation-edit.js';
+import { sentencesToPutBack, withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
 import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
 import { approvalIsCurrent, approvalRequired } from '../seo-blog/policy.js';
-import { nextPublishingSlot, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
+import { nextPublishingSlot, plannedSiteGone, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
 import type { PublishingPlan } from '../seo-blog/engine.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
 import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
@@ -190,11 +190,13 @@ function primaryLink(href: string, label: string, external = false): string {
 }
 function hostOf(url: string): string { try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; } }
 /** Only https addresses become links or pictures; anything else is shown as text (or not at all). */
-export function safeHttps(url: string | null | undefined): string | null {
+export function safeHttps(url: string | null | undefined, allowHttp = false): string | null {
   if (!url) return null;
-  try { const u = new URL(url); return u.protocol === 'https:' && !/[\s"'<>`]/.test(url) ? url : null; } catch { return null; }
+  // Quotes and apostrophes are fine (every attribute is escaped); spaces and control characters are not addresses.
+  try { const u = new URL(url); return (u.protocol === 'https:' || (allowHttp && u.protocol === 'http:')) && !/[\s\u0000-\u001f]/.test(url) ? url : null; } catch { return null; }
 }
-const link = (url: string | null | undefined, text: string, attrs = ' rel="noopener"') => { const ok = safeHttps(url); return ok ? `<a href="${e(ok)}"${attrs}>${e(text)}</a>` : e(text); };
+/** A link, or plain text when the address is not one we link to. Source lists allow http, as the published page does. */
+const link = (url: string | null | undefined, text: string, attrs = ' rel="noopener"', allowHttp = false) => { const ok = safeHttps(url, allowHttp); return ok ? `<a href="${e(ok)}"${attrs}>${e(text)}</a>` : e(text); };
 
 /** The picture shown to the owner: a privately reviewed hero is served from the private route until it is released. */
 function pictureSrc(b: Brand, article: Article, image: ArticleBody['image']): string | null {
@@ -288,11 +290,13 @@ function laterPanel(shell: Shell, base: string, label: string, v: ArticleVersion
 }
 
 /** "Goes out on Tue 18 Nov at 9:00 on Key Properties blog", or "in about 6 minutes". */
-function whenItGoes(slot: PlannedSlot, siteLabel: string | null, now: string, websites: number): string {
+function whenItGoes(slot: PlannedSlot, siteLabel: string | null, now: string, nameIt: boolean): string {
   const minutes = Math.round((Date.parse(slot.publishAtUtc) - Date.parse(now)) / 60_000);
   const when = minutes < 15 ? `in about ${Math.max(1, minutes)} minute${minutes === 1 ? '' : 's'}` : `on ${longWhen(slot.localDate, slot.localTime, now.slice(0, 10))}`;
-  return `goes out ${when}${websites > 1 && siteLabel ? ` on ${siteLabel}` : ''}`;
+  return `goes out ${when}${nameIt && siteLabel ? ` on ${siteLabel}` : ''}`;
 }
+/** Said deliberately when there is nothing to press: the bar still tells him what happens next. */
+const NOTHING_TO_DO: BarAction = { html: '<span class="ap-quietnote" data-no-action>Nothing for you to do now.</span>' };
 
 function screenState(shell: Shell, d: ArticlePageData, v: ArticleVersion, critical: readonly CheckIssue[]): ScreenState {
   const b = shell.brand!;
@@ -304,18 +308,31 @@ function screenState(shell: Shell, d: ArticlePageData, v: ArticleVersion, critic
   const sit = situation({ ...a, checks: a.checks ? { ...a.checks, issues: critical.length ? a.checks.issues : a.checks.issues.filter((i) => i.severity !== 'critical') } : null }, b, now, connected.length);
   const later = (label = 'Publish later') => ({ html: laterPanel(shell, base, label, v, a, connected, 'approve-publish', false, plan.site?.id ?? null, now) });
   const approved = approvalIsCurrent(a, v);
+  // The website is named whenever there is more than one on record, or it is not the one the article's time was set on.
+  const named = (site: string | null | undefined) => (plan.websitesOnRecord ?? d.destinations.length) > 1 || Boolean(a.schedule && site && a.schedule.destinationId !== site);
   /** The main press, bound to the website and time shown beside it. */
   const press = (label: string, lead: string): ScreenState => {
     if (!plan.site || !plan.slot) return { kind: sit.kind, sentence: `${lead} There is no free publishing day in your plan, so choose a time.`, primary: { html: laterPanel(shell, base, 'Choose a time', v, a, connected, 'approve-publish', true, plan.site?.id ?? null, now) }, secondary: [] };
-    const goes = whenItGoes(plan.slot, plan.site.label, now, connected.length);
-    return { kind: sit.kind, sentence: `${lead} ${label}: it ${goes}.`,
+    const goes = whenItGoes(plan.slot, plan.site.label, now, named(plan.site.id));
+    // The time already set is the one the press keeps: say it once.
+    const said = plan.slot.kept ? lead.replace(/ It is planned for [^.]+\./, '') : lead;
+    return { kind: sit.kind, sentence: `${said} ${label}: it ${goes}.`,
       primary: { html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'planned', localDate: plan.slot.localDate, localTime: plan.slot.localTime, destinationId: plan.site.id, rowVersion: plan.rowVersion }, label, { primary: true }) },
       secondary: [later()] };
   };
   const detail = a.hold && a.hold.reason !== 'owner' ? a.hold.detail : undefined;
+  // The article's time is on a website that is no longer connected: never moved silently.
+  if (plan.goneSite && !['live', 'publishing', 'checking', 'owner_hold', 'must_fix'].includes(sit.kind)) {
+    const alt = plan.alternative;
+    const insteadWhen = alt?.slot ? ` Or publish it on ${alt.site.label} instead: it would go out ${whenItGoes(alt.slot, null, now, false).replace(/^goes out /, '')}${approved ? '' : ', and that approves it'}.` : '';
+    return { kind: 'site_gone', sentence: `This was planned for ${plan.goneSite.label}, which is not connected any more.${insteadWhen}`, detail,
+      primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, `Check the connection to ${plan.goneSite.label}`) },
+      secondary: alt?.slot ? [{ html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'planned', localDate: alt.slot.localDate, localTime: alt.slot.localTime, destinationId: alt.site.id, rowVersion: plan.rowVersion }, `Publish it on ${alt.site.label} instead`, { cls: 'ap-textbutton' }) }] : [] };
+  }
   switch (sit.kind) {
     case 'live': return { kind: sit.kind, sentence: sit.bar, primary: safeHttps(a.publishedUrl) ? { html: primaryLink(a.publishedUrl!, 'View it', true) } : null, secondary: [] };
-    case 'publishing': case 'checking': case 'rewriting': case 'due': return { kind: sit.kind, sentence: sit.bar, primary: null, secondary: [] };
+    // Deliberately no main button: nothing he presses would help; the sentence says what happens next.
+    case 'publishing': case 'checking': case 'rewriting': case 'due': return { kind: sit.kind, sentence: sit.bar, primary: null, secondary: [NOTHING_TO_DO] };
     case 'owner_hold': return { kind: sit.kind, sentence: sit.bar, primary: { html: postButton(shell, `${base}/hold`, { rowVersion: a.rowVersion, held: '0' }, 'Allow it to go out', { primary: true }) }, secondary: [] };
     case 'must_fix': return { kind: sit.kind, sentence: sit.bar, primary: { html: primaryLink('#fix', 'Show me') }, secondary: [] };
     case 'no_website': return { kind: sit.kind, sentence: sit.bar, primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, 'Connect your website') }, secondary: [] };
@@ -328,7 +345,7 @@ function screenState(shell: Shell, d: ArticlePageData, v: ArticleVersion, critic
       return { ...press(approved ? 'Publish' : 'Approve and publish', sit.bar.replace(' Choose when it should go out now.', '')), detail };
     case 'scheduled': {
       const s = a.schedule!;
-      return { kind: sit.kind, sentence: `${sit.bar.replace(/\.$/, '')}${connected.length > 1 ? ` on ${connected.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : ''}.`, primary: { html: laterPanel(shell, base, 'Change the time', v, a, connected, 'schedule', true, null, now) },
+      return { kind: sit.kind, sentence: `${sit.bar.replace(/\.$/, '')}${named(s.destinationId) ? ` on ${d.destinations.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : ''}.`, primary: { html: laterPanel(shell, base, 'Change the time', v, a, connected, 'schedule', true, null, now) },
         secondary: [{ html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'now', destinationId: s.destinationId, rowVersion: a.rowVersion }, 'Publish now', { cls: 'ap-textbutton' }) }] };
     }
     case 'ready': return press('Approve and publish', sit.bar);
@@ -336,9 +353,16 @@ function screenState(shell: Shell, d: ArticlePageData, v: ArticleVersion, critic
   }
 }
 
+/** The same plan the engine computes, for callers that render without one (it is checked again on the press). */
 function fallbackPlan(b: Brand, a: Article, destinations: readonly PublicDestination[], now: string): PublishingPlan {
+  const websites = destinations.filter((x) => x.status === 'connected').length;
+  const gone = plannedSiteGone(a, destinations);
+  if (gone) {
+    const alt = publishingSite({ schedule: null }, b, destinations, now);
+    return { site: null, goneSite: gone, alternative: alt ? { site: { id: alt.id, label: alt.label }, slot: nextPublishingSlot({ id: a.id, schedule: null }, b, [], alt.id, now) } : null, websites, websitesOnRecord: destinations.length, slot: null, paused: b.settings.pauseAll, now, rowVersion: a.rowVersion };
+  }
   const site = publishingSite(a, b, destinations, now);
-  return { site: site ? { id: site.id, label: site.label } : null, websites: destinations.filter((x) => x.status === 'connected').length, slot: site ? nextPublishingSlot(a, b, [], site.id, now) : null, paused: b.settings.pauseAll, now, rowVersion: a.rowVersion };
+  return { site: site ? { id: site.id, label: site.label } : null, websites, websitesOnRecord: destinations.length, slot: site ? nextPublishingSlot(a, b, [], site.id, now) : null, paused: b.settings.pauseAll, now, rowVersion: a.rowVersion };
 }
 
 // ─── The article page ────────────────────────────────────────────────────────
@@ -354,6 +378,8 @@ export interface ArticlePageData {
   readonly jobs?: readonly Job[];
   readonly mode?: ArticlePageMode;
   readonly open?: readonly string[];
+  /** Sources of changed sentences that kept them in the last save, to check (ids; unknown ones are ignored). */
+  readonly checkSources?: readonly string[];
   /** Where and when the main press would put it (computed by the engine; recomputed here when absent). */
   readonly plan?: PublishingPlan;
   /** The planned working title, shown while the article has no written version. */
@@ -374,7 +400,7 @@ function readingColumn(b: Brand, a: Article, body: ArticleBody): string {
     body.faqs.length ? `<section class="ap-part" id="questions"><h2>Frequently asked questions</h2>\n${body.faqs.map((f, i) => `<div id="question-${i + 1}"><h3>${e(f.q)}</h3>\n${md(f.a)}</div>`).join('\n')}</section>` : '',
     `<div id="closing">${md(body.conclusion)}</div>`,
     body.cta ? (safeHttps(body.cta.url) ? `<p><a class="ap-cta" href="${e(body.cta.url)}" rel="noopener">${e(body.cta.label)}</a></p>` : `<p>${e(body.cta.label)}</p>`) : '',
-    cites.list.length ? `<section class="ap-sources" aria-label="Sources"><h2>Sources</h2><ol>${cites.list.map((c, i) => `<li id="source-${i + 1}">${link(c.url, c.title)} (accessed ${e(c.retrievedAt.slice(0, 10))})</li>`).join('')}</ol></section>` : '',
+    cites.list.length ? `<section class="ap-sources" aria-label="Sources"><h2>Sources</h2><ol>${cites.list.map((c, i) => `<li id="source-${i + 1}">${link(c.url, c.title, ' rel="noopener"', true)} (accessed ${e(c.retrievedAt.slice(0, 10))})</li>`).join('')}</ol></section>` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -421,10 +447,37 @@ function improvements(shell: Shell, base: string, v: ArticleVersion, warnings: r
 ${postButton(shell, `${base}/checks`, {}, 'Run checks again', { cls: 'ap-textbutton' })}</div></details>`;
 }
 
-function mustFix(shell: Shell, base: string, v: ArticleVersion, critical: readonly CheckIssue[]): string {
+function mustFix(shell: Shell, base: string, v: ArticleVersion, critical: readonly CheckIssue[], canPutBack = false): string {
   if (!critical.length) return '';
   const b = shell.brand!;
-  return `<section class="ap-fix" id="fix" aria-labelledby="fix-title"><h2 id="fix-title">${critical.length === 1 ? 'One thing to fix' : `${critical.length} things to fix`} before this can go out</h2><ul>${critical.map((c) => { const t = fixTarget(b, base, c, v); return `<li><span>${e(plainCheck(c))}<br><span class="ap-note">How to fix it: ${e(c.fix)}</span></span><a class="button secondary" href="${e(t.href)}">${e(t.label)}</a></li>`; }).join('')}</ul></section>`;
+  return `<section class="ap-fix" id="fix" aria-labelledby="fix-title"><h2 id="fix-title">${critical.length === 1 ? 'One thing to fix' : `${critical.length} things to fix`} before this can go out</h2><ul>${critical.map((c) => { const t = fixTarget(b, base, c, v); const back = canPutBack && /^facts\.(unsupported_figure|figure_not_in_source|regulatory_needs_evidence|unknown_source)$/.test(c.code) ? ` <a class="ap-textbutton" href="#put-back">Put the earlier wording back</a>` : ''; return `<li><span>${e(plainCheck(c))}<br><span class="ap-note">How to fix it: ${e(c.fix)}</span></span><span><a class="button secondary" href="${e(t.href)}">${e(t.label)}</a>${back}</span></li>`; }).join('')}</ul></section>`;
+}
+
+/** Sentences that lost their source in the last save, each with a way back (the previous version's wording and sources). */
+function putBackList(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string[] {
+  void shell; void base;
+  if (v.change !== 'edited') return [];
+  const earlier = d.versions.find((x) => x.id === v.parentVersionId) ?? d.versions.find((x) => x.number === v.number - 1);
+  if (!earlier) return [];
+  const fields: [string, string | undefined, string | undefined][] = [['intro', earlier.body.intro, v.body.intro], ['conclusion', earlier.body.conclusion, v.body.conclusion],
+    ...v.body.sections.map((s) => [`section:${s.id}`, earlier.body.sections.find((x) => x.id === s.id)?.body, s.body] as [string, string | undefined, string | undefined]),
+    ...v.body.faqs.map((f, i) => [`faq:${i}`, earlier.body.faqs[i]?.a, f.a] as [string, string | undefined, string | undefined])];
+  return fields.flatMap(([field, from, to]) => (from === undefined || to === undefined ? [] : sentencesToPutBack(from, to).map((x) => `${field}|${x.index}|${earlier.id}|${x.earlier}`)));
+}
+function putBack(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string {
+  const list = putBackList(shell, d, v, base);
+  if (!list.length) return '';
+  return `<section class="ap-putback" id="put-back" aria-labelledby="put-back-title"><h2 id="put-back-title">Sources removed when you last saved</h2><p class="ap-note">You changed ${list.length === 1 ? 'a sentence that had a source' : 'sentences that had sources'}, so ${list.length === 1 ? 'its source was' : 'their sources were'} removed. You can put the earlier wording back, with its source.</p><ul>${list.map((item) => {
+    const [field, index, fromVersionId, ...rest] = item.split('|');
+    const earlier = rest.join('|').replace(/^\s*(?:[-*]|\d{1,3}[.)])\s+/, '').replace(/\*\*|[*_`]/g, '');
+    return `<li><q>${e(earlier)}</q>${postButton(shell, `${base}/put-back`, { versionId: v.id, fromVersionId: fromVersionId!, field: field!, index: index! }, 'Put the earlier wording back', { note: 'This makes a new version; you’ll approve it again.' })}</li>`;
+  }).join('')}</ul></section>`;
+}
+/** After a save that kept sources on changed sentences: a link to each of those sources, to check the claim still matches. */
+function checkSourcesNote(d: ArticlePageData, v: ArticleVersion): string {
+  const sources = (d.checkSources ?? []).map((id) => v.body.citations.find((c) => c.sourceId === id)).filter((c): c is ArticleBody['citations'][number] => Boolean(c));
+  if (!sources.length) return '';
+  return `<p class="ap-quiet-line" role="status">Check ${sources.length === 1 ? 'the sentence you changed still says' : 'the sentences you changed still say'} what ${sources.length === 1 ? 'its source says' : 'their sources say'}: ${sources.map((c) => link(c.url, c.title, ' rel="noopener" target="_blank"', true)).join(', ')}.</p>`;
 }
 
 function dispatchLine(d: SocialDispatch, timezone: string): string {
@@ -511,10 +564,12 @@ function whereFold(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: st
   const b = shell.brand!;
   const a = d.article;
   const connected = d.destinations.filter((x) => x.status === 'connected');
-  const site = publishingSite(a, b, connected, d.now ?? new Date().toISOString());
+  const gone = plannedSiteGone(a, d.destinations);
+  const site = gone ? null : publishingSite(a, b, connected, d.now ?? new Date().toISOString());
   const address = v.websiteTarget?.target.canonicalUrl ?? a.publishedUrl ?? v.promotionPack?.canonicalUrl ?? null;
   const parts: string[] = [];
-  parts.push(site ? `<p>It goes on <strong>${e(site.label)}</strong>${address ? ` at <span class="ap-url">${e(address)}</span>` : ''}.</p>` : `<p>Your website is not connected yet. <a href="${brandUrl(b, 'setup')}#websites">Connect it in Brand setup</a>.</p>`);
+  if (gone) parts.push(`<p>It was planned for <strong>${e(gone.label)}</strong>, which is not connected any more. <a href="${brandUrl(b, 'setup')}#websites">Check the connection</a>.</p>`);
+  else parts.push(site ? `<p>It goes on <strong>${e(site.label)}</strong>${address ? ` at <span class="ap-url">${e(address)}</span>` : ''}.</p>` : `<p>Your website is not connected yet. <a href="${brandUrl(b, 'setup')}#websites">Connect it in Brand setup</a>.</p>`);
   if (a.publishedUrl) parts.push('<p class="ap-note">It is already live, so its web address stays the same when you change it.</p>');
   // Topics on the website: only when the connected website lets him choose (otherwise there is nothing to decide).
   for (const dest of connected.filter((x) => x.websiteCapability?.protocol === 'v2')) {
@@ -550,7 +605,7 @@ ${repair ? `<details class="ap-choice"><summary class="ap-textbutton">Add it to 
 function sourcesFold(v: ArticleVersion, open: boolean): string {
   const cites = citationNumbers(v.body);
   const ordered = [...cites.list, ...v.body.citations.filter((c) => !cites.list.includes(c))];
-  return fold('sources', 'Where the facts came from', ordered.length ? `<ol class="ap-source-list">${ordered.map((c) => `<li>${link(c.url, c.title)} <span class="ap-note">${e(hostOf(c.url))}${c.public ? '' : ' · used for research, not shown to readers'}</span><details><summary class="ap-textbutton">show</summary><p class="ap-note">${e(c.passage)}</p></details></li>`).join('')}</ol>` : '<p class="ap-note">No sources are recorded for this version.</p>', open);
+  return fold('sources', 'Where the facts came from', ordered.length ? `<ol class="ap-source-list">${ordered.map((c) => `<li>${link(c.url, c.title, ' rel="noopener"', true)} <span class="ap-note">${e(hostOf(c.url))}${c.public ? '' : ' · used for research, not shown to readers'}</span><details><summary class="ap-textbutton">show</summary><p class="ap-note">${e(c.passage)}</p></details></li>`).join('')}</ol>` : '<p class="ap-note">No sources are recorded for this version.</p>', open);
 }
 
 function historyFold(shell: Shell, d: ArticlePageData, base: string, open: boolean): string {
@@ -574,8 +629,18 @@ function moreMenu(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: str
   const items: string[] = [];
   if (a.delivery !== 'publishing') items.push(`<a href="${base}?edit=1">Edit</a>`);
   items.push(`<a href="${base}?open=rewrite#rewrite">Ask for a rewrite</a>`);
-  // Plain approval, with no date: still reachable (for example while no website is connected).
-  if (a.delivery !== 'publishing' && !approvalIsCurrent(a, v)) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
+  // Plain approval (the existing step), worded for what it really does: with a time already set it goes out then;
+  // with no time it waits; with a time that has just passed (and no hold yet) it is not offered at all.
+  if (a.delivery !== 'publishing' && !approvalIsCurrent(a, v)) {
+    const now = d.now ?? new Date().toISOString();
+    const s = a.schedule;
+    const many = (d.plan?.websitesOnRecord ?? d.destinations.length) > 1;
+    if (!s || a.hold) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
+    else if (Date.parse(s.publishAtUtc) > Date.parse(now) && !plannedSiteGone(a, d.destinations)) {
+      const site = many ? ` on ${d.destinations.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : '';
+      items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, `Approve: it goes out on ${shortWhen(s.localDate, null, now.slice(0, 10))} at ${s.localTime.replace(/^0(\d)/, '$1')}${site}`, { cls: 'ap-menu-button' }));
+    }
+  }
   if (a.delivery !== 'publishing') items.push(postButton(shell, `${base}/hold`, { rowVersion: a.rowVersion, held: a.hold?.reason === 'owner' ? '0' : '1' }, a.hold?.reason === 'owner' ? 'Allow it to go out' : 'Don’t publish this', { cls: 'ap-menu-button' }));
   if (a.schedule && a.delivery !== 'publishing') items.push(postButton(shell, `${base}/unschedule`, { rowVersion: a.rowVersion }, 'Take it off the calendar', { cls: 'ap-menu-button' }));
   items.push(`<a href="${base}?open=download#download">Download</a>`, `<a href="${base}?open=history#history">Earlier versions</a>`, `<a href="${base}/preview?v=${e(v.id)}" target="_blank" rel="noopener">Open it as a web page</a>`,
@@ -612,13 +677,13 @@ export function editorPage(shell: Shell, d: ArticlePageData): string {
     return layout(shell, v.body.title, `<div class="ap ap-editing">${head}
 <form method="post" action="${base}/edit" id="article-edit" class="ap-read">${csrfField(shell.csrf)}${hidden({ versionId: v.id, citationsHidden: '1', imageUrl: v.body.image.url ?? '' })}
 ${editingColumn(v.body)}
-<p class="ap-note">Sources stay linked to their sentences when you save. If you delete a sentence, its source link goes with it.</p></form>
+<p class="ap-note">Sentences you leave as they are keep their sources. If you change a sentence that has a source, its source can be removed (you can put the earlier wording back afterwards), and the article is checked again when you save.</p></form>
 <div class="ap-folds">${googleFold(d, v, base, true, true)}</div></div>`, `<style>${ARTICLE_CSS}</style>`);
   }
   const state = screenState(shell, d, v, critical);
   const head = bar(`<p class="ap-state">${e(state.sentence)}${state.detail ? ` <span class="ap-note">${e(state.detail)}</span>` : ''}</p><div class="ap-actions">${state.secondary.map((s) => s.html).join('')}${moreMenu(shell, d, v, base)}${state.primary?.html ?? ''}</div>`);
   return layout(shell, v.body.title, `<div class="ap">${head}
-<div class="ap-column">${simulated}${mustFix(shell, base, v, critical)}${improvements(shell, base, v, warnings, open.has('improve'))}</div>
+<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}</div>
 <article class="ap-read">${pictureArea(shell, a, v, base)}
 ${readingColumn(b, a, v.body)}</article>
 <div class="ap-column">${postsSection(shell, d, v, base)}</div>
@@ -717,7 +782,7 @@ button.ap-textbutton{border:0;background:none;color:var(--accent)}
 .ap-change{width:100%;text-align:center}.ap-change>summary{cursor:pointer;margin:0 auto}
 .ap-choices{margin:12px auto 0;max-width:460px;text-align:left;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;font-size:15px;line-height:1.5}
 .ap-choice{margin:4px 0}.ap-choice form{padding:4px 0 10px}
-.ap-note{color:var(--muted);font-size:14px;line-height:1.5}.ap-warn{padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--warn) 10%,var(--card));border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}.ap-menu .ap-inline .ap-note{display:block;padding:0 12px 6px;margin-top:-6px}
+.ap-note{color:var(--muted);font-size:14px;line-height:1.5}.ap-quietnote{color:var(--muted);font-size:14px;padding:8px 4px}.ap-putback{margin:0 0 22px;padding:14px 18px;border-radius:14px;background:var(--card);border:1px solid var(--line)}.ap-putback h2{font-size:17px;margin:0 0 6px}.ap-putback ul{list-style:none;margin:8px 0 0;padding:0}.ap-putback li{padding:8px 0;border-top:1px solid var(--line)}.ap-putback q{display:block;margin:0 0 6px}.ap-warn{padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--warn) 10%,var(--card));border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}.ap-menu .ap-inline .ap-note{display:block;padding:0 12px 6px;margin-top:-6px}
 .ap-quiet-line{color:var(--muted);font-size:15px;margin:0 0 14px}
 .ap-quiet{margin:0 0 22px;font-size:15px;color:var(--muted)}.ap-quiet>summary{cursor:pointer;display:inline-block;text-decoration:underline dotted;text-underline-offset:3px}
 .ap-quiet .ap-panel{margin-top:8px;padding:12px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;color:var(--ink)}
