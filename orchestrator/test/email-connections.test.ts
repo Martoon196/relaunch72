@@ -4,6 +4,7 @@
  * connection as a bounce source (Postmark's set-up samples answered 200 and recorded nothing). Postmark and DNS are
  * stand-ins; nothing touches the network. Every value is synthetic.
  */
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inspect } from 'node:util';
@@ -128,7 +129,7 @@ test('the feature is on only with EMAIL_CONNECT=enabled and well-formed settings
   assert.equal(noBounces.enabled, false);
   assert.deepEqual(noBounces.problems, ['EMAIL_BOUNCE_HANDLING is off, so Connect email stays off.']);
   // A bad configuration never throws: the service is simply off.
-  const service = new EmailConnectionService({ config: loadEmailConnectConfig({}, {}), store: new MemoryEmailConnectionStore() });
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config: loadEmailConnectConfig({}, {}), store: new MemoryEmailConnectionStore() });
   assert.equal(service.enabled, false);
 });
 
@@ -189,11 +190,11 @@ function harness(options: { resolver?: ReturnType<typeof fakeResolver>; configur
   const effects: unknown[] = [];
   bounces.setEffects(PP_WS, { onMarketingBlock: async input => { effects.push(input); } });
   assert.ok(config.enabled);
-  const sources = new EmailConnectionBounceSources({ store, vault: config.vault, service: bounces, log });
+  const sources = new EmailConnectionBounceSources({ eligibility: staticEligibility, store, vault: config.vault, service: bounces, log });
   bounces.setSourceLoader(sources);
   const webhook = createPostmarkBounceWebhook({ service: bounces, log });
   const account = createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch });
-  const service = new EmailConnectionService({ config, store, account, resolver: options.resolver ?? fakeResolver(), bounces: sources, log, secret: () => SECRET, lockWaitMs: 3_000,
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config, store, account, resolver: options.resolver ?? fakeResolver(), bounces: sources, log, secret: () => SECRET, lockWaitMs: 3_000,
     founder: async () => options.founder === true });
   const post = async (body: unknown, auth = `${EMAIL_CONNECT_BUSINESSES[0]!.sourceKey}:${SECRET}`, path = KEYPATH) => {
     const captured = { status: 0, body: '' };
@@ -285,7 +286,7 @@ test('webhook creation order: the secret is saved, and readable by every instanc
   h.store.saveSealed = async (...args: Parameters<typeof realSave>) => { await realSave(...args); timeline.push(`saved:${args[2]}`); };
   // Another instance that never loaded this connection answers Postmark's samples from the store alone.
   const other = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
-  other.setSourceLoader(new EmailConnectionBounceSources({ store: h.store, vault: h.config.vault!, service: other }));
+  other.setSourceLoader(new EmailConnectionBounceSources({ eligibility: staticEligibility, store: h.store, vault: h.config.vault!, service: other }));
   const otherHook = createPostmarkBounceWebhook({ service: other });
   const postOther = async (body: unknown, auth: string, path: string) => {
     const captured = { status: 0 };
@@ -597,7 +598,7 @@ test('S2: a lost or changed EMAIL_CONNECTION_KEY is recoverable without SQL', as
   const rotated = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 3).toString('base64') }, { portalBaseUrl: ORIGIN });
   const lines: string[] = [];
   const bounces = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
-  const sources = new EmailConnectionBounceSources({ store: h.store, vault: rotated.vault, service: bounces, log: line => lines.push(line) });
+  const sources = new EmailConnectionBounceSources({ eligibility: staticEligibility, store: h.store, vault: rotated.vault, service: bounces, log: line => lines.push(line) });
   bounces.setSourceLoader(sources);
   await sources.refresh();
   const hook = createPostmarkBounceWebhook({ service: bounces });
@@ -607,7 +608,7 @@ test('S2: a lost or changed EMAIL_CONNECTION_KEY is recoverable without SQL', as
   assert.equal(captured.status, 503, 'retried by Postmark, never dropped');
   assert.equal(lines.filter(line => line.includes('EMAIL_CONNECTION_KEY')).length, 1, 'one line names the setting');
   assert.equal(lines.join('\n').includes(Buffer.alloc(32, 3).toString('base64')), false);
-  const service = new EmailConnectionService({ config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
     resolver: fakeResolver(), bounces: sources, secret: () => 'whsec-new-secret-after-rotation-0123456789', lockWaitMs: 2000 });
   // Continue: the unreadable secret is treated as absent; a new one is saved and the webhook replaced.
   h.store.row!.status = 'needs_attention';
@@ -727,7 +728,7 @@ test('only the eligible owner, only an allowed business', async () => {
   await assert.rejects(h.service.connect({ ...owner, sessionToken: 'someone-else-session-token-000000' }, FORM), (e: unknown) => e instanceof EmailConnectionError && e.status === 403);
   await assert.rejects(h.service.connect({ ...owner, workspaceId: '2789228d-55a6-4688-b1e8-2f70abca990b' }, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message === EMAIL_CONNECTION_MESSAGES.notAllowed);
   assert.equal(h.postmark.calls.length, 0);
-  const off = new EmailConnectionService({ config: loadEmailConnectConfig({}, {}), store: h.store });
+  const off = new EmailConnectionService({ eligibility: staticEligibility, config: loadEmailConnectConfig({}, {}), store: h.store });
   assert.deepEqual(await off.view(owner), { offered: false, message: 'Email connection isn\'t switched on yet.' });
 });
 
@@ -738,7 +739,7 @@ test('stored connections are added and removed without a restart, from this or a
   const a = harness();
   await a.service.connect(owner, FORM);
   const other = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
-  const otherSources = new EmailConnectionBounceSources({ store: a.store, vault: loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }).vault!, service: other });
+  const otherSources = new EmailConnectionBounceSources({ eligibility: staticEligibility, store: a.store, vault: loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }).vault!, service: other });
   other.setSourceLoader(otherSources);
   const hook = createPostmarkBounceWebhook({ service: other });
   const call = async () => {
@@ -753,7 +754,7 @@ test('stored connections are added and removed without a restart, from this or a
   // The store cannot be read: 503 (Postmark retries), never a 4xx (Postmark drops those).
   const cold = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
   const broken = new MemoryEmailConnectionStore(); broken.sourcesFail = new Error('database down');
-  cold.setSourceLoader(new EmailConnectionBounceSources({ store: broken, vault: loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }).vault!, service: cold }));
+  cold.setSourceLoader(new EmailConnectionBounceSources({ eligibility: staticEligibility, store: broken, vault: loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }).vault!, service: cold }));
   const coldHook = createPostmarkBounceWebhook({ service: cold });
   const captured = { status: 0 };
   const req = Object.assign(Readable.from([Buffer.from('{}')]), { method: 'POST', url: KEYPATH, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: '127.0.0.3' } }) as unknown as IncomingMessage;
@@ -790,14 +791,14 @@ test('on a database at 0154 the feature is simply not offered and nothing errors
   const lines: string[] = [];
   const missing = Object.assign(new Error('function app_private.email_connection_state(bytea, uuid) does not exist'), { code: '42883' });
   const pool = { query: async () => { throw missing; }, connect: async () => { throw new Error('not used'); } };
-  const store = new PgEmailConnectionStore(pool as never, { log: line => lines.push(line) });
+  const store = new PgEmailConnectionStore(pool as never, { eligibility: staticEligibility, log: line => lines.push(line) });
   const config = loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN });
   const postmark = new FakePostmark();
-  const service = new EmailConnectionService({ config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }) });
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }) });
   assert.deepEqual(await service.view(owner), { offered: false, message: 'Email connection isn\'t switched on yet.' });
   assert.equal(await store.sources(), null);
   const bounces = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
-  const sources = new EmailConnectionBounceSources({ store, vault: config.vault!, service: bounces });
+  const sources = new EmailConnectionBounceSources({ eligibility: staticEligibility, store, vault: config.vault!, service: bounces });
   await sources.refresh();
   assert.deepEqual(bounces.sources, []);
   bounces.setSourceLoader(sources);
@@ -938,7 +939,7 @@ test('F3: a lock lost mid-run stops the run cleanly at its next step, and a late
   });
   let client = makeClient();
   const pool = { query: async () => ({ rows: [] }), connect: async () => client };
-  const store = new PgEmailConnectionStore(pool as never, { lockPool: pool as never });
+  const store = new PgEmailConnectionStore(pool as never, { eligibility: staticEligibility, lockPool: pool as never });
   const lock = await store.lock(PP_WS, 100);
   client.emit('error', new Error('terminating connection due to idle-in-transaction timeout'));
   assert.equal(lock!.lost(), true);
@@ -950,7 +951,7 @@ test('F3: a lock lost mid-run stops the run cleanly at its next step, and a late
   await next!.release();
   assert.deepEqual(released, [true, false]);
   // A pool-connect timeout means "still held", answered as such at the deadline.
-  const full = new PgEmailConnectionStore(pool as never, { lockPool: { connect: async () => { throw new Error('timeout exceeded when trying to connect'); } } as never });
+  const full = new PgEmailConnectionStore(pool as never, { eligibility: staticEligibility, lockPool: { connect: async () => { throw new Error('timeout exceeded when trying to connect'); } } as never });
   assert.equal(await full.lock(PP_WS, 300), null);
 });
 
@@ -962,7 +963,7 @@ test('F5: a connected business whose secrets no longer open is repaired by Check
   assert.equal((await h.store.state(OWNER_SESSION, PP_WS)).status, 'verified');
   // The key changes.
   const rotated = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 6).toString('base64') }, { portalBaseUrl: ORIGIN });
-  const service = new EmailConnectionService({ config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config: rotated, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
     resolver: fakeResolver(), bounces: h.sources, secret: () => 'whsec-repaired-secret-0123456789-abcdef', lockWaitMs: 2000 });
   h.postmark.verify = async () => true;
   const view = await service.view(owner);
@@ -977,7 +978,7 @@ test('F5: a connected business whose secrets no longer open is repaired by Check
   assert.ok(again.offered && again.repair === undefined);
   // Continue repairs too.
   const r2 = loadEmailConnectConfig({ ...ENV, EMAIL_CONNECTION_KEY: Buffer.alloc(32, 8).toString('base64') }, { portalBaseUrl: ORIGIN });
-  const s2 = new EmailConnectionService({ config: r2, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
+  const s2 = new EmailConnectionService({ eligibility: staticEligibility, config: r2, store: h.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: h.postmark.fetch }),
     resolver: fakeResolver(), secret: () => 'whsec-second-repair-0123456789-abcdefgh', lockWaitMs: 2000 });
   assert.equal((await s2.continue(owner)).message, 'Your email connection was repaired. Press Check to confirm your records.');
   assert.equal(h.postmark.servers[0]!.webhooks.length, 1);
@@ -1012,7 +1013,7 @@ test('F7/F8: the domain list pages by rows received and refuses an incomplete li
     }
     return answer;
   }) as typeof fetch;
-  const service = new EmailConnectionService({ config: g.config, store: g.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: g.postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config: g.config, store: g.store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: g.postmark.fetch }),
     resolver: fakeResolver(), bounces: g.sources, secret: () => SECRET, lockWaitMs: 2000 });
   await assert.rejects(service.connect(owner, FORM), (e: unknown) => e instanceof EmailConnectionError && e.message.startsWith(EMAIL_CONNECTION_MESSAGES.needsHand));
   assert.equal((await g.store.state(OWNER_SESSION, PP_WS)).domainId, null);

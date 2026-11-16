@@ -22,6 +22,9 @@
  *   POST /portal/email/works-now    csrf, commandId, email ("This address works now" for a hard bounce)
  *   GET  /portal/email/founder      the founder's page (founder only)
  *   POST /portal/email/founder/act  csrf, commandId, action, workspace, version (founder only)
+ * The allow-list (0157; offered only once the database has it):
+ *   POST /portal/email/founder/allowlist csrf, commandId, action (allow | revoke | reallow), workspace, [reason] (founder only;
+ *                                   revoke needs a reason: the page's own confirm step)
  * Same-origin and CSRF checked like the follow-ups page; the database re-checks the owner (or founder) on every call.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -31,6 +34,8 @@ import type { PostgresPortalDeps } from './router.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import { FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
 import { EMAIL_CONNECTION_MESSAGES, EmailConnectionError, type EmailConnectionService } from '../email-connections/service.js';
+import { emailConnectNotAllowedMessage } from '../email-connections/eligibility.js';
+import type { AllowlistAction, AllowlistResult, EmailConnectAllowlistService } from '../email-connections/allowlist.js';
 import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, renderFounderProtectionPage,
   type EmailConnectionPageInput } from './email-connection-view.js';
 import { SENDING_MESSAGES, type OwnerSendingService, type SendingResult } from '../email-protection/owner.js';
@@ -73,6 +78,8 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
   identity: PortalSessionIdentity | null;
   /** Release 2's sending controls; absent: the page is exactly release 1's. */
   sending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
+  /** The founder's allow-list (0157); absent, or the database without 0157: the founder page is exactly as before. */
+  allowlist?: Pick<EmailConnectAllowlistService, 'view' | 'act'>;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/u, '');
   if (path !== BASE && !path.startsWith(`${BASE}/`)) return false;
@@ -80,6 +87,7 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
     const { portal, service, identity } = input;
     let origin: URL;
     try { origin = new URL(portal.portalBaseUrl ?? ''); } catch { throw new RouteError(503, EMAIL_CONNECTION_MESSAGES.off); }
+    // Product-profile gate kept as it is: Connect email is served only on the Property Predator growth portal (property_predator_growth) until a later stage opens it to other portal profiles; the allow-list (0157) decides which businesses on this portal may use it.
     if (portal.productProfile?.id !== 'property_predator_growth' || origin.protocol !== 'https:' || req.headers.host?.toLowerCase() !== origin.host.toLowerCase()) {
       throw new RouteError(404, 'This page isn’t available here.');
     }
@@ -95,11 +103,15 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       const sending = input.sending && view.offered ? await input.sending.view(identity, view.state).catch(() => null) : null;
       return renderEmailConnectionPage({ view, csrf, commandId: randomUUID(), ...(sending?.offered ? { sending } : {}), ...extra });
     };
+    const allowlistView = async () => {
+      const view = await input.allowlist?.view(identity).catch(() => null);
+      return view ? { allowlist: view } : {};
+    };
     if (path === `${BASE}/founder`) {
       if (req.method !== 'GET' || url.search) throw new RouteError(405, STALE);
       const founder = await input.sending?.founderView(identity).catch(() => null);
       if (!founder) throw new RouteError(403, 'Only the founder can open this page.');
-      send(res, 200, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID() })); return true;
+      send(res, 200, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID(), ...await allowlistView() })); return true;
     }
     if (path === BASE) {
       if (req.method !== 'GET') throw new RouteError(405, STALE);
@@ -111,7 +123,7 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       // the one this session has selected; another id is refused.
       // Exactly an allowed id as listed (lower case): another spelling of it is refused, as before.
       if (business !== null && (service.eligibility.business(business)?.workspaceId !== business || business !== identity.workspaceId)) {
-        throw new RouteError(404, EMAIL_CONNECTION_MESSAGES.notAllowed);
+        throw new RouteError(404, emailConnectNotAllowedMessage(service.eligibility));
       }
       send(res, 200, await page(url.searchParams.get('agree') === 'yes' ? { agreed: true } : {})); return true;
     }
@@ -127,7 +139,18 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       const result = await input.sending.founderAct(identity, founderAction === 'lift_account' ? null : workspace, founderAction, version);
       const founder = await input.sending.founderView(identity).catch(() => null);
       if (!founder) throw new RouteError(403, result.message);
-      send(res, result.ok ? 200 : 409, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID(), message: result })); return true;
+      send(res, result.ok ? 200 : 409, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID(), message: result, ...await allowlistView() })); return true;
+    }
+    if (action === 'founder/allowlist') {
+      const fields = await readForm(req, ['csrf', 'commandId', 'action', 'workspace'], ['reason']);
+      if (!verifyPortalCsrf(portal.sessionSecret, identity.sessionToken, fields.get('csrf') ?? '') || !UUID.test(fields.get('commandId') ?? '')) throw new RouteError(403, STALE);
+      const listAction = fields.get('action') as AllowlistAction, workspace = (fields.get('workspace') ?? '').toLowerCase();
+      if (!input.allowlist || !input.sending || !(['allow', 'revoke', 'reallow'] as const).includes(listAction) || !UUID.test(workspace)
+          || (fields.has('reason') && listAction !== 'revoke')) throw new RouteError(400, STALE);
+      const result: AllowlistResult = await input.allowlist.act(identity, listAction, workspace, listAction === 'revoke' ? (fields.get('reason') ?? '').slice(0, 400) : null);
+      const founder = await input.sending.founderView(identity).catch(() => null);
+      if (!founder) throw new RouteError(403, result.message);
+      send(res, result.ok ? 200 : 409, renderFounderProtectionPage({ ...founder, csrf, commandId: randomUUID(), message: result, ...await allowlistView() })); return true;
     }
     if ((SENDING_ACTIONS as readonly string[]).includes(action)) {
       const sendingAction = action as typeof SENDING_ACTIONS[number];
