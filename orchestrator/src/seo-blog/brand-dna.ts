@@ -31,7 +31,7 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  checkAllPricing, priceCandidates, withoutActionMarkers, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
+  basisPositions, checkAllPricing, priceCandidates, withoutActionMarkers, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
   type CheckedPricing, type CheckDocument, type LinkContext, type PriceStatus,
 } from './brand-dna-rules.js';
 
@@ -670,7 +670,24 @@ const PRICE_PHRASE = /£\s?\d[\d,]*(?:\.\d{1,2})?(?:\s?(?:k|m)\b)?(?:\s?\+\s?vat
 
 interface FoundPrice { readonly amount: number; readonly phrase: string; readonly quote: string }
 
-function pricesNear(text: string, name: string, otherNames: readonly string[]): FoundPrice[] {
+/**
+ * Where each position of the whitespace-collapsed text (`text.replace(/\s+/g, ' ')`) stands in `text`: one entry per
+ * collapsed character, a run of white space mapping to its first character.
+ */
+export function collapsedPositions(text: string): Int32Array {
+  const map = new Int32Array(text.length + 1);
+  let h = 0, at = 0;
+  for (const m of text.matchAll(/\s+/g)) {
+    for (let i = at; i < m.index!; i++) map[h++] = i;
+    map[h++] = m.index!;
+    at = m.index! + m[0].length;
+  }
+  for (let i = at; i < text.length; i++) map[h++] = i;
+  map[h] = text.length;
+  return map.subarray(0, h + 1);
+}
+
+function pricesNear(text: string, name: string, otherNames: readonly string[], ignoreAt?: (collapsed: number) => boolean): FoundPrice[] {
   const haystack = text.replace(/\s+/g, ' ');
   const lower = haystack.toLowerCase(), needle = name.replace(/\s+/g, ' ').trim().toLowerCase();
   if (needle.length < 3) return [];
@@ -689,6 +706,8 @@ function pricesNear(text: string, name: string, otherNames: readonly string[]): 
     const end = Math.min(next, stop + 240);
     const window = haystack.slice(start, end);
     for (const m of window.matchAll(PRICE_PHRASE)) {
+      // (Accepted structures only: that very occurrence is another accepted offer's.)
+      if (ignoreAt?.(start + m.index!)) continue;
       const amountText = /£\s?(\d[\d,]*(?:\.\d{1,2})?)\s?(k|m)?/i.exec(m[0]);
       if (!amountText) continue;
       const amount = Number(amountText[1]!.replace(/,/g, '')) * (amountText[2]?.toLowerCase() === 'k' ? 1_000 : amountText[2]?.toLowerCase() === 'm' ? 1_000_000 : 1);
@@ -708,13 +727,31 @@ function pricesNear(text: string, name: string, otherNames: readonly string[]): 
  * share none, the owner must choose. It never picks, and it never fires on one page listing several
  * prices for an offer (monthly and yearly, say).
  */
-export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>, documents: readonly SourceText[]): ProfileConflict[] {
+export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>, documents: readonly SourceText[],
+  /** For an offer whose structure was accepted: the amounts ("document:basis position of its £") other accepted offers claim. */
+  claimedByOthers?: (offer: ProfileOffer) => ReadonlySet<string> | null): ProfileConflict[] {
   const added: ProfileConflict[] = [];
+  // Built once per document, and only when an accepted structure needs it: collapsed position → text → basis.
+  const maps = new Map<string, ((collapsed: number) => number) | null>();
+  const basisAt = (d: SourceText) => {
+    if (!maps.has(d.id)) {
+      const text = d.text ?? '', toText = collapsedPositions(text), toBasis = basisPositions(text);
+      maps.set(d.id, toBasis ? (c: number) => (c >= 0 && c < toText.length ? toBasis[toText[c]!]! : -1) : null);
+    }
+    return maps.get(d.id)!;
+  };
   for (const offer of value.offers) {
     // Skipped only when a price question for this offer is already on the card; a different question about the same offer does not hide a price disagreement.
     if (value.conflicts.some((c) => priceConflictOffer(c, value.offers) === offer)) continue;
     const otherNames = value.offers.filter((o) => o !== offer).map((o) => o.name.replace(/\s+/g, ' ').trim().toLowerCase()).filter((n) => n.length >= 3);
-    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames) : [] })).filter((d) => d.prices.length > 0);
+    const claimed = claimedByOthers?.(offer) ?? null;
+    const ignoreFor = (d: SourceText) => {
+      if (!claimed?.size) return undefined;
+      const at = basisAt(d);
+      // A position that cannot be mapped with certainty is never ignored.
+      return at ? (c: number) => { const b = at(c); return b >= 0 && claimed.has(`${d.id}:${b}`); } : undefined;
+    };
+    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames, ignoreFor(d)) : [] })).filter((d) => d.prices.length > 0);
     const disagree = perDoc.some((a, i) => perDoc.slice(i + 1).some((b) => !a.prices.some((p) => b.prices.some((q) => q.amount === p.amount))));
     if (!disagree) continue;
     const options: ProfileConflictOption[] = [];
@@ -783,7 +820,15 @@ export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents
   const before = [...modelQuestions, ...several];
   // The cross-source backstop as before, except that an answer whose amounts are all covered by that offer's own accepted
   // structure does not conflict.
-  const backstop = priceConflicts({ offers: value.offers, conflicts: before }, documents).filter((c) => {
+  // For an offer whose structure was accepted, an amount whose very occurrence another accepted offer claims is not read.
+  const claimedByOthers = (offer: ProfileOffer) => {
+    const i = value.offers.indexOf(offer);
+    if (i < 0 || !checked[i]) return null;
+    const set = new Set<string>();
+    checked.forEach((c, j) => { if (c && j !== i && value.offers[j]!.name !== offer.name) for (const a of c.claimedAmounts ?? []) set.add(a); });
+    return set;
+  };
+  const backstop = priceConflicts({ offers: value.offers, conflicts: before }, documents, claimedByOthers).filter((c) => {
     const i = value.offers.findIndex((o) => o.name === c.offer);
     return !(i >= 0 && answered(c, i));
   });

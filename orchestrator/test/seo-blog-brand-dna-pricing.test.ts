@@ -11,9 +11,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  brandDnaCard, brandPageText, BRAND_DNA_RULES_VERSION, cleanProvenance, holdConflictedPrices, pricingAfterEdit, pricingEditText, repairProfileFacts, settleConflict, strictProfileProblems, type ProfileFacts,
+  brandDnaCard, brandPageText, BRAND_DNA_RULES_VERSION, collapsedPositions, cleanProvenance, holdConflictedPrices, pricingAfterEdit, pricingEditText, repairProfileFacts, settleConflict, strictProfileProblems, type ProfileFacts,
 } from '../src/seo-blog/brand-dna.js';
-import { actionLineIndexes, checkAllPricing, checkPricing, keyOf, proposedLines, withoutActionMarkers, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
+import { actionLineIndexes, basisPositions, basisText, checkAllPricing, checkPricing, keyOf, proposedLines, withoutActionMarkers, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
 import { brandPageHtmlLines } from '../src/seo-blog/html.js';
 import { extractProfile, profileForPrompt } from '../src/seo-blog/generation.js';
 import { brandDnaPage } from '../src/portal/brand-dna-view.js';
@@ -134,12 +134,13 @@ test('400 random cards with proposed structures: never a price, line, role, pare
 
 // ─── The owner's first real card (MHP) ───────────────────────────────────────
 
-async function mhp(given: (id: Record<string, string>) => Record<string, unknown>) {
-  const entries = Object.entries(MHP_PAGES);
+async function mhp(given: (id: Record<string, string>) => Record<string, unknown>, pages: Record<string, string> = MHP_PAGES, uploads: KnowledgeDocument[] = []) {
+  const entries = Object.entries(pages);
   const ids = Object.fromEntries(entries.map(([p], i) => [p, `doc${i + 1}`]));
-  const documents = entries.map(([path, html], i) => kdoc(`doc${i + 1}`, brandPageText(brandPageHtmlLines(html)), MHP_SITE + path, { title: path === '/' ? 'Home page' : path === '/join/' ? 'Join page' : 'Mentoring page' }));
+  const documents = [...entries.map(([path, html], i) => kdoc(`doc${i + 1}`, brandPageText(brandPageHtmlLines(html)), MHP_SITE + path, { title: path === '/' ? 'Home page' : path === '/join/' ? 'Join page' : 'Mentoring page' })), ...uploads];
   return { ...(await make(documents, given(ids), MHP_SITE)), documents };
 }
+const reordered = (order: number[]) => (id: Record<string, string>) => { const a = mhpStructuredAnswer(id) as { offers: unknown[] }; return { ...a, offers: order.map((k) => a.offers[k]) }; };
 const linesOf = (o: ProfileOffer | undefined) => (o?.pricing?.lines ?? []).map((l) => [l.role, ...(l.label ? [l.label] : []), l.text, ...(l.total ? [l.total] : []), ...(l.for ? [`for ${l.for}`] : [])]);
 
 const MHP_NAMES = ['Free cheat sheets', 'The Deal Desk', 'Property Done Properly', "The Members' Room", 'One Lane Mentoring', 'One Lane Private'];
@@ -167,18 +168,24 @@ test('MHP, honest structured answer: the structure check accepts every proposed 
   assert.equal(r[4], null); assert.equal(r[3], null, "The Members' Room: nothing is excused when the claiming offer's check fails");
 });
 
-test('MHP, honest structured answer: every structure accepted; the one question left is the unchanged cross-source backstop', async () => {
+test('MHP, honest structured answer: no price questions, in any order of offers; every price and line with its source', async () => {
+  for (const order of [[0, 1, 2, 3, 4, 5], [5, 4, 3, 2, 1, 0], [4, 0, 3, 5, 2, 1]]) {
+    const { profile } = await mhp(reordered(order));
+    assert.deepEqual(profile.conflicts, [], `no questions (order ${order})`);
+    const room = profile.offers.find((o) => o.name === "The Members' Room");
+    assert.equal(room!.price, '£67 a month');
+    assert.deepEqual(linesOf(room), [['other', '£670 a year'], ['special', "founders' price", '£47 a month'], ['special', 'for the first 100', '£47']], `order ${order}`);
+  }
   const { profile, documents } = await mhp(mhpStructuredAnswer);
   const by = (n: string) => profile.offers.find((o) => o.name === n);
-  // The Members' Room is held by priceConflicts (8eca59d's cross-source backstop, not the structure check): its window on
-  // the Mentoring page ("The Members' Room is included for a year." then "£3,997, or 6 x £699") shares no amount with the
-  // Home page's (£1,497, £997, £67, £47), and £1,497, £25,000 … are not amounts of its structure.
-  assert.deepEqual(profile.conflicts.map((c) => [c.offer, c.options?.map((o) => o.value)]), [["The Members' Room", ['£1,497,', '£997', '£67 a month', '£47', '£25,000', '£2,250']]]);
-  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', null], ['Property Done Properly', '£1,497'], ["The Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000']]);
+  // The cross-source backstop: The Members' Room's window on the Mentoring page ("The Members' Room is included for a
+  // year." then "£3,997, or 6 x £699") reads amounts whose very occurrences One Lane Mentoring's accepted structure claims;
+  // its Home window's £1,497 / £997 are Property Done Properly's. Those are not read, so nothing disagrees.
+  assert.deepEqual(profile.conflicts, []);
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', null], ['Property Done Properly', '£1,497'], ["The Members' Room", '£67 a month'], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000']]);
   // Property Done Properly: its Join section runs past the "Webinar price:" line where the 8eca59d run stops (change A).
   assert.deepEqual(linesOf(by('Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'Webinar price', '£997'], ['plan', '3 x £349', 'for £997']]);
-  // (The Members' Room's structure is accepted by the check, test above; held by the backstop, it shows none.)
-  assert.deepEqual(linesOf(by("The Members' Room")), []);
+  assert.deepEqual(linesOf(by("The Members' Room")), [['other', '£670 a year'], ['special', "founders' price", '£47 a month'], ['special', 'for the first 100', '£47']]);
   assert.deepEqual(linesOf(by('One Lane Mentoring')), [['plan', '6 x £699', '£4,194 in total', 'for £3,997']]);
   assert.deepEqual(linesOf(by('One Lane Private')), [['plan', '12 x £2,250', '£27,000 in total', 'for £25,000']]);
   assert.equal(by('The Deal Desk')!.price, null, 'the model left it empty: nothing is filled');
@@ -186,7 +193,7 @@ test('MHP, honest structured answer: every structure accepted; the one question 
   const shown = brandDnaCard(profile, documents);
   assert.deepEqual(shown.offers.map((o) => o.priceSource?.quote ?? null), [
     'Free cheat sheets | Five one-page guides to the numbers | Available free with an email address | None needed', null, '£1,497 once, or 3 x £525',
-    null, '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)']);
+    "£67 a month or £670 a year, with a founders' price of £47 a month.", '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)']);
   assert.equal(shown.offers.find((x) => x.name === 'Free cheat sheets')!.priceSource!.quote, 'Free cheat sheets | Five one-page guides to the numbers | Available free with an email address | None needed');
   const page = brandDnaPage(inputs.SHELL, { ...inputs.STATE, profile, card: shown, status: 'proposed' } as never, 'cmd');
   assert.match(page, /Or pay in instalments: 6 x £699 \(£4,194 in total\) for £3,997<\/span><span class="from"><a[^>]*>From your Join page<\/a>: <q>£3,997 or 6 x £699 \(£4,194 in total\)<\/q>/);
@@ -201,6 +208,52 @@ test('MHP: the Home row\'s "for seven days after a webinar" as the special\'s la
   const { profile } = await mhp((id) => { const a = mhpStructuredAnswer(id) as { offers: Record<string, unknown>[] }; return { ...a, offers: a.offers.map((o) => (o.name === 'Property Done Properly'
     ? { ...o, pricing: { lines: [{ kind: 'plan', text: '3 x £525', for: '£1,497' }, { kind: 'special', text: '£997', label: 'for seven days after a webinar' }, { kind: 'plan', text: '3 x £349', for: '£997' }] } } : o)) }; });
   assert.deepEqual(linesOf(profile.offers.find((o) => o.name === 'Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'for seven days after a webinar', '£997'], ['plan', '3 x £349', 'for £997']]);
+});
+
+test('the backstop still asks: a different price in an upload, an equal amount claimed elsewhere (B1d), an unclaimed amount, an unmappable page', async () => {
+  // An uploaded list states another price for The Members' Room.
+  const upload = kdoc('u1', "Price list\nThe Members' Room is now £77 a month.", null);
+  const a = await mhp(mhpStructuredAnswer, MHP_PAGES, [upload]);
+  assert.deepEqual(a.profile.conflicts.map((c) => c.offer), ["The Members' Room"]);
+  // (Its answers are the backstop's first six, as at 8eca59d: the upload's £77 a month is what makes the sources disagree.)
+  assert.equal(a.profile.offers.find((o) => o.name === "The Members' Room")!.price, null);
+  // B1(d): "New price £1,597" in an upload against the accepted £1,497, while another offer's accepted structure holds an
+  // equal "£1,597 a year" at a different position: never ignored.
+  const page = kdoc('d1', tagged('<h3>Property Course</h3><p>Twelve modules.</p><p>£1,497</p><h3>Annual Club</h3><p>£149 a month or £1,597 a year</p>'), 'https://x.example/pricing');
+  const note = kdoc('u2', 'Property Course. New price £1,597.', null);
+  const b = await make([page, note], { offers: [
+    { name: 'Property Course', description: '', price: '£1,497', url: null, sourceDocumentId: 'd1', pricing: { lines: [] } },
+    { name: 'Annual Club', description: '', price: '£149 a month', url: null, sourceDocumentId: 'd1', pricing: { lines: [{ kind: 'other', text: '£1,597 a year' }] } }] });
+  assert.equal(b.profile.offers[1]!.pricing!.lines[0]!.text, '£1,597 a year', "Annual Club's structure is accepted");
+  assert.deepEqual(b.profile.conflicts.map((c) => [c.offer, c.options?.map((o) => o.value)]), [['Property Course', ['£1,497', '£1,597']]]);
+  // An amount near the offer's name that no accepted offer claims.
+  const c = await make([kdoc('d1', tagged('<h3>Pro</h3><p>£29 per month</p><h3>Team</h3><p>£99 per month</p>'), 'https://x.example/pricing'), kdoc('u3', 'Pro is £35 per month.', null)], { offers: [
+    { name: 'Pro', description: '', price: '£29 per month', url: null, sourceDocumentId: 'd1', pricing: { lines: [] } },
+    { name: 'Team', description: '', price: '£99 per month', url: null, sourceDocumentId: 'd1', pricing: { lines: [] } }] });
+  assert.deepEqual(c.profile.conflicts.map((x) => x.offer), ['Pro']);
+  // A Mentoring page whose positions cannot be mapped with certainty (a combining accent the normalisation joins): nothing on
+  // it is ignored, and the questions are exactly those the backstop asked before this change (recorded at fba388a).
+  const d = await mhp(mhpStructuredAnswer, { ...MHP_PAGES, '/mentoring/': MHP_PAGES['/mentoring/']!.replace('Ninety days', 'Cafe\u0301 talks. Ninety days') });
+  assert.deepEqual(d.profile.conflicts.map((x) => [x.offer, x.options?.map((o) => `${o.value}@${o.documentId}`)]), [
+    ["The Members' Room", ['£67 a month@doc1', '£47@doc1', '£47@doc2', '£67 a month@doc2', '£670 a year@doc2', '£997@doc2']],
+    ['One Lane Private', ['£997@doc2', '£25,000@doc2', '£2,250@doc2', '£27,000@doc2', '£47@doc2', '£699@doc3']]]);
+});
+
+test('the backstop\'s position map: collapsed text to document text to the rules\' basis, exact, or nothing', () => {
+  const text = '# Pro  plan\n\n| Pro | £9\u00a0a month |   £90 a year\n▸ Buy\t now £5\u200b£6 ² £7';
+  const collapsed = text.replace(/\s+/g, ' '), toText = collapsedPositions(text), toBasis = basisPositions(text)!, basis = basisText(text);
+  assert.ok(toBasis, 'no joining normalisation: certain');
+  assert.equal(toText.length, collapsed.length + 1);
+  for (let c = 0; c < collapsed.length; c++) {
+    const t = toText[c]!;
+    if (/\s/.test(collapsed[c]!)) assert.ok(/\s/.test(text[t]!), `white space at ${c}`); else assert.equal(text[t], collapsed[c], `char at ${c}`);
+    if (collapsed[c] === '£') assert.equal(basis[toBasis[t]!], '£', `£ at ${c}`);
+  }
+  // Removed characters map nowhere; a footnote mark becomes a space; a code point's second half is not a start.
+  assert.equal(toBasis[text.indexOf('\u200b')], -1);
+  assert.equal(basis[toBasis[text.indexOf('²')]!], ' ');
+  const astral = basisPositions('a𝐀£1')!; assert.equal(astral[2], -1); assert.equal(basisText('a𝐀£1')[astral[3]!], '£');
+  assert.equal(basisPositions('Cafe\u0301 £5'), null, 'normalisation joins characters: no position is certain');
 });
 
 test('MHP, the owner\'s real (unstructured) answer: handled exactly as at 8eca59d', async () => {

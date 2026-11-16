@@ -29,6 +29,25 @@ export function basisText(text: string | null | undefined): string {
   return String(text ?? '').replace(INVISIBLE, '').replace(FOOTNOTE, ' ').normalize('NFKC');
 }
 
+/**
+ * Where each position of `text` lands in `basisText(text)`: an exact map (index i of the text, at a code point's start,
+ * to its index in the basis; -1 for a removed character), or null when the basis cannot be rebuilt character by character
+ * (normalisation joining characters), so no position is certain.
+ */
+export function basisPositions(text: string): Int32Array | null {
+  const map = new Int32Array(text.length + 1).fill(-1);
+  let out = '', i = 0;
+  for (const ch of text) {
+    const piece = INVISIBLE.test(ch) ? '' : FOOTNOTE.test(ch) ? ' ' : ch;
+    INVISIBLE.lastIndex = 0; FOOTNOTE.lastIndex = 0;
+    if (piece) map[i] = out.length;
+    out += piece.normalize('NFKC');
+    i += ch.length;
+  }
+  map[text.length] = out.length;
+  return out === basisText(text) ? map : null;
+}
+
 export interface Tok { readonly w: string; readonly raw: string; readonly s: number; readonly e: number }
 /** A number keeps its internal commas and points ("1,500" and "1.5" are one word each, never "1 500" or "1 5"). */
 const TOKEN = /\p{N}+(?:[.,]\p{N}+)*|[\p{L}\p{M}][\p{L}\p{M}\p{N}]*|[£$€¥%+]/gu;
@@ -770,6 +789,8 @@ export interface CheckedPricing {
   /** The occurrences ("document:position") inside this offer's own section that the accepted structure accounts for as its
    * price or one of its lines: another offer's check may excuse exactly these (never an equal amount elsewhere). */
   readonly claims?: readonly string[];
+  /** The same occurrences by where their first "£" stands ("document:position" in the basis), for the cross-source backstop. */
+  readonly claimedAmounts?: readonly string[];
 }
 /** A document as the structure check reads it: the plain text, and which of its lines were wholly action text on the page. */
 export interface CheckDocument { readonly id: string; readonly text?: string | null; readonly actionLines?: readonly number[] }
@@ -1059,8 +1080,10 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
     if (groups.has(g) && groups.get(g) !== a) return null;
     groups.set(g, a);
   }
-  const claims = occs.filter((o) => o.mine && (covered.has(o.i) || amountKey(o.x.text) === amountKey(price) || out.some((l) => l.role !== 'plan' && keyOf(l.text) === o.x.key))).map((o) => `${o.doc}:${o.x.s}`);
-  return { lines: out, priceDocumentId: first.doc, priceQuote: quoteOf(first), claims };
+  const claimed = occs.filter((o) => o.mine && (covered.has(o.i) || amountKey(o.x.text) === amountKey(price) || out.some((l) => l.role !== 'plan' && keyOf(l.text) === o.x.key)));
+  const claims = claimed.map((o) => `${o.doc}:${o.x.s}`);
+  const claimedAmounts = claimed.flatMap((o) => { const k = o.st.basis.slice(o.x.s, o.x.e).indexOf('£'); return k >= 0 ? [`${o.doc}:${o.x.s + k}`] : []; });
+  return { lines: out, priceDocumentId: first.doc, priceQuote: quoteOf(first), claims, claimedAmounts };
 }
 
 /** One offer for `checkAllPricing`: its index in `names`, its price, its proposal (null: none) and its cited document. */
