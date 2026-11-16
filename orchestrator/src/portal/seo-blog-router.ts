@@ -38,6 +38,8 @@ import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
+import { ARTICLE_FOLDS, longWhen } from './seo-blog-article-view.js';
+import { keepIfUnchanged, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
@@ -407,7 +409,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     }
     if (tab === 'articles') {
       const articleId = rest.split('/')[1];
-      if (!articleId) return send(res, 200, articlesPage(shell('articles'), { articles: await engine.listArticles(actor, brandId) }));
+      if (!articleId) {
+        const [articles, jobs, plans, destinations] = await Promise.all([engine.listArticles(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId)]);
+        return send(res, 200, articlesPage(shell('articles'), { articles, jobs, briefs: plans.flatMap((p) => p.briefs), websites: destinations.filter((d) => d.status === 'connected').length }));
+      }
       const action = rest.split('/')[2];
       if(action==='posts')return send(res,200,postingDraftsPage(shell('articles'),await engine.getPostingDrafts(actor,brandId,articleId)));
       if(action==='post-export') {
@@ -431,7 +436,13 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       const [detail, destinations] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listDestinations(actor, brandId)]);
       const social = detail.article.linkedPromotions?.length ? await engine.socialOverview(actor, brandId).catch(() => null) : null;
-      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social }));
+      // Writing in progress: the page says what the write task is doing (read only).
+      const jobs = detail.version ? [] : await engine.listJobs(actor, brandId);
+      const workingTitle = detail.version ? null : (await engine.listPlans(actor, brandId)).flatMap((p) => p.briefs).find((x) => x.id === detail.article.briefId)?.workingTitle ?? null;
+      const open = url.searchParams.getAll('open').filter((x) => (ARTICLE_FOLDS as readonly string[]).includes(x));
+      // The website and time the main press would use, shown beside it and checked again when pressed.
+      const plan = detail.version ? await engine.publishingPlan(actor, brandId, articleId) : undefined;
+      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social, jobs, open, workingTitle, plan, now: plan?.now, checkSources: url.searchParams.getAll('checksource').slice(0, 5), mode: url.searchParams.get('edit') === '1' ? 'edit' : 'read' }));
     }
     if (tab === 'calendar') {
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
@@ -893,7 +904,13 @@ async function handlePost(
     }
     case 'jobs': {
       if (parts[1] && parts[2] === 'cancel') { await engine.cancelJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task cancelled.'); }
-      if (parts[1] && parts[2] === 'retry') { const task=await engine.retryJob(actor, brandId, parts[1]); return ok(back(task.kind==='plan'?'topics':'activity'), task.kind==='plan'?'Your plan is continuing from its saved progress.':'Task queued again.'); }
+      if (parts[1] && parts[2] === 'retry') {
+        const task=await engine.retryJob(actor, brandId, parts[1]);
+        // A retry started from the articles list or an article page returns there (fixed shapes only).
+        const from=f('back')??'';
+        if(new RegExp(`^articles(?:/${UUID.toLowerCase()})?$`).test(from))return ok(back(from),'Trying again. The article carries on being written; you can leave this page.');
+        return ok(back(task.kind==='plan'?'topics':'activity'), task.kind==='plan'?'Your plan is continuing from its saved progress.':'Task queued again.');
+      }
       if (parts[1] && parts[2] === 'image-retry') { await engine.retryImagePreparation(actor, brandId, parts[1]); return ok(back('activity'), 'Saved image queued for local preparation. No new image generation was requested.'); }
       break;
     }
@@ -1003,26 +1020,118 @@ async function handlePost(
       }
       if(action==='website-target'){
         const v=await engine.reviewArticleWebsiteTarget(actor,brandId,articleId,{expectedVersionId:f('versionId')??'',destinationId:f('destinationId')??'',categoryIds:form.fields.getAll('categoryId')});
-        return ok(here,`Website target saved in version ${v.number}. Review and approve that exact version before publication.`);
+        return ok(here,'Topics saved. Have a read, then approve the article again.');
       }
-      if(action==='delivery-recheck'){await engine.reobservePublication(actor,brandId,articleId,f('publicationId')??'');return ok(here,'Public delivery checks updated. No article was republished.');}
-      if(action==='sitemap-repair'){await engine.requestSitemapRepair(actor,brandId,articleId,{publicationId:f('publicationId')??'',commandId:f('commandId')??'',acknowledgeUnknown:f('acknowledgeUnknown')==='1'});return ok(here,'Sitemap-only repair intent recorded. Article and index bytes will not be republished.');}
+      if(action==='delivery-recheck'){await engine.reobservePublication(actor,brandId,articleId,f('publicationId')??'');return ok(here,'Checked again. Nothing was sent to your website.');}
+      if(action==='sitemap-repair'){await engine.requestSitemapRepair(actor,brandId,articleId,{publicationId:f('publicationId')??'',commandId:f('commandId')??'',acknowledgeUnknown:f('acknowledgeUnknown')==='1'});return ok(here,'Asked your website to add it to the site map. The article itself is not sent again.');}
+      if (action === 'approve-publish') {
+        // "Approve and publish": everything checked first, then the existing approve and schedule steps (engine.approveAndSchedule).
+        // "planned" is the time the page showed; the press is refused (nothing approved) if the calendar changed since.
+        const kind = f('when');
+        const when = kind === 'now' ? 'now' as const : kind === 'at' || kind === 'planned' ? { localDate: (f('localDate') ?? '').trim(), localTime: (f('localTime') ?? '').trim(), planned: kind === 'planned' } : 'next' as const;
+        const rowVersionField = f('rowVersion');
+        const websites = (await engine.listDestinations(actor, brandId)).length;
+        let r: Awaited<ReturnType<SeoBlogEngine['approveAndSchedule']>>;
+        try { r = await engine.approveAndSchedule(actor, brandId, articleId, { versionId: f('versionId') ?? '', when, destinationId: f('destinationId'), rowVersion: rowVersionField ? int(rowVersionField, 'the article version') : null }); }
+        catch (error) {
+          if (error instanceof SeoBlogError && error.code === 'calendar_changed') {
+            const plan = await engine.publishingPlan(actor, brandId, articleId);
+            throw new SeoBlogError(409, plan.slot ? `The calendar changed. Here is the new time: ${longWhen(plan.slot.localDate, plan.slot.localTime)}. Nothing was approved yet; press again if that suits you.` : error.message);
+          }
+          throw error;
+        }
+        const on = websites > 1 || r.siteChanged ? ` on ${r.destinationLabel}` : '';
+        const going = r.minutesAway < 15 ? `It goes onto your website${on} in about ${r.minutesAway} minute${r.minutesAway === 1 ? '' : 's'}` : `It goes out${on} on ${longWhen(r.localDate, r.localTime)}`;
+        return ok(here, `${r.approvedNow ? 'Approved. ' : ''}${going}${r.kept && !r.replayed ? ', as planned' : ''}.`);
+      }
+      if (action === 'picture-remove') {
+        // Clearing the picture, as the old editor allowed by emptying its address: a new version, approval resets.
+        const current = (await engine.getArticle(actor, brandId, articleId)).version;
+        if (!current) throw new SeoBlogError(409, 'The article is still being written.');
+        const v = await engine.editArticle(actor, brandId, articleId, f('versionId') ?? '', { image: { kind: 'none', url: null, alt: current.body.image.alt, provenance: '', width: null, height: null } });
+        return ok(here, v.id === current.id ? 'There is no picture to remove.' : 'Picture removed. This made a new version, so approve the article again when you are ready.');
+      }
+      if (action === 'picture') {
+        // A picture already on the owner's website, by its address: the editor's existing image field, on its own.
+        const current = (await engine.getArticle(actor, brandId, articleId)).version;
+        if (!current) throw new SeoBlogError(409, 'The article is still being written.');
+        const imageUrl = (f('imageUrl') ?? '').trim();
+        const v = await engine.editArticle(actor, brandId, articleId, f('versionId') ?? '', { image: { kind: 'brand_asset', url: imageUrl, alt: (f('imageAlt') ?? '').trim(), provenance: '', width: null, height: null } });
+        return ok(here, v.id === current.id ? 'That is already the picture.' : 'Picture added. Have a look, then approve the article again.');
+      }
+      if (action === 'rewrite') {
+        // One choice for the owner, the two existing rewrite steps underneath.
+        const sectionId = f('sectionId') ?? '';
+        if (sectionId === 'whole') { await engine.requestRegeneration(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'The article is being written again. This version stays here until the new one is ready.'); }
+        await engine.regenerateSection(actor, brandId, articleId, f('versionId') ?? '', sectionId, f('instruction') ?? '');
+        return ok(here, 'That part has been rewritten. Other sections are unchanged. Have a read, then approve it again.');
+      }
+      if (action === 'promotion-approve-all') {
+        // Each post is approved by the existing single-post step, one after the other, each bound to this exact version.
+        const detail = await engine.getArticle(actor, brandId, articleId);
+        const v = detail.version;
+        if (!v?.promotionPack || v.id !== f('versionId')) throw new SeoBlogError(409, 'The article changed. Have another look at the posts.');
+        const approvedNames: string[] = [];
+        for (const post of v.promotionPack.posts) {
+          // Skip only posts already approved in the current way; an approval from before scheduling support is renewed.
+          if (detail.article.linkedPromotions?.some((p) => p.articleVersionId === v.id && p.network === post.network && p.approvalRequestId)) continue;
+          try { await engine.approvePromotion(actor, brandId, articleId, v.id, post.network, f('packSha') ?? ''); approvedNames.push(post.network === 'linkedin' ? 'LinkedIn' : 'Instagram'); }
+          catch (error) {
+            // Report what did happen: the posts approved before this one stay approved; this one is not confirmed.
+            const done = approvedNames.length ? `${approvedNames.join(' and ')} approved. ` : '';
+            const name = post.network === 'linkedin' ? 'LinkedIn' : 'Instagram';
+            if (!(error instanceof SeoBlogError)) { console.error('seo-blog: post approval failed', (error as Error).name); throw new SeoBlogError(409, `${done}We could not confirm the ${name} post’s approval. Refresh the page before trying again.`); }
+            throw new SeoBlogError(error.status >= 500 ? 409 : error.status, `${done}The ${name} post was not approved: ${error.message}`);
+          }
+        }
+        return ok(here, 'Posts approved. They go out after the article is live on your website.');
+      }
       if (action === 'edit') {
         const ids = form.fields.getAll('sectionId'), headings = form.fields.getAll('sectionHeading'), bodies = form.fields.getAll('sectionBody');
         if (ids.length !== headings.length || ids.length !== bodies.length) throw new SeoBlogError(400, 'Refresh the editor and try again.');
         const questions=form.fields.getAll('faqQuestion'),answers=form.fields.getAll('faqAnswer'),editFaqs=f('faqEditor')==='1';
         if(editFaqs&&(questions.length!==answers.length||questions.length>8||questions.some(q=>!q.trim()||q.length>200)||answers.some(a=>!a.trim()||a.length>1500)))throw new SeoBlogError(400,'Each FAQ needs a question and answer within the shown limits. Refresh the editor and try again.');
         const current = (await engine.getArticle(actor, brandId, articleId)).version;
+        // The in-place editor hides citation markers; each one goes back on its own sentence (citation-edit.ts).
+        // Only the version being edited supplies markers; a stale form is refused below by the version check.
+        const hiddenCitations = f('citationsHidden') === '1' && current && current.id === f('versionId');
+        const prior = hiddenCitations ? current!.body : null;
+        let droppedSentences = 0, typedRemoved = 0;
+        const keptOnEdited: string[] = [];
+        const text = (stored: string | undefined, edited: string) => { if (!prior || stored === undefined) return edited; const r = restoreCitationsDetailed(stored, edited); droppedSentences += r.droppedSentences; typedRemoved += r.typedRemoved; for (const ids of r.keptOnEdited) keptOnEdited.push(ids[0]!); return r.text; };
+        const plainText = (stored: string | undefined, edited: string) => prior && stored !== undefined ? keepIfUnchanged(stored, edited) : edited;
         const imageUrl = (f('imageUrl') ?? '').trim();
         const imageChanged = current && (imageUrl !== (current.body.image.url ?? '') || (f('imageAlt') ?? '') !== current.body.image.alt);
         const v = await engine.editArticle(actor, brandId, articleId, f('versionId') ?? '', {
-          title: f('title') ?? '', slug: f('slug') ?? '', seoTitle: f('seoTitle') ?? '', metaDescription: f('metaDescription') ?? '', excerpt: f('excerpt') ?? '',
-          intro: f('intro') ?? '', conclusion: f('conclusion') ?? '',
-          sections: ids.map((id, i) => ({ id, heading: headings[i]!, body: bodies[i]! })),
-          ...(editFaqs?{faqs:questions.map((q,i)=>({q:q.trim(),a:answers[i]!.trim()}))}:{}),
+          title: plainText(prior?.title, f('title') ?? ''), slug: f('slug') ?? '', seoTitle: f('seoTitle') ?? '', metaDescription: f('metaDescription') ?? '', excerpt: f('excerpt') ?? '',
+          intro: text(prior?.intro, f('intro') ?? ''), conclusion: text(prior?.conclusion, f('conclusion') ?? ''),
+          sections: ids.map((id, i) => { const was = prior?.sections.find((s) => s.id === id); return { id, heading: plainText(was?.heading, headings[i]!), body: text(was?.body, bodies[i]!) }; }),
+          ...(editFaqs?{faqs:questions.map((q,i)=>{const was=prior?.faqs[i];const qq=plainText(was?.q,q),aa=text(was?.a,answers[i]!);return {q:was&&qq===was.q?qq:qq.trim(),a:was&&aa===was.a?aa:aa.trim()};})}:{}),
           ...(imageChanged ? { image: imageUrl ? { kind: 'brand_asset', url: imageUrl, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } : { kind: 'none', url: null, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } } : {}),
         });
-        return ok(here, `Saved as version ${v.number}. Checks ran again.`);
+        if (hiddenCitations && v.id === current!.id) return ok(here, typedRemoved ? 'Source links cannot be typed in, so what you typed was removed. Nothing else changed, so nothing was saved.' : 'Nothing changed, so nothing was saved.');
+        const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article. You can put the earlier wording back below.` : '';
+        const typed = typedRemoved ? ` Source links cannot be typed in, so ${typedRemoved === 1 ? 'the one you typed was' : `the ${typedRemoved} you typed were`} removed.` : '';
+        const kept = keptOnEdited.length ? ` ${keptOnEdited.length === 1 ? '1 sentence you changed still has its source' : `${keptOnEdited.length} sentences you changed still have their sources`}. Check ${keptOnEdited.length === 1 ? 'it still says' : 'they still say'} what the source says.` : '';
+        // The page shows a link to each kept sentence's source (ids are checked against the article's own sources there).
+        const check = keptOnEdited.length ? `?${keptOnEdited.slice(0, 5).map((id) => `checksource=${encodeURIComponent(id)}`).join('&')}` : '';
+        return ok(`${here}${check}`, hiddenCitations ? `Saved.${sources}${typed}${kept} Have a read, then approve it again.` : `Saved as version ${v.number}. Checks ran again.`);
+      }
+      if (action === 'put-back') {
+        // "Put the earlier wording back": one sentence of the previous version, with its sources, as a new version.
+        const detail = await engine.getArticle(actor, brandId, articleId);
+        const v = detail.version, earlier = detail.versions.find((x) => x.id === f('fromVersionId'));
+        if (!v || v.id !== f('versionId') || !earlier) throw new SeoBlogError(409, 'The article changed. Have another look before putting wording back.');
+        const field = f('field') ?? '', index = Number(f('index'));
+        const put = (from: string | undefined, to: string | undefined) => { if (from === undefined || to === undefined) return null; return putBackSentence(from, to, index); };
+        let edit: Parameters<SeoBlogEngine['editArticle']>[4] | null = null;
+        if (field === 'intro') { const t = put(earlier.body.intro, v.body.intro); if (t !== null) edit = { intro: t }; }
+        else if (field === 'conclusion') { const t = put(earlier.body.conclusion, v.body.conclusion); if (t !== null) edit = { conclusion: t }; }
+        else if (field.startsWith('section:')) { const id = field.slice(8); const t = put(earlier.body.sections.find((x) => x.id === id)?.body, v.body.sections.find((x) => x.id === id)?.body); if (t !== null) edit = { sections: v.body.sections.map((x) => (x.id === id ? { ...x, body: t } : x)) }; }
+        else if (field.startsWith('faq:')) { const i = Number(field.slice(4)); const t = put(earlier.body.faqs[i]?.a, v.body.faqs[i]?.a); if (t !== null) edit = { faqs: v.body.faqs.map((x, k) => (k === i ? { ...x, a: t } : x)) }; }
+        if (!edit) throw new SeoBlogError(409, 'That earlier wording cannot be put back any more, because the text around it changed. You can still edit it by hand.');
+        await engine.editArticle(actor, brandId, articleId, v.id, edit);
+        return ok(here, 'The earlier wording and its source are back. This made a new version; have a read, then approve it again.');
       }
       if (action === 'regenerate-section') {
         const v = await engine.regenerateSection(actor, brandId, articleId, f('versionId') ?? '', f('sectionId') ?? '', f('instruction') ?? '');
@@ -1031,29 +1140,34 @@ async function handlePost(
       if (action === 'regenerate') { await engine.requestRegeneration(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'Regenerating in the background. The current version stays available.'); }
       if (action === 'promotion-refresh') {
         await engine.refreshPromotionVersion(actor, brandId, articleId, f('versionId') ?? '');
-        return ok(here, 'A new article and promotion version is ready for review. Previous linked approvals no longer authorise delivery.');
+        return ok(here, 'The posts now link to the article’s current address. Approve the article and its posts again.');
       }
       if (action === 'promotion-approve') {
         const network = f('network');
         if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose an accompanying post.');
         await engine.approvePromotion(actor, brandId, articleId, f('versionId') ?? '', network, f('packSha') ?? '');
-        return ok(here, 'Exact accompanying post approved. It is held until the same blog version and URL are verified public and a brand-owned account is connected.');
+        return ok(here, 'Post approved. It goes out after the article is live on your website and your account is connected.');
       }
       if (action === 'social-schedule') {
         const network = f('network');
         if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose an accompanying post.');
         const d = await engine.scheduleSocial(actor, brandId, articleId, f('versionId') ?? '', network, f('packSha') ?? '', (f('localDate') ?? '').trim(), (f('localTime') ?? '').trim());
-        return ok(here, `${network} post queued for ${d.scheduledFor.slice(0, 16).replace('T', ' ')} UTC through the brand’s registered account. It is re-verified shortly before sending.`);
+        return ok(here, `${network === 'linkedin' ? 'LinkedIn' : 'Instagram'} post planned for ${d.scheduledFor.slice(0, 16).replace('T', ' ')} UTC. Just before sending we check the article is still live and unchanged.`);
       }
-      if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); return ok(here, `Checks: ${c.issues.length} issue(s).`); }
-      if (action === 'approve') { await engine.approve(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'Approved.'); }
-      if (action === 'approval-flag') { await engine.setRequiresApproval(actor, brandId, articleId, rowVersion(), f('required') === '1'); return ok(here, 'Saved.'); }
-      if (action === 'hold') { await engine.hold(actor, brandId, articleId, rowVersion(), f('held') === '1'); return ok(here, f('held') === '1' ? 'Held.' : 'Hold released.'); }
+      if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); const must = c.issues.filter((i) => i.severity === 'critical').length; return ok(here, must ? `Checked again: ${must === 1 ? '1 thing' : `${must} things`} to fix.` : c.issues.length ? `Checked again: nothing to fix, ${c.issues.length} optional improvement${c.issues.length === 1 ? '' : 's'}.` : 'Checked again: nothing to fix.'); }
+      if (action === 'approve') {
+        const a = await engine.approve(actor, brandId, articleId, f('versionId') ?? '');
+        // Approving an article that already has a time means it goes out then: say so.
+        const now = (await engine.publishingPlan(actor, brandId, articleId)).now;
+        return ok(here, a.schedule && Date.parse(a.schedule.publishAtUtc) > Date.parse(now) ? `Approved. It goes out on ${longWhen(a.schedule.localDate, a.schedule.localTime)}.` : 'Approved. It will not go out until it has a time.');
+      }
+      if (action === 'approval-flag') { await engine.setRequiresApproval(actor, brandId, articleId, rowVersion(), f('required') === '1'); return ok(`${here}?open=where#where`, f('required') === '1' ? 'Saved. This article will always wait for your approval.' : 'Saved. This article follows your business’s publishing setting.'); }
+      if (action === 'hold') { await engine.hold(actor, brandId, articleId, rowVersion(), f('held') === '1'); return ok(here, f('held') === '1' ? 'Done. This article will not go out until you allow it.' : 'Done. This article can go out again.'); }
       if (action === 'schedule') {
         const a = await engine.schedule(actor, brandId, articleId, rowVersion(), { localDate: f('localDate') ?? '', localTime: f('localTime') ?? '', destinationId: f('destinationId') ?? '' });
-        return ok(here, `Scheduled for ${a.schedule!.localDate} ${a.schedule!.localTime}. Nothing changes on the website until then.`);
+        return ok(here, `It goes out on ${longWhen(a.schedule!.localDate, a.schedule!.localTime)}. Nothing changes on your website until then.`);
       }
-      if (action === 'unschedule') { await engine.unschedule(actor, brandId, articleId, rowVersion()); return ok(here, 'Schedule cancelled.'); }
+      if (action === 'unschedule') { await engine.unschedule(actor, brandId, articleId, rowVersion()); return ok(here, 'Taken off the calendar. It will not go out until you choose a time.'); }
       if (action === 'proposal') {
         await engine.moveProposedDate(actor, brandId, articleId, rowVersion(), f('localDate') ?? '', f('localTime') ?? '');
         return ok(back('calendar'), 'Proposed date moved. No website publication was scheduled.');
