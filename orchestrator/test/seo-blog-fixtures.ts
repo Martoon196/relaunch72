@@ -147,6 +147,19 @@ export class ScriptedModel implements LlmClient {
         ],
         provenance_note: 'Cluster chosen from the brand profile, the site inventory and the research sources.',
       };
+      // Keyword-first planning (contract v2): a cooperative planner chooses, by id, the candidate each article answers.
+      const candidates = block(content, 'keyword_candidates') as { id: string; phrase: string; can_be_target: boolean }[] | null;
+      if (candidates) {
+        const plan = out as { pillar: Record<string, unknown>; supporting: Record<string, unknown>[] };
+        const answers: Record<string, string> = { 'tenancy-deposit-protection-guide': 'tenancy deposit protection', 'deposit-deadline-30-days': 'deposit protection deadline',
+          'returning-a-tenancy-deposit': 'return tenancy deposit', 'deposit-dispute-evidence': 'deposit dispute evidence', 'choosing-a-deposit-scheme': 'deposit protection schemes',
+          'prescribed-information-checklist': 'prescribed information deposit' };
+        const extra = candidates.filter((c) => !c.can_be_target).slice(0, 2).map((c) => c.id);
+        for (const a of [plan.pillar, ...plan.supporting]) {
+          a.primary_phrase_id = candidates.find((c) => c.can_be_target && c.phrase === answers[a.slug as string])?.id ?? null;
+          a.secondary_phrase_ids = a === plan.pillar ? extra : [];
+        }
+      }
     } else if (stage === 'SEO_BLOG_ARTICLE') {
       const sources = block(content, 'research_sources') as { id: string; url: string; passage: string }[];
       const linkable = block(content, 'linkable_pages') as { url: string }[];

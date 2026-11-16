@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
-import { bindBriefs, briefSeo, planningGuidance, planningShortlist, SHORTLIST_SIZE } from '../src/seo-blog/keyword-planning.js';
+import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, planningShortlist, SHORTLIST_SIZE } from '../src/seo-blog/keyword-planning.js';
 import type { InventoryKeywordPool } from '../src/seo-blog/keyword-fill.js';
 import type { StoredKeywordRow } from '../src/seo-blog/keyword-store-shape.js';
 import type { KeywordResearchProvider, LabsCallResult, LabsMarket } from '../src/keyword/dataforseo-labs.js';
@@ -28,7 +28,7 @@ function stored(phrase: string, o: Partial<StoredKeywordRow> = {}): StoredKeywor
 }
 const pool = (rows: StoredKeywordRow[]): InventoryKeywordPool => ({ schema: 1, locationCode: 2826, languageCode: 'en', builtAt: NOW, rows, state: 'measured', ledger: { entries: [], months: {} } });
 
-test('the shortlist: the best cluster first (pillar, then its phrases), topped up to seven; no questions, no used or expired phrases', () => {
+test('the shortlist: the best cluster first (pillar, then its phrases), topped up to seven; no questions, no used, near-used or expired phrases', () => {
   const p = pool([
     stored('tenancy deposit protection', { role: 'pillar', opportunity: 0.9, clusterId: 'deposits' }),
     stored('deposit protection deadline', { opportunity: 0.6, clusterId: 'deposits' }),
@@ -45,40 +45,47 @@ test('the shortlist: the best cluster first (pillar, then its phrases), topped u
   assert.ok(!s.some((r) => r.phrase === 'old phrase' || r.phrase === 'used phrase'));
   assert.deepEqual(planningShortlist(null, [], NOW), []);
   assert.deepEqual(planningShortlist(pool([]), [], NOW), []);
-  // Guidance for the planner: the phrases and their stored numbers, in plain words, naming no mechanism.
-  const g = planningGuidance(s)!;
-  assert.match(g, /1\. landlord gas safety certificate \(about 500 searches a month\)/);
-  assert.match(g, /target question in the reader's own words/);
-  assert.doesNotMatch(g, BANNED);
-  assert.equal(planningGuidance([]), null);
+  // The candidates the planner sees: ids, plain facts from the stored list, naming no mechanism.
+  const c = planningCandidates(p, ['used phrase'], NOW);
+  const block = candidatesForPrompt(c);
+  assert.equal(block[0]!.id, 'K1');
+  assert.equal(block[0]!.phrase, 'landlord gas safety certificate');
+  assert.equal(block[0]!.can_be_target, true);
+  assert.equal(block[0]!.searches_a_month, 500);
+  assert.ok(block.slice(SHORTLIST_SIZE).every((x) => x.can_be_target === false), 'further phrases are offered as secondary only');
+  assert.doesNotMatch(JSON.stringify(block), BANNED);
 });
 
-test('binding: each brief gets the measured phrase its question answers, one phrase per brief; the rest are honestly "none"', () => {
+test('binding is by id only: the chosen candidate is bound, the honest "none" otherwise, and no number is ever made up', () => {
   const p = pool([stored('tenancy deposit protection', { searches: 2400 }), stored('deposit protection deadline', { searches: 480 }), stored('deposit protection schemes', { searches: 720 }),
-    stored('how long to protect a tenancy deposit', { searches: 210 }), stored('what is prescribed information', { searches: 140 })]);
-  const s = planningShortlist(p, [], NOW);
-  const briefs = [
-    { key: 'a', targetQuery: 'how does tenancy deposit protection work', workingTitle: 'Tenancy deposit protection: a guide' },
-    { key: 'b', targetQuery: 'deposit protection deadline', workingTitle: 'The deposit protection deadline explained' },
-    { key: 'c', targetQuery: 'how do I paint a fence', workingTitle: 'Painting fences' },
-  ];
-  const bound = bindBriefs(briefs, s);
-  assert.equal(bound.get('a')?.phrase, 'tenancy deposit protection');
-  assert.equal(bound.get('b')?.phrase, 'deposit protection deadline');
-  assert.equal(bound.has('c'), false);
-  const seo = briefSeo({ ...briefs[0]!, bound: bound.get('a')!, pool: p, now: NOW });
+    stored('how long does tenancy deposit protection last', { searches: 210 }), stored('what is prescribed information', { searches: 140 })]);
+  const c = planningCandidates(p, [], NOW);
+  const ids = candidateIds(c);
+  const idOf = (phrase: string) => [...ids].find(([, v]) => v.row.phrase === phrase)![0];
+  const { bound, stripped } = bindByIds([
+    { key: 'a', primaryId: idOf('tenancy deposit protection'), secondaryIds: [idOf('deposit protection schemes')] },
+    { key: 'b', primaryId: idOf('deposit protection deadline'), secondaryIds: [] },
+    // The words match a candidate exactly, but no id was chosen: never bound.
+    { key: 'c', primaryId: null, secondaryIds: undefined },
+  ], c);
+  assert.equal(stripped, 0);
+  assert.equal(bound.get('a')!.primary?.phrase, 'tenancy deposit protection');
+  assert.equal(bound.get('b')!.primary?.phrase, 'deposit protection deadline');
+  assert.equal(bound.get('c')!.primary, null);
+  const seo = briefSeo({ targetQuery: 'how does tenancy deposit protection work', binding: bound.get('a')!, pool: p, now: NOW });
+  assert.equal(seo.schema, 2);
   assert.equal(seo.primary.phrase, 'tenancy deposit protection');
   assert.equal(seo.primary.searches, 2400);
   assert.equal(seo.primary.basis, 'measured');
   assert.equal(seo.primary.measuredMonth, '2026-10');
-  assert.ok(seo.secondary.length > 0 && seo.secondary.length <= 6);
-  assert.ok(!seo.secondary.some((x) => x.phrase === 'tenancy deposit protection'));
-  assert.ok(seo.questions.some((q) => q.text === 'how long to protect a tenancy deposit' && q.searches === 210 && q.source === 'searched'));
-  assert.ok(seo.questions.length <= 8);
-  const none = briefSeo({ ...briefs[2]!, bound: null, pool: p, now: NOW });
+  assert.deepEqual(seo.secondary.map((x) => x.phrase), ['deposit protection schemes'], 'secondary phrases come only by id');
+  assert.ok(seo.questions.some((q) => q.text === 'how long does tenancy deposit protection last' && q.searches === null), 'questions carry text only');
+  const none = briefSeo({ targetQuery: 'deposit protection deadline', binding: bound.get('c')!, pool: p, now: NOW });
   assert.equal(none.primary.basis, 'none');
   assert.equal(none.primary.searches, null, 'no number is ever made up');
   assert.equal(none.cluster, null);
+  assert.deepEqual(none.secondary, []);
+  assert.deepEqual(none.questions, []);
 });
 
 // ─── Through the engine ─────────────────────────────────────────────────────
@@ -158,7 +165,7 @@ test('switch on: research runs on the shortlisted phrases, and every new brief c
   assert.equal(pillar.seo!.primary.phrase, 'tenancy deposit protection');
   assert.equal(pillar.seo!.primary.searches, 2400);
   assert.deepEqual(pillar.demand, { kind: 'measured', volume: 2400, competition: null, provider: 'keyword list', retrievedAt: pillar.seo!.primary.measuredAt });
-  assert.ok(pillar.seo!.questions.some((q) => q.text === 'how long to protect a tenancy deposit' && q.searches === 210));
+  assert.ok(pillar.seo!.questions.every((q) => q.searches === null));
   const bound = briefs.filter((b) => b.seo!.primary.basis === 'measured');
   assert.ok(bound.length >= 3, `${bound.length} briefs bound to measured phrases`);
   assert.equal(new Set(bound.map((b) => b.seo!.primary.phrase)).size, bound.length, 'one phrase per brief');

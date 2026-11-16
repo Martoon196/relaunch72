@@ -405,7 +405,33 @@ export const PLAN_SCHEMA: AnySchema = {
   },
 };
 
+/**
+ * Keyword-first planning output contract, version 2 (prompt `seo-blog-plan-v2.md`). Used only when the server offers
+ * measured keyword candidates; every other plan keeps `seo-blog-plan.md` and PLAN_SCHEMA unchanged, so plans made
+ * with the old version stay reproducible. Each article gains `primary_phrase_id` (a target candidate id or null) and
+ * `secondary_phrase_ids` (candidate ids); the schema's enums are the ids the server sent, so an unknown id fails the
+ * membership check, and the validator refuses two articles with one target.
+ */
+export const PLAN_PROMPT_V2 = 'seo-blog-plan-v2.md';
+export const PLAN_SCHEMA_V2_VERSION = 'seo-blog-plan-schema@2.0.0';
+
+export function planSchemaWithCandidates(targetIds: readonly string[], allIds: readonly string[]): AnySchema {
+  const withIds = (role: 'pillar' | 'supporting'): AnySchema => {
+    const base = planArticle(role) as { required: string[]; properties: Record<string, unknown> };
+    return { ...base, required: [...base.required, 'primary_phrase_id', 'secondary_phrase_ids'], properties: { ...base.properties,
+      primary_phrase_id: { type: ['string', 'null'], enum: [...targetIds, null] },
+      secondary_phrase_ids: { type: 'array', maxItems: 6, uniqueItems: true, items: { type: 'string', enum: [...allIds] } },
+    } };
+  };
+  const plan = PLAN_SCHEMA as { required: string[]; properties: Record<string, unknown> };
+  return { ...plan, properties: { ...plan.properties, pillar: withIds('pillar'), supporting: { type: 'array', minItems: 6, maxItems: 6, items: withIds('supporting') } } };
+}
+
 export interface PlannedArticle {
+  /** Contract v2 only: the id of the measured candidate this article targets, or null. */
+  readonly primary_phrase_id?: string | null;
+  /** Contract v2 only: ids of candidates used as secondary phrases. */
+  readonly secondary_phrase_ids?: string[];
   readonly role: 'pillar' | 'supporting';
   readonly slug: string;
   readonly working_title: string;
@@ -455,20 +481,25 @@ export async function proposeCluster(llm: LlmClient, input: {
   readonly focus: string | null;
   readonly excluded: readonly string[];
   readonly sourceArticleUrl: string | null;
+  /** Keyword-first planning only: the measured candidates shown to the planner (contract v2). Absent: the original contract, unchanged. */
+  readonly keywordCandidates?: { readonly targetIds: readonly string[]; readonly allIds: readonly string[]; readonly block: readonly unknown[] };
 }): Promise<JsonCallResult<PlannedCluster>> {
   const short = shortSourceIds(input.sources);
+  const candidates = input.keywordCandidates && input.keywordCandidates.allIds.length ? input.keywordCandidates : null;
+  const schema = candidates ? planSchemaWithCandidates(candidates.targetIds, candidates.allIds) : PLAN_SCHEMA;
+  const candidateBlock = candidates ? [dataBlock('keyword_candidates', candidates.block)] : [];
   const inventoryUrls = new Set(input.inventory.filter((p) => p.fetchStatus === 'ok').flatMap((p) => [p.url, p.canonical].filter((u): u is string => Boolean(u))));
   const conversion = new Set(input.profile.conversionPages.map((p) => p.url));
   const ownerInputs=dataBlock('owner_inputs', { focus: input.focus, excluded_subjects: input.excluded, source_article: input.sourceArticleUrl });
   const {approvedClaims:_claims,offers:_offers,...correctionProfile}=profileForPrompt(input.profile);
   return callJson<PlannedCluster>(llm, {
-    prompt: loadPrompt('seo-blog-plan.md'),
-    schema: PLAN_SCHEMA,
+    prompt: loadPrompt(candidates ? PLAN_PROMPT_V2 : 'seo-blog-plan.md'),
+    schema,
     maxTokens: 16000,
     ...(methodRunFor(llm)?.structuredPlanning?{correctionUser:[
       `Brand: ${input.brandName}`,
       dataBlock('brand_profile',{...correctionProfile,approvedClaimReferences:input.profile.approvedClaims.map((_c,i)=>`profile:${input.profile.version}:claim:${i}`),offers:input.profile.offers.map((o,i)=>({name:o.name,url:o.url,sourceDocumentId:o.sourceDocumentId,factReference:`profile:${input.profile.version}:offer:${i}`}))}),
-      dataBlock('website_inventory',[...inventoryUrls].map(url=>({url}))),ownerInputs,
+      dataBlock('website_inventory',[...inventoryUrls].map(url=>({url}))),ownerInputs,...candidateBlock,
     ].join('\n\n')}:{}),
     user: [
       `Brand: ${input.brandName}`,
@@ -476,13 +507,19 @@ export async function proposeCluster(llm: LlmClient, input: {
       dataBlock('website_inventory', input.inventory.filter((p) => p.fetchStatus === 'ok').slice(0, 120).map((p) => ({ url: p.canonical ?? p.url, title: p.title, headings: p.headings.slice(0, 6), editorial: p.editorial }))),
       ...(methodRunFor(llm)?.structuredPlanning?[]:[dataBlock('research_sources', researchForPrompt(short))]),
       ownerInputs,
-      ...(methodRunFor(llm)?.structuredPlanning?[]:[`Server response schema (required; method sidecar is a separate sibling): ${JSON.stringify(PLAN_SCHEMA)}`]),
+      ...candidateBlock,
+      ...(methodRunFor(llm)?.structuredPlanning?[]:[`Server response schema (required; method sidecar is a separate sibling): ${JSON.stringify(schema)}`]),
     ].join('\n\n'),
     validate: (v) => {
       const problems: string[] = [];
       const all = [v.pillar, ...v.supporting];
       const slugs = new Set(all.map((a) => a.slug));
       if (slugs.size !== all.length) problems.push('slugs must be unique across the cluster');
+      if (candidates) {
+        const targets = all.map((a) => a.primary_phrase_id).filter((id): id is string => typeof id === 'string');
+        if (new Set(targets).size !== targets.length) problems.push('each keyword candidate id may be the primary_phrase_id of one article at most');
+        for (const a of all) if (a.primary_phrase_id && a.secondary_phrase_ids?.includes(a.primary_phrase_id)) problems.push(`${a.slug}: secondary_phrase_ids must not repeat its primary_phrase_id`);
+      }
       for (const a of all) {
         for (const id of a.source_ids) if (!short.has(id)) problems.push(`${a.slug}: unknown source id ${id}`);
         for (const link of a.internal_links) {
