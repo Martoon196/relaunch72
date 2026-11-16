@@ -33,6 +33,7 @@ import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
 import { researchQueries, researchQuerySeeds, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
+import { nextPublishingSlot, ownSlot, publishingSite, soonSlot } from './publishing-plan.js';
 import type { SeoBlogStore } from './store.js';
 import { EXISTING_WORKSPACE, namesExistingWorkspace } from './existing-workspace.js';
 import { StaleWriteError } from './store.js';
@@ -79,16 +80,28 @@ import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodContro
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
 import { confirmedVisualInputs, type EditorialFormat } from './method-evidence.js';
 
-/** What "Approve and publish" did. A null date means approval only: no free publishing day was found. */
+/** What "Approve and publish" did. */
 export interface ApproveAndScheduleResult {
   readonly approvedNow: boolean;
-  readonly localDate: string | null;
-  readonly localTime: string | null;
-  readonly publishAtUtc: string | null;
+  readonly localDate: string;
+  readonly localTime: string;
+  readonly publishAtUtc: string;
   readonly destinationLabel: string;
   readonly paused: boolean;
   /** True when a future time the owner had already chosen was kept. */
   readonly kept: boolean;
+  /** Whole minutes from the press to the time it goes out. */
+  readonly minutesAway: number;
+}
+
+/** Where and when "Approve and publish" would put an article now. */
+export interface PublishingPlan {
+  readonly site: { readonly id: string; readonly label: string } | null;
+  readonly websites: number;
+  readonly slot: import('./publishing-plan.js').PlannedSlot | null;
+  readonly paused: boolean;
+  readonly now: string;
+  readonly rowVersion: number;
 }
 
 export interface EngineDeps {
@@ -2282,54 +2295,80 @@ export class SeoBlogEngine {
   }
 
   /**
-   * "Approve and publish": the owner's one decision, built only from the existing approve and schedule
-   * steps with every gate intact. Preconditions are checked before anything is written, so a refusal
-   * changes nothing; approval stays bound to the exact version the owner was reading; the schedule step
-   * is the ordinary diary slot (the dispatcher still re-checks pause, checks, connection and approval at
-   * the time, and publication is still verified on the live website).
-   *
-   * `when`: 'next' keeps a future time already chosen, otherwise takes the next free day in the
-   * business's publishing rhythm; 'now' goes out within two minutes; a local date and time is the
-   * owner's own choice.
+   * Where and when "Approve and publish" would put this article right now (read only): the page shows it before
+   * the press and the press is checked against it.
    */
-  async approveAndSchedule(actor: Actor, brandId: string, articleId: string, input: { versionId: string; when: 'next' | 'now' | { localDate: string; localTime: string }; destinationId?: string | null }): Promise<ApproveAndScheduleResult> {
+  async publishingPlan(actor: Actor, brandId: string, articleId: string): Promise<PublishingPlan> {
+    const brand = await this.brandFor(actor, brandId);
+    const article = await this.store.getArticle(brandId, articleId);
+    if (!article) throw new SeoBlogError(404, 'That article was not found.');
+    const destinations = await this.store.listDestinations(brandId);
+    const connected = destinations.filter((d) => d.status === 'connected');
+    const now = this.now();
+    const site = publishingSite(article, brand, destinations, now);
+    const slot = site ? nextPublishingSlot(article, brand, await this.store.listArticles(brandId), site.id, now) : null;
+    return { site: site ? { id: site.id, label: site.label } : null, websites: connected.length, slot, paused: brand.settings.pauseAll, now, rowVersion: article.rowVersion };
+  }
+
+  /**
+   * "Approve and publish": the owner's one decision, built only from the existing approve and schedule steps
+   * with every gate intact. Everything is resolved and checked first; only then is anything written:
+   *  1. membership; 2. the article; 3. the exact version shown; 4. the row the owner saw (when given);
+   *  5. not held by the owner; 6. publishing not paused for the business; 7. not publishing, not awaiting a
+   *  result, not already live; 8. the website (a chosen one must be connected, never swapped); 9. the time
+   *  (a shown "next" time must still be the next time; a typed time must be real and in the future; "now"
+   *  is a real future minute even across clock changes); 10. critical checks (approve refuses them);
+   * then approve (exact version), then schedule (the existing step). If scheduling still fails, the approval
+   * just written is taken back, so a refusal never leaves a new approval behind. At its time the dispatcher
+   * re-checks pause, checks, connection and approval, and publication is verified on the live website.
+   */
+  async approveAndSchedule(actor: Actor, brandId: string, articleId: string, input: { versionId: string; when: 'next' | 'now' | { localDate: string; localTime: string; planned?: boolean }; destinationId?: string | null; rowVersion?: number | null }): Promise<ApproveAndScheduleResult> {
     const brand = await this.brandFor(actor, brandId);
     const article = await this.store.getArticle(brandId, articleId);
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
     if (!article.currentVersionId || article.currentVersionId !== input.versionId) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
+    if (input.rowVersion !== undefined && input.rowVersion !== null && input.rowVersion !== article.rowVersion) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
     if (article.hold?.reason === 'owner') throw new SeoBlogError(409, 'You asked for this article not to go out. Choose “Allow it to go out” first.');
+    if (brand.settings.pauseAll) throw new SeoBlogError(409, 'Publishing is paused for this business. Switch it back on first.', 'paused');
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is going onto your website right now.');
     if (article.delivery === 'unknown') throw new SeoBlogError(409, 'We are still checking whether the last attempt reached your website. Try again once that is settled.');
     if (article.delivery === 'published' && article.publishedVersionId === article.currentVersionId) throw new SeoBlogError(409, 'This article is already live on your website.');
-    const connected = (await this.store.listDestinations(brandId)).filter((d) => d.status === 'connected');
-    const futureSchedule = article.schedule && Date.parse(article.schedule.publishAtUtc) > Date.parse(this.now()) ? article.schedule : null;
-    const destination = connected.find((d) => d.id === input.destinationId)
-      ?? connected.find((d) => d.id === futureSchedule?.destinationId)
-      ?? connected.find((d) => d.id === brand.settings.programme?.structure?.destinationId)
-      ?? connected[0];
-    if (!destination) throw new SeoBlogError(409, 'Your website is not connected yet, so nothing can go out. Connect it in Brand setup first.', 'destination');
+    const now = this.now();
+    const destinations = await this.store.listDestinations(brandId);
+    const site = publishingSite(article, brand, destinations, now, input.destinationId || null);
+    if (!site) throw new SeoBlogError(409, 'Your website is not connected yet, so nothing can go out. Connect it in Brand setup first.', 'destination');
     const version = await this.store.getVersion(brandId, article.currentVersionId);
-    const approvedNow = !approvalIsCurrent(article, version);
-    // Approval: the existing step, bound to this exact version, refusing critical check failures.
-    if (approvedNow) await this.approve(actor, brandId, articleId, input.versionId);
-    let slot: { localDate: string; localTime: string } | null;
-    if (input.when === 'now') {
-      const local = utcToLocal(new Date(Math.ceil((Date.parse(this.now()) + 120_000) / 60_000) * 60_000).toISOString(), brand.timezone);
-      slot = { localDate: local.date, localTime: local.time };
-    } else if (input.when === 'next') {
-      if (futureSchedule && futureSchedule.destinationId === destination.id) {
-        return { approvedNow, localDate: futureSchedule.localDate, localTime: futureSchedule.localTime, publishAtUtc: futureSchedule.publishAtUtc, destinationLabel: destination.label, paused: brand.settings.pauseAll, kept: true };
+    if (!version) throw new SeoBlogError(409, 'The article’s history is incomplete.');
+    let slot: { localDate: string; localTime: string; publishAtUtc: string; kept: boolean } | null;
+    if (input.when === 'now') slot = soonSlot(now, brand.timezone);
+    else if (input.when === 'next' || input.when.planned) {
+      slot = nextPublishingSlot(article, brand, await this.store.listArticles(brandId), site.id, now);
+      if (input.when !== 'next' && input.when.planned && (!slot || slot.localDate !== input.when.localDate || slot.localTime !== input.when.localTime)) {
+        throw new SeoBlogError(409, slot ? `The calendar changed. Here is the new time: ${slot.localDate} ${slot.localTime}. Nothing was approved yet.` : 'The calendar changed and there is no free publishing day in your plan. Choose “Publish later”. Nothing was approved yet.', 'calendar_changed');
       }
-      const others = (await this.store.listArticles(brandId)).filter((a) => a.id !== articleId && a.schedule);
-      const placed = autoPlace({ items: [{ id: articleId, role: 'supporting' }], occupiedLocalDates: others.map((a) => a.schedule!.localDate),
-        cadence: brand.settings.cadence, timeZone: brand.timezone, now: this.now(), horizonDays: 366 }).placed[0];
-      slot = placed ? { localDate: placed.localDate, localTime: placed.localTime } : null;
-    } else slot = input.when;
-    if (!slot) return { approvedNow, localDate: null, localTime: null, publishAtUtc: null, destinationLabel: destination.label, paused: brand.settings.pauseAll, kept: false };
+    } else slot = ownSlot(input.when.localDate.trim(), input.when.localTime.trim(), brand.timezone, now);
+    if (!slot) throw new SeoBlogError(409, 'There is no free publishing day in your plan. Choose “Publish later” to pick a time. Nothing was approved.', 'no_slot');
+    // Approval: the existing step, bound to this exact version, refusing critical check failures.
+    const approvedNow = !approvalIsCurrent(article, version);
+    const previousApproval = article.approval;
+    if (approvedNow) await this.approve(actor, brandId, articleId, input.versionId);
+    const minutesAway = (at: string) => Math.max(1, Math.round((Date.parse(at) - Date.parse(now)) / 60_000));
+    if (slot.kept) return { approvedNow, localDate: slot.localDate, localTime: slot.localTime, publishAtUtc: slot.publishAtUtc, destinationLabel: site.label, paused: false, kept: true, minutesAway: minutesAway(slot.publishAtUtc) };
     const fresh = (await this.store.getArticle(brandId, articleId))!;
-    // Scheduling: the existing step (row version, delivery state, connected website, a time in the future).
-    const scheduled = await this.schedule(actor, brandId, articleId, fresh.rowVersion, { ...slot, destinationId: destination.id });
-    return { approvedNow, localDate: scheduled.schedule!.localDate, localTime: scheduled.schedule!.localTime, publishAtUtc: scheduled.schedule!.publishAtUtc, destinationLabel: destination.label, paused: brand.settings.pauseAll, kept: false };
+    try {
+      // Scheduling: the existing step (row version, delivery state, existing website, a time in the future).
+      const scheduled = await this.schedule(actor, brandId, articleId, fresh.rowVersion, { localDate: slot.localDate, localTime: slot.localTime, destinationId: site.id });
+      return { approvedNow, localDate: scheduled.schedule!.localDate, localTime: scheduled.schedule!.localTime, publishAtUtc: scheduled.schedule!.publishAtUtc, destinationLabel: site.label, paused: false, kept: false, minutesAway: minutesAway(scheduled.schedule!.publishAtUtc) };
+    } catch (error) {
+      if (approvedNow) {
+        const latest = await this.store.getArticle(brandId, articleId);
+        if (latest?.approval?.versionId === input.versionId && latest.approval.approvedBy === actor.userId) {
+          await this.store.updateArticle({ ...latest, approval: previousApproval }).catch(() => undefined);
+          await this.log(brandId, actor.userId, 'article.approval_withdrawn', 'The approval was taken back because the article could not be scheduled.', articleId).catch(() => undefined);
+        }
+      }
+      throw error;
+    }
   }
 
   /** Place unscheduled, unpublished drafts into free cadence slots (diary only). */

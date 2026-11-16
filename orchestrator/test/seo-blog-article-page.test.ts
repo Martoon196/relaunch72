@@ -110,7 +110,8 @@ test('citation markers stay on their sentences through edits and a no-change sav
   assert.doesNotMatch(plain, /\[src:/);
   assert.equal(restoreCitations(stored, plain.replace(/\n/g, '\r\n')), stored);
   assert.equal(restoreCitations(stored, plain.replace('Plain closing line.', 'A new closing line.')), stored.replace('Plain closing line.', 'A new closing line.'));
-  assert.equal(restoreCitations(stored, plain.replace('Rents also grew.', 'Rents also grew quickly.')), stored.replace('Rents also grew [src:b2] [src:c3].', 'Rents also grew quickly [src:b2] [src:c3].'));
+  assert.equal(restoreCitations(stored, plain.replace('Rents also grew.', 'Rents also grew quickly.')), stored.replace('Rents also grew [src:b2] [src:c3].', 'Rents also grew quickly.'), 'a short reworded sentence (fewer than four shared words) loses its sources');
+  assert.equal(restoreCitations(stored, plain.replace('Prices rose 5.5% in 2024.', 'Prices rose by 5.5% in 2024.')), stored.replace('Prices rose 5.5% in 2024 [src:a1].', 'Prices rose by 5.5% in 2024 [src:a1].'), 'a lightly reworded sentence with the same number keeps its source');
   assert.equal(restoreCitations(stored, plain.replace('Prices rose 5.5% in 2024. ', '')), stored.replace('Prices rose 5.5% in 2024 [src:a1]. ', ''), 'a deleted claim takes its source with it');
 });
 

@@ -17,6 +17,8 @@ import { withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
 import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
 import { approvalIsCurrent, approvalRequired } from '../seo-blog/policy.js';
+import { nextPublishingSlot, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
+import type { PublishingPlan } from '../seo-blog/engine.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
 import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
 import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, CheckIssue, Destination, Job, Publication, SocialDispatch } from '../seo-blog/types.js';
@@ -28,7 +30,8 @@ export type ArticlePageMode = 'read' | 'edit';
 export const ARTICLE_FOLDS = ['google', 'where', 'sources', 'history', 'download', 'rewrite', 'improve'] as const;
 export type ArticleFold = typeof ARTICLE_FOLDS[number];
 
-const brandUrl = (b: Brand, path: string) => `${SEO_BLOG_BASE}/b/${b.id}/${path}`;
+/** Ids in addresses are escaped wherever they come from (they are placed straight into attributes). */
+const brandUrl = (b: Brand, path: string) => e(`${SEO_BLOG_BASE}/b/${b.id}/${path}`);
 const NETWORK: Record<string, string> = { linkedin: 'LinkedIn', instagram: 'Instagram' };
 
 // ─── Dates in plain words ─────────────────────────────────────────────────────
@@ -179,23 +182,85 @@ function plainWritingError(message: string): { reason: string; retry: boolean; l
 function hidden(fields: Record<string, string | number>): string {
   return Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${e(k)}" value="${e(v)}">`).join('');
 }
-function postButton(shell: Shell, action: string, fields: Record<string, string | number>, label: string, opts: { primary?: boolean; cls?: string; disabled?: boolean } = {}): string {
-  return `<form method="post" action="${action}" class="ap-inline">${csrfField(shell.csrf)}${hidden(fields)}<button type="submit" class="${opts.primary ? 'ap-primary' : `secondary ${opts.cls ?? ''}`.trim()}"${opts.primary ? ' data-primary' : ''}${opts.disabled ? ' disabled' : ''}>${e(label)}</button></form>`;
+function postButton(shell: Shell, action: string, fields: Record<string, string | number>, label: string, opts: { primary?: boolean; cls?: string; disabled?: boolean; note?: string } = {}): string {
+  return `<form method="post" action="${e(action)}" class="ap-inline">${csrfField(shell.csrf)}${hidden(fields)}<button type="submit" class="${opts.primary ? 'ap-primary' : `secondary ${opts.cls ?? ''}`.trim()}"${opts.primary ? ' data-primary' : ''}${opts.disabled ? ' disabled' : ''}>${e(label)}</button>${opts.note ? `<span class="ap-note"> ${e(opts.note)}</span>` : ''}</form>`;
 }
 function primaryLink(href: string, label: string, external = false): string {
   return `<a class="button ap-primary" data-primary href="${e(href)}"${external ? ' target="_blank" rel="noopener"' : ''}>${e(label)}</a>`;
 }
 function hostOf(url: string): string { try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; } }
+/** Only https addresses become links or pictures; anything else is shown as text (or not at all). */
+export function safeHttps(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try { const u = new URL(url); return u.protocol === 'https:' && !/[\s"'<>`]/.test(url) ? url : null; } catch { return null; }
+}
+const link = (url: string | null | undefined, text: string, attrs = ' rel="noopener"') => { const ok = safeHttps(url); return ok ? `<a href="${e(ok)}"${attrs}>${e(text)}</a>` : e(text); };
 
 /** The picture shown to the owner: a privately reviewed hero is served from the private route until it is released. */
 function pictureSrc(b: Brand, article: Article, image: ArticleBody['image']): string | null {
   if (!image.url) return null;
   const hero = article.heroMedia;
-  if (hero && image.url === hero.reservation.prospectiveUrl) return `${SEO_BLOG_BASE}/b/${b.id}/media/${hero.reservation.assetId}/${hero.reservation.assetSha256}.jpg`;
-  return image.url;
+  if (hero && image.url === hero.reservation.prospectiveUrl && /^[0-9a-f-]{36}$/i.test(hero.reservation.assetId) && /^[0-9a-f]{64}$/i.test(hero.reservation.assetSha256)) return `${SEO_BLOG_BASE}/b/${b.id}/media/${hero.reservation.assetId}/${hero.reservation.assetSha256}.jpg`;
+  return safeHttps(image.url);
 }
 
-// ─── The state of the article and its one main action ───────────────────────
+// ─── Where the article is: one sentence, shared by the article bar and the articles list ─────────────
+
+export type SituationKind = 'writing' | 'live' | 'publishing' | 'checking' | 'owner_hold' | 'must_fix' | 'rewriting' | 'failed' | 'paused' | 'held' | 'scheduled' | 'due' | 'no_website' | 'ready' | 'approved' | 'auto_ready';
+type Group = 'ready' | 'coming' | 'writing' | 'live';
+export interface Situation {
+  readonly kind: SituationKind;
+  /** The sentence in the article page's bar. */
+  readonly bar: string;
+  /** The grey line in the articles list. */
+  readonly line: string;
+  readonly group: Group;
+}
+
+/**
+ * Where an article is, from the same facts for the list row and the article page. Approval counts when it is for
+ * the current version (versions never change, so this is the engine's exact-version rule).
+ */
+export function situation(a: Article, b: Pick<Brand, 'settings' | 'timezone'>, now: string, websites: number): Situation {
+  const today = now.slice(0, 10);
+  const s = (kind: SituationKind, group: Group, bar: string, line: string): Situation => ({ kind, group, bar, line });
+  if (!a.currentVersionId) return s('writing', 'writing', 'This article is being written.', 'Being written');
+  if (a.delivery === 'published' && a.publishedVersionId === a.currentVersionId) {
+    const since = a.publishedAt ? shortWhen(instant(a.publishedAt, b.timezone).date, null, today) : null;
+    return s('live', 'live', `Live on your website${since ? ` since ${since}` : ''}.`, since ? `Live since ${since}` : 'Live');
+  }
+  if (a.delivery === 'publishing') return s('publishing', 'coming', 'Going onto your website now.', 'Going onto your website now');
+  if (a.delivery === 'unknown') return s('checking', 'coming', 'We are checking whether it reached your website. You do not need to do anything.', 'Checking it reached your website');
+  const rewriteFailed = a.editorialState === 'failed' ? ' The last rewrite did not finish; this version is unchanged.' : '';
+  if (a.hold?.reason === 'owner') return s('owner_hold', 'ready', `You asked for this not to go out yet.${rewriteFailed}`, 'On hold: you asked for this not to go out yet');
+  const critical = (a.checks?.issues ?? []).filter((i) => i.severity === 'critical').length;
+  if (critical) return s('must_fix', 'ready', `${critical === 1 ? '1 thing' : `${critical} things`} to fix before this can go out.${rewriteFailed}`, critical === 1 ? 'Needs one fix' : `Needs ${critical} fixes`);
+  const approved = Boolean(a.approval && a.approval.versionId === a.currentVersionId);
+  const needsApproval = approvalRequired(b.settings.autoPublish, a.requiresApproval);
+  const future = a.schedule && Date.parse(a.schedule.publishAtUtc) > Date.parse(now) ? a.schedule : null;
+  if (a.editorialState === 'writing') {
+    if (future && (approved || !needsApproval)) return s('rewriting', 'coming', `A rewrite is running. The approved version still goes out on ${longWhen(future.localDate, future.localTime, today)} unless you take it off the calendar.`, `Going out ${shortWhen(future.localDate, future.localTime, today)} · a rewrite is running`);
+    return s('rewriting', 'writing', 'A rewrite is running. This version stays here until the new one is ready.', 'Being rewritten');
+  }
+  if (a.delivery === 'failed') return s('failed', 'ready', `It did not reach your website last time.${rewriteFailed}`, 'Did not reach your website');
+  if (b.settings.pauseAll) return s('paused', 'ready', `Publishing is paused for this business. Switch it back on first.${future ? ' If it is still paused at its time, this article will be held and you will need to choose a new time.' : ''}`, 'Publishing is paused');
+  if (a.hold) {
+    const retime = ['missing_approval', 'missed_window', 'stale_version', 'paused'].includes(a.hold.reason) ? ' Choose when it should go out now.' : '';
+    return s('held', 'ready', `${plainHold(a.hold.reason)}${retime}${rewriteFailed}`, `On hold: ${plainHold(a.hold.reason).replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}`);
+  }
+  if (future && (approved || !needsApproval)) return s('scheduled', 'coming', `Going out on ${longWhen(future.localDate, future.localTime, today)}.${rewriteFailed}`, `Going out ${shortWhen(future.localDate, future.localTime, today)}`);
+  if (a.schedule && !future && (approved || !needsApproval)) return s('due', 'coming', 'Its time has come: it goes onto your website within the next few minutes.', 'Going out now');
+  const liveNote = a.publishedUrl ? ' An earlier version is live on your website; this one would replace it.' : '';
+  if (!websites) return s('no_website', 'ready', `Ready for you to read. Your website is not connected yet, so it cannot go out.${rewriteFailed}`, 'Ready for you to read · website not connected');
+  if (needsApproval && !approved) {
+    const planned = future ? ` It is planned for ${shortWhen(future.localDate, future.localTime, today)}.` : '';
+    return s('ready', 'ready', `Ready for you to read.${planned}${liveNote}${rewriteFailed}`, a.publishedUrl ? 'Live · your changes are waiting for you' : future ? `Ready for you to read · planned for ${shortWhen(future.localDate, null, today)}` : 'Ready for you to read');
+  }
+  if (approved) return s('approved', 'ready', `Approved, but not on the calendar yet.${liveNote}${rewriteFailed}`, 'Approved, not on the calendar yet');
+  return s('auto_ready', 'ready', `Ready. Automatic publishing is on, but it has no time yet.${liveNote}${rewriteFailed}`, 'Ready, no time yet');
+}
+
+// ─── The article's one main action ───────────────────────────────────────────
 
 interface BarAction { readonly html: string }
 interface ScreenState {
@@ -206,62 +271,74 @@ interface ScreenState {
   readonly secondary: readonly BarAction[];
 }
 
-function laterPanel(shell: Shell, base: string, label: string, v: ArticleVersion, a: Article, connected: readonly PublicDestination[], route: 'approve-publish' | 'schedule', primary: boolean): string {
+function siteSelect(connected: readonly PublicDestination[], selected: string | null | undefined, id: string): string {
+  if (connected.length > 1) return `<label for="${id}">Website</label><select id="${id}" name="destinationId">${connected.map((d) => `<option value="${e(d.id)}"${d.id === selected ? ' selected' : ''}>${e(d.label)}</option>`).join('')}</select>`;
+  return connected[0] ? hidden({ destinationId: connected[0].id }) : '';
+}
+
+function laterPanel(shell: Shell, base: string, label: string, v: ArticleVersion, a: Article, connected: readonly PublicDestination[], route: 'approve-publish' | 'schedule', primary: boolean, siteId: string | null, now: string): string {
   const b = shell.brand!;
   const s = a.schedule;
-  const today = instant(new Date().toISOString(), b.timezone).date;
-  const site = connected.length > 1
-    ? `<label for="later-site">Website</label><select id="later-site" name="destinationId">${connected.map((d) => `<option value="${e(d.id)}"${d.id === s?.destinationId ? ' selected' : ''}>${e(d.label)}</option>`).join('')}</select>`
-    : connected[0] ? hidden({ destinationId: connected[0].id }) : '';
-  const fields = route === 'schedule' ? hidden({ rowVersion: a.rowVersion }) : hidden({ versionId: v.id, when: 'at' });
-  return `<details class="ap-later"><summary class="${primary ? 'button ap-primary' : 'ap-textbutton'}"${primary ? ' data-primary' : ''}>${e(label)}</summary><div class="ap-panel"><form method="post" action="${base}/${route}">${csrfField(shell.csrf)}${fields}
-<div class="ap-when"><div><label for="later-date">Day</label><input id="later-date" type="date" name="localDate" min="${today}" value="${e(s?.localDate ?? '')}" required></div><div><label for="later-time">Time</label><input id="later-time" type="time" name="localTime" value="${e(s?.localTime ?? b.settings.cadence.localTime)}" required></div></div>${site}
+  const today = instant(now, b.timezone).date;
+  const fields = route === 'schedule' ? hidden({ rowVersion: a.rowVersion }) : hidden({ versionId: v.id, when: 'at', rowVersion: a.rowVersion });
+  const id = route === 'schedule' ? 'change' : 'later';
+  return `<details class="ap-later"><summary class="${primary ? 'button ap-primary' : 'ap-textbutton'}"${primary ? ' data-primary' : ''}>${e(label)}</summary><div class="ap-panel"><form method="post" action="${e(`${base}/${route}`)}">${csrfField(shell.csrf)}${fields}
+<div class="ap-when"><div><label for="${id}-date">Day</label><input id="${id}-date" type="date" name="localDate" min="${today}" value="${e(s?.localDate ?? '')}" required></div><div><label for="${id}-time">Time</label><input id="${id}-time" type="time" name="localTime" value="${e(s?.localTime ?? b.settings.cadence.localTime)}" required></div></div>${siteSelect(connected, route === 'schedule' ? s?.destinationId : siteId, `${id}-site`)}
 <p class="ap-note">${route === 'approve-publish' ? 'This approves the article as it is now. ' : ''}Times are ${b.timezone === 'Europe/London' ? 'UK time' : e(b.timezone)}.</p><button type="submit" class="secondary">${route === 'schedule' ? 'Save the new time' : 'Approve and publish then'}</button></form></div></details>`;
+}
+
+/** "Goes out on Tue 18 Nov at 9:00 on Key Properties blog", or "in about 6 minutes". */
+function whenItGoes(slot: PlannedSlot, siteLabel: string | null, now: string, websites: number): string {
+  const minutes = Math.round((Date.parse(slot.publishAtUtc) - Date.parse(now)) / 60_000);
+  const when = minutes < 15 ? `in about ${Math.max(1, minutes)} minute${minutes === 1 ? '' : 's'}` : `on ${longWhen(slot.localDate, slot.localTime, now.slice(0, 10))}`;
+  return `goes out ${when}${websites > 1 && siteLabel ? ` on ${siteLabel}` : ''}`;
 }
 
 function screenState(shell: Shell, d: ArticlePageData, v: ArticleVersion, critical: readonly CheckIssue[]): ScreenState {
   const b = shell.brand!;
   const a = d.article;
   const base = brandUrl(b, `articles/${a.id}`);
+  const now = d.now ?? new Date().toISOString();
   const connected = d.destinations.filter((x) => x.status === 'connected');
-  const approvePublish = (label: string) => ({ html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'next' }, label, { primary: true }) });
-  const later = (label = 'Publish later') => ({ html: laterPanel(shell, base, label, v, a, connected, 'approve-publish', false) });
-  const liveNote = a.publishedUrl && a.publishedVersionId !== v.id ? ' An earlier version is live on your website; this one would replace it.' : '';
-  if (a.delivery === 'published' && a.publishedVersionId === v.id) {
-    const since = a.publishedAt ? ` since ${shortWhen(instant(a.publishedAt, b.timezone).date, null, (d.now ?? new Date().toISOString()).slice(0, 10))}` : '';
-    return { kind: 'published', sentence: `Live on your website${since}.`, primary: a.publishedUrl ? { html: primaryLink(a.publishedUrl, 'View it', true) } : null, secondary: [] };
-  }
-  if (a.delivery === 'publishing') return { kind: 'publishing', sentence: 'Going onto your website now.', primary: null, secondary: [] };
-  if (a.delivery === 'unknown') return { kind: 'unknown', sentence: 'We are checking whether it reached your website. You do not need to do anything.', primary: null, secondary: [] };
-  if (a.hold?.reason === 'owner') return { kind: 'owner_hold', sentence: 'You asked for this not to go out yet.', primary: { html: postButton(shell, `${base}/hold`, { rowVersion: a.rowVersion, held: '0' }, 'Allow it to go out', { primary: true }) }, secondary: [] };
-  if (critical.length) return { kind: 'must_fix', sentence: `${critical.length === 1 ? '1 thing' : `${critical.length} things`} to fix before this can go out.`, primary: { html: primaryLink('#fix', 'Show me') }, secondary: [] };
-  if (!connected.length) return { kind: 'no_website', sentence: 'Ready for you to read. Your website is not connected yet, so it cannot go out.', primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, 'Connect your website') }, secondary: [] };
-  if (a.delivery === 'failed') {
-    return { kind: 'failed', sentence: 'It did not reach your website last time.', detail: a.failure ?? undefined, primary: { html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'now' }, 'Try again now', { primary: true }) }, secondary: [later('Choose a time')] };
-  }
-  if (a.hold) {
-    const why = plainHold(a.hold.reason);
-    if (a.hold.reason === 'paused' && b.settings.pauseAll) return { kind: 'held', sentence: `${why} Publishing is still paused for your business.`, primary: { html: primaryLink(brandUrl(b, 'publishing'), 'Open publishing settings') }, secondary: [] };
-    if (a.hold.reason === 'destination') return { kind: 'held', sentence: why, primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, 'Check the connection') }, secondary: [later('Choose a new time')] };
-    if (a.hold.reason === 'budget') return { kind: 'held', sentence: why, primary: { html: primaryLink(brandUrl(b, 'publishing'), 'Check the allowance') }, secondary: [] };
-    if (a.hold.reason === 'checks_failed') return { kind: 'held', sentence: why, primary: { html: postButton(shell, `${base}/checks`, {}, 'Check it again', { primary: true }) }, secondary: [] };
-    return { kind: 'held', sentence: `${why} Choose when it should go out now.`, primary: approvePublish('Approve and publish'), secondary: [later('Choose a time')] };
-  }
-  const needsApproval = approvalRequired(b.settings.autoPublish, a.requiresApproval);
+  const plan = d.plan ?? fallbackPlan(b, a, d.destinations, now);
+  const sit = situation({ ...a, checks: a.checks ? { ...a.checks, issues: critical.length ? a.checks.issues : a.checks.issues.filter((i) => i.severity !== 'critical') } : null }, b, now, connected.length);
+  const later = (label = 'Publish later') => ({ html: laterPanel(shell, base, label, v, a, connected, 'approve-publish', false, plan.site?.id ?? null, now) });
   const approved = approvalIsCurrent(a, v);
-  const nowIso = d.now ?? new Date().toISOString();
-  const today = nowIso.slice(0, 10);
-  const future = a.schedule && Date.parse(a.schedule.publishAtUtc) > Date.parse(nowIso) ? a.schedule : null;
-  if (future && (approved || !needsApproval)) {
-    const paused = b.settings.pauseAll ? ' Publishing is paused for your business, so it will wait until you switch it back on.' : '';
-    return { kind: 'scheduled', sentence: `Going out on ${longWhen(future.localDate, future.localTime, today)}.${paused}`, primary: { html: laterPanel(shell, base, 'Change the time', v, a, connected, 'schedule', true) },
-      secondary: [{ html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'now' }, 'Publish now', { cls: 'ap-textbutton' }) }] };
+  /** The main press, bound to the website and time shown beside it. */
+  const press = (label: string, lead: string): ScreenState => {
+    if (!plan.site || !plan.slot) return { kind: sit.kind, sentence: `${lead} There is no free publishing day in your plan, so choose a time.`, primary: { html: laterPanel(shell, base, 'Choose a time', v, a, connected, 'approve-publish', true, plan.site?.id ?? null, now) }, secondary: [] };
+    const goes = whenItGoes(plan.slot, plan.site.label, now, connected.length);
+    return { kind: sit.kind, sentence: `${lead} ${label}: it ${goes}.`,
+      primary: { html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'planned', localDate: plan.slot.localDate, localTime: plan.slot.localTime, destinationId: plan.site.id, rowVersion: plan.rowVersion }, label, { primary: true }) },
+      secondary: [later()] };
+  };
+  const detail = a.hold && a.hold.reason !== 'owner' ? a.hold.detail : undefined;
+  switch (sit.kind) {
+    case 'live': return { kind: sit.kind, sentence: sit.bar, primary: safeHttps(a.publishedUrl) ? { html: primaryLink(a.publishedUrl!, 'View it', true) } : null, secondary: [] };
+    case 'publishing': case 'checking': case 'rewriting': case 'due': return { kind: sit.kind, sentence: sit.bar, primary: null, secondary: [] };
+    case 'owner_hold': return { kind: sit.kind, sentence: sit.bar, primary: { html: postButton(shell, `${base}/hold`, { rowVersion: a.rowVersion, held: '0' }, 'Allow it to go out', { primary: true }) }, secondary: [] };
+    case 'must_fix': return { kind: sit.kind, sentence: sit.bar, primary: { html: primaryLink('#fix', 'Show me') }, secondary: [] };
+    case 'no_website': return { kind: sit.kind, sentence: sit.bar, primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, 'Connect your website') }, secondary: [] };
+    case 'paused': return { kind: sit.kind, sentence: sit.bar, primary: { html: primaryLink(`${brandUrl(b, 'publishing')}#pause`, 'Switch publishing back on') }, secondary: [] };
+    case 'failed': return { kind: sit.kind, sentence: sit.bar, detail: a.failure ?? undefined, primary: { html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'now', destinationId: a.schedule?.destinationId ?? plan.site?.id ?? '', rowVersion: a.rowVersion }, 'Try again now', { primary: true }) }, secondary: [later('Choose a time')] };
+    case 'held':
+      if (a.hold?.reason === 'destination') return { kind: sit.kind, sentence: sit.bar, detail, primary: { html: primaryLink(`${brandUrl(b, 'setup')}#websites`, 'Check the connection') }, secondary: [later('Choose a new time')] };
+      if (a.hold?.reason === 'budget') return { kind: sit.kind, sentence: sit.bar, detail, primary: { html: primaryLink(brandUrl(b, 'publishing'), 'Check the allowance') }, secondary: [] };
+      if (a.hold?.reason === 'checks_failed' || a.hold?.reason === 'outcome_unknown') return { kind: sit.kind, sentence: sit.bar, detail, primary: { html: postButton(shell, `${base}/checks`, {}, 'Check it again', { primary: true }) }, secondary: [] };
+      return { ...press(approved ? 'Publish' : 'Approve and publish', sit.bar.replace(' Choose when it should go out now.', '')), detail };
+    case 'scheduled': {
+      const s = a.schedule!;
+      return { kind: sit.kind, sentence: `${sit.bar.replace(/\.$/, '')}${connected.length > 1 ? ` on ${connected.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : ''}.`, primary: { html: laterPanel(shell, base, 'Change the time', v, a, connected, 'schedule', true, null, now) },
+        secondary: [{ html: postButton(shell, `${base}/approve-publish`, { versionId: v.id, when: 'now', destinationId: s.destinationId, rowVersion: a.rowVersion }, 'Publish now', { cls: 'ap-textbutton' }) }] };
+    }
+    case 'ready': return press('Approve and publish', sit.bar);
+    default: return press('Publish', sit.bar);
   }
-  if (needsApproval && !approved) {
-    const planned = future ? ` It is planned for ${shortWhen(future.localDate, future.localTime, today)}.` : '';
-    return { kind: 'ready', sentence: `Ready for you to read.${planned}${liveNote}`, primary: approvePublish('Approve and publish'), secondary: [later()] };
-  }
-  return { kind: 'approved', sentence: `${approved ? 'Approved' : 'Ready'}, but not on the calendar yet.${liveNote}`, primary: approvePublish('Publish'), secondary: [later()] };
+}
+
+function fallbackPlan(b: Brand, a: Article, destinations: readonly PublicDestination[], now: string): PublishingPlan {
+  const site = publishingSite(a, b, destinations, now);
+  return { site: site ? { id: site.id, label: site.label } : null, websites: destinations.filter((x) => x.status === 'connected').length, slot: site ? nextPublishingSlot(a, b, [], site.id, now) : null, paused: b.settings.pauseAll, now, rowVersion: a.rowVersion };
 }
 
 // ─── The article page ────────────────────────────────────────────────────────
@@ -277,6 +354,8 @@ export interface ArticlePageData {
   readonly jobs?: readonly Job[];
   readonly mode?: ArticlePageMode;
   readonly open?: readonly string[];
+  /** Where and when the main press would put it (computed by the engine; recomputed here when absent). */
+  readonly plan?: PublishingPlan;
   /** The planned working title, shown while the article has no written version. */
   readonly workingTitle?: string | null;
   /** The current instant (tests and screenshots pin it). */
@@ -294,8 +373,8 @@ function readingColumn(b: Brand, a: Article, body: ArticleBody): string {
     ...body.sections.map((s) => `<section class="ap-part" id="part-${e(s.id)}"><h2>${e(s.heading)}</h2>\n${md(s.body, true)}</section>`),
     body.faqs.length ? `<section class="ap-part" id="questions"><h2>Frequently asked questions</h2>\n${body.faqs.map((f, i) => `<div id="question-${i + 1}"><h3>${e(f.q)}</h3>\n${md(f.a)}</div>`).join('\n')}</section>` : '',
     `<div id="closing">${md(body.conclusion)}</div>`,
-    body.cta ? `<p><a class="ap-cta" href="${e(body.cta.url)}" rel="noopener">${e(body.cta.label)}</a></p>` : '',
-    cites.list.length ? `<section class="ap-sources" aria-label="Sources"><h2>Sources</h2><ol>${cites.list.map((c, i) => `<li id="source-${i + 1}"><a href="${e(c.url)}" rel="noopener">${e(c.title)}</a> (accessed ${e(c.retrievedAt.slice(0, 10))})</li>`).join('')}</ol></section>` : '',
+    body.cta ? (safeHttps(body.cta.url) ? `<p><a class="ap-cta" href="${e(body.cta.url)}" rel="noopener">${e(body.cta.label)}</a></p>` : `<p>${e(body.cta.label)}</p>`) : '',
+    cites.list.length ? `<section class="ap-sources" aria-label="Sources"><h2>Sources</h2><ol>${cites.list.map((c, i) => `<li id="source-${i + 1}">${link(c.url, c.title)} (accessed ${e(c.retrievedAt.slice(0, 10))})</li>`).join('')}</ol></section>` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -303,7 +382,8 @@ const rowsFor = (text: string, perLine = 68) => Math.max(1, text.split('\n').red
 
 /** The same column, editable in place. Bodies stay Markdown; citation markers are hidden and put back on save. */
 function editingColumn(body: ArticleBody): string {
-  const area = (name: string, id: string, value: string, cls: string, label: string, extra = '') =>
+  // Line breaks are shown as plain new lines whatever an older editor stored (a no-change save stays a no-change save).
+  const area = (name: string, id: string, raw: string, cls: string, label: string, extra = '', value = raw.replace(/\r\n?/g, '\n')) =>
     `<label class="ap-sr" for="${id}">${e(label)}</label><textarea id="${id}" name="${name}" class="ap-edit ${cls}" rows="${rowsFor(value, cls === 'ap-edit-h1' ? 34 : cls === 'ap-edit-h2' ? 48 : 68)}"${extra}>\n${e(value)}</textarea>`;
   return [
     area('title', 'edit-title', body.title, 'ap-edit-h1', 'Title', ' maxlength="200" required'),
@@ -327,7 +407,9 @@ ${perMonth > 0
     ? `<details class="ap-choice"><summary class="ap-textbutton">Make one for me</summary><form method="post" action="${base}/image-request">${csrfField(shell.csrf)}${hidden({ versionId: v.id, commandId: randomUUID() })}<p class="ap-note">This asks our picture service to make one illustration for this article. It uses 1 of your ${perMonth} pictures this month. You check it before it is used.</p><button type="submit" class="secondary">Make a picture</button></form></details>`
     : `<p class="ap-choice ap-note">Making pictures is switched off for your business. You can switch it on in <a href="${brandUrl(b, 'publishing')}">Publishing</a>.</p>`}
 </div>`;
-  if (src) return `<figure class="ap-pic" id="picture"><img src="${e(src)}" alt="${e(v.body.image.alt)}"><figcaption><details class="ap-change"><summary class="ap-textbutton">Change picture</summary>${choices}</details></figcaption></figure>`;
+  const remove = v.body.image.kind !== 'none' || v.body.image.url ? `<details class="ap-change ap-remove"><summary class="ap-textbutton">Remove the picture</summary><div class="ap-panel ap-choices"><p class="ap-note">The article will have no picture. This makes a new version, so you’ll approve it again.</p>${postButton(shell, `${base}/picture-remove`, { versionId: v.id }, 'Remove the picture')}</div></details>` : '';
+  if (src) return `<figure class="ap-pic" id="picture"><img src="${e(src)}" alt="${e(v.body.image.alt)}"><figcaption><details class="ap-change"><summary class="ap-textbutton">Change picture</summary>${choices}</details>${remove}</figcaption></figure>`;
+  if (remove) return `<div class="ap-pic ap-pic-empty" id="picture"><p>This picture’s address cannot be shown here.</p><details class="ap-change"><summary class="button secondary">Choose another picture</summary>${choices}</details>${remove}</div>`;
   return `<div class="ap-pic ap-pic-empty" id="picture"><p>No picture yet</p><details class="ap-change"><summary class="button secondary">Add a picture</summary>${choices}</details></div>`;
 }
 
@@ -335,19 +417,19 @@ function improvements(shell: Shell, base: string, v: ArticleVersion, warnings: r
   const b = shell.brand!;
   const list = warnings.filter((w) => w.code !== 'image.none');
   const label = list.length ? `${list.length} optional improvement${list.length === 1 ? '' : 's'}` : 'No problems found';
-  return `<details class="ap-quiet" id="improve"${open ? ' open' : ''}><summary>${label}</summary><div class="ap-panel">${list.length ? `<ul class="ap-list">${list.map((w) => { const t = fixTarget(b, base, w, v); return `<li>${e(plainCheck(w))} <a href="${e(t.href)}">${e(t.label)}</a></li>`; }).join('')}</ul>` : '<p class="ap-note">These checks look for gaps and risky claims. They are a help, not a guarantee.</p>'}
+  return `<details class="ap-quiet" id="improve"${open ? ' open' : ''}><summary>${label}</summary><div class="ap-panel">${list.length ? `<ul class="ap-list">${list.map((w) => { const t = fixTarget(b, base, w, v); return `<li>${e(plainCheck(w))} <a href="${e(t.href)}">${e(t.label)}</a><br><span class="ap-note">How to fix it: ${e(w.fix)}</span></li>`; }).join('')}</ul>` : '<p class="ap-note">These checks look for gaps and risky claims. They are a help, not a guarantee.</p>'}
 ${postButton(shell, `${base}/checks`, {}, 'Run checks again', { cls: 'ap-textbutton' })}</div></details>`;
 }
 
 function mustFix(shell: Shell, base: string, v: ArticleVersion, critical: readonly CheckIssue[]): string {
   if (!critical.length) return '';
   const b = shell.brand!;
-  return `<section class="ap-fix" id="fix" aria-labelledby="fix-title"><h2 id="fix-title">${critical.length === 1 ? 'One thing to fix' : `${critical.length} things to fix`} before this can go out</h2><ul>${critical.map((c) => { const t = fixTarget(b, base, c, v); return `<li><span>${e(plainCheck(c))}</span><a class="button secondary" href="${e(t.href)}">${e(t.label)}</a></li>`; }).join('')}</ul></section>`;
+  return `<section class="ap-fix" id="fix" aria-labelledby="fix-title"><h2 id="fix-title">${critical.length === 1 ? 'One thing to fix' : `${critical.length} things to fix`} before this can go out</h2><ul>${critical.map((c) => { const t = fixTarget(b, base, c, v); return `<li><span>${e(plainCheck(c))}<br><span class="ap-note">How to fix it: ${e(c.fix)}</span></span><a class="button secondary" href="${e(t.href)}">${e(t.label)}</a></li>`; }).join('')}</ul></section>`;
 }
 
 function dispatchLine(d: SocialDispatch, timezone: string): string {
   const local = instant(d.scheduledFor, timezone);
-  return `${shortWhen(local.date, local.time)}: ${d.state === 'queued' ? 'waiting to send' : `not sent. ${d.detail ?? ''}`}`;
+  return `${shortWhen(local.date, local.time)}: ${d.state === 'queued' ? `waiting to send. Just before sending we check it again; this account sends at most ${d.dailyCap} a day and ${d.monthlyCap} a month` : `not sent. ${d.detail ?? ''}`}`;
 }
 
 function plainPostHold(hold: string): string {
@@ -384,15 +466,17 @@ function postsSection(shell: Shell, d: ArticlePageData, v: ArticleVersion, base:
   const pack = v.promotionPack;
   const pic = pictureSrc(b, a, v.body.image);
   if (!pack) return `<section class="ap-posts" aria-labelledby="posts-title"><h2 id="posts-title">Posts that go out with this article</h2><p class="ap-note">No posts were written for this older version of the article.</p></section>`;
-  const pending = pack.canonicalUrl ? pack.posts.filter((p) => !linkedPromotionFor(a, v, p.network)) : [];
+  // A post counts as approved only with a current approval; one from before scheduling support is renewed.
+  const isApproved = (network: 'instagram' | 'linkedin') => Boolean(linkedPromotionFor(a, v, network)?.approvalRequestId);
+  const pending = pack.canonicalUrl ? pack.posts.filter((p) => !isApproved(p.network)) : [];
   const cards = pack.posts.map((post) => {
-    const approved = Boolean(linkedPromotionFor(a, v, post.network));
+    const approved = isApproved(post.network);
     const hold = promotionPublicationHold(a, v, post.network);
     return `<article class="ap-post" aria-label="${e(NETWORK[post.network] ?? post.network)} post"><header><strong>${e(NETWORK[post.network] ?? post.network)}</strong><span class="ap-note">${approved ? 'Approved' : 'Not approved yet'}</span></header>
 ${pic ? `<img src="${e(pic)}" alt="${e(v.body.image.alt)}">` : ''}<p class="ap-post-text">${e(post.copy)}</p>${pack.canonicalUrl ? `<p class="ap-post-link">${e(pack.canonicalUrl)}</p>` : ''}
 <p class="ap-note">${e(hold ? plainPostHold(hold) : 'Ready to send.')}</p>
 <details class="ap-choice"><summary class="ap-textbutton">Picture idea</summary><p class="ap-note">${e(post.artworkInstructions)}</p></details>
-${approved ? '' : postButton(shell, `${base}/promotion-approve`, { versionId: v.id, packSha: sha256(pack), network: post.network }, 'Approve this post', { disabled: !pack.canonicalUrl })}
+${approved ? '' : postButton(shell, `${base}/promotion-approve`, { versionId: v.id, packSha: sha256(pack), network: post.network }, linkedPromotionFor(a, v, post.network) ? 'Approve this post again' : 'Approve this post', { disabled: !pack.canonicalUrl })}
 ${postSending(shell, a, v, post.network, base, d.social)}</article>`;
   }).join('');
   return `<section class="ap-posts" aria-labelledby="posts-title"><h2 id="posts-title">Posts that go out with this article</h2>
@@ -427,7 +511,7 @@ function whereFold(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: st
   const b = shell.brand!;
   const a = d.article;
   const connected = d.destinations.filter((x) => x.status === 'connected');
-  const site = connected.find((x) => x.id === a.schedule?.destinationId) ?? connected.find((x) => x.id === b.settings.programme?.structure?.destinationId) ?? connected[0];
+  const site = publishingSite(a, b, connected, d.now ?? new Date().toISOString());
   const address = v.websiteTarget?.target.canonicalUrl ?? a.publishedUrl ?? v.promotionPack?.canonicalUrl ?? null;
   const parts: string[] = [];
   parts.push(site ? `<p>It goes on <strong>${e(site.label)}</strong>${address ? ` at <span class="ap-url">${e(address)}</span>` : ''}.</p>` : `<p>Your website is not connected yet. <a href="${brandUrl(b, 'setup')}#websites">Connect it in Brand setup</a>.</p>`);
@@ -457,7 +541,7 @@ function deliveryChecks(shell: Shell, p: Publication, destination: PublicDestina
   const label = (state: string) => state === 'verified' ? 'showing' : state === 'different' ? 'showing something different' : 'not checked yet';
   const rows = evidence ? [['The article', evidence.article], ['Your blog page', evidence.index], ...evidence.categories.map((c, i) => [`Topic page ${i + 1}`, c] as const), ['Your site map (for Google)', evidence.sitemap]] as const : [];
   const repair = destination?.websiteCapability?.protocol === 'v2' && destination.websiteCapability.capabilities.repair.sitemap;
-  return `<div class="ap-delivery"><h3>Is it showing on your website?</h3>${evidence ? `<ul class="ap-list">${rows.map(([what, check]) => `<li>${e(what)}: ${e(label(check.state))}</li>`).join('')}</ul>` : '<p class="ap-note">We have not checked it yet.</p>'}
+  return `<div class="ap-delivery"><h3>Is it showing on your website?</h3>${evidence ? `<ul class="ap-list">${rows.map(([what, check]) => { const at = check.at ? instant(check.at, shell.brand!.timezone) : null; return `<li>${e(what)}: ${e(label(check.state))}${at ? ` <span class="ap-note">(checked ${e(shortWhen(at.date, at.time))})</span>` : ''}${check.state === 'different' && check.detail ? `<br><span class="ap-note">${e(check.detail)}</span>` : ''}</li>`; }).join('')}</ul>` : '<p class="ap-note">We have not checked it yet.</p>'}
 ${p.sitemapRepair ? `<p class="ap-note">Site map repair: ${e(p.sitemapRepair.state)}. ${e(p.sitemapRepair.detail)}</p>` : ''}
 ${postButton(shell, `${base}/delivery-recheck`, { publicationId: p.id }, 'Check again')}
 ${repair ? `<details class="ap-choice"><summary class="ap-textbutton">Add it to the site map only</summary><form method="post" action="${base}/sitemap-repair">${csrfField(shell.csrf)}${hidden({ publicationId: p.id, commandId: randomUUID() })}<p class="ap-note">This only adds this article to your site map. The article itself is not sent again.</p>${p.sitemapRepair?.uncertain && p.sitemapRepair.state !== 'done' ? '<label class="ap-check"><input type="checkbox" name="acknowledgeUnknown" value="1" required> I have checked the earlier attempt and want to try again.</label>' : ''}<button class="secondary" type="submit">Add to the site map</button></form></details>` : ''}</div>`;
@@ -466,21 +550,23 @@ ${repair ? `<details class="ap-choice"><summary class="ap-textbutton">Add it to 
 function sourcesFold(v: ArticleVersion, open: boolean): string {
   const cites = citationNumbers(v.body);
   const ordered = [...cites.list, ...v.body.citations.filter((c) => !cites.list.includes(c))];
-  return fold('sources', 'Where the facts came from', ordered.length ? `<ol class="ap-source-list">${ordered.map((c) => `<li><a href="${e(c.url)}" rel="noopener">${e(c.title)}</a> <span class="ap-note">${e(hostOf(c.url))}${c.public ? '' : ' · used for research, not shown to readers'}</span><details><summary class="ap-textbutton">show</summary><p class="ap-note">${e(c.passage)}</p></details></li>`).join('')}</ol>` : '<p class="ap-note">No sources are recorded for this version.</p>', open);
+  return fold('sources', 'Where the facts came from', ordered.length ? `<ol class="ap-source-list">${ordered.map((c) => `<li>${link(c.url, c.title)} <span class="ap-note">${e(hostOf(c.url))}${c.public ? '' : ' · used for research, not shown to readers'}</span><details><summary class="ap-textbutton">show</summary><p class="ap-note">${e(c.passage)}</p></details></li>`).join('')}</ol>` : '<p class="ap-note">No sources are recorded for this version.</p>', open);
 }
 
 function historyFold(shell: Shell, d: ArticlePageData, base: string, open: boolean): string {
   const tz = shell.brand!.timezone;
   const change: Record<string, string> = { generated: 'Written', edited: 'You edited it', section_regenerated: 'One part rewritten', regenerated: 'Rewritten', image_changed: 'Picture changed', metadata_changed: 'Details changed' };
   const versions = [...d.versions].reverse().map((x) => { const at = instant(x.createdAt, tz); return `<li><span>Version ${x.number}${x.id === d.article.currentVersionId ? ' (this one)' : ''} · ${e(change[x.change] ?? 'Changed')} · ${e(shortWhen(at.date, at.time))}</span> <a href="${base}/preview?v=${e(x.id)}" target="_blank" rel="noopener">Preview</a></li>`; }).join('');
-  const attempts = d.publications.length ? `<h3>Publishing attempts</h3><ul class="ap-list">${d.publications.map((p) => `<li>${e(({ prepared: 'Getting ready', submitted: 'Sent to your website', outcome_unknown: 'Result not confirmed', verifying: 'Checking it is live', published: 'Live', failed: 'Did not work', cancelled: 'Cancelled' } as Record<string, string>)[p.state] ?? p.state)}${p.verifiedAt ? ` · confirmed ${e(shortWhen(instant(p.verifiedAt, tz).date, instant(p.verifiedAt, tz).time))} at <a href="${e(p.publicUrl)}">${e(p.publicUrl)}</a>` : ''}<br><span class="ap-note">${e(p.detail)}</span></li>`).join('')}</ul>` : '';
+  const attempts = d.publications.length ? `<h3>Publishing attempts</h3><ul class="ap-list">${d.publications.map((p) => `<li>${e(({ prepared: 'Getting ready', submitted: 'Sent to your website', outcome_unknown: 'Result not confirmed', verifying: 'Checking it is live', published: 'Live', failed: 'Did not work', cancelled: 'Cancelled' } as Record<string, string>)[p.state] ?? p.state)}${p.verifiedAt ? ` · confirmed ${e(shortWhen(instant(p.verifiedAt, tz).date, instant(p.verifiedAt, tz).time))} at ${link(p.publicUrl, p.publicUrl)}` : ''}<br><span class="ap-note">${e(p.detail)}</span></li>`).join('')}</ul>` : '';
   return fold('history', 'Earlier versions', `<ul class="ap-list">${versions}</ul>${attempts}`, open);
 }
 
 function rewriteFold(shell: Shell, v: ArticleVersion, base: string, open: boolean): string {
-  return fold('rewrite', 'Ask for a rewrite', `<form method="post" action="${base}/rewrite">${csrfField(shell.csrf)}${hidden({ versionId: v.id })}<label for="rw-part">Which part?</label><select id="rw-part" name="sectionId"><option value="whole">The whole article</option>${v.body.sections.map((s) => `<option value="${e(s.id)}">${e(s.heading)}</option>`).join('')}</select>
+  return fold('rewrite', 'Ask for a rewrite', `<form method="post" action="${e(`${base}/rewrite`)}">${csrfField(shell.csrf)}${hidden({ versionId: v.id })}<label for="rw-part">Which part?</label><select id="rw-part" name="sectionId">${v.body.sections.map((s, i) => `<option value="${e(s.id)}"${i === 0 ? ' selected' : ''}>${e(s.heading)}</option>`).join('')}<option value="whole">The whole article</option></select>
 <label for="rw-what">What should change?</label><textarea id="rw-what" name="instruction" maxlength="1000" rows="3" placeholder="For example: make it simpler, add an example"></textarea>
-<p class="ap-note">One part: only that part changes and the rest stays exactly as it is. The whole article is written again from the same plan, and your note is not used. Either way it uses some of your monthly writing allowance, and you’ll approve it again.</p><button type="submit" class="secondary">Ask for the rewrite</button></form>`, open);
+<p>One part: only that part is rewritten, following your note, and the rest stays exactly as it is.</p>
+<p class="ap-warn"><strong>The whole article</strong> rewrites everything from the same plan. It uses about four times as much of your monthly writing allowance as one part, and your note is not used for it.</p>
+<p class="ap-note">Either way you’ll approve the article again.</p><button type="submit" class="secondary">Ask for the rewrite</button></form>`, open);
 }
 
 function moreMenu(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string {
@@ -488,6 +574,8 @@ function moreMenu(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: str
   const items: string[] = [];
   if (a.delivery !== 'publishing') items.push(`<a href="${base}?edit=1">Edit</a>`);
   items.push(`<a href="${base}?open=rewrite#rewrite">Ask for a rewrite</a>`);
+  // Plain approval, with no date: still reachable (for example while no website is connected).
+  if (a.delivery !== 'publishing' && !approvalIsCurrent(a, v)) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
   if (a.delivery !== 'publishing') items.push(postButton(shell, `${base}/hold`, { rowVersion: a.rowVersion, held: a.hold?.reason === 'owner' ? '0' : '1' }, a.hold?.reason === 'owner' ? 'Allow it to go out' : 'Don’t publish this', { cls: 'ap-menu-button' }));
   if (a.schedule && a.delivery !== 'publishing') items.push(postButton(shell, `${base}/unschedule`, { rowVersion: a.rowVersion }, 'Take it off the calendar', { cls: 'ap-menu-button' }));
   items.push(`<a href="${base}?open=download#download">Download</a>`, `<a href="${base}?open=history#history">Earlier versions</a>`, `<a href="${base}/preview?v=${e(v.id)}" target="_blank" rel="noopener">Open it as a web page</a>`,
@@ -554,39 +642,26 @@ export interface ArticleListRow {
   readonly image?: ArticleBody['image'];
 }
 
-type Group = 'ready' | 'coming' | 'writing' | 'live';
-
-function rowState(b: Brand, row: ArticleListRow, jobs: readonly Job[], today: string): { group: Group; line: string; retryJobId: string | null; link: WritingStatus['link'] } {
+function rowState(b: Brand, row: ArticleListRow, jobs: readonly Job[], now: string, websites: number): { group: Group; line: string; retryJobId: string | null; link: WritingStatus['link'] } {
   const a = row.article;
-  const none = { retryJobId: null, link: null };
   if (!a.currentVersionId) {
     const w = writingStatus(b, a, a.briefId, jobs);
     return { group: 'writing', line: w.sentence.replace(/\.$/, ''), retryJobId: w.retryJobId, link: w.link };
   }
-  const critical = (a.checks?.issues ?? []).filter((i) => i.severity === 'critical').length;
-  switch (row.status) {
-    case 'Published': return { ...none, group: 'live', line: `Live since ${a.publishedAt ? shortWhen(instant(a.publishedAt, b.timezone).date, null, today) : 'recently'}` };
-    case 'Scheduled': return { ...none, group: 'coming', line: a.schedule ? `Going out ${shortWhen(a.schedule.localDate, a.schedule.localTime, today)}` : 'Going out soon' };
-    case 'Publishing': return { ...none, group: 'coming', line: 'Going onto your website now' };
-    case 'Outcome unknown': return { ...none, group: 'coming', line: 'Checking it reached your website' };
-    default: break;
-  }
-  if (critical) return { ...none, group: 'ready', line: critical === 1 ? 'Needs one fix' : `Needs ${critical} fixes` };
-  if (row.status === 'Held') return { ...none, group: 'ready', line: plainHold(a.hold?.reason ?? '').replace(/\.$/, '') };
-  if (row.status === 'Failed') return { ...none, group: 'ready', line: 'Did not reach your website' };
-  if (row.status === 'Needs approval') return { ...none, group: 'ready', line: a.schedule ? `Ready for you to read · planned for ${shortWhen(a.schedule.localDate, null, today)}` : 'Ready for you to read' };
-  return { ...none, group: 'ready', line: 'Approved, not on the calendar yet' };
+  // The same sentence the article page's bar is built from.
+  const sit = situation(a, b, now, websites);
+  return { group: sit.group, line: sit.line, retryJobId: null, link: null };
 }
 
-export function articlesPage(shell: Shell, data: { articles: readonly ArticleListRow[]; jobs?: readonly Job[]; briefs?: readonly ArticleBrief[]; now?: string }): string {
+export function articlesPage(shell: Shell, data: { articles: readonly ArticleListRow[]; jobs?: readonly Job[]; briefs?: readonly ArticleBrief[]; now?: string; websites?: number }): string {
   const b = shell.brand!;
-  const today = (data.now ?? new Date().toISOString()).slice(0, 10);
+  const now = data.now ?? new Date().toISOString();
   const jobs = data.jobs ?? [];
   const briefs = new Map((data.briefs ?? []).map((x) => [x.id, x]));
   type Item = { href: string; title: string; line: string; excerpt: string; thumb: string | null; alt: string; retryJobId: string | null; link: WritingStatus['link']; sort: string };
   const groups: Record<Group, Item[]> = { ready: [], coming: [], writing: [], live: [] };
   for (const row of data.articles) {
-    const s = rowState(b, row, jobs, today);
+    const s = rowState(b, row, jobs, now, data.websites ?? 1);
     const brief = briefs.get(row.article.briefId);
     const title = row.article.currentVersionId ? row.title : brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase());
     const src = row.image ? pictureSrc(b, row.article, row.image) : null;
@@ -602,7 +677,7 @@ export function articlesPage(shell: Shell, data: { articles: readonly ArticleLis
   groups.coming.sort((x, y) => x.sort.localeCompare(y.sort));
   groups.live.sort((x, y) => y.sort.localeCompare(x.sort));
   const titles: Record<Group, string> = { ready: 'Ready for you', coming: 'Coming up', writing: 'Being written', live: 'Live' };
-  const row = (i: Item) => `<li class="al-row"><a class="al-link" href="${i.href}"><span class="al-thumb">${i.thumb ? `<img src="${e(i.thumb)}" alt="${e(i.alt)}">` : '<span class="al-thumb-empty" aria-hidden="true"></span>'}</span><span class="al-text"><span class="al-title">${e(i.title)}</span><span class="al-line${i.retryJobId || i.link ? ' al-line-wrap' : ''}">${e(i.line)}${i.excerpt ? ` · ${e(i.excerpt)}` : ''}</span></span></a>${i.retryJobId ? `<form method="post" action="${brandUrl(b, `jobs/${i.retryJobId}/retry`)}" class="al-act">${csrfField(shell.csrf)}${hidden({ back: 'articles' })}<button type="submit" class="secondary" title="Trying again uses some of your writing allowance">Try again</button></form>` : i.link ? `<a class="al-act ap-textbutton" href="${e(i.link.href)}">${e(i.link.label)}</a>` : ''}</li>`;
+  const row = (i: Item) => `<li class="al-row"><a class="al-link" href="${e(i.href)}"><span class="al-thumb">${i.thumb ? `<img src="${e(i.thumb)}" alt="${e(i.alt)}">` : '<span class="al-thumb-empty" aria-hidden="true"></span>'}</span><span class="al-text"><span class="al-title">${e(i.title)}</span><span class="al-line${i.retryJobId || i.link ? ' al-line-wrap' : ''}">${e(i.line)}${i.excerpt ? ` · ${e(i.excerpt)}` : ''}</span></span></a>${i.retryJobId ? `<form method="post" action="${e(brandUrl(b, `jobs/${i.retryJobId}/retry`))}" class="al-act">${csrfField(shell.csrf)}${hidden({ back: 'articles' })}<button type="submit" class="secondary">Try again</button><span class="ap-note al-cost">Uses some of your writing allowance.</span></form>` : i.link ? `<a class="al-act ap-textbutton" href="${e(i.link.href)}">${e(i.link.label)}</a>` : ''}</li>`;
   const sections = (['ready', 'coming', 'writing', 'live'] as const).filter((g) => groups[g].length).map((g) => `<section class="al-group" aria-labelledby="al-${g}"><h2 id="al-${g}">${titles[g]} <span class="al-count">(${groups[g].length})</span></h2><ul class="al-list">${groups[g].map(row).join('')}</ul></section>`).join('');
   return layout(shell, 'Articles', `<div class="al"><h1>Articles</h1>${sections || `<p class="al-empty">No articles yet. Choose topics in <a href="${brandUrl(b, 'topics')}">Topics</a> and they appear here as they are written.</p>`}</div>`, `<style>${ARTICLE_CSS}</style>`);
 }
@@ -636,13 +711,13 @@ button.ap-textbutton{border:0;background:none;color:var(--accent)}
 .ap-cta{display:inline-block;padding:10px 16px;border:1px solid var(--accent);border-radius:999px;text-decoration:none}
 .ap-sources{margin-top:2.4em;padding-top:1em;border-top:1px solid var(--line);font-size:15px;color:var(--muted)}.ap-sources h2{font-size:17px;margin:0 0 .6em}
 .ap-pic{margin:0 0 6px}.ap-pic img{display:block;width:100%;height:auto;max-height:420px;object-fit:cover;border-radius:16px;background:var(--bg)}
-.ap-pic figcaption{display:flex;justify-content:flex-end}
+.ap-pic figcaption{display:flex;justify-content:flex-end;gap:4px;flex-wrap:wrap}.ap-pic figcaption .ap-change{width:auto}
 .ap-pic-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:200px;padding:28px 16px;border-radius:16px;background:var(--bg);border:1px dashed color-mix(in srgb,var(--muted) 45%,transparent);text-align:center}
 .ap-pic-empty>p{margin:0;color:var(--muted);font-size:16px}
 .ap-change{width:100%;text-align:center}.ap-change>summary{cursor:pointer;margin:0 auto}
 .ap-choices{margin:12px auto 0;max-width:460px;text-align:left;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;font-size:15px;line-height:1.5}
 .ap-choice{margin:4px 0}.ap-choice form{padding:4px 0 10px}
-.ap-note{color:var(--muted);font-size:14px;line-height:1.5}
+.ap-note{color:var(--muted);font-size:14px;line-height:1.5}.ap-warn{padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--warn) 10%,var(--card));border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}.ap-menu .ap-inline .ap-note{display:block;padding:0 12px 6px;margin-top:-6px}
 .ap-quiet-line{color:var(--muted);font-size:15px;margin:0 0 14px}
 .ap-quiet{margin:0 0 22px;font-size:15px;color:var(--muted)}.ap-quiet>summary{cursor:pointer;display:inline-block;text-decoration:underline dotted;text-underline-offset:3px}
 .ap-quiet .ap-panel{margin-top:8px;padding:12px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;color:var(--ink)}
@@ -689,7 +764,7 @@ button.ap-textbutton{border:0;background:none;color:var(--accent)}
 .al-text{display:flex;flex-direction:column;min-width:0;gap:3px}
 .al-title{font-size:17px;font-weight:600;line-height:1.35}
 .al-line{font-size:14px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.al-act{flex:0 0 auto;margin:0}.al-line-wrap{white-space:normal}
+.al-act{flex:0 1 auto;margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;max-width:100%}.al-cost{font-size:13px}.al-line-wrap{white-space:normal}
 .al-empty{color:var(--muted)}
 @media(max-width:700px){
 .ap-bar{border-radius:0;margin:0 -16px 20px;border-left:0;border-right:0;padding:10px 16px}
