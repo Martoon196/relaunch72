@@ -139,6 +139,8 @@ export interface EngineDeps {
   readonly publishers: PublisherRegistry;
   readonly vault: SeoBlogCredentialVault | null;
   readonly keywords?: KeywordProvider | null;
+  /** SEO_BLOG_WORDPRESS_FOCUS_PHRASE: send the article's target phrase to the WordPress plugin. Off by default. */
+  readonly wordpressFocusPhrase?: boolean;
   /** SEO_BLOG_REQUIRE_FULL_ENGINE: planning and writing stop with a neutral message rather than produce a weaker article. Off by default. */
   readonly requireFullEngine?: boolean;
   /** Keyword research for the business's keyword list (SEO_BLOG_KEYWORD_POOL). Absent: keyword lists are not offered. */
@@ -2848,7 +2850,25 @@ export class SeoBlogEngine {
     return { ...next, events };
   }
 
-  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): PublishInput {
+  /**
+   * The target phrase for the website's SEO plugin: only the measured phrase keyword-first planning put on the brief
+   * (`brief.seo.primary`, basis other than "none"). With none, nothing is sent: the brief's question-style search target
+   * is not a keyphrase, and a whole question in the plugin's focus field would only make its score look bad. Single
+   * spaces, no trailing question mark, at most 100 characters; up to four secondary phrases (the plugin uses them where
+   * it can: Rank Math takes them, Yoast keeps the primary only).
+   */
+  private async focusFor(brandId: string, version: ArticleVersion): Promise<PublishInput['focus']> {
+    const brief = await this.store.getBrief(brandId, version.briefId);
+    const seo = brief?.seo;
+    if (!seo?.primary || seo.primary.basis === 'none') return null;
+    const clean = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().replace(/[?\uFF1F]+$/u, '').trim().slice(0, 100).trim() : '');
+    const phrase = clean(seo.primary.phrase);
+    if (!phrase) return null;
+    const secondary = [...new Set((Array.isArray(seo.secondary) ? seo.secondary : []).map((x) => clean(x?.phrase)).filter((x) => x && x !== phrase))].slice(0, 4);
+    return { phrase, secondary };
+  }
+
+  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion, focus?: PublishInput['focus']): PublishInput {
     const snapshot=publication.websiteSnapshot;const pinned=snapshot?.destination??destination;
     return {
       ...(snapshot?.target?{websiteTarget:snapshot.target}:{}),
@@ -2856,6 +2876,7 @@ export class SeoBlogEngine {
       articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha,
       versionNumber: publication.versionNumber ?? version.number, body: version.body,
       publishedAt: snapshot?.publishedAt??publication.firstAttemptAt ?? this.now(),
+      ...(focus ? { focus } : {}),
     };
   }
 
@@ -2870,7 +2891,8 @@ export class SeoBlogEngine {
     const publisher = publisherFor(this.deps.publishers, destination.type);
     let p = await this.store.updatePublication(this.pub(publication, { state: 'submitted', attempts: publication.attempts + 1, firstAttemptAt: publication.firstAttemptAt ?? this.now(), lastAttemptAt: this.now(), detail: 'Sent to the website.' }));
     try {
-      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version));
+      const focus = this.deps.wordpressFocusPhrase && destination.type === 'wordpress' ? await this.focusFor(brand.id, version) : null;
+      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version, focus));
       p = await this.store.updatePublication(this.pub(p, { state: 'verifying', providerRef: outcome.providerRef, publicUrl: outcome.publicUrl, detail: outcome.status === 'already_present' ? 'Already on the website; confirming the public page.' : 'Accepted by the website; confirming the public page.' }));
       await this.log(brand.id, 'system', 'publish.accepted', `Website accepted the article; waiting for ${p.publicUrl} to serve it.`, p.articleId);
       return this.verify(brand, p, version);

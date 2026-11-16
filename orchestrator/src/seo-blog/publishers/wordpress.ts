@@ -185,6 +185,8 @@ export class WordPressPublisher implements WebsitePublisher {
         social: { title: body.seoTitle || body.title, description: body.metaDescription || body.excerpt },
         // Same public-only set the rendered Sources list uses; private research never leaves RL72.
         citations: citationNumbers(body).list.map((c) => ({ url: c.url, title: c.title })),
+        // Plugin 1.2.0 writes these into Yoast SEO / Rank Math focus fields; older plugins ignore the key.
+        ...(input.focus?.phrase ? { seo: { focusPhrase: input.focus.phrase, secondaryPhrases: [...input.focus.secondary] } } : {}),
       },
     });
   }
