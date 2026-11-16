@@ -13,7 +13,7 @@ import { CONTENT_AREA_FONT_FACES } from './content-area-fonts.js';
 
 const BASE = '/portal/seo-blog';
 
-export type ContentAreaPlace = 'home' | 'dna' | 'calendar' | 'articles' | 'social' | 'results' | 'settings';
+export type ContentAreaPlace = 'home' | 'dna' | 'keywords' | 'calendar' | 'articles' | 'social' | 'results' | 'settings';
 
 /** What the shell itself shows on every page (all read from the business's real records). */
 export interface ContentAreaPreview {
@@ -27,6 +27,8 @@ export interface ContentAreaPreview {
   readonly autopilot?: ContentAreaAutopilot;
   /** On an article that needs the owner: where it sits among those that need him (shown above the page, outside it). */
   readonly queue?: { readonly index: number; readonly total: number; readonly next: string | null };
+  /** Keyword lists are on (SEO_BLOG_KEYWORD_POOL): the Keywords place is shown. Absent: the seven places, unchanged. */
+  readonly keywords?: boolean;
 }
 
 export interface ContentAreaAutopilot {
@@ -39,6 +41,7 @@ export interface ContentAreaAutopilot {
 const ICON: Record<ContentAreaPlace | 'more' | 'down', string> = {
   home: '<path d="M3 10.5 12 3l9 7.5V20a1.5 1.5 0 0 1-1.5 1.5h-4.5v-6h-6v6H4.5A1.5 1.5 0 0 1 3 20z"/>',
   dna: '<path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/>',
+  keywords: '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5.5 5.5M8 10.5h5"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   articles: '<path d="M6 3h8l4.5 4.5V19.5A1.5 1.5 0 0 1 17 21H6a1.5 1.5 0 0 1-1.5-1.5v-15A1.5 1.5 0 0 1 6 3z"/><path d="M14 3v4.5h4.5M8 12.5h7M8 16h7"/>',
   social: '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/>',
@@ -52,9 +55,11 @@ export function icon(name: keyof typeof ICON, size = 20): string {
 }
 
 const PLACES: readonly [ContentAreaPlace, string, string][] = [
-  ['home', 'Home', 'overview'], ['dna', 'Brand DNA', 'dna'], ['calendar', 'Calendar', 'calendar'], ['articles', 'Articles', 'articles'],
+  ['home', 'Home', 'overview'], ['dna', 'Brand DNA', 'dna'], ['keywords', 'Keywords', 'keywords'], ['calendar', 'Calendar', 'calendar'], ['articles', 'Articles', 'articles'],
   ['social', 'Social', 'social'], ['results', 'Results', 'results'], ['settings', 'Settings', 'publishing'],
 ];
+/** The places this shell shows: Keywords only when keyword lists are on (an eighth place); otherwise the seven, unchanged. */
+const placesFor = (shell: Shell) => PLACES.filter(([p]) => p !== 'keywords' || shell.preview?.keywords === true);
 const PHONE: readonly ContentAreaPlace[] = ['home', 'calendar', 'articles', 'results'];
 
 function placeFor(shell: Shell): ContentAreaPlace | null {
@@ -121,10 +126,10 @@ export function contentAreaLayout(shell: Shell, title: string, body: string, ext
   const switcher = `<details class="ca-biz"><summary><span class="ca-biz-av" aria-hidden="true">${e(initials(b.name))}</span><span class="ca-biz-name"><span class="ca-sr">Business: </span>${e(b.name)}</span>${icon('down', 18)}</summary>
 <div class="ca-biz-panel">${shell.brands.length > 1 ? `<form method="get" action="${BASE}/switch"><label for="ca-brand-switch">Open another business</label><select id="ca-brand-switch" name="brand">${shell.brands.map((x) => `<option value="${e(x.id)}"${x.id === b.id ? ' selected' : ''}>${e(x.name)}</option>`).join('')}</select><input type="hidden" name="to" value="${e(stay)}"><button type="submit" class="ca-btn-2">Open</button></form>` : ''}<a href="${BASE}">All your businesses</a></div></details>`;
   const auto = autopilot(shell);
-  const more = PLACES.filter(([p]) => !PHONE.includes(p));
+  const more = placesFor(shell).filter(([p]) => !PHONE.includes(p));
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · ${e(b.name)}</title><style>${legacyCss}</style><style>${CONTENT_AREA_FONT_FACES}${CONTENT_AREA_TOKENS}${CONTENT_AREA_CSS}</style>${extraHead}${feedbackHead}</head><body class="ca">${feedbackStatus}<a class="ca-skip" href="#ca-main">Skip to the page</a>
 <div class="ca-app"><aside class="ca-side" aria-label="${e(b.name)}">${switcher}
-<nav class="ca-nav" aria-label="Content area">${PLACES.map(([p, label, tab]) => link(p, label, tab, 'ca-nav-item')).join('')}</nav>
+<nav class="ca-nav" aria-label="Content area">${placesFor(shell).map(([p, label, tab]) => link(p, label, tab, 'ca-nav-item')).join('')}</nav>
 <div class="ca-foot"><p class="ca-auto"><span class="ca-dot${auto.on ? ' on' : ''}" aria-hidden="true"></span><strong>${e(auto.title)}</strong><span>${e(auto.line)}${auto.fix ? ` <a href="${e(auto.fix.href)}">${e(auto.fix.label)}</a>` : ''}</span></p>
 <details class="ca-tools"><summary>More tools</summary><ul>${otherTools(shell)}</ul></details>${oldLook(shell, 'ca-oldlook')}</div></aside>
 <main id="ca-main" class="ca-main" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${queue(shell)}${body}</main></div>

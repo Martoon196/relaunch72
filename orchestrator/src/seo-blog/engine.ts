@@ -2238,6 +2238,12 @@ export class SeoBlogEngine {
     return planningShortlist(inventory?.keywordPool ?? null, used, this.now());
   }
 
+  /** What autopilot would plan next from the list (read only). */
+  async keywordNextUp(actor: Actor, brandId: string): Promise<ShortlistRow[]> {
+    await this.brandFor(actor, brandId);
+    return this.keywordListsReady ? this.currentShortlist(brandId) : [];
+  }
+
   private keywordChoices(brand: Brand): KeywordChoices | null {
     return ((brand.settings.programme ?? {}) as { keywordChoices?: KeywordChoices }).keywordChoices ?? null;
   }
