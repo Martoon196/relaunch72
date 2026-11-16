@@ -181,6 +181,13 @@ export function profileFactsSha(p: Pick<BrandProfile, 'offers' | 'approvedClaims
   return sha256({ offers: p.offers.map((o) => ({ name: o.name, description: o.description, price: o.price, url: o.url })), claims: p.approvedClaims, conflicts: p.conflicts.map((c) => ({ field: c.field, detail: c.detail })) });
 }
 
+/** How many waiting article writes one pass may put back in the queue. */
+export const ALLOWANCE_RESUME_LIMIT = 10;
+/** An article write stopped by the monthly writing allowance (the engine's BudgetExceededError, or the copy boundary's). */
+export function allowanceBlockedWrite(job: Job): boolean {
+  return isArticleWriteJob(job) && job.state === 'blocked' && /Writing allowance/.test(job.error ?? '');
+}
+
 function monthStart(now: string): string {
   const d = new Date(now);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
@@ -3029,6 +3036,7 @@ export class SeoBlogEngine {
           }
         }else await this.dispatchDue(job.brandId);
       }
+      else if (job.kind === 'daily' && p.allowanceWake === true) { const brand = await this.store.getBrand(job.brandId); if (brand) await this.resumeAllowanceWrites(brand, 'new_month'); }
       else if (job.kind === 'daily') await this.runDaily(job.brandId);
       const latest = (await this.store.getJob(job.brandId, job.id))!;
       if (latest.state === 'cancelled') return latest;
@@ -3054,6 +3062,8 @@ export class SeoBlogEngine {
         error: message.slice(0, 400), updatedAt: this.now(),
       });
       await this.log(job.brandId, 'system', `job.${next.state}`, `${job.kind}: ${message}`.slice(0, 400), job.id);
+      // Stopped by the monthly writing allowance: a new month resumes it without anyone pressing anything.
+      if (allowanceBlockedWrite(next)) await this.ensureAllowanceWake(job.brandId).catch(() => undefined);
       return next;
     }
   }
@@ -3062,6 +3072,16 @@ export class SeoBlogEngine {
     const brand=await this.brandFor(actor, brandId);
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
+    return this.retryJobFor(brand, job, 'Queued again by the owner.');
+  }
+
+  /**
+   * The one retry path (the owner's Retry and the automatic allowance resume both use it). It only ever moves a
+   * blocked or failed task back to the queue, through the row-version-checked store write, so two callers racing
+   * for the same task cannot both requeue it: the second write is refused as stale.
+   */
+  private async retryJobFor(brand: Brand, job: Job, note: string): Promise<Job> {
+    const brandId = brand.id;
     if (!['blocked', 'failed'].includes(job.state)) return job;
     if (isImageJob(job)) throw new SeoBlogError(409, 'Image tasks cannot repeat a paid call through Retry. Use Retry preparation for a saved candidate, or explicitly request a new generation intent.');
     let retainsCopyEpoch=false;
@@ -3080,13 +3100,68 @@ export class SeoBlogEngine {
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');
     if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
-    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan'||retainsCopyEpoch ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
+    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan'||retainsCopyEpoch ? job.attempts : 0, runAfter: this.now(), error: null, progress: note, updatedAt: this.now() });
+  }
+
+  /**
+   * Article writing that stopped because the monthly writing allowance ran out, put back in the queue once the
+   * allowance has room again (a higher allowance saved, or a new month). Oldest first, at most
+   * ALLOWANCE_RESUME_LIMIT per pass, and only while each one still fits: the month's recorded usage, plus the
+   * estimate of every article write already queued or running, plus this one, must fit within the ceiling (the
+   * engine's own requireBudget rule; unlimited always fits). Never for a paused business or unconfirmed business
+   * details, never for a write whose earlier copy step has an unknown result, and only through retryJobFor, whose
+   * row-version check means a job is requeued at most once even when two passes race.
+   */
+  private async resumeAllowanceWrites(brand: Brand, why: 'allowance' | 'new_month' | 'daily'): Promise<number> {
+    if (brand.settings.pauseAll) return 0;
+    const { profile, stale } = await this.currentFactsKey(brand.id);
+    if (!profile?.confirmedAt || stale) return 0;
+    const jobs = await this.store.listJobs(brand.id);
+    const waiting = jobs.filter(allowanceBlockedWrite).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+    if (!waiting.length) return 0;
+    const ceiling = monthlyCeiling(brand.settings, 'model_tokens');
+    const used = await this.store.usageSince(brand.id, 'model_tokens', monthStart(this.now()));
+    let committed = jobs.filter((j) => isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length * USAGE_ESTIMATES.article;
+    const fits = () => ceiling > 0 && used + committed + USAGE_ESTIMATES.article <= ceiling;
+    const reason = why === 'allowance' ? 'the writing allowance was raised' : why === 'new_month' ? 'a new month started' : 'the writing allowance has room again';
+    let resumed = 0;
+    for (const job of waiting) {
+      if (resumed >= ALLOWANCE_RESUME_LIMIT || !fits()) break;
+      try {
+        const next = await this.retryJobFor(brand, job, `Queued again automatically: ${reason}, so there is enough allowance now.`);
+        if (next.state !== 'queued') continue;
+      } catch (error) {
+        if (error instanceof SeoBlogError) continue; // changed meanwhile, or not safe to repeat: left as it is
+        throw error;
+      }
+      committed += USAGE_ESTIMATES.article;
+      resumed++;
+      await this.log(brand.id, 'system', 'job.resumed_allowance', `Article writing queued again automatically: ${reason}.`, job.id);
+    }
+    if ((await this.store.listJobs(brand.id)).some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id);
+    return resumed;
+  }
+
+  /** Owner-side: after saving a higher allowance, resume what now fits. Returns how many articles were queued again. */
+  async resumeAllowanceBlockedWrites(actor: Actor, brandId: string): Promise<number> {
+    const brand = await this.brandFor(actor, brandId);
+    return this.resumeAllowanceWrites(brand, 'allowance');
+  }
+
+  /** One wake-up task at the start of next month (idempotent per business and month), so a new month's allowance resumes waiting writes. */
+  private async ensureAllowanceWake(brandId: string): Promise<void> {
+    const d = new Date(this.now());
+    const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString();
+    const now = this.now();
+    await this.store.enqueueJob({ id: randomUUID(), brandId, kind: 'daily', idempotencyKey: `allowance-wake:${next.slice(0, 7)}`, payload: { allowanceWake: true },
+      state: 'queued', attempts: 0, maxAttempts: JOB_MAX_ATTEMPTS, leaseOwner: null, leaseExpiresAt: null, runAfter: next, progress: 'Waiting for the new month’s writing allowance.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 });
   }
 
   /** Daily bounded top-up when the brand enables ongoing production. Never replaces accepted plans. */
   async runDaily(brandId: string): Promise<void> {
     const brand = await this.store.getBrand(brandId);
     if (!brand?.settings.ongoingProduction || brand.settings.pauseAll) return;
+    await this.resumeAllowanceWrites(brand, 'daily');
     const day = this.now().slice(0, 10);
     if (brand.website) await this.enqueue(brandId, 'inventory', `daily-inventory:${day}`, {});
     const [articles, briefs, plans, jobs] = await Promise.all([this.store.listArticles(brandId), this.store.listBriefs(brandId), this.store.listPlans(brandId),this.store.listJobs(brandId)]);

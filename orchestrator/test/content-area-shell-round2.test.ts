@@ -29,7 +29,8 @@ const STATES: Record<string, { scenario: Scenario; settings?: object; mut?: (s: 
   'website-disconnected-calm': { scenario: 'calm', mut: (s) => { s.destinations = [{ ...fx.destination, status: 'failed', statusDetail: 'The website refused the key.' }]; } },
   'website-disconnected-busy': { scenario: 'busy', mut: (s) => { s.destinations = [{ ...fx.destination, status: 'failed', statusDetail: 'The website refused the key.' }]; } },
   'writing-failed-job': { scenario: 'calm', mut: (s) => { s.jobs[0] = { ...s.jobs[0]!, state: 'failed', error: 'TypeError: cannot read properties of undefined (reading id) at engine.ts:1234' }; } },
-  'writing-blocked-allowance': { scenario: 'calm', mut: (s) => { s.jobs[0] = { ...s.jobs[0]!, state: 'blocked', error: 'The monthly writing allowance is used up.' }; } },
+  // Still no allowance left this month (with room again, the article page and Home offer to write it now instead).
+  'writing-blocked-allowance': { scenario: 'calm', mut: (s) => { s.jobs[0] = { ...s.jobs[0]!, state: 'blocked', error: 'The monthly writing allowance is used up.' }; s.usage = { ...s.usage, model_tokens: 2_000_000 }; } },
   'paused-busy': { scenario: 'busy', settings: { pauseAll: true } },
   'paused-calm': { scenario: 'calm', settings: { pauseAll: true } },
   'auto-on-busy': { scenario: 'busy', settings: { autoPublish: true } },
