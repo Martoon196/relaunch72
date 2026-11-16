@@ -173,7 +173,9 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
           : action === 'check' ? await service.check(identity, fields.get('auto') === 'yes' ? { repair: false } : {})
             : action === 'use-domain' ? await service.useExistingDomain(identity)
               : action === 'repair-bounces' ? await service.repairBounceReporting!(identity) : await service.disconnect(identity);
-      send(res, 200, await page({ message: { text: result.message, ok: result.ok }, ...(result.bounceRepair ? { offerBounceRepair: true } : {}) }));
+      // An automatic check that learnt nothing new (nothing written, still waiting): the page's script keeps its place.
+      const quiet = action === 'check' && fields.get('auto') === 'yes' && result.unchanged === true;
+      send(res, 200, await page({ message: { text: result.message, ok: result.ok }, ...(result.bounceRepair ? { offerBounceRepair: true } : {}), ...(quiet ? { autoQuiet: true } : {}) }));
     } catch (error) {
       if (!(error instanceof EmailConnectionError)) throw error;
       // A refusal is shown on the page itself, with what the owner typed kept in the form.

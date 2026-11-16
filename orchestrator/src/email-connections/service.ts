@@ -121,6 +121,8 @@ export interface EmailConnectionResult {
   readonly ok: boolean; readonly message: string;
   /** Bounce reporting is still not confirmed: the page keeps offering "Repair bounce reporting". */
   readonly bounceRepair?: boolean;
+  /** An automatic check whose answer matched what was stored (nothing was written). */
+  readonly unchanged?: boolean;
 }
 
 export interface EmailConnectionBounceHook {
@@ -215,6 +217,17 @@ export class EmailConnectionService {
 
   private async isFounder(identity: PortalSessionIdentity): Promise<boolean> {
     try { return (await this.input.founder?.(identity)) === true; } catch { return false; }
+  }
+
+  /**
+   * The light read for the status card (home and follow-ups pages): the stored state only, one query. No name-server
+   * look-up, no secrets check, no Postmark. null when the feature is off or the database lacks 0155.
+   */
+  async entryState(identity: PortalSessionIdentity): Promise<EmailConnectionState | null> {
+    if (!this.enabled) return null;
+    const business = this.business(identity);
+    try { return await this.input.store.state(identity.sessionToken, business.workspaceId); }
+    catch (error) { if (error instanceof EmailConnectionAbsentError) return null; throw error; }
   }
 
   /** What the page shows. Never throws for "not switched on": that is a page of its own. */
@@ -640,9 +653,17 @@ export class EmailConnectionService {
         returnPath: Object.freeze({ host: returnPath.returnPathHost || state.dns?.returnPath.host || '', value: returnPath.returnPathValue || state.dns?.returnPath.value || '', verified: returnPathOk }),
         origin: state.dns?.origin ?? 'adopted',
       });
-      try { await this.input.store.checked(identity.sessionToken, business.workspaceId, dns, dkimOk, returnPathOk); }
-      catch (error) { throw this.storeError(error); }
-      if (dkimOk && returnPathOk) return { ok: true, message: EMAIL_CONNECTION_MESSAGES.checkBoth };
+      // The page's own once-a-minute check writes only a real change: the same answer as stored adds no event and no
+      // row version (so an open tab never makes the founder's buttons stale, nor fills the events table).
+      const same = (a: { host: string; value: string; verified: boolean } | undefined, b: { host: string; value: string; verified: boolean }) =>
+        Boolean(a) && a!.host === b.host && a!.value === b.value && a!.verified === b.verified;
+      const unchanged = same(state.dns?.dkim, dns.dkim) && same(state.dns?.returnPath, dns.returnPath) && (state.status === 'verified') === (dkimOk && returnPathOk);
+      if (!(options.repair === false && unchanged)) {
+        try { await this.input.store.checked(identity.sessionToken, business.workspaceId, dns, dkimOk, returnPathOk); }
+        catch (error) { throw this.storeError(error); }
+      }
+      const quiet = options.repair === false && unchanged ? { unchanged: true } : {};
+      if (dkimOk && returnPathOk) return { ok: true, message: EMAIL_CONNECTION_MESSAGES.checkBoth, ...quiet };
       // Our own look-ups, only for the wording: is the missing record absent, or there with another value?
       const seen: { txt: DnsSeen | null; cname: DnsSeen | null } = {
         txt: dkimOk ? null : await lookUpTxt(this.resolver, dns.dkim.host, dns.dkim.value),
@@ -650,8 +671,8 @@ export class EmailConnectionService {
       };
       if (seen.txt === 'different') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkMismatch('TXT') };
       if (seen.cname === 'different') return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkMismatch('CNAME') };
-      if (dkimOk || returnPathOk) return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkOne(dkimOk ? 'CNAME' : 'TXT') };
-      return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkNone };
+      if (dkimOk || returnPathOk) return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkOne(dkimOk ? 'CNAME' : 'TXT'), ...quiet };
+      return { ok: false, message: EMAIL_CONNECTION_MESSAGES.checkNone, ...quiet };
     });
   }
 

@@ -29,7 +29,9 @@ export const EMAIL_CONNECTION_ROUTE = '/portal/email';
 /**
  * The page script: Copy buttons, and the records step checking again by itself. It posts the page's own Check form
  * (same origin, the page's CSRF token, plus auto=yes so the check never repairs or creates anything), at most once a
- * minute while the tab is visible, for up to 30 minutes, and stops on any answer that is not a normal page.
+ * minute while the tab is visible, for up to 30 minutes, and stops on any answer that is not a normal page. An answer
+ * that changes nothing keeps the owner's place; one that says something new (a record found, or a Value that doesn't
+ * match) replaces the page so the owner sees it.
  */
 export const EMAIL_CONNECTION_COPY_SCRIPT = `(function(){
 function copies(root){var b=root.querySelectorAll('button[data-copy]');for(var i=0;i<b.length;i++){(function(x){x.hidden=false;x.addEventListener('click',function(){if(!navigator.clipboard)return;var was=x.textContent;navigator.clipboard.writeText(x.getAttribute('data-copy')||'').then(function(){x.textContent='Copied';setTimeout(function(){x.textContent=was;},2000);});});})(b[i]);}
@@ -45,7 +47,9 @@ var body=new URLSearchParams(new FormData(f));body.append('auto','yes');
 fetch(f.action,{method:'POST',body:body,credentials:'same-origin',redirect:'error'}).then(function(r){if(r.status!==200)throw new Error('status');return r.text();}).then(function(html){busy=false;
 var doc=new DOMParser().parseFromString(html,'text/html'),fresh=doc.querySelector('main'),main=document.querySelector('main');if(!fresh||!main)throw new Error('page');
 var was=document.querySelector('[data-records-found]'),now=doc.querySelector('[data-records-found]');
-if(was&&now&&was.getAttribute('data-records-found')===now.getAttribute('data-records-found')){say('Checked again at '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})+'. Not all found yet: we look again in about a minute.');return;}
+var said=document.querySelector('[data-message]'),says=doc.querySelector('[data-message]');
+var same=was&&now&&was.getAttribute('data-records-found')===now.getAttribute('data-records-found');
+if(same&&(doc.querySelector('[data-auto-quiet]')||(said&&says&&said.textContent===says.textContent))){say('Checked again at '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})+'. Not all found yet: we look again in about a minute.');return;}
 main.innerHTML=fresh.innerHTML;copies(main);if(!form())stop();}).catch(function(){busy=false;stop('We stopped checking by ourselves because something went wrong. Press Check to try again.');});}
 copies(document);
 if(form()&&window.fetch&&window.URLSearchParams&&window.FormData&&window.DOMParser){timer=setInterval(tick,60000);}
@@ -72,6 +76,8 @@ export interface EmailConnectionPageInput {
   readonly sendingForm?: { readonly businessName: string; readonly postalAddress: string; readonly testList: string };
   /** A test was just sent: step 4 asks "Did it arrive?" (nothing is stored about the answer). */
   readonly testSent?: boolean;
+  /** The page's own automatic check learnt nothing new: marked so its script keeps the owner's place. */
+  readonly autoQuiet?: boolean;
 }
 
 const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${e(value)}">`;
@@ -132,7 +138,7 @@ function addressFields(page: EmailConnectionPageInput, state: EmailConnectionSta
 function connectForm(page: EmailConnectionPageInput, state: EmailConnectionState, button: string, secondary: boolean, withRules: boolean): string {
   return `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/connect">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}
     ${addressFields(page, state)}
-    ${withRules ? `<h3>Our email rules</h3>${termsList()}${agreeBox()}` : hidden('agree', 'yes')}
+    ${withRules ? `<h3>Our email rules</h3>${termsList()}${agreeBox()}` : `${hidden('agree', 'yes')}<p class="agree-line">By pressing Connect you agree to our email rules. <a href="${EMAIL_CONNECTION_ROUTE}">Read the rules again</a></p>`}
     <button type="submit"${secondary ? ' class="secondary"' : ''}>${e(button)}</button></form>`;
 }
 
@@ -141,7 +147,7 @@ function connectForm(page: EmailConnectionPageInput, state: EmailConnectionState
 function stepSummary(n: EmailStep, page: EmailConnectionPageInput, state: EmailConnectionState): string {
   const s = page.sending?.sending;
   switch (n) {
-    case 1: return state.terms ? `Agreed by ${state.terms.acceptedByName ?? 'the business owner'} on ${day(state.terms.acceptedAt)}.` : 'You ticked the email rules.';
+    case 1: return state.terms ? `Agreed by ${state.terms.acceptedByName ?? 'the business owner'} on ${day(state.terms.acceptedAt)}.` : 'Read: you agree when you press Connect.';
     case 2: return state.fromAddress ? `Sends from ${state.fromName ?? ''} <${state.fromAddress}>` : 'Your sending address is saved.';
     case 3: return state.domain ? `Both records found on ${state.domain}` : 'Both records found';
     case 4: return page.sending?.testList.length ? `Test sent to ${page.sending.testList.join(', ')}` : s?.testCurrent ? 'Test sent' : 'Connected';
@@ -153,10 +159,11 @@ const LATER: Readonly<Record<EmailStep, string>> = {
   4: 'Add your business details and send a test email to yourself.', 5: 'Ask to go live. The platform owner approves it.',
 };
 
-function progressStrip(now: EmailStep | 'live', page: EmailConnectionPageInput, state: EmailConnectionState): string {
+function progressStrip(now: EmailStep | 'live' | 'held', page: EmailConnectionPageInput, state: EmailConnectionState): string {
   const items = ([1, 2, 3, 4, 5] as const).map(n => {
-    const done = now === 'live' || n < now, current = now === n;
-    const line = done ? stepSummary(n, page, state) : current ? 'You are here.' : LATER[n];
+    // 'held': connected, and the rest switches on later (a database without sending controls): nothing is "now".
+    const done = now === 'live' || (now === 'held' ? n <= 3 : n < now), current = now === n;
+    const line = done ? stepSummary(n, page, state) : current ? 'You are here.' : now === 'held' ? 'Switched on later: nothing is needed from you now.' : LATER[n];
     return `<li class="${done ? 'done' : current ? 'now' : 'later'}"${current ? ' aria-current="step"' : ''}><span class="dot" aria-hidden="true">${done ? '✓' : n}</span>`
       + `<span><strong>${n} ${e(EMAIL_STEP_NAMES[n])}</strong>${done ? '<span class="sr"> (done)</span>' : current ? '<span class="sr"> (now)</span>' : ''}<span class="line">${e(line)}</span></span></li>`;
   }).join('');
@@ -243,9 +250,15 @@ function bouncedList(page: EmailConnectionPageInput, sending: OwnerSendingView):
 const startingLimits = () => `<p>New senders start at up to ${plain(RAMP[0]!.daily, 'marketing email', 'marketing emails')} a day. Your first ${SAMPLE.size} go first, then we wait ${SAMPLE.waitHours} hours to check how many bounced or were marked as spam; if no more than 1 bounced and nobody marked one as spam, the rest go by themselves. The daily number rises as your emails keep arriving safely, up to ${RAMP[RAMP.length - 1]!.daily.toLocaleString('en-GB')} a day.</p>`;
 
 /** The More options every connected screen shares (each shown only where it can work). */
-function connectedMore(page: EmailConnectionPageInput, state: EmailConnectionState, s: SendingState | null, sending: OwnerSendingView | undefined, include: { test?: boolean; details?: boolean } = {}): More[] {
+function connectedMore(page: EmailConnectionPageInput, state: EmailConnectionState, s: SendingState | null, sending: OwnerSendingView | undefined,
+  include: { test?: boolean; details?: boolean; pauseResume?: boolean } = {}): More[] {
   const items: More[] = [];
   const off = state.protection.state === 'off';
+  // The owner's own pause, wherever the card itself does not carry it: Resume while paused, Pause in test or live.
+  if (include.pauseResume && s && !off) {
+    if (s.ownerPausedAt) items.push(more('You paused your marketing emails. Let them go again.', action(page, 'resume', 'Resume', true)));
+    else if (state.mode !== 'off') items.push(more('Stop your marketing emails until you resume them. Sign-in links and receipts still go.', action(page, 'pause', 'Pause', true)));
+  }
   if (include.test && s && !off) items.push(more('Send another test email to yourself.', action(page, 'test-send', 'Send a test to me', true)));
   if (include.details && s && sending) items.push(more('Change your business name, postal address or where tests go.', `<details><summary>Change your business details</summary>${detailsForm(page, s, sending, false, true)}</details>`));
   items.push(more('Ask the email service to look at your two records again.', action(page, 'check', 'Check again', true)));
@@ -258,13 +271,16 @@ function connectedMore(page: EmailConnectionPageInput, state: EmailConnectionSta
 }
 
 function figures(state: EmailConnectionState, s: SendingState): string {
+  // While the owner's own pause holds, nothing marketing goes: no "up to N a day can go" line.
   const counts = s.counts;
   if (!counts) return '';
   return `<p>In the last 7 days: ${e(plain(counts.sends7, 'email', 'emails'))} sent, ${e(plain(bounces7(counts), 'bounce', 'bounces'))}${counts.sends7 ? ` (${e(percent(bounces7(counts), counts.sends7))})` : ''}${counts.blocked7 ? `, ${e(plain(counts.blocked7, 'email', 'emails'))} blocked by the receiving email service` : ''}. In the last 30 days: ${e(plain(counts.complaints30, 'spam report', 'spam reports'))}.</p>
-    ${state.mode === 'live' && state.protection.state !== 'paused' && state.protection.state !== 'off' ? `<p>Right now up to ${e(plain(state.protection.dailyCap, 'marketing email', 'marketing emails'))} a day can go${state.protection.dailyCap < RAMP[RAMP.length - 1]!.daily ? ', rising as your emails keep arriving safely' : ''}. ${e(plain(counts.liveDay, 'has', 'have'))} gone in the last 24 hours.</p>` : ''}`;
+    ${state.mode === 'live' && !s.ownerPausedAt && state.protection.state !== 'paused' && state.protection.state !== 'off' ? `<p>Right now up to ${e(plain(state.protection.dailyCap, 'marketing email', 'marketing emails'))} a day can go${state.protection.dailyCap < RAMP[RAMP.length - 1]!.daily ? ', rising as your emails keep arriving safely' : ''}. ${e(plain(counts.liveDay, 'has', 'have'))} gone in the last 24 hours.</p>` : ''}`;
 }
 
-interface Screen { readonly now: EmailStep | 'live'; readonly card: string; readonly more: readonly More[]; readonly after?: string }
+interface Screen { readonly now: EmailStep | 'live' | 'held'; readonly card: string; readonly more: readonly More[]; readonly after?: string;
+  /** This card is the waiting-for-approval card (so the banner saying the same is not shown twice). */
+  readonly saysWaiting?: boolean }
 
 function sendingScreen(page: EmailConnectionPageInput, state: EmailConnectionState, sending: OwnerSendingView): Screen {
   const s = sending.sending!;
@@ -272,15 +288,22 @@ function sendingScreen(page: EmailConnectionPageInput, state: EmailConnectionSta
   const from = `${state.fromName ?? ''} <${state.fromAddress ?? ''}>`;
   const after = bouncedList(page, sending);
   if (state.protection.state === 'off') {
-    return { now: step, after, more: connectedMore(page, state, s, sending), card: `<section class="card step" id="email-step"><h2>Email sending is switched off</h2>
+    return { now: step, after, more: connectedMore(page, state, s, sending, { details: true }), card: `<section class="card step" id="email-step"><h2>Email sending is switched off</h2>
       <p>The note at the top says why and what happens next. There is nothing to press on this page: only we can switch it back on.</p>${link('/portal', 'Back to Growth HQ')}</section>` };
   }
   const outdated = state.terms && state.terms.version !== EMAIL_TERMS_VERSION
     ? `<p class="notice">Our email rules have changed since you agreed to them. To agree to the new ones, press Disconnect under More options, then connect again with the same address. Records that were already found stay the same.</p>` : '';
+  // The owner's own pause shows on every card: the banner asks them to press Resume, so Resume is here.
+  const ownerPaused = Boolean(s.ownerPausedAt);
+  const pausedNote = ownerPaused ? `<div class="notice paused-note"><p><strong>You have paused your marketing emails.</strong> Nothing marketing goes until you press Resume. You can carry on with this step meanwhile.</p>${action(page, 'resume', 'Resume', true)}</div>` : '';
+  const pauseMore = { pauseResume: !ownerPaused };
+  // A go-live request still waiting, on a card other than the waiting card (for example a fresh test is needed).
+  const waitingNote = s.goLiveRequestedAt ? `<p class="notice">Your request to go live (${e(when(s.goLiveRequestedAt))}) is waiting for the platform owner’s approval.</p>` : '';
+  const several = sending.testList.length > 1;
   // Step 4: who the emails are from, then a test; then "Did it arrive?".
   if (step === 4 || (page.testSent && step === 5)) {
     if (page.testSent) {
-      return { now: 4, after, more: connectedMore(page, state, s, sending, { details: true }), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 4 of 5</div><h2>Did it arrive?</h2>
+      return { now: 4, after, more: connectedMore(page, state, s, sending, { details: true, ...pauseMore }), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 4 of 5</div>${pausedNote}${waitingNote}<h2>Did it arrive?</h2>
         <p>We sent a test email to <strong>${e(sending.testList.join(', ') || 'your address')}</strong>. It comes from ${e(from)}, with the subject “Test email from ${e(state.fromName ?? '')}”.</p>
         ${link(EMAIL_CONNECTION_ROUTE, 'Yes, go to the last step')}
         <details class="nope"><summary class="button secondary">No, or it went to spam</summary><ol>
@@ -289,35 +312,37 @@ function sendingScreen(page: EmailConnectionPageInput, state: EmailConnectionSta
           <li>Check the address it went to: ${e(sending.testList.join(', ') || 'the address you sign in with')}. To use another, change it under More options.</li>
           <li>Then send it again.</li></ol>${action(page, 'test-send', 'Send it again', true)}</details>${outdated}</section>` };
     }
-    return { now: 4, after, more: connectedMore(page, state, s, sending), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 4 of 5</div><h2>Send yourself a test</h2>
+    return { now: 4, after, more: connectedMore(page, state, s, sending, pauseMore), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 4 of 5</div>${pausedNote}${waitingNote}<h2>Send yourself a test</h2>
       <h3>First, who your emails are from</h3>
       <p>The law requires your real business name and postal address at the bottom of every marketing email. We add them for you, with an unsubscribe link, like this:</p>
       <p class="example">${e(s.businessName || 'Property Predator Ltd')} · ${e(s.postalAddress || '1 High Street, Leeds LS1 1AA')} · Unsubscribe</p>
       ${outdated}${detailsForm(page, s, sending, true, false)}
-      <p class="small">We save these details, then send one test email to you from ${e(from)}.</p></section>` };
+      <p class="small">${several ? `We save these details, then send a test email to each address (${e(sending.testList.join(', '))}) from ${e(from)}.` : `We save these details, then send one test email to you from ${e(from)}.`}</p></section>` };
   }
   if (step === 5) {
     const going = `<p>Going live means your follow-up and marketing emails go out from <strong>${e(from)}</strong>. Nothing extra is sent when you press it.</p>`;
     const mode = state.mode === 'test' ? `<p class="small">You are testing now: only your test addresses (${e(sending.testList.join(', ') || 'none yet')}) get emails until you go live.</p>` : '';
     if (s.goLiveRequestedAt) {
-      return { now: 5, after, more: connectedMore(page, state, s, sending, { test: true, details: true }), card: `<section class="card step ok" id="email-step" role="status"><div class="eyebrow">Step 5 of 5</div><h2>Waiting for approval</h2>
+      // Paused by the owner while waiting: Resume is the one thing to press; checking for the answer is secondary.
+      return { now: 5, after, saysWaiting: true, more: connectedMore(page, state, s, sending, { test: true, details: true, ...pauseMore }), card: `<section class="card step ok" id="email-step" role="status"><div class="eyebrow">Step 5 of 5</div><h2>Waiting for approval</h2>
         <p>You asked to go live on ${e(when(s.goLiveRequestedAt))}. The platform owner approves every new sender, and it is usually quick.</p>
         <p>${sending.willEmail ? 'We will email you when it is done.' : 'Check back on this page for the answer.'} Nothing else is needed from you.</p>
-        ${link(EMAIL_CONNECTION_ROUTE, 'Check for the answer')}</section>` };
+        ${ownerPaused ? `<p><strong>You have also paused your marketing emails.</strong> Nothing marketing goes until you press Resume, even once approved.</p><div class="actions">${action(page, 'resume', 'Resume')}${link(EMAIL_CONNECTION_ROUTE, 'Check for the answer', true)}</div>`
+          : link(EMAIL_CONNECTION_ROUTE, 'Check for the answer')}</section>` };
     }
     if (page.offerBounceRepair) {
-      return { now: 5, after, more: [more('Ask to go live again, once bounce reporting is repaired.', action(page, 'go-live', 'Go live', true)), ...connectedMore(page, state, s, sending, { test: true, details: true })],
-        card: `<section class="card step" id="email-step"><div class="eyebrow">Step 5 of 5</div><h2>One repair before you go live</h2>
+      return { now: 5, after, more: [more('Ask to go live again, once bounce reporting is repaired.', action(page, 'go-live', 'Go live', true)), ...connectedMore(page, state, s, sending, { test: true, details: true, ...pauseMore })],
+        card: `<section class="card step" id="email-step"><div class="eyebrow">Step 5 of 5</div>${pausedNote}<h2>One repair before you go live</h2>
         <p>Before you go live, the email service must be able to tell us about emails that bounce. It couldn’t confirm that just now. Press Repair bounce reporting, then press Go live again.</p>
         <p class="small">${BOUNCE_REPAIR_NOTE}</p>${action(page, 'repair-bounces', 'Repair bounce reporting')}</section>` };
     }
-    return { now: 5, after, more: connectedMore(page, state, s, sending, { test: true, details: true }), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 5 of 5</div><h2>Go live</h2>
+    return { now: 5, after, more: connectedMore(page, state, s, sending, { test: true, details: true, ...pauseMore }), card: `<section class="card step" id="email-step"><div class="eyebrow">Step 5 of 5</div>${pausedNote}<h2>Go live</h2>
       ${going}${startingLimits()}<p>The first time, and whenever your domain changes, the platform owner approves it before anything goes.</p>${mode}${outdated}${action(page, 'go-live', 'Go live')}</section>` };
   }
-  // Live.
-  const paused = Boolean(s.ownerPausedAt);
+  // Live: the card carries Pause (or Resume) itself.
+  const paused = ownerPaused;
   const primary = page.offerBounceRepair ? action(page, 'repair-bounces', 'Repair bounce reporting') : paused ? action(page, 'resume', 'Resume') : link('/portal/follow-ups', 'Open your follow-ups');
-  const pause = paused ? '' : action(page, 'pause', 'Pause', true);
+  const pause = paused ? (page.offerBounceRepair ? action(page, 'resume', 'Resume', true) : '') : action(page, 'pause', 'Pause', true);
   return { now: 'live', after, more: connectedMore(page, state, s, sending, { test: true, details: true }), card: `<section class="card step ok" id="email-step"><h2>Your email is live ✓</h2>
     <p>Your follow-up and marketing emails go out from <strong>${e(from)}</strong>.</p>
     ${paused ? '<p><strong>You have paused your marketing emails.</strong> Nothing marketing goes until you press Resume.</p>' : ''}
@@ -348,7 +373,7 @@ function screen(page: EmailConnectionPageInput, state: EmailConnectionState, hos
       }
       return { now: 2, more: [], card: `<section class="card step" id="email-step"><div class="eyebrow">Step 2 of 5</div><h2>Your sending address</h2>
         <p>This is the address your emails come from. It must be on your own domain: the part after the @, like yourbusiness.co.uk.</p>
-        ${connectForm(page, state, 'Connect', false, false)}<p class="small">When you press Connect, we set everything up with the email service for you. It takes a few seconds. <a href="${EMAIL_CONNECTION_ROUTE}">Read the rules again</a></p></section>` };
+        ${connectForm(page, state, 'Connect', false, false)}<p class="small">When you press Connect, we set everything up with the email service for you. It takes a few seconds.</p></section>` };
     }
     case 'creating': case 'needs_attention': {
       const other = more('Connect with another address or domain instead.', `<details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details', true, true)}</details>`);
@@ -375,10 +400,13 @@ function screen(page: EmailConnectionPageInput, state: EmailConnectionState, hos
       return { now, more: records.more, card: outdated ? records.card.replace('</section>', '<p class="notice">Our email rules have changed since you agreed to them. To agree to the new ones, press Start again under More options, then connect again with the same address.</p></section>') : records.card };
     }
     case 'verified': {
-      if (view.repair) return { now, more: connectedMore(page, state, null, undefined), card: repairCard(page) };
+      if (view.repair) {
+        const sv = page.sending?.sending ? page.sending : undefined;
+        return { now, after: sv ? bouncedList(page, sv) : '', more: connectedMore(page, state, sv?.sending ?? null, sv, { details: true, pauseResume: true }), card: repairCard(page) };
+      }
       if (page.sending?.sending) return sendingScreen(page, state, page.sending);
       // Release 1 only: connected; sending is switched on in the next release.
-      return { now: 4, more: connectedMore(page, state, null, undefined), card: `<section class="card step ok" id="email-step"><h2>Your email is connected ✓</h2>
+      return { now: 'held', more: connectedMore(page, state, null, undefined), card: `<section class="card step ok" id="email-step"><h2>Your email is connected ✓</h2>
         <p><strong>${e(EMAIL_CONNECTION_MESSAGES.connectedNext)}</strong> Nothing else is needed from you right now.</p>${link('/portal', 'Back to Growth HQ')}</section>` };
     }
   }
@@ -398,7 +426,7 @@ function body(page: EmailConnectionPageInput): string {
   const shown = screen(page, state, view.dnsHost);
   const banner = page.sending?.banner ?? null;
   // The step card says everything the waiting banner would, with who approves: shown once.
-  const bannerHtml = banner && !(page.sending?.sending?.goLiveRequestedAt && banner.title === 'Waiting for approval') ? renderBanner(banner) : '';
+  const bannerHtml = banner && !(shown.saysWaiting && banner.title === 'Waiting for approval') ? renderBanner(banner) : '';
   const intro = `<section class="card intro"><div class="eyebrow">Email</div><h1>Connect your email</h1>
     <nav class="business" aria-label="Business"><span>Business</span> <a href="${EMAIL_CONNECTION_ROUTE}?business=${e(view.business.workspaceId)}" aria-current="page">${e(view.business.name)}</a></nav>
     <p>Send your follow-up and marketing emails from your own address, one step at a time. About 5 minutes, plus adding two records to your domain.</p>${progressStrip(shown.now, page, state)}</section>`;
@@ -420,13 +448,14 @@ button,.button{display:inline-block;box-sizing:border-box;max-width:100%;padding
 .more{background:#fff;border:1px solid #d2dbdb;border-radius:18px;padding:6px 22px}.more>summary{padding:14px 0}.more-list{list-style:none;padding:0;margin:0 0 12px}.more-list>li{border-top:1px solid #e1e7e6;padding:12px 0}.more-list p{margin:0}.more-list form{margin:0}
 .steps{list-style:none;padding:0;margin:18px 0 0;display:grid;gap:6px}.steps li{display:flex;gap:12px;align-items:flex-start;padding:8px 12px;border-radius:10px;overflow-wrap:anywhere}.steps .dot{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:15px;background:#e1e7e6;color:#465b60}.steps .line{display:block;font-size:15px;color:#465b60}
 .steps .done .dot{background:#2f7d55;color:#fff}.steps .now{background:#fdf3dc;border:2px solid #f2b440}.steps .now .dot{background:#f2b440;color:#172b30}.steps .later{color:#6a7b7e}.steps .later strong{font-weight:600}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.paused-note{margin:0 0 14px}.paused-note p{margin:0 0 4px}.agree-line{font-weight:600}
 .ui-name{font-weight:700;background:#eef2f1;border-radius:4px;padding:0 4px}
 a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible,textarea:focus-visible{outline:3px solid #83510c;outline-offset:3px}
 main>.card>p:only-child{margin:0}
 @media(max-width:520px){header,main{padding:16px}.actions form,.more-list form{width:100%}button:not(.copy),.button{width:100%}.field .label{min-width:0;width:100%}.more{padding:4px 16px}.choice{padding:0 14px}}`;
 
 export function renderEmailConnectionPage(page: EmailConnectionPageInput): string {
-  const message = page.message ? `<section class="card ${page.message.ok ? 'ok' : 'notice'}" role="${page.message.ok ? 'status' : 'alert'}"><p>${e(page.message.text)}</p></section>` : '';
+  const message = page.message ? `<section class="card ${page.message.ok ? 'ok' : 'notice'}" data-message${page.autoQuiet ? ' data-auto-quiet' : ''} role="${page.message.ok ? 'status' : 'alert'}"><p>${e(page.message.text)}</p></section>` : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect your email</title><style>${PAGE_STYLE}</style><script src="${EMAIL_CONNECTION_ROUTE}/copy.js" defer></script></head><body><header><strong>Growth HQ</strong><nav aria-label="Workspace navigation"><a href="/portal">Home</a> · <a href="/portal/follow-ups">Follow-ups</a></nav></header><main>${message}${body(page)}</main></body></html>`;
 }
 

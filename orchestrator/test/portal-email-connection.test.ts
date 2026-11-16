@@ -20,11 +20,12 @@ const KEY = Buffer.alloc(32, 9).toString('base64');
 const owner = { sessionToken: OWNER_SESSION, userId: '00000000-0000-4000-8000-000000000001', workspaceId: PP_WS, userEmail: 'owner@relaunch72-test.co.uk' };
 const portal = { productProfile: { id: 'property_predator_growth' } as never, portalBaseUrl: ORIGIN, sessionSecret: SESSION_SECRET };
 
-function setup(env: NodeJS.ProcessEnv = { EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, founder = false) {
+function setup(env: NodeJS.ProcessEnv = { EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, founder = false,
+  resolver = fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] } })) {
   const postmark = new FakePostmark(), store = new MemoryEmailConnectionStore(new Set([OWNER_SESSION]), { [OWNER_SESSION]: 'Pat <O\'Brien>' });
   const service = new EmailConnectionService({ config: loadEmailConnectConfig(env, { portalBaseUrl: ORIGIN }), store,
     account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
-    resolver: fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] } }), secret: () => SECRET, lockWaitMs: 2000, founder: async () => founder });
+    resolver, secret: () => SECRET, lockWaitMs: 2000, founder: async () => founder });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, headers: Record<string, string> = {}) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';
     const captured = { status: 0, body: '', headers: {} as Record<string, string> };
@@ -243,4 +244,35 @@ test('Connect for a domain whose records are already verified answers "already i
   const page = await f.call('POST', '/portal/email/use-domain', { csrf: f.csrf, commandId: f.commandId });
   assert.match(page.body, /role="status"><p>Nearly there\. Both records are already in place for your domain, so press Check below to finish\.<\/p>/u);
   assert.doesNotMatch(page.body, /Add the 2 records below/u);
+});
+
+test('the automatic check writes only a real change, keeps the owner\'s place when nothing changed, and shows a new problem', async () => {
+  const dkimHost = () => `${h.postmark.domains[0]!.id}pm._domainkey.propertypredator-test.co.uk`;
+  const txt: Record<string, string[][]> = {};
+  const h = setup(undefined, false, fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] }, txt }));
+  await h.call('POST', '/portal/email/connect', { csrf: h.csrf, commandId: h.commandId, fromName: 'PP', fromAddress: 'hello@propertypredator-test.co.uk', replyTo: '', agree: 'yes' });
+  const before = { events: h.store.events.length, version: h.store.row!.rowVersion };
+  const postmarkBefore = h.postmark.calls.length;
+  // Nothing found, as stored: the two verify calls, no store write, and the page is marked quiet for the script.
+  let page = await h.call('POST', '/portal/email/check', { csrf: h.csrf, commandId: h.commandId, auto: 'yes' });
+  assert.equal(page.status, 200);
+  assert.deepEqual(h.postmark.calls.slice(postmarkBefore).map(c => `${c.method} ${c.path.replace(/[0-9]+/gu, 'N')}`), ['PUT /domains/N/verifyDkim', 'PUT /domains/N/verifyReturnPath']);
+  assert.deepEqual([h.store.events.length, h.store.row!.rowVersion], [before.events, before.version], 'no event, no row version');
+  assert.match(page.body, /data-message data-auto-quiet role="alert"><p>Not found yet\./u);
+  // A manual Check with the same answer still writes exactly as before.
+  await h.call('POST', '/portal/email/check', { csrf: h.csrf, commandId: h.commandId });
+  assert.equal(h.store.events.length, before.events + 1);
+  // Something the owner must act on (record 1 there with another value): said, not hidden as quiet.
+  txt[dkimHost()] = [['v=other-value']];
+  page = await h.call('POST', '/portal/email/check', { csrf: h.csrf, commandId: h.commandId, auto: 'yes' });
+  assert.match(page.body, /Record 1 is there, but its Value doesn&#39;t match/u);
+  assert.doesNotMatch(page.body, /data-auto-quiet/u, 'something new to act on: the script shows it');
+  // A real change (one record found) is written as a manual Check writes it.
+  const events = h.store.events.length;
+  h.postmark.domains[0]!.dkimVerified = true;
+  page = await h.call('POST', '/portal/email/check', { csrf: h.csrf, commandId: h.commandId, auto: 'yes' });
+  assert.equal(h.store.events.length, events + 1);
+  assert.equal(h.store.events.at(-1)!.outcome, 'partial');
+  assert.doesNotMatch(page.body, /data-auto-quiet/u, 'a change replaces the page');
+  assert.match(page.body, /data-records-found="1"/u);
 });

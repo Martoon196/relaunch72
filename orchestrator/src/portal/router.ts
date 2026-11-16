@@ -23,7 +23,7 @@ import type { EmailConnectionService } from '../email-connections/service.js';
 import type { OwnerSendingService } from '../email-protection/owner.js';
 import { emailConnectBusiness } from '../email-connections/config.js';
 const emailConnectionBusinessAllowed = (workspaceId: string): boolean => Boolean(emailConnectBusiness(workspaceId));
-import { emailEntryStatus, type EmailEntryStatus } from './email-connection-progress.js';
+import { readEmailEntry, type EmailEntryStatus } from './email-connection-progress.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';
 import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
@@ -562,9 +562,9 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   seoBlog?: PortalSeoBlogService;
   /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
   emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>
-    & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
+    & Partial<Pick<EmailConnectionService, 'repairBounceReporting' | 'entryState'>>;
   /** Release 2 of "Connect email": sending controls and the founder's protection page (0156). */
-  emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
+  emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'> & Partial<Pick<OwnerSendingService, 'entryConfig'>>;
   /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */
   webinars?: PgWebinarService;
   /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
@@ -7591,10 +7591,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 async function emailEntry(deps: PostgresPortalDeps, identity: PortalSessionIdentity | null, workspaceId: string): Promise<EmailEntryStatus | null> {
   const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   if (!identity || profile.id !== 'property_predator_growth' || !emailConnectionBusinessAllowed(workspaceId) || !deps.emailConnections) return null;
-  try {
-    if (!(await deps.emailConnections.available())) return null;
-    const view = await deps.emailConnections.view(identity);
-    const sending = view.offered && deps.emailSending ? await deps.emailSending.view(identity, view.state).catch(() => null) : null;
-    return emailEntryStatus(view, sending);
-  } catch { return null; }
+  // The light read only (never the page's full view: no name-server look-up, secrets check, counts or Postmark),
+  // bounded by a short timeout; anything slow or failing falls back to the plain link.
+  const connections = deps.emailConnections, sending = deps.emailSending;
+  if (!connections.enabled || !connections.entryState) return null;
+  return readEmailEntry({
+    config: async () => sending?.entryConfig ? sending.entryConfig(workspaceId) : 'absent',
+    state: async () => connections.entryState!(identity),
+  });
 }

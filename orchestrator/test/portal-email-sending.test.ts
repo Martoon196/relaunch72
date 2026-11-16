@@ -326,3 +326,18 @@ test('the page\'s own once-a-minute check never repairs: unreadable secrets are 
   assert.equal(h.postmark.calls.filter(c => c.method !== 'GET').length, writes, 'no call that changes anything at the email service');
   assert.equal(h.store.row!.status, 'verified');
 });
+
+test('the owner\'s own pause survives every move: after Back to testing the page still offers Resume, and Pause is offered in test mode', async () => {
+  const h = await setup();
+  h.store.row!.mode = 'live';
+  h.protection.sending = { ...h.protection.sending, approvedCurrent: true, goLiveApprovedAt: '2026-11-01T00:00:00Z', ownerPausedAt: '2026-11-17T00:00:00Z' };
+  let page = await h.call('GET', '/portal/email');
+  assert.match(page.body, /<button type="submit">Resume<\/button>/u, 'live and paused: Resume is the primary');
+  page = await h.call('POST', '/portal/email/back-to-test', h.form());
+  assert.match(page.body, /You are testing\./u);
+  assert.match(page.body, /You have paused your marketing emails[^]*action="\/portal\/email\/resume"[^]*>Resume<\/button>/u, 'the banner asks for Resume and it is there');
+  h.store.row!.mode = 'test';
+  h.protection.sending = { ...h.protection.sending, ownerPausedAt: null };
+  page = await h.call('GET', '/portal/email');
+  assert.match(page.body, /<summary>More options<\/summary>[^]*action="\/portal\/email\/pause"[^]*>Pause<\/button>/u, 'test mode, not paused: Pause under More options');
+});

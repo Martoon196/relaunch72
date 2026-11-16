@@ -190,6 +190,16 @@ export class OwnerSendingService {
   /** The database has 0156. */
   async available(): Promise<boolean> { return this.input.protection.present(); }
 
+  /**
+   * The light read behind the "Connect email" status card on the home and follow-ups pages: the sender's own config
+   * (one query: the stored status and mode, the owner's pause, protection, footer, test and approval flags). null: no
+   * connection row; 'absent': this database has no sending controls (0156). Never the counts, the vault or Postmark.
+   */
+  async entryConfig(workspaceId: string): Promise<SendingConfig | null | 'absent'> {
+    if (!(await this.input.protection.present())) return 'absent';
+    return this.input.protection.sendingConfig(workspaceId);
+  }
+
   async view(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<OwnerSendingView> {
     let sending: SendingState | null = null;
     try { sending = await this.input.protection.state(identity.sessionToken, identity.workspaceId); }
