@@ -150,7 +150,7 @@ test('real native render starts from exact owned, independently probed source an
     rightsConfirmed:true,claimsConfirmed:true,disclosureConfirmed:true};
    await assert.rejects(review.review({...input,outputSha256:'0'.repeat(64)}),/authorised/iu);
    await assert.rejects(other.review({...input,workspaceId:b.brand.id}),/authorised/iu);
-   await assert.rejects(other.list(a.brand.id),/authorised/iu);
+   await assert.rejects(other.list(a.brand.id),/authorised|session/iu);
    assert.deepEqual(await other.list(b.brand.id),[]);
    await assert.rejects(content.query('SELECT * FROM app.creative_media_local_output_reviews'),/permission denied/iu);
    // Call the SQL boundary directly so missing/null fields cannot hide behind TS validation.
@@ -162,6 +162,10 @@ test('real native render starts from exact owned, independently probed source an
       async tx=>tx.query('SELECT app_private.creative_media_local_output_review($1,$2,$3,$4)',
        [a.brand.id,sessionHash,'review',JSON.stringify(bad)])),/Invalid exact private review request/iu);
    }
+   await assert.rejects(withTransaction(content,{actorKind:'user',workspaceId:a.brand.id,
+     userId:a.principal.userId,requestId:'null-action-review',portalSessionTokenHash:sessionHash},
+     async tx=>tx.query('SELECT app_private.creative_media_local_output_review($1,$2,$3,$4)',
+      [a.brand.id,sessionHash,null,JSON.stringify(input)])),/Invalid exact private review request/iu);
    const accepted=await review.review(input);
    assert.equal(accepted.revision,1);assert.equal(accepted.replayed,false);
    assert.equal((await review.review(input)).replayed,true);

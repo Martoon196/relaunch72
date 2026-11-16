@@ -73,7 +73,7 @@ BEGIN
       ORDER BY revision DESC LIMIT 1) r ON true
     WHERE o.workspace_id=p_workspace),'[]'::jsonb);
  END IF;
- IF p_action<>'review' OR p_input IS NULL OR jsonb_typeof(p_input)<>'object'
+ IF p_action IS DISTINCT FROM 'review' OR p_input IS NULL OR jsonb_typeof(p_input)<>'object'
    OR octet_length(p_input::text)>2000
    OR coalesce(p_input->>'outputId','')!~'^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$'
    OR coalesce(p_input->>'commandId','')!~'^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$'
