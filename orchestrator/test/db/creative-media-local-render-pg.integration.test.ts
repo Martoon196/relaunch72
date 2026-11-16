@@ -12,6 +12,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
+import {withTransaction} from '../../src/db/transaction.js';
 import {fixtureBrand} from '../rl72-method-fixtures.js';
 import {PgSeoBlogStore} from '../../src/seo-blog/pg-store.js';
 import {PgCreativeVideoSources} from '../../src/creative-studio/media-video-source-pg-store.js';
@@ -19,6 +20,7 @@ import {PgVideoSourceProbeWorker,ffprobeFromBytes} from '../../src/creative-stud
 import {PgMediaEditStore} from '../../src/creative-studio/media-edit-pg-store.js';
 import {PgLocalRenderOwner,PgLocalRenderWorker,runQueuedLocalRender,renderLocalVideo}
  from '../../src/creative-studio/media-local-render-pg-store.js';
+import {PgLocalOutputReviewOwner} from '../../src/creative-studio/media-local-output-review.js';
 import {videoEditDigest,type VideoEditPlan} from '../../src/creative-studio/media-edit-plan.js';
 
 const raw=process.env.RL72_METHODS_PG_TEST_URL;
@@ -135,6 +137,45 @@ test('real native render starts from exact owned, independently probed source an
    const paid=(await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_jobs WHERE workspace_id=$1',
     [a.brand.id])).rows[0]?.n;
    assert.equal(paid,0,'Local rendering must not create a paid provider reservation');
+  });
+  await t.test('local output exact owner review is isolated, replay-safe, withdrawable and never published',async()=>{
+   const review=new PgLocalOutputReviewOwner(content,a.principal,env);
+   const other=new PgLocalOutputReviewOwner(content,b.principal,env);
+   const output=(await a.owner.outputs(a.brand.id))[0]!;
+   const initial=(await review.list(a.brand.id))[0]!;
+   assert.equal(initial.revision,0);assert.equal(initial.decision,null);
+   assert.equal(initial.sha256,output.sha256);
+   const input={workspaceId:a.brand.id,outputId:output.id,outputSha256:output.sha256,
+    expectedRevision:0,commandId:randomUUID(),decision:'reviewed_private' as const,
+    rightsConfirmed:true,claimsConfirmed:true,disclosureConfirmed:true};
+   await assert.rejects(review.review({...input,outputSha256:'0'.repeat(64)}),/authorised/iu);
+   await assert.rejects(other.review({...input,workspaceId:b.brand.id}),/authorised/iu);
+   await assert.rejects(other.list(a.brand.id),/authorised/iu);
+   assert.deepEqual(await other.list(b.brand.id),[]);
+   await assert.rejects(content.query('SELECT * FROM app.creative_media_local_output_reviews'),/permission denied/iu);
+   // Call the SQL boundary directly so missing/null fields cannot hide behind TS validation.
+   const sessionHash=createHash('sha256').update(a.principal.sessionToken).digest();
+   for(const bad of [{...input,rightsConfirmed:null},{...input,decision:null},
+      {...input,claimsConfirmed:undefined},{...input,disclosureConfirmed:undefined}]){
+    await assert.rejects(withTransaction(content,{actorKind:'user',workspaceId:a.brand.id,
+      userId:a.principal.userId,requestId:'malformed-local-review',portalSessionTokenHash:sessionHash},
+      async tx=>tx.query('SELECT app_private.creative_media_local_output_review($1,$2,$3,$4)',
+       [a.brand.id,sessionHash,'review',JSON.stringify(bad)])),/Invalid exact private review request/iu);
+   }
+   const accepted=await review.review(input);
+   assert.equal(accepted.revision,1);assert.equal(accepted.replayed,false);
+   assert.equal((await review.review(input)).replayed,true);
+   await assert.rejects(review.review({...input,decision:'rejected_private'}),/changed/iu);
+   await assert.rejects(review.review({...input,commandId:randomUUID()}),/changed/iu);
+   const withdrawn=await review.review({...input,expectedRevision:1,commandId:randomUUID(),
+    decision:'withdrawn_private',rightsConfirmed:false,claimsConfirmed:false,disclosureConfirmed:false});
+   assert.equal(withdrawn.revision,2);
+   assert.equal((await review.list(a.brand.id))[0]?.decision,'withdrawn_private');
+   assert.equal((await review.review({...input,expectedRevision:2,commandId:randomUUID()})).revision,3);
+   const history=await admin.query('SELECT decision FROM app.creative_media_local_output_reviews WHERE workspace_id=$1 AND output_id=$2 ORDER BY revision',[a.brand.id,output.id]);
+   assert.deepEqual(history.rows.map(x=>x.decision),['reviewed_private','withdrawn_private','reviewed_private']);
+   // Review never copies the local render to provider capture or publication records.
+   assert.equal((await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_outputs WHERE workspace_id=$1',[a.brand.id])).rows[0].n,0);
   });
   await t.test('newer edit makes an older timeline unqueueable',async()=>{
    const newer:VideoEditPlan={...plan,clips:[...plan.clips].reverse()};

@@ -148,3 +148,21 @@ The existing owned `orchestrator/src/workers/creative-media/cli.ts` now accepts 
 5. Private local output review and publishing are future controlled hooks. **Do not** treat `completed` as `approved` or `published`; no affiliate link or social rail may read an unreviewed candidate. Existing `creative_media_output_reviews` are for paid-provider capture records; local outputs require a compatible, independently reviewed review path before any release. Claude owns integration with existing Creative Studio exact-version approvals and Zernio scheduling.
 
 **Release constraints:** source size ≤20 MB and private output size <20 MB are deliberate PostgreSQL-blob pilot ceilings; larger production media needs separate protected object storage. Technical probe is not licence verification. The source fixture is synthetic, not a merchant asset. No production provider, send, billing, schedule, deployment or root dependency changes.
+
+
+## 16 November continuation — exact private review of native local outputs
+
+Foundation `96545c199dbe6c7acf63f8f09459e875920f3927` merged without conflicts; upstream email protection files are preserved.
+
+- New **draft only** `migration-drafts/local-output-private-review.sql`, applied only after `local-render-jobs.sql` in the disposable test harness. No active migrations added. Separate append-only local output review and command tables avoid mixing local output IDs with paid-provider captures.
+- `PgLocalOutputReviewOwner` in `media-local-output-review.ts` uses the canonical signed owner session, selected workspace and existing content-command transaction. Both `CREATIVE_MEDIA=enabled` and `RL72_MEDIA_LOCAL_RENDER_ENABLED=true` are required; defaults remain off.
+- Acceptance binds the original SHA256 to its completed local-render job, immutable source/timeline hashes and exact private blob bytes. Three fresh owner attestations cover rights, claims and disclosures. Technical rendering does not verify licensing. Decisions can be rejected, withdrawn and re-reviewed; revisions and single-use command hashes protect concurrent changes and altered retries. All records remain private.
+- `creativeMediaLocalOutputReviewPage` in `creative-media-local-output-review-view.ts` is **unmounted**. It previews only the existing private local stream, carries exact digest/revision/command/CSRF fields, and offers no distribution action. A mismatched review SHA cannot be displayed as acceptance of another output.
+
+**Claude-only integration hooks (do not mount in this branch):**
+1. GET `/portal/seo-blog/b/:brandId/creative/local-outputs/review`: after canonical owner-session/selected-workspace checks, compose `PgLocalRenderOwner.outputs(brandId)` and `PgLocalOutputReviewOwner.list(brandId)`, then `creativeMediaLocalOutputReviewPage(shell, outputs, reviews, randomUUID)`.
+2. POST the same path: enforce canonical CSRF and owner checks; parse `outputId,outputSha256,expectedRevision,commandId,decision` plus three boolean attestations, call `PgLocalOutputReviewOwner.review({workspaceId:brandId,...})`, redirect to the owner review page. Missing unchecked boxes become `false`; never trust browser workspace IDs.
+3. Use the previously proposed owner-only `local-outputs/:id/stream` handler with private/no-store byte-range headers. Do not expose a CDN/public URL or connect review to a publisher.
+4. The new SQL must be consolidated/numbered and permissions reviewed by Claude. `reviewed_private` grants no public-release, calendar, provider, merchant or billing authority. No production flags, routes, schedule or deployment changed.
+
+Verification extends the real disposable PostgreSQL + FFmpeg path with exact local review, null/missing SQL-field rejection, cross-tenant denial, replay conflicts, stale revisions and append-only withdrawal/re-review. UI and service tests cover disabled flags, worker identity refusal, fresh attestations and digest mismatch. Results must be checked at the pushed commit; a synthetic test fixture is not merchant media or a licence receipt.

@@ -8,6 +8,7 @@
  *   POST /portal/email/check        csrf, commandId
  *   POST /portal/email/disconnect   csrf, commandId (also "Start again")
  *   POST /portal/email/use-domain   csrf, commandId (the platform founder only: take over a domain already in the account)
+ *   POST /portal/email/repair-bounces csrf, commandId ("Repair bounce reporting": offered after Go live could not confirm the bounce webhook)
  * Release 2 (sending, 0156; offered only once the connection is verified and the database has 0156):
  *   POST /portal/email/details      csrf, commandId, businessName, postalAddress, testList
  *   POST /portal/email/test-send    csrf, commandId ("Send a test to me")
@@ -67,7 +68,7 @@ async function readForm(req: IncomingMessage, required: readonly string[], optio
 
 export async function handleEmailConnection(req: IncomingMessage, res: ServerResponse, url: URL, input: {
   portal: Pick<PostgresPortalDeps, 'productProfile' | 'portalBaseUrl' | 'sessionSecret'>;
-  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>;
+  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'> & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
   identity: PortalSessionIdentity | null;
   /** Release 2's sending controls; absent: the page is exactly release 1's. */
   sending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
@@ -143,10 +144,12 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
         : sendingAction === 'test-send' ? await sending.sendTest(identity, state, fields.get('commandId')!)
           : sendingAction === 'works-now' ? await sending.liftAddress(identity, (fields.get('email') ?? '').slice(0, 320))
             : await sending.command(identity, state, sendingAction === 'go-live' ? 'live' : sendingAction === 'back-to-test' || sendingAction === 'start-test' ? 'test' : sendingAction);
-      send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && !result.ok ? { sendingForm: details } : {}) }));
+      send(res, result.ok ? 200 : 409, await page({ message: { text: result.message, ok: result.ok }, ...(details && !result.ok ? { sendingForm: details } : {}),
+        ...(result.bounceRepair && service.repairBounceReporting ? { offerBounceRepair: true } : {}) }));
       return true;
     }
-    if (!['connect', 'continue', 'check', 'disconnect', 'use-domain'].includes(action)) throw new RouteError(404, STALE);
+    if (!['connect', 'continue', 'check', 'disconnect', 'use-domain', 'repair-bounces'].includes(action)) throw new RouteError(404, STALE);
+    if (action === 'repair-bounces' && !service.repairBounceReporting) throw new RouteError(404, STALE);
     const fields = action === 'connect'
       ? await readForm(req, ['csrf', 'commandId', 'fromName', 'fromAddress', 'replyTo'], ['agree'])
       : await readForm(req, ['csrf', 'commandId']);
@@ -157,14 +160,17 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       const result = action === 'connect' ? await service.connect(identity, { ...typed!, agreed: fields.get('agree') === 'yes' })
         : action === 'continue' ? await service.continue(identity)
           : action === 'check' ? await service.check(identity)
-            : action === 'use-domain' ? await service.useExistingDomain(identity) : await service.disconnect(identity);
-      send(res, 200, await page({ message: { text: result.message, ok: result.ok } }));
+            : action === 'use-domain' ? await service.useExistingDomain(identity)
+              : action === 'repair-bounces' ? await service.repairBounceReporting!(identity) : await service.disconnect(identity);
+      send(res, 200, await page({ message: { text: result.message, ok: result.ok }, ...(result.bounceRepair ? { offerBounceRepair: true } : {}) }));
     } catch (error) {
       if (!(error instanceof EmailConnectionError)) throw error;
       // A refusal is shown on the page itself, with what the owner typed kept in the form.
       if (error.status === 403 || error.code === 'off') throw new RouteError(error.status, error.message);
       send(res, error.status, await page({ message: { text: error.message, ok: false }, ...(typed ? { form: typed } : {}),
-        ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}) }));
+        ...(error.code === 'domain_in_account' ? { offerTakeOver: true } : {}),
+        // A repair that failed (busy, refused, interrupted) leaves bounce reporting unconfirmed: the button stays.
+        ...(action === 'repair-bounces' ? { offerBounceRepair: true } : {}) }));
     }
     return true;
   } catch (error) {

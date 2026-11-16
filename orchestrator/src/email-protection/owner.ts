@@ -11,6 +11,9 @@ import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import type { EmailConnectionStore, EmailConnectionState } from '../email-connections/store.js';
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { createPostmarkServerApi, type PostmarkServerApi } from '../email-connections/postmark-account-api.js';
+import { confirmBounceWebhook, webhookCheckLine, type WebhookCheck } from '../email-connections/webhook-check.js';
+import { emailConnectBusiness } from '../email-connections/config.js';
+import { connectionWebhookUrl } from '../email-connections/service.js';
 import { EMAIL_TERMS_VERSION } from '../email-connections/terms.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
 import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
@@ -49,7 +52,7 @@ export const SENDING_MESSAGES = Object.freeze({
   resumedStillHeld: (why: string) => `Resumed. ${why}`,
   switchedOff: 'Email sending is switched off for this business. Only we can switch it back on.',
   protectionPaused: 'Your marketing emails are paused by our protection. Only we can restart them.',
-  needsWebhook: 'We couldn\'t confirm the email service will tell us about bounces. Press Repair or Check again, then try once more.',
+  needsWebhook: 'We couldn\'t confirm the email service will tell us about bounces. Press Repair bounce reporting below, then press Go live again.',
   needsTerms: 'Tick the latest email rules first.',
   needsFooter: 'Add your business\'s real name and postal address first. They go at the bottom of every marketing email.',
   needsTest: 'Send a test to yourself first. It must be accepted for sending since your email was last connected.',
@@ -83,7 +86,11 @@ export interface OwnerSendingView {
   readonly bounced: readonly { readonly email: string; readonly since: string }[];
 }
 
-export type SendingResult = { readonly ok: boolean; readonly message: string };
+export type SendingResult = {
+  readonly ok: boolean; readonly message: string;
+  /** Go live was refused because the bounce webhook could not be confirmed: the page offers "Repair bounce reporting". */
+  readonly bounceRepair?: boolean;
+};
 
 const TEST_SUBJECT = (from: string) => `Test email from ${from}`;
 
@@ -255,20 +262,24 @@ export class OwnerSendingService {
     return { ok: true, message: replayed === list.length ? SENDING_MESSAGES.testReplayed : SENDING_MESSAGES.testSent };
   }
 
-  /** Whether Postmark has the bounce webhook saved for this business, verified, on its stream (asked now, with the server token). */
-  private async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<boolean> {
-    if (!connection.webhookId) return false;
-    try {
-      const token = await this.token(identity);
-      if (!token) return false;
-      const api = this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher });
-      return (await api.listWebhooks(connection.stream ?? 'broadcast')).some(hook => hook.id === connection.webhookId && hook.status === 'verified');
-    } catch { return false; }
+  /**
+   * Whether Postmark has the bounce webhook saved for this business, verified, on its stream (asked now, with the server
+   * token; see confirmBounceWebhook). Every outcome but "listed as verified" is logged as one
+   * 'email.protection.go_live_webhook' line.
+   */
+  async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<WebhookCheck> {
+    // Our bounce address for this business: the same value Connect gave Postmark (portal origin + the business's source key).
+    const business = emailConnectBusiness(identity.workspaceId);
+    const expectedUrl = business && this.input.portalOrigin ? connectionWebhookUrl(this.input.portalOrigin, business) : null;
+    const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', expectedUrl, token: () => this.token(identity),
+      api: token => this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher }) });
+    if (check.reason !== 'listed_verified') this.input.log?.(webhookCheckLine('email.protection.go_live_webhook', identity.workspaceId, check));
+    return check;
   }
 
   /** test / live / pause / resume. */
   async command(identity: PortalSessionIdentity, connection: EmailConnectionState, action: 'test' | 'live' | 'pause' | 'resume'): Promise<SendingResult> {
-    const webhookOk = action === 'live' ? await this.webhookVerified(identity, connection) : false;
+    const webhookOk = action === 'live' ? (await this.webhookVerified(identity, connection)).confirmed : false;
     let outcome;
     try { outcome = await this.input.protection.command(identity.sessionToken, identity.workspaceId, action, EMAIL_TERMS_VERSION, webhookOk); }
     catch (error) { return this.refusal(error); }
@@ -286,7 +297,7 @@ export class OwnerSendingService {
       }
       case 'unchanged': return { ok: true, message: SENDING_MESSAGES.unchanged };
       case 'switched_off': return { ok: false, message: SENDING_MESSAGES.switchedOff };
-      case 'needs_webhook': return { ok: false, message: SENDING_MESSAGES.needsWebhook };
+      case 'needs_webhook': return { ok: false, message: SENDING_MESSAGES.needsWebhook, bounceRepair: true };
       case 'needs_terms': return { ok: false, message: SENDING_MESSAGES.needsTerms };
       case 'needs_footer': return { ok: false, message: SENDING_MESSAGES.needsFooter };
       case 'needs_test': return { ok: false, message: SENDING_MESSAGES.needsTest };

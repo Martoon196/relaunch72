@@ -28,6 +28,8 @@ export interface EmailConnectionPageInput {
   readonly form?: { readonly fromName: string; readonly fromAddress: string; readonly replyTo: string };
   /** Only for the platform founder, after a clash with a domain already in the shared account. */
   readonly offerTakeOver?: boolean;
+  /** Go live (or a repair) could not confirm the bounce webhook: the connected card (or the records screen) offers "Repair bounce reporting". */
+  readonly offerBounceRepair?: boolean;
   /** Release 2: the sending controls (only for a verified connection on a database with 0156). */
   readonly sending?: OwnerSendingView;
   /** What the owner typed in the sending details, shown again after a refusal. */
@@ -63,13 +65,13 @@ function termsBlock(): string {
     <label class="check" for="email-agree"><input id="email-agree" type="checkbox" name="agree" value="yes" required> ${e(EMAIL_TERMS_AGREEMENT)}</label>`;
 }
 
-function connectForm(page: EmailConnectionPageInput, state: EmailConnectionState, button = 'Connect'): string {
+function connectForm(page: EmailConnectionPageInput, state: EmailConnectionState, button = 'Connect', secondary = false): string {
   const form = page.form ?? { fromName: state.fromName ?? '', fromAddress: state.fromAddress ?? '', replyTo: state.replyTo ?? '' };
   return `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/connect">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}
     <label for="email-from-name">Sender name<input id="email-from-name" name="fromName" maxlength="100" required value="${e(form.fromName)}" autocomplete="organization"></label>
     <label for="email-from">Send from (an address on your own domain)<input id="email-from" name="fromAddress" type="email" maxlength="254" required value="${e(form.fromAddress)}" placeholder="hello@yourbusiness.co.uk"></label>
     <label for="email-reply">Replies go to<input id="email-reply" name="replyTo" type="email" maxlength="254" value="${e(form.replyTo)}"></label>
-    ${termsBlock()}<button type="submit">${e(button)}</button></form>`;
+    ${termsBlock()}<button type="submit"${secondary ? ' class="secondary"' : ''}>${e(button)}</button></form>`;
 }
 
 function recordCard(kind: 'TXT' | 'CNAME', host: string, value: string, domain: string, verified: boolean): string {
@@ -92,15 +94,27 @@ function recordsSection(page: EmailConnectionPageInput, state: EmailConnectionSt
   const dns = state.dns, domain = state.domain ?? '';
   if (!dns) return `<section class="card"><p>${e(EMAIL_CONNECTION_MESSAGES.unfinished)}</p>${continueForm(page)}</section>`;
   const help = HELP[host ?? 'other'];
-  return `<section class="card"><h2>Add these 2 records where your domain is managed</h2>
-    <p>Your domain is <strong>${e(domain)}</strong>. Add both records, then press Check.</p>
+  // Both already found (a domain set up before, or adopted with its records in place): nothing to add, only Check.
+  const bothFound = dns.dkim.verified && dns.returnPath.verified;
+  const heading = bothFound ? '<h2>Your 2 records are already in place</h2>'
+    + `<p>Your domain is <strong>${e(domain)}</strong>. Both records are already found, so there is nothing to add. Press Check to finish connecting.</p>`
+    : '<h2>Add these 2 records where your domain is managed</h2>' + `<p>Your domain is <strong>${e(domain)}</strong>. Add both records, then press Check.</p>`;
+  return `<section class="card">${heading}
     ${recordCard('TXT', dns.dkim.host, dns.dkim.value, domain, dns.dkim.verified)}${recordCard('CNAME', dns.returnPath.host, dns.returnPath.value, domain, dns.returnPath.verified)}
-    <details${host && host !== 'other' ? ' open' : ''}><summary>Where do I add these?</summary>
+    ${bothFound ? '' : `<details${host && host !== 'other' ? ' open' : ''}><summary>Where do I add these?</summary>
       <p>${help.name ? `Your domain’s DNS looks like it is with <strong>${e(help.name)}</strong>.` : 'Here is how it usually goes.'}</p>
       <ol>${help.steps.map(step => `<li>${e(step)}</li>`).join('')}</ol></details>
-    <p><a class="button secondary" href="${e(mailto(state))}">Email these to whoever looks after my website</a></p>
+    <p><a class="button secondary" href="${e(mailto(state))}">Email these to whoever looks after my website</a></p>`}
     <form method="post" action="${EMAIL_CONNECTION_ROUTE}/check">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit">Check</button></form>
+    ${bounceRepairBlock(page)}
     <details><summary>Start again</summary><p>Starting again means you will be given new records to add. The old ones can be removed.</p>${disconnectForm(page, 'Start again')}</details></section>`;
+}
+
+/** "Repair bounce reporting": only when Go live (or a repair) could not confirm the bounce webhook. */
+function bounceRepairBlock(page: EmailConnectionPageInput): string {
+  if (!page.offerBounceRepair) return '';
+  return `<p class="small">If the email service can't reach our bounce address, this sets bounce reporting up again. You may be asked to press Check and send yourself a test again.</p>
+    <form method="post" action="${EMAIL_CONNECTION_ROUTE}/repair-bounces">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit" class="secondary">Repair bounce reporting</button></form>`;
 }
 
 function repairCard(page: EmailConnectionPageInput): string {
@@ -163,6 +177,7 @@ function connectedCard(page: EmailConnectionPageInput, state: EmailConnectionSta
     <ul class="ticks"><li>✓ TXT record found</li><li>✓ CNAME record found</li></ul>
     ${page.sending ? '' : `<p class="notice"><strong>${e(EMAIL_CONNECTION_MESSAGES.connectedNext)}</strong></p>`}
     <form method="post" action="${EMAIL_CONNECTION_ROUTE}/check">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}<button type="submit" class="secondary">Check again</button></form>
+    ${bounceRepairBlock(page)}
     <details><summary>Disconnect</summary><p>Email stops being connected for this business. Your sending domain is kept if it is already proven, and you can connect again later.</p>${disconnectForm(page)}</details>
     ${terms ? `<p class="small">Agreed by ${e(terms.acceptedByName ?? 'the business owner')} on ${e(day(terms.acceptedAt))}.</p>` : ''}</section>`;
 }
@@ -178,9 +193,9 @@ function body(page: EmailConnectionPageInput): string {
     case 'not_connected': case 'disconnected':
       return `${banner}${intro}<section class="card"><h2>Your sending address</h2>${connectForm(page, state)}</section>`;
     case 'creating': case 'needs_attention':
-      return `${banner}${intro}<section class="card"><h2>Setting up</h2><p>Setting up didn’t finish.</p>${continueForm(page)}
-        ${page.offerTakeOver ? takeOverForm(page) : ''}
-        <details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details')}</details>
+      // After the founder's clash, Continue would only meet the same domain again: "Use this domain" is the one next step.
+      return `${banner}${intro}<section class="card"><h2>Setting up</h2><p>Setting up didn’t finish.</p>${page.offerTakeOver ? takeOverForm(page) : continueForm(page)}
+        <details><summary>Use different details</summary>${connectForm(page, state, 'Connect with these details', page.offerTakeOver === true)}</details>
         <details><summary>Start again</summary><p>This removes what was set up so far for this business. Nothing is sent and nothing else changes.</p>${disconnectForm(page, 'Start again')}</details></section>`;
     case 'dns_pending':
       return `${banner}${intro}${view.repair ? repairCard(page) : ''}${recordsSection(page, state, view.dnsHost)}`;

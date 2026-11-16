@@ -560,7 +560,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
   /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
-  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>;
+  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>
+    & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
   /** Release 2 of "Connect email": sending controls and the founder's protection page (0156). */
   emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
   /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */

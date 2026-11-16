@@ -26,7 +26,8 @@ const draftFiles=[
   "0166_creative_media_edit_projects.sql",
   "0167_creative_media_global_budget.sql",
   "output-private-review.sql",
-  "local-render-jobs.sql"
+  "local-render-jobs.sql",
+  "local-output-private-review.sql"
 ];
 const client=new pg.Client({connectionString:DATABASE});
 await client.connect();
