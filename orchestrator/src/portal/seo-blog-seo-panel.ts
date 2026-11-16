@@ -38,9 +38,13 @@ export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): S
   if (hit && hit.b === b && hit.d === d) return hit.s;
   const self = addressOf(d.article, v);
   const hosts = [b.website, self, d.article.publishedUrl, ...d.destinations.map((x) => x.publicBaseUrl)];
-  // The existing quality checks count only when they ran on exactly this version.
-  const checkIssues = d.article.checks && d.article.checks.versionId === v.id ? d.article.checks.issues : null;
-  const s = seoScore(d.articleBrief ?? null, v.body, { siteHosts: hosts, selfUrl: self, checkIssues });
+  // The existing quality checks count only when they ran on exactly this version. Issues from an earlier version are
+  // passed on as stale: an open must-fix there holds the score down until the checks run again, so the report never
+  // shows a high score beside the page's "things to fix" box.
+  const ranHere = Boolean(d.article.checks && d.article.checks.versionId === v.id);
+  const checkIssues = ranHere ? d.article.checks!.issues : null;
+  const staleCheckIssues = !ranHere && d.article.checks ? d.article.checks.issues : null;
+  const s = seoScore(d.articleBrief ?? null, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
   scored.set(v, { b, d, s });
   return s;
 }
@@ -138,9 +142,9 @@ function tagsCard(d: SeoPanelData, v: ArticleVersion): string {
 <p class="sp-foot">The Google title and short description are shown in <a href="#google">How it appears in Google</a>, just below.</p></section>`;
 }
 
-/** Where each fix lives on this page. Nothing here is a new control. */
-function fixLink(fix: SeoFix | null, base: string, v: ArticleVersion, a: Article): string {
-  if (!fix) return '';
+/** Where each fix lives on this page, or null when the owner cannot make it now. Nothing here is a new control. */
+function fixTarget(fix: SeoFix | null, base: string, v: ArticleVersion, a: Article): [string, string] | null {
+  if (!fix) return null;
   const editable = a.delivery !== 'publishing';
   const firstPart = v.body.sections[0]?.id;
   const to: Record<SeoFix, [string, string] | null> = {
@@ -156,7 +160,10 @@ function fixLink(fix: SeoFix | null, base: string, v: ArticleVersion, a: Article
     picture: ['#picture', 'Add a picture'],
     fix: ['#fix', 'Show me what to fix'],
   };
-  const t = to[fix];
+  return to[fix];
+}
+function fixLink(fix: SeoFix | null, base: string, v: ArticleVersion, a: Article): string {
+  const t = fixTarget(fix, base, v, a);
   return t ? ` <a class="sp-fix" href="${e(t[0])}">${e(t[1])}</a>` : '';
 }
 
@@ -172,13 +179,16 @@ const COUNT_WORDS = ['No things', 'One thing', 'Two things', 'Three things', 'Fo
 function leadBlock(s: SeoScore, base: string, v: ArticleVersion, a: Article): string {
   const todo = s.checks.filter((c) => c.result !== 'pass');
   if (!todo.length) return '<p class="sp-sub">Every check passes.</p>';
-  const next = seoNextSteps(s, 3);
+  // Only changes the owner can make now count towards the headline (never the page address once it is live).
+  const next = seoNextSteps(s, 3, (c) => fixTarget(c.fix, base, v, a) !== null);
   const top = next.checks;
   const held = Boolean(s.cap && s.uncapped > s.cap.limit);
   const headline = top.length && next.to > next.from
     ? `${COUNT_WORDS[top.length]} would take this from ${next.from} to ${next.to}`
     : top.length ? `${top.length === 1 ? 'The thing' : `The ${COUNT_WORDS[top.length]!.toLowerCase()}`} that would help most` : 'What is left to improve';
-  const capNote = s.cap && (held || next.to >= s.cap.limit) ? `<p class="ap-note sp-cap">${e(s.cap.reason)}</p>` : '';
+  // A cap from the checks links to what they found, or to where they are run.
+  const capLink = s.cap && (s.cap.kind === 'must-fix' || s.cap.kind === 'stale-checks') ? ' <a class="sp-fix" href="#fix">Show me what to fix</a>' : '';
+  const capNote = s.cap && (held || next.to >= s.cap.limit) ? `<p class="ap-note sp-cap">${e(s.cap.reason)}${capLink}</p>` : '';
   const rest = todo.filter((c) => !top.includes(c));
   const notYet = rest.filter((c) => c.result === 'fail'), nearly = rest.filter((c) => c.result === 'partly');
   const list = (cs: readonly SeoCheck[]) => cs.map((c) => checkItem(c, SEO_GROUP_LABELS[c.group], base, v, a)).join('');

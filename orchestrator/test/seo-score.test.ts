@@ -4,7 +4,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MUST_FIX_CAP, readingEase, REPETITION_CAP, sentences, SEO_WEIGHTS, seoNextSteps, seoScore, syllables, type SeoCheck, type SeoScore } from '../src/seo-blog/seo-score.js';
+import { closeKeys, MUST_FIX_CAP, readingEase, REPETITION_CAP, sentences, SEO_GATE_BAR, SEO_WEIGHTS, seoNextSteps, seoScore, stem, STUFFING_CAP, syllables, TOO_LONG_CAP, SOME_REPETITION_CAP, type SeoCheck, type SeoScore } from '../src/seo-blog/seo-score.js';
+import { readFileSync } from 'node:fs';
+import * as R from './seo-score-review-fixtures.js';
 import { seoBlogCapabilitiesLine } from '../src/portal/seo-blog-capabilities.js';
 import type { ArticleBody } from '../src/seo-blog/types.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
@@ -50,8 +52,8 @@ const prose = (n: number, offset = 0) => Array.from({ length: n }, (_, i) => BAN
 
 test('the weights add up to 100, and every check in a full report carries its documented weight', () => {
   assert.equal(Object.values(SEO_WEIGHTS).reduce((a, b) => a + b, 0), 100);
-  const s = seoScore(sp.brief(), fx.body(), SITE);
-  assert.equal(s.checks.reduce((n, c) => n + c.weight, 0), 100, 'all 28 checks present when phrase, questions and check results exist');
+  const s = seoScore(sp.brief(), fx.body({ image: sp.strongBody().image }), SITE);
+  assert.equal(s.checks.reduce((n, c) => n + c.weight, 0), 100, 'all 28 checks present when phrase, questions, a picture and check results exist');
   assert.equal(s.checks.length, Object.keys(SEO_WEIGHTS).length);
   assert.deepEqual(s.parts.map((p) => [p.label, p.weight]), [['Search', 56], ['Easy to read', 29], ['Answers the searcher', 15]]);
   assert.ok(Number.isInteger(s.score) && s.score >= 0 && s.score <= 100);
@@ -103,7 +105,9 @@ test('the search phrase checks: title, start of title, description, address, ope
   const none = seoScore(q(P), mini({ seoTitle: 'Property', intro: 'Hello there.', slug: 'property', metaDescription: 'Nothing.' }), SITE);
   for (const id of ['phrase.title', 'phrase.title_start', 'phrase.description', 'phrase.address', 'phrase.opening', 'phrase.heading', 'phrase.use']) assert.equal(result(none, id), 'fail', id);
   const mixed = seoScore(q(P), mini({ slug: 'offer-maximum', intro: 'The offer you make, at its very maximum, matters most.', metaDescription: 'Your offer, at its maximum, should be written down before you speak to anyone.', sections: [{ id: 'a', heading: 'Offer: the maximum', body: 'x' }] }), SITE);
-  for (const id of ['phrase.address', 'phrase.opening', 'phrase.description', 'phrase.heading', 'phrase.use']) assert.equal(result(mixed, id), 'partly', id);
+  for (const id of ['phrase.opening', 'phrase.description', 'phrase.use']) assert.equal(result(mixed, id), 'partly', id);
+  // The address and a sub-heading may hold the main words in another order (a close form): that passes.
+  for (const id of ['phrase.address', 'phrase.heading']) assert.equal(result(mixed, id), 'pass', id);
   // Sensible use: once is partly; all in one part is partly; stuffing fails.
   assert.equal(result(seoScore(q(P), mini({ intro: `Your maximum offer comes from the sums below. ${prose(20)}` }), SITE), 'phrase.use'), 'partly');
   const onePlace = check(seoScore(q(P), mini({ intro: `Your maximum offer comes first in this short guide. Set the maximum offer early in the process. ${prose(20)}` }), SITE), 'phrase.use');
@@ -178,7 +182,13 @@ test('links: a real page of your own site passes; the home page, the article its
   assert.equal(result(s({ intro: 'See [this very guide](https://www.martinhowardproperty.example/p/77).' }, { siteHosts: SITE.siteHosts, selfUrl: 'https://www.martinhowardproperty.example/p/77' }), 'links.internal'), 'partly', 'the article itself by its address');
   assert.equal(result(s({ intro: 'See [services](https://www.martinhowardproperty.example/services).' }), 'links.internal'), 'partly', 'a one-word link');
   const broken = { siteHosts: SITE.siteHosts, checkIssues: [{ code: 'links.broken_internal', severity: 'critical' as const, message: 'The internal link https://www.martinhowardproperty.example/soon is not a published page.' }] };
-  assert.equal(result(s({ intro: 'See [our coming soon page](https://www.martinhowardproperty.example/soon).' }, broken), 'links.internal'), 'partly', 'a link the checks found broken');
+  // A link the checks found broken is a must-fix that caps the whole score; it is not taken off here a second time.
+  const brokenScore = s({ intro: 'See [our coming soon page](https://www.martinhowardproperty.example/soon).' }, broken);
+  assert.equal(result(brokenScore, 'links.internal'), 'pass');
+  assert.match(check(brokenScore, 'links.internal').found, /not live yet: that is in the list of things to fix/);
+  assert.equal(brokenScore.cap?.kind, 'must-fix');
+  const brokenWarning = { siteHosts: SITE.siteHosts, checkIssues: [{ ...broken.checkIssues[0]!, severity: 'warning' as const }] };
+  assert.equal(result(s({ intro: 'See [our coming soon page](https://www.martinhowardproperty.example/soon).' }, brokenWarning), 'links.internal'), 'partly', 'flagged but not a must-fix: no cap, so it counts here');
   assert.equal(result(s({ intro: 'See [GOV.UK](https://www.gov.uk/x).' }), 'links.internal'), 'fail');
   assert.match(check(s({}, { siteHosts: [] }), 'links.internal').found, /do not know your website address/);
   // Outside sources: checked links pass; unchecked or unverified links are partly; shown citations pass.
@@ -197,15 +207,25 @@ test('pictures: no picture is a clear fail with what to do; a short description 
   assert.equal(result(none, 'pictures.main'), 'fail');
   assert.equal(check(none, 'pictures.main').fix, 'picture');
   assert.match(check(none, 'pictures.main').todo!, /Add a picture/);
-  assert.equal(result(none, 'pictures.phrase'), 'fail', 'the fixture has a description but no picture: nothing is published');
+  // No picture costs the picture's points once: its description is not scored until there is a picture.
+  assert.ok(!none.checks.some((c) => c.id === 'pictures.phrase'), 'the fixture has a description but no picture: nothing is published');
+  assert.ok(none.leftOut.some((x) => /picture description/.test(x)));
+  assert.equal(none.available, 100 - 7 - 2, 'no questions on record (7) and no picture to describe (2)');
+  assert.equal(check(none, 'pictures.main').unlocks, SEO_WEIGHTS.pictureDescriptionPhrase);
   const img = (alt: string) => ({ kind: 'brand_asset' as const, url: 'https://x.example/a.jpg', alt, provenance: '', width: null, height: null });
   assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('') }), SITE), 'pictures.main'), 'partly');
   assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('A house') }), SITE), 'pictures.main'), 'partly', 'too short');
   const onlyPhrase = seoScore(q('maximum offer'), mini({ image: img('Maximum offers') }), SITE);
   assert.equal(result(onlyPhrase, 'pictures.main'), 'partly'); assert.equal(result(onlyPhrase, 'pictures.phrase'), 'fail');
   assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('Working out a maximum offer at a desk') }), SITE), 'pictures.phrase'), 'pass');
-  assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('The offer, at its maximum, on paper') }), SITE), 'pictures.phrase'), 'partly');
+  // The topic, said naturally, is enough: the phrase's last main word or half its main words, in any close form.
+  assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('The offer, at its maximum, on paper') }), SITE), 'pictures.phrase'), 'pass');
+  assert.equal(result(seoScore(q('how to bleed a radiator'), mini({ image: img('A hand turning a radiator key on a white radiator') }), SITE), 'pictures.phrase'), 'pass');
+  assert.equal(result(seoScore(q('repayment or interest only mortgage'), mini({ image: img('A couple at a kitchen table comparing two mortgage illustrations') }), SITE), 'pictures.phrase'), 'pass');
+  assert.equal(result(seoScore(q('garden office planning permission'), mini({ image: img('A cedar-clad garden office with a flat roof') }), SITE), 'pictures.phrase'), 'pass');
+  assert.equal(result(seoScore(q('garden office planning permission'), mini({ image: img('A cedar-clad office with a flat roof at dusk') }), SITE), 'pictures.phrase'), 'partly', 'one main word of four, not the last');
   assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('A terraced house on a street') }), SITE), 'pictures.phrase'), 'fail');
+  assert.equal(result(seoScore(q('maximum offer'), mini({ image: img('A house') }), SITE), 'pictures.phrase'), 'partly', 'describe the picture first');
 });
 
 test('easy to read: sentence length both ways, paragraphs, spacing, reading ease without credit for fragments, starts, linking words and variety', () => {
@@ -230,16 +250,24 @@ test('easy to read: sentence length both ways, paragraphs, spacing, reading ease
   assert.equal(result(s({ intro: 'Hi.' }), 'read.ease'), 'fail', 'too little text');
   const frag = check(s({ intro: 'So go. But big. Then win. So yes. But go. Then run. So fast. But now. Then stop. So good. Big win. Go now. '.repeat(2) }), 'read.ease');
   assert.equal(frag.result, 'fail', 'very easy fragments earn nothing'); assert.match(frag.found, /fragments/);
-  assert.equal(result(s({ intro: 'The cat sat on the warm mat. The dog ran across the wide park. The bird sang in the old tree. A fox hid under the shed.' }), 'read.starts'), 'partly');
-  assert.equal(result(s({ intro: 'The cat sat on the mat. The dog ran in the park. The bird sang in the tree. A fox hid. The x went. The y came. The z left.' }), 'read.starts'), 'fail');
+  assert.equal(result(s({ intro: 'Cats sat on the warm mat. Cats ran across the wide park. Cats sang in the old tree. A fox hid under the shed.' }), 'read.starts'), 'partly', 'three in a row');
+  assert.equal(result(s({ intro: 'The cat sat on the warm mat. The dog ran across the wide park. The bird sang in the old tree. A fox hid under the shed.' }), 'read.starts'), 'pass', 'three "the" in a row is natural');
+  assert.equal(result(s({ intro: 'The cat sat on the mat. The dog ran in the park. The bird sang in the tree. The fox hid. A cow went. The x went. The y came. The z left. The q sat.' }), 'read.starts'), 'fail', 'two runs of four');
   assert.equal(result(s({ intro: prose(20) }), 'read.starts'), 'pass');
-  const theHeavy = BANK.slice(0, 12).map((x, i) => (i % 4 === 0 ? `The ${x.charAt(0).toLowerCase()}${x.slice(1)}` : x)).join(' ');
-  assert.equal(result(s({ intro: theHeavy }), 'read.starts'), 'partly', 'one word starts over 15% of sentences, never three in a row');
+  const startHeavy = (word: string, every: number) => BANK.slice(0, 12).map((x, i) => (i % every === 0 ? `${word} ${x.charAt(0).toLowerCase()}${x.slice(1)}` : x)).join(' ');
+  assert.equal(result(s({ intro: startHeavy('Often', 4) }), 'read.starts'), 'partly', 'one word starts over 15% of sentences, never three in a row');
+  // Everyday starts are natural at natural rates: "the" may start a quarter of the sentences.
+  assert.equal(result(s({ intro: startHeavy('The', 4) }), 'read.starts'), 'pass', '"the" at 25%');
+  assert.equal(result(s({ intro: startHeavy('The', 3) }), 'read.starts'), 'partly', '"the" at a third');
   assert.equal(result(s({ intro: '- The one\n- The two\n- The three' }), 'read.starts'), 'fail', 'no prose sentences at all');
   assert.equal(result(s({ intro: prose(20) }), 'read.linking'), 'pass', check(s({ intro: prose(20) }), 'read.linking').found);
   assert.equal(result(s({ intro: 'It rains, so we stay. Because it is cold, we sit inside. For example, tea helps. Cats nap.' }), 'read.linking'), 'partly', 'above 60%');
   assert.equal(result(s({ intro: 'So it rains today. But we stay inside. Then we read books. So we nap later. But cats nap too.' }), 'read.linking'), 'fail', 'every sentence starts with one');
   assert.equal(result(s({ intro: 'Cats nap all day. Dogs bark at night. Birds sing in spring. Fish swim upstream. Cows moo loudly.' }), 'read.linking'), 'fail');
+  // About one sentence in five is plenty: 20% passes, 10% to 20% is partly.
+  const linkMix = (k: number) => [...Array.from({ length: k }, (_, i) => `Prices rose in town ${i + 1}, so buyers waited for a while.`), ...Array.from({ length: 10 - k }, (_, i) => `Buyers in town ${i + 1} looked at new homes this spring.`)].join(' ');
+  assert.equal(result(s({ intro: linkMix(2) }), 'read.linking'), 'pass', '20%');
+  assert.equal(result(s({ intro: linkMix(1) }), 'read.linking'), 'partly', '10%');
   assert.equal(result(s({ intro: prose(20) }), 'read.variety'), 'pass');
   assert.equal(result(s({ intro: Array.from({ length: 10 }, () => BANK[0]).join(' ') }), 'read.variety'), 'fail', 'repeated sentences');
 });
@@ -309,7 +337,9 @@ test('caps: an open must-fix issue holds the score at 59; heavy repetition holds
   assert.ok(good.score > MUST_FIX_CAP);
   const held = seoScore(sp.measured(), sp.strongBody(), { ...SITE, checkIssues: [fx.critical] });
   assert.equal(held.score, MUST_FIX_CAP); assert.ok(held.uncapped > MUST_FIX_CAP);
-  assert.match(held.cap!.reason, /fixing before it goes out/);
+  assert.equal(held.cap!.kind, 'must-fix');
+  assert.match(held.cap!.reason, /^The checks found 1 thing to fix, so the score stays at 59 or below until it is fixed\.$/);
+  assert.doesNotMatch(held.cap!.reason, /goes out/, 'true on a live article too');
   // A warning does not cap.
   assert.equal(seoScore(sp.measured(), sp.strongBody(), { ...SITE, checkIssues: fx.warnings }).cap, null);
   const repeated = seoScore(sp.measured(), { ...sp.strongBody(), sections: sp.strongBody().sections.map((x) => ({ ...x, body: Array.from({ length: 12 }, () => BANK[0]).join(' ') })) }, SITE);
@@ -342,7 +372,12 @@ test('the next steps: the three checks worth most, and the score they would reac
   const gains = n.checks.map((c) => c.weight - c.points);
   const others = s.checks.filter((c) => c.result !== 'pass' && c.fix !== null && !n.checks.includes(c)).map((c) => c.weight - c.points);
   assert.ok(Math.min(...gains) >= Math.max(0, ...others), 'the largest gains come first');
-  assert.equal(n.to, Math.round(((s.earned + gains.reduce((a, b) => a + b, 0)) * 100) / s.available));
+  // Rounded down, and a check that comes back once the fix is made (the picture description) counts as not passing.
+  const unlocked = n.checks.reduce((t, c) => t + (c.unlocks ?? 0), 0);
+  assert.equal(n.to, Math.floor(((s.earned + gains.reduce((a, b) => a + b, 0)) * 100) / (s.available + unlocked)));
+  // Only checks the owner can act on: a filter leaves the others out of the headline.
+  const noAddress = seoNextSteps(seoScore(sp.brief(), { ...sp.strongBody(), slug: 'maximum-offer-guide' }, SITE), 3, (c) => c.fix !== 'address');
+  assert.ok(!noAddress.checks.some((c) => c.fix === 'address'));
   const held = seoScore(sp.measured(), sp.strongBody(), { ...SITE, checkIssues: [fx.critical] });
   assert.ok(seoNextSteps(held).to <= MUST_FIX_CAP);
   assert.deepEqual(seoNextSteps(seoScore(sp.measured(), sp.strongBody(), SITE), 0).checks, []);
@@ -402,4 +437,207 @@ test('the start-up capability line is structured, has only on/off states, and no
   assert.deepEqual(line, { event: 'seo-blog.capabilities', process: 'worker', research: 'live', searchNumbers: 'on', writingMethods: 'on' });
   assert.deepEqual(JSON.parse(seoBlogCapabilitiesLine('portal', { search: 'unconfigured', keywords: 'mock', methods: false })), { event: 'seo-blog.capabilities', process: 'portal', research: 'unconfigured', searchNumbers: 'off', writingMethods: 'off' });
   assert.equal(JSON.parse(seoBlogCapabilitiesLine('portal', { search: 'live', keywords: 'off', methods: false })).searchNumbers, 'off');
+});
+
+// ─── The independent review: good natural writing scores in the mid-90s, rubbish 70 or below ──────────────────────
+
+const GOOD = [['the how-to (bleed a radiator)', R.A], ['the comparison (repayment or interest only)', R.B], ['the long guide (garden office)', R.C]] as const;
+const scoreGood = (x: R.GoodArticle, body = x.body, extra: Parameters<typeof seoScore>[2] = {}) => seoScore(x.brief, body, { siteHosts: [x.site], selfUrl: `${x.site}/blog/${x.body.slug}`, checkIssues: [], ...extra });
+
+test('the review\'s three good natural articles score 93 or more with a picture and 88 or more without, with no check failing', () => {
+  for (const [name, x] of GOOD) {
+    const s = scoreGood(x);
+    assert.ok(s.score >= 93, `${name} scored ${s.score}`);
+    assert.equal(s.cap, null, name);
+    assert.deepEqual(s.checks.filter((c) => c.result === 'fail').map((c) => c.id), [], name);
+    // What is left is a true placement detail, never a push to make the writing worse.
+    for (const c of s.checks.filter((k) => k.result !== 'pass')) assert.ok(['answers.opening', 'phrase.description'].includes(c.id), `${name}: ${c.id} ${c.found}`);
+    const bare = scoreGood(x, R.withoutPicture(x.body));
+    assert.ok(bare.score >= 88, `${name} without a picture scored ${bare.score}`);
+    assert.deepEqual(bare.checks.filter((c) => c.result === 'fail').map((c) => c.id), ['pictures.main'], name);
+    // As a gate, with the checks run, each clears the recommended bar.
+    assert.ok(scoreGood(x, x.body, { targetMode: true }).score >= SEO_GATE_BAR.withPicture, name);
+    assert.ok(scoreGood(x, R.withoutPicture(x.body), { targetMode: true }).score >= SEO_GATE_BAR.withoutPicture, name);
+  }
+});
+
+test('every rubbish article from the review scores 70 or below, whatever the checks found', () => {
+  const brief = sp.brief();
+  const C = R.REVIEW_CONTEXT;
+  const rubbish: [string, ArticleBody, Parameters<typeof seoScore>[2]?][] = [
+    ['word salad, every limit met', R.wordSalad()],
+    ['word salad, checks not run', R.wordSalad(), { ...C, checkIssues: null }],
+    ['word salad, outside link flagged', R.wordSalad(), { ...C, checkIssues: [{ code: 'links.unverified_external', severity: 'warning', message: 'The external link https://example.org/x was not part of the research.' }] }],
+    ['word salad, as a target with checks not run', R.wordSalad(), { ...C, checkIssues: null, targetMode: true }],
+    ...[6, 8, 9, 10].map((n) => [`word salad, ${n}-word sentences`, R.wordSalad({ n, perPart: Math.ceil(121 / n) })] as [string, ArticleBody]),
+    ['word salad, a heading every 84 words', R.wordSalad({ parts: 14, perPart: 7, n: 12 })],
+    ['word salad, 26 parts', R.wordSalad({ parts: 26, perPart: 4, n: 11 })],
+    ['word salad, 12-word answers', R.wordSalad({ faqA: (q, pick) => `${q.replace(/\?$/, '').split(' ').slice(-3).join(' ')} ${Array.from({ length: 9 }, () => pick(['cat', 'dog', 'sun', 'moon', 'tree'])).join(' ')}.` })],
+    ['one empty paragraph repeated in 12 parts, a word swapped', R.spunArticle(12)],
+    ['one empty paragraph repeated in 30 parts', R.spunArticle(30)],
+    ...Object.entries(R.STUFFING).map(([k, f]) => [`stuffing: ${k}`, f()] as [string, ArticleBody]),
+    ['padded with one checklist, 8 parts', R.padded(2, 8)],
+    ['padded to 29,897 words with one checklist', R.padded(2, 120)],
+    ['padded to 4,971 words with one checklist', R.padded(2, 17)],
+    ['the two-word nonsense fixture', sp.nonsenseBody()],
+  ];
+  for (const [name, body, ctx] of rubbish) {
+    const s = seoScore(brief, body, ctx ?? C);
+    assert.ok(s.score <= 70, `${name} scored ${s.score} (uncapped ${s.uncapped})`);
+  }
+  assert.equal(seoScore(brief, R.padded(2, 120), C).words, 29_897);
+  // The named cases, by the cap that holds each.
+  assert.equal(seoScore(brief, R.wordSalad(), C).cap?.kind, 'not-sentences');
+  assert.equal(seoScore(brief, R.spunArticle(12), C).cap?.kind, 'repetition');
+  assert.equal(seoScore(brief, R.STUFFING.exact38(), C).cap?.kind, 'stuffing');
+  assert.equal(seoScore(brief, R.STUFFING.variants36(), C).cap?.kind, 'stuffing');
+  assert.ok(seoScore(brief, R.STUFFING.bullets60(), C).score <= STUFFING_CAP);
+  assert.equal(seoScore(brief, R.padded(2, 120), C).score, REPETITION_CAP);
+});
+
+test('S1 varied wording: near repeats (a word or two changed) and list items count, over the whole article', () => {
+  const s = (o: Partial<ArticleBody>) => seoScore(null, mini(o), SITE);
+  const near = BANK.slice(0, 10).map((x) => x.replace(/\b(the|a)\b/, 'one')).join(' ');
+  const swapped = s({ intro: prose(10), sections: [{ id: 'a', heading: 'Again', body: near }] });
+  assert.equal(result(swapped, 'read.variety'), 'fail', check(swapped, 'read.variety').found);
+  assert.match(check(swapped, 'read.variety').found, /repeat an earlier one word for word or nearly/);
+  const items = s({ intro: prose(12), sections: [{ id: 'a', heading: 'List', body: Array.from({ length: 6 }, () => '- Check the roof, the gutters and the chimney stacks first').join('\n') }] });
+  assert.notEqual(result(items, 'read.variety'), 'pass', 'repeated list items count');
+  assert.ok(items.measures.repeatedSentences > 0);
+  // Wording repeated far apart is caught too, not only within 50 words.
+  const far = s({ intro: prose(20), sections: [{ id: 'a', heading: 'Later', body: prose(20) }] });
+  assert.ok(far.measures.repeatedWording > 40, String(far.measures.repeatedWording));
+  assert.equal(far.cap?.kind, 'repetition');
+  // Natural writing is untouched.
+  for (const [, x] of GOOD) { const g = scoreGood(x); assert.equal(result(g, 'read.variety'), 'pass'); assert.ok(g.measures.repeatedWording <= 3); }
+  // Some repetition holds the score at 70; heavy repetition at 40.
+  assert.equal(seoScore(sp.brief(), R.STUFFING.onePerPart(), R.REVIEW_CONTEXT).cap?.limit, SOME_REPETITION_CAP);
+});
+
+test('S2 length has teeth: over 5,000 words the score is held at 70, even with no repeats', () => {
+  const long = seoScore(sp.brief(), R.longVariedBody(300), R.REVIEW_CONTEXT);
+  assert.ok(long.words > 5000, String(long.words));
+  assert.equal(long.cap?.kind, 'too-long');
+  assert.equal(long.score, Math.min(long.uncapped, TOO_LONG_CAP));
+  assert.equal(result(long, 'page.length'), 'fail');
+  const fine = seoScore(sp.brief(), R.longVariedBody(100), R.REVIEW_CONTEXT);
+  assert.ok(fine.words < 5000 && fine.cap === null, `${fine.words} ${fine.cap?.kind}`);
+});
+
+test('S3 the phrase is counted everywhere and in every close form, and stuffing caps the score', () => {
+  const brief = sp.brief();
+  for (const k of ['bullets60', 'exact38', 'variants36', 'phraseBullets', 'sixWordRepeats', 'ingVariants'] as const) {
+    const s = seoScore(brief, R.STUFFING[k](), R.REVIEW_CONTEXT);
+    assert.equal(result(s, 'phrase.use'), 'fail', k);
+    assert.match(check(s, 'phrase.use').found, /too many: it reads as stuffed/, k);
+    assert.ok(s.score <= STUFFING_CAP, `${k}: ${s.score}`);
+  }
+  // Short bullets and short sentences count: 60 bullets read as 60 uses, not 2.
+  assert.match(check(seoScore(brief, R.STUFFING.bullets60(), R.REVIEW_CONTEXT), 'phrase.use').found, /comes up 6\d times/);
+  // Close forms: -ing and -ed forms, plurals and the main words in another order.
+  assert.deepEqual([closeKeys('appraising'), closeKeys('appraised'), closeKeys('appraise')].map((k) => k.includes('apprais')), [true, true, true]);
+  assert.ok(closeKeys('bleeding').includes('bleed') && closeKeys('stopped').includes('stop') && closeKeys('added').includes('add'));
+  assert.ok(!closeKeys('letter').includes('let'));
+});
+
+test('S4 good writing is not marked down or pushed to get worse', () => {
+  // a. Linking words in about one sentence in four pass (the three articles and the strong fixture measure 26% to 30%).
+  for (const [name, x] of GOOD) assert.equal(result(scoreGood(x), 'read.linking'), 'pass', name);
+  assert.equal(result(seoScore(sp.measured(), sp.strongBody(), SITE), 'read.linking'), 'pass');
+  // b. The picture description passes when it describes the picture and mentions the topic; the exact phrase is not needed.
+  for (const [name, x] of GOOD) assert.equal(result(scoreGood(x), 'pictures.phrase'), 'pass', name);
+  // c. One exact use and natural variations after it pass.
+  for (const [name, x] of GOOD) assert.equal(result(scoreGood(x), 'phrase.use'), 'pass', `${name}: ${check(scoreGood(x), 'phrase.use').found}`);
+  // d. An answer under its own heading counts, matched on meaning words with plurals and close forms; the minimum
+  //    answer length stays.
+  const fixtureQ = seoScore({ targetQuery: 'appraise a property deal', relatedQuestions: ['How long should a property appraisal take?'] }, sp.strongBody(), SITE);
+  assert.equal(result(fixtureQ, 'answers.questions'), 'pass', 'answered in the questions and answers without repeating its words');
+  const habit = { ...R.A.body, sections: R.A.body.sections.map((x) => (x.id === 'a5' ? { ...x, heading: 'Make it a yearly habit' } : x.id === 'a2' ? { ...x, heading: 'Heating on or off?' } : x)) };
+  assert.equal(result(scoreGood(R.A, habit), 'answers.questions'), 'pass', 'answers under natural headings');
+  const short = mini({ sections: [{ id: 'a', heading: 'How long should a property appraisal take?', body: 'About an hour, usually.' }] });
+  assert.equal(result(seoScore(q('appraise a property deal', ['How long should a property appraisal take?']), short, SITE), 'answers.questions'), 'fail', 'a short answer is not an answer');
+  // e. Headings that ask the questions on record do not count against "too many headings use the phrase".
+  const head = scoreGood({ ...R.C, brief: { ...R.C.brief, targetQuery: 'garden office' } });
+  assert.equal(result(head, 'phrase.heading'), 'pass', check(head, 'phrase.heading').found);
+  assert.equal(result(head, 'answers.questions'), 'pass');
+  const exactHeads = mini({ sections: ['Your maximum offer explained', 'How do I set a maximum offer?', 'When is a maximum offer too low?', 'Is my maximum offer fair?'].map((heading, i) => ({ id: `${i}`, heading, body: prose(5, i) })) });
+  assert.equal(result(seoScore(q('maximum offer', ['How do I set a maximum offer?', 'When is a maximum offer too low?', 'Is my maximum offer fair?']), exactHeads, SITE), 'phrase.heading'), 'pass');
+  assert.equal(result(seoScore(q('maximum offer'), exactHeads, SITE), 'phrase.heading'), 'partly', 'without those questions on record, four is forced');
+  // f. A business name after a separator is not a repeat.
+  for (const title of ['Appraise a property deal | Martin Howard Property', 'Appraise a property deal - Martin Howard Property', 'Appraise a property deal – Martin Howard Property']) {
+    const t = seoScore(sp.brief(), { ...sp.strongBody(), seoTitle: title }, SITE);
+    assert.equal(result(t, 'phrase.title'), 'pass', title);
+    assert.doesNotMatch(check(t, 'phrase.title').found, /repeats words/);
+  }
+  assert.equal(result(seoScore(q('bridging loan'), mini({ seoTitle: 'Bridging loans: what a bridging loan costs' }), SITE), 'phrase.title'), 'partly', 'a real repeat is still a repeat');
+  // g. A complete 900-word how-to is not told to add words; the band suits what the searcher wants, and padding never earns more.
+  const how = check(scoreGood(R.A), 'page.length');
+  assert.equal(how.result, 'pass'); assert.match(how.found, /^933 words: a good length for a guide or how-to\.$/);
+  const lengthFor = (intent: 'learn' | 'compare' | 'buy', n: number) => result(seoScore({ targetQuery: 'maximum offer', searchIntent: intent }, mini({ intro: R.variedSentences(Math.round(n / 16)).join(' ') }), SITE), 'page.length');
+  assert.equal(lengthFor('learn', 850), 'pass');
+  assert.equal(lengthFor('buy', 600), 'pass');
+  assert.equal(lengthFor('compare', 700), 'partly');
+  assert.equal(lengthFor('buy', 1800), 'partly', 'above the band earns nothing more');
+  // h. "The" at a natural rate is not penalised (the how-to's 17%).
+  assert.equal(result(scoreGood(R.A), 'read.starts'), 'pass');
+  // i. An address that holds the phrase's main words passes.
+  for (const slug of ['bleed-radiator', 'bleed-a-radiator', 'radiator-bleed']) assert.equal(result(seoScore(q('how to bleed a radiator'), mini({ slug }), SITE), 'phrase.address'), 'pass', slug);
+  assert.equal(result(seoScore(q('how to bleed a radiator'), mini({ slug: 'radiator-guide' }), SITE), 'phrase.address'), 'partly');
+});
+
+test('S6 strict target mode fails closed: no phrase, no questions and checks not run are fails, and checks not run cap the score', () => {
+  const report = seoScore(sp.measured(), sp.strongBody(), SITE);
+  const noQs = seoScore({ ...sp.measured(), relatedQuestions: [] }, sp.strongBody(), { ...SITE, targetMode: true });
+  assert.equal(result(noQs, 'answers.questions'), 'fail');
+  assert.equal(noQs.leftOut.length, 0);
+  assert.ok(noQs.score <= report.score - 7, `${noQs.score} vs ${report.score}`);
+  const notRun = seoScore(sp.measured(), sp.strongBody(), { siteHosts: SITE.siteHosts, checkIssues: null, targetMode: true });
+  assert.equal(result(notRun, 'answers.figures'), 'fail');
+  assert.equal(notRun.cap?.kind, 'not-checked'); assert.equal(notRun.score, MUST_FIX_CAP);
+  const noBrief = seoScore(null, sp.strongBody(), { ...SITE, targetMode: true });
+  assert.equal(result(noBrief, 'phrase.missing'), 'fail'); assert.equal(result(noBrief, 'answers.questions'), 'fail');
+  assert.equal(noBrief.available, 100, 'nothing is left out');
+  // The read-only report still leaves out and scales.
+  const ro = seoScore({ ...sp.measured(), relatedQuestions: [] }, sp.strongBody(), { siteHosts: SITE.siteHosts, checkIssues: null });
+  assert.equal(ro.cap, null); assert.equal(ro.leftOut.length, 2);
+  // `asTarget` is the same switch.
+  assert.equal(seoScore(null, sp.strongBody(), { ...SITE, asTarget: true }).score, noBrief.score);
+});
+
+test('correctness: small matching misses, accents and possessives in the address, and the reviewer\'s 146 hard words', () => {
+  const t = (title: string, phrase: string) => result(seoScore(q(phrase), mini({ seoTitle: `${title} for you today` }), SITE), 'phrase.title');
+  assert.equal(t('Glasses repair near you', 'glass repair'), 'fail', '"glasses" is not more than one "glass"');
+  assert.equal(t('Buses hire in Leeds', 'bus hire'), 'pass', '"buses" is the plural of "bus"');
+  assert.equal(stem('glasses'), 'glasses'); assert.equal(stem('buses'), 'bus'); assert.equal(stem('houses'), 'house'); assert.equal(stem('businesses'), 'business'); assert.equal(stem('news'), 'news');
+  const addr = (phrase: string, slug: string) => result(seoScore(q(phrase), mini({ slug }), SITE), 'phrase.address');
+  assert.equal(addr('café insurance', 'cafe-insurance'), 'pass', 'accents');
+  assert.equal(addr('cafe insurance', 'café-insurance'), 'pass');
+  assert.equal(addr('landlord insurance', 'landlord-s-insurance'), 'pass', 'a possessive written into the address');
+  assert.equal(addr("landlord's insurance", 'landlords-insurance'), 'pass');
+  // The reviewer's list: 31 of 146 were wrong before this change; none now.
+  const list: Record<string, number> = JSON.parse(readFileSync(new URL('./seo-score-syllables.json', import.meta.url), 'utf8'));
+  const wrong = Object.entries(list).filter(([w, n]) => syllables(w) !== n).map(([w, n]) => `${w}:${syllables(w)}/${n}`);
+  assert.equal(Object.keys(list).length, 146);
+  assert.deepEqual(wrong, []);
+  // Reading ease on the reference sentences.
+  const rep = (x: string, k = 3) => Array.from({ length: k }, () => x);
+  assert.equal(Math.round(readingEase(rep('The cat sat on the mat.', 6))!), 116);
+  assert.equal(readingEase(rep('This sentence, taken as a reading passage unto itself, is being used to prove a point.'))!.toFixed(1), '69.0');
+  assert.equal(readingEase(['Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.'])!.toFixed(1), '41.0');
+});
+
+test('the gate: the score is documented as a bar to pass, with a recommended bar with and without a picture', () => {
+  assert.ok(SEO_GATE_BAR.withPicture > SEO_GATE_BAR.withoutPicture && SEO_GATE_BAR.withoutPicture > 70);
+  const src = readFileSync(new URL('../src/seo-blog/seo-score.ts', import.meta.url), 'utf8');
+  assert.match(src, /A GATE, NOT A TARGET/);
+  assert.match(src, /it cannot judge meaning/);
+  // The weights table in the header matches SEO_WEIGHTS, row for row, and totals 100.
+  const rows = [...src.slice(0, src.indexOf('import type')).matchAll(/^ \* \| [^|]+\| [^|]+\| ([^|]+?)\s*\|\s+(\d+) \|$/gm)].map((m) => Number(m[2]));
+  const total = rows.pop();
+  assert.equal(total, 100);
+  assert.deepEqual(rows, Object.values(SEO_WEIGHTS));
+  // Cap reasons are plain: no dashes, no internals.
+  for (const s of [seoScore(sp.brief(), R.wordSalad(), R.REVIEW_CONTEXT), seoScore(sp.brief(), R.STUFFING.exact38(), R.REVIEW_CONTEXT), seoScore(sp.brief(), R.padded(2, 8), R.REVIEW_CONTEXT), seoScore(sp.brief(), R.longVariedBody(300), R.REVIEW_CONTEXT)]) {
+    assert.ok(s.cap); assert.doesNotMatch(s.cap!.reason, /[–—]|model|supplier|function word|n-gram|shingle/i, s.cap!.reason);
+  }
 });

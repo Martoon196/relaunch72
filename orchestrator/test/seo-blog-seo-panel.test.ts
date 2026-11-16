@@ -126,8 +126,57 @@ test('the lead says plainly when a must-fix issue holds the score, and every che
   const held = fx.article({ currentVersionId: v.id, checks: { versionId: v.id, contentSha: v.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-13T09:00:00.000Z', status: 'blocked', issues: [fx.critical] } as never });
   const html = panelOf(editorPage(newLook(), { ...fx.pageData('ready'), version: v, versions: [v], article: held, articleBrief: sp.measured(), open: ['seo'] }));
   assert.match(html, /SEO report: 59 out of 100/);
-  assert.match(visible(html), /1 thing needs fixing before it goes out, so the score stays at 59 or below until it is fixed\./);
+  assert.match(visible(html), /The checks found 1 thing to fix, so the score stays at 59 or below until it is fixed\. Show me what to fix/);
+  // The wording is true on a live article too, and it links to the thing to fix.
+  assert.doesNotMatch(visible(html), /goes out/);
+  assert.match(html, /<p class="ap-note sp-cap">[^<]*<a class="sp-fix" href="#fix">Show me what to fix<\/a><\/p>/);
   assert.match(html, /<h4 class="sp-sub sp-lead">The (?:three|two|one) things? that would help most<\/h4>|<h4 class="sp-sub sp-lead">The thing that would help most<\/h4>/);
+  const live = fx.article({ currentVersionId: v.id, publishedVersionId: v.id, publishedUrl: 'https://www.martinhowardproperty.example/blog/appraise-a-property-deal', editorialState: 'published' as never, checks: held.checks });
+  const liveHtml = panelOf(editorPage(newLook(), { ...fx.pageData('published'), version: v, versions: [v], article: live, articleBrief: sp.measured(), open: ['seo'] }));
+  assert.match(liveHtml, /<p class="ap-note sp-cap">The checks found 1 thing to fix, so the score stays at 59 or below until it is fixed\. <a class="sp-fix" href="#fix">Show me what to fix<\/a><\/p>/);
+});
+
+test('the headline counts only changes the owner can make now: never the page address once the article is live, and it never overstates', () => {
+  // The strong article with an address that lacks the phrase, live: the address cannot change any more.
+  const body = { ...sp.strongBody(), slug: 'maximum-offer-guide' };
+  const v = fx.version(3, body);
+  const checks = { versionId: v.id, contentSha: v.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-13T09:00:00.000Z', status: 'passed', issues: [] };
+  const live = fx.article({ currentVersionId: v.id, publishedVersionId: v.id, publishedUrl: 'https://www.martinhowardproperty.example/blog/maximum-offer-guide', checks } as never);
+  const d = { ...fx.pageData('published'), version: v, versions: [v], article: live, articleBrief: sp.brief(), open: ['seo'] };
+  const s = articleSeoScore(fx.brand, { article: live, articleBrief: d.articleBrief, destinations: d.destinations }, v);
+  assert.ok(s.checks.some((c) => c.id === 'phrase.address' && c.result !== 'pass'), 'the address check is open');
+  const html = panelOf(editorPage(newLook(), d));
+  const top = /<ul class="sp-checks sp-top">([\s\S]*?)<\/ul>/.exec(html)![1]!;
+  assert.doesNotMatch(top, /The search phrase is in the page address/, 'the live address is not one of the three');
+  assert.doesNotMatch(html, /Edit the page address/);
+  const lead = /<h4 class="sp-sub sp-lead">(?:\w+ things?|One thing) would take this from (\d+) to (\d+)<\/h4>/.exec(html);
+  assert.ok(lead, 'a headline with the reachable score');
+  const actionable = seoNextSteps(s, 3, (c) => c.fix !== 'address');
+  assert.equal(Number(lead![2]), actionable.to);
+  // Never more than the open points of the checks it names can reach (rounded down).
+  const gained = actionable.checks.reduce((t, c) => t + c.weight - c.points, 0);
+  assert.ok(actionable.to <= Math.floor(((s.earned + gained) * 100) / s.available));
+  // Before it is live, the address is a change the owner can make, so it may be counted.
+  const draft = fx.article({ currentVersionId: v.id, checks } as never);
+  const draftScore = articleSeoScore(fx.brand, { article: draft, articleBrief: sp.brief(), destinations: d.destinations }, v);
+  assert.ok(seoNextSteps(draftScore, 10).checks.some((c) => c.id === 'phrase.address'));
+  assert.match(panelOf(editorPage(newLook(), { ...fx.pageData('ready'), version: v, versions: [v], article: draft, articleBrief: sp.brief(), open: ['seo'] })), /Edit the page address/);
+});
+
+test('checks that ran on an earlier version and found a must-fix: the report says plainly that they need running, and the score is held with the page\'s "to fix" box', () => {
+  const v = fx.version(3, sp.strongBody());
+  const older = fx.versions[1]!;
+  const stale = fx.article({ currentVersionId: v.id, checks: { versionId: older.id, contentSha: older.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-12T09:00:00.000Z', status: 'blocked', issues: [fx.critical] } as never });
+  const d = { ...fx.pageData('ready'), version: v, versions: [older, v], article: stale, articleBrief: sp.measured(), open: ['seo'] };
+  const s = articleSeoScore(fx.brand, { article: stale, articleBrief: d.articleBrief, destinations: d.destinations }, v);
+  assert.equal(s.cap?.kind, 'stale-checks');
+  assert.ok(s.score <= 59, String(s.score));
+  const v2 = visible(panelOf(editorPage(newLook(), d)));
+  assert.match(v2, /The checks last ran on an earlier version and found 1 thing to fix\. They have not run on this version, so the score stays at 59 or below until they run again\./);
+  assert.match(v2, /Left out because they cannot be checked for this article: every figure has a source \(the checks have not run on this version yet\)/);
+  // Without a must-fix on record, an earlier run does not hold the score: the figures are simply left out.
+  const calm = fx.article({ currentVersionId: v.id, checks: { versionId: older.id, contentSha: older.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-12T09:00:00.000Z', status: 'warnings', issues: fx.warnings } as never });
+  assert.equal(articleSeoScore(fx.brand, { article: calm, articleBrief: d.articleBrief, destinations: d.destinations }, v).cap, null);
 });
 
 test('dark mode: the tick, cross and "!" use the card colour on their coloured circle, so they read in both themes', () => {
