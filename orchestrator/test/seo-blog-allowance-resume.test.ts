@@ -164,7 +164,7 @@ test('a new month: the worker’s own pass puts the waiting article back without
   await f.h.engine.tick('w');
   const j = await job();
   assert.ok(['queued', 'running', 'done'].includes(j.state), j.state);
-  assert.match((await f.h.engine.activity(OWNER, f.brand.id)).map((e) => e.message).join('\n'), /queued again automatically: a new month started/);
+  assert.match((await f.h.engine.activity(OWNER, f.brand.id)).map((e) => e.message).join('\n'), /queued again automatically: (a new month started|the writing allowance has room again)/);
 });
 
 test('other causes that have since been cleared offer "Write it now"; an unknown result and an out-of-date plan never do', () => {
@@ -202,4 +202,73 @@ test('S1: a source comes back with a changed-back sentence only if the article s
   assert.equal(restoreCitationsDetailed(stored, edited, previous, () => true).text, previous);
   const r = restoreCitationsDetailed(stored, edited, previous, () => false);
   assert.equal(r.text, edited); assert.equal(r.restoredFromEarlier, 0); assert.equal(r.notRestored, 1);
+});
+
+// ─── Jobs blocked before this release, the worker's own pass, and the page's arithmetic ───
+
+/** As in production before this release: no wake-up task, no record of an automatic requeue. */
+async function blockedBeforeRelease(s: Awaited<ReturnType<typeof stoppedForAllowance>>) {
+  for (const j of await s.f.h.store.listJobs(s.f.brand.id)) if (j.payload.allowanceWake === true) await s.f.h.store.updateJob({ ...j, state: 'cancelled' });
+  const b = (await s.f.h.store.getBrand(s.f.brand.id))!;
+  assert.equal(b.settings.ongoingProduction, false);
+}
+
+test('a write blocked before this release (no wake-up task, ongoing production off) is written by one ordinary worker pass once the allowance fits', async () => {
+  const s = await stoppedForAllowance();
+  await blockedBeforeRelease(s);
+  // Something else brings the worker to this business (here a website re-read the owner asked for).
+  const now = s.f.h.clock.now();
+  await s.f.h.store.enqueueJob({ id: randomUUID(), brandId: s.f.brand.id, kind: 'inventory', idempotencyKey: 'owner-reread', payload: {}, state: 'queued', attempts: 0, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Queued.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 });
+  await s.f.h.engine.tick('w');
+  assert.equal((await s.job()).state, 'blocked', 'not enough allowance yet: still waiting, nothing spent');
+  await unlimitedWriting(s.f);
+  await s.f.h.store.enqueueJob({ id: randomUUID(), brandId: s.f.brand.id, kind: 'inventory', idempotencyKey: 'owner-reread-2', payload: {}, state: 'queued', attempts: 0, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Queued.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 });
+  await s.f.h.engine.tick('w');
+  assert.equal((await s.job()).state, 'done');
+  assert.ok((await s.f.h.engine.getArticle(OWNER, s.f.brand.id, s.f.articleId)).version, 'written in that one pass');
+});
+
+test('the founder’s limits page making writing unlimited resumes the waiting article at once (the owner’s real case)', async () => {
+  const s = await stoppedForAllowance();
+  await blockedBeforeRelease(s);
+  const limits = { allowed: async () => true, list: async () => ({ brands: [], policy: { version: 1, enabled: true, maxConcurrency: 1, monthlyMicrousd: 0 } }), policy: async () => undefined,
+    save: async () => { await unlimitedWriting(s.f); } };
+  const service = { ...s.service, limitsFor: () => limits } as unknown as PortalSeoBlogService;
+  const r = await call(service, 'POST', '/portal/seo-blog/limits', [['_csrf', csrf], ['target', s.f.brand.id], ['rowVersion', '1'], ['modelTokensUnlimited', '1'], ['searchCalls', '200'], ['images', '0'], ['studioImages', '0']]);
+  assert.match(message(r).text, /1 article that was waiting is being written now\./);
+  assert.equal((await s.job()).state, 'queued');
+});
+
+test('the worker’s own pass cannot loop: at most one automatic requeue per job per month; the owner’s save still works', async () => {
+  const s = await stoppedForAllowance();
+  await blockedBeforeRelease(s);
+  await unlimitedWriting(s.f);
+  // The write keeps stopping for the allowance (as a copy step's own reservation rule could make it do).
+  const engine = s.f.h.engine as unknown as { runWrite: (...a: unknown[]) => Promise<unknown> };
+  let runs = 0;
+  engine.runWrite = async () => { runs++; throw new (await import('../src/seo-blog/types.js')).SeoBlogError(409, 'Writing allowance: recorded usage 1; pending copy reservations 2; ceiling 3.', 'budget_exceeded'); };
+  const now = s.f.h.clock.now();
+  for (let i = 0; i < 4; i++) {
+    await s.f.h.store.enqueueJob({ id: randomUUID(), brandId: s.f.brand.id, kind: 'inventory', idempotencyKey: `visit-${i}`, payload: {}, state: 'queued', attempts: 0, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Queued.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 });
+    await s.f.h.engine.tick('w');
+  }
+  assert.equal(runs, 1, 'requeued and tried once, then left waiting');
+  assert.equal((await s.job()).state, 'blocked');
+  assert.equal(await s.f.h.engine.resumeAllowanceBlockedWrites(OWNER, s.f.brand.id), 1, 'the owner raising the allowance still requeues it');
+});
+
+test('the page uses the automatic resume’s arithmetic: queued work comes first, with no button that would only stop again', () => {
+  const b = { ...fx.brand, settings: { ...fx.brand.settings, budgets: { ...fx.brand.settings.budgets, modelTokensPerMonth: 100_000 } } } as Brand;
+  const job = (id: string, state: Job['state'], briefId: string, error: string | null): Job => ({ id, brandId: b.id, kind: 'write', idempotencyKey: id, payload: { briefId }, state, attempts: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null,
+    runAfter: '2026-11-15T10:00:00.000Z', progress: '', error, createdAt: '2026-11-14T10:00:00.000Z', updatedAt: '2026-11-15T10:00:00.000Z', rowVersion: 2 });
+  const blocked = job('cccccccc-1111-4222-8333-444455556666', 'blocked', 'b1', 'Writing allowance: monthly ceiling reached.');
+  const facts = { usage: { model_tokens: 50_000, search_calls: 0, images: 0 }, profile: 'confirmed' as const, generation: 'live' as const };
+  // 50,000 + 32,000 fits on its own; with another article already being written (50,000 + 2 × 32,000) it does not.
+  const alone = writingStatus(b, null, 'b1', [blocked], facts);
+  assert.equal(alone.retryLabel, 'Write it now');
+  const behind = writingStatus(b, null, 'b1', [blocked, job('dddddddd-1111-4222-8333-444455556666', 'running', 'b2', null)], facts);
+  assert.equal(behind.sentence, 'Other articles are being written first. This one starts when they finish, if there is still enough writing allowance.');
+  assert.equal(behind.retryJobId, null); assert.equal(behind.link, null);
+  const none = writingStatus(b, null, 'b1', [blocked], { ...facts, usage: { model_tokens: 90_000, search_calls: 0, images: 0 } });
+  assert.match(none.sentence, /^Paused: waiting for more writing allowance this month/);
 });

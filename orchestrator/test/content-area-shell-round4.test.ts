@@ -178,7 +178,8 @@ test('4. phone: the bar matches the sidebar, 44 px targets, the business at the 
 test('5a. stopped writing with no button of its own ranks below reading, stays off the badge and never pins Home', () => during(async () => {
   for (const [name, mut] of [
     ['cancelled', (s: Showcase) => job(s, { state: 'cancelled' })],
-    ['service not connected', (s: Showcase) => job(s, { state: 'blocked', error: 'Generation is not configured. Connect a model provider.' })],
+    // Still not connected (once it is, the article page and Home offer "Write it now" instead).
+    ['service not connected', (s: Showcase) => { job(s, { state: 'blocked', error: 'Generation is not configured. Connect a model provider.' }); s.generation = 'unavailable'; }],
     ['stopped, no task', (s: Showcase) => { s.jobs.length = 0; patch(s, 13, { editorialState: 'failed', failure: 'The model returned an unusable draft.' }); }],
   ] as const) {
     const calm = make('calm', mut);

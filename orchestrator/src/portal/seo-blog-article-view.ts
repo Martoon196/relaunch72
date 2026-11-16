@@ -160,10 +160,13 @@ export interface ResumeFacts {
   readonly generation: BrandReadiness['generation'] | null;
 }
 
-/** The engine's own requireBudget rule for one more article: the month's usage plus its estimate within a ceiling above zero (unlimited fits). */
-export function writingAllowanceFits(b: Pick<Brand, 'settings'>, usage: Readonly<Record<UsageKind, number>>): boolean {
+/**
+ * The automatic resume's own arithmetic (engine resumeAllowanceWrites): the month's usage, plus an article estimate
+ * for every article write already queued or running, plus this one, within a ceiling above zero (unlimited fits).
+ */
+export function writingAllowanceFits(b: Pick<Brand, 'settings'>, usage: Readonly<Record<UsageKind, number>>, alreadyWriting = 0): boolean {
   const ceiling = monthlyCeiling(b.settings, 'model_tokens');
-  return ceiling > 0 && usage.model_tokens + USAGE_ESTIMATES.article <= ceiling;
+  return ceiling > 0 && usage.model_tokens + (alreadyWriting + 1) * USAGE_ESTIMATES.article <= ceiling;
 }
 
 /** Why an article with no written version is where it is, from its write task. Nothing is invented. */
@@ -184,7 +187,12 @@ export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'edit
   if (job.state === 'done') return { ...none, sentence: article?.editorialState === 'failed' ? `Writing stopped${article.failure ? `: ${plainWritingError(article.failure).reason}` : '.'}` : 'Being written' };
   const plain = plainWritingError(job.error ?? job.progress);
   // Stopped for a reason that has since been sorted out: say so, and offer the existing Retry as the way forward.
-  const cleared = plain.cause === 'allowance' ? (facts?.usage ? writingAllowanceFits(b, facts.usage) : false)
+  const writingNow = jobs.filter((j) => j.id !== job.id && isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length;
+  // Enough this month, but only after the articles already being written: no button (pressing would stop again).
+  if (plain.cause === 'allowance' && facts?.usage && !b.settings.pauseAll && writingNow && writingAllowanceFits(b, facts.usage) && !writingAllowanceFits(b, facts.usage, writingNow)) {
+    return { sentence: 'Other articles are being written first. This one starts when they finish, if there is still enough writing allowance.', retryJobId: null, retryCosts: false, link: null };
+  }
+  const cleared = plain.cause === 'allowance' ? (facts?.usage ? writingAllowanceFits(b, facts.usage, writingNow) : false)
     : plain.cause === 'profile' ? facts?.profile === 'confirmed'
     : plain.cause === 'paused' ? !b.settings.pauseAll
     : plain.cause === 'service' ? Boolean(facts?.generation && facts.generation !== 'unavailable') : false;
