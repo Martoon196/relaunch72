@@ -5,7 +5,7 @@ import { loadPrompt } from '../stages/prompt.js';
 import { callJson, dataBlock, profileForPrompt } from './generation.js';
 import { methodHash, methodRunFor, PRIVATE_RELEASE_VERSION, type MethodController } from './method-packs.js';
 import type { SeoBlogStore } from './store.js';
-import { SeoBlogError, type BrandProfile } from './types.js';
+import { offerForWriting, SeoBlogError, type BrandProfile } from './types.js';
 import { currentKnowledge } from './method-evidence.js';
 import { acquisitionReferenceKinds, buildAcquisitionEvidence, type AcquisitionEvidence } from './acquisition-evidence.js';
 
@@ -101,7 +101,7 @@ export function campaignProblems(brief:CampaignBrief,content:unknown,profile:Bra
   for(const url of encoded.match(/https?:\/\/[^\s"<>\\)]+/g)??[])if(!allowed.has(url.replace(/[.,;!]$/,'')))problems.push('Only the campaign’s confirmed action URL may be used.');
   if(/\b(?:we have|we've|has been|was)\s+(?:sent|scheduled|published)\b/i.test(encoded))problems.push('A draft cannot claim that anything was sent, scheduled or published.');
   for(const exclusion of profile.exclusions)if(exclusion.length>=3&&encoded.toLowerCase().includes(exclusion.toLowerCase()))problems.push('The draft includes an excluded brand term or claim.');
-  const approved=JSON.stringify({offers:profile.offers,claims:profile.approvedClaims,incentiveTerms:brief.incentiveTerms});
+  const approved=JSON.stringify({offers:profile.offers.map(offerForWriting),claims:profile.approvedClaims,incentiveTerms:brief.incentiveTerms});
   for(const figure of encoded.match(/(?:£|\$|€)\s*\d[\d,.]*|\b\d+(?:\.\d+)?%/g)??[])if(!approved.includes(figure))problems.push('Commercial figures must match the approved brand facts or incentive terms.');
   if(brief.kind==='acquisition'){
     const p=v as AcquisitionProposal,evidence=brief.evidence??{research:[],facts:[],gaps:[]};
@@ -125,7 +125,7 @@ export function campaignProblems(brief:CampaignBrief,content:unknown,profile:Bra
     if(/\b(?:achieved|delivered|resulted in|generated)\b/i.test(p.objective.goal))problems.push('A proposal cannot report results; keep predictions as hypotheses.');
     if(/\b(?:roas|return on ad spend|cpa|cac|ctr)\b[^.]{0,40}\b(?:will|is|of|at)\b/i.test(forecast))problems.push('Do not state predicted ROAS, CPA, CAC or CTR as facts.');
     if(/\b(?:achieved|delivered|resulted in|generated)\b/i.test(forecast))problems.push('A proposal cannot report results; keep predictions as hypotheses.');
-    const approvedText=JSON.stringify({offers:profile.offers,claims:profile.approvedClaims}).toLowerCase();
+    const approvedText=JSON.stringify({offers:profile.offers.map(offerForWriting),claims:profile.approvedClaims}).toLowerCase();
     for(const term of encoded.match(COMMERCIAL_COMMITMENTS)??[])if(!approvedText.includes(term.toLowerCase()))problems.push(`Do not introduce commercial commitments that are not in approved facts ("${term}").`);
     if(/\b(?:competitors?|rivals?)\b[^.]{0,60}\b(?:spend|budget|spending)\b/i.test(encoded))problems.push('Do not state competitor spend.');
   }

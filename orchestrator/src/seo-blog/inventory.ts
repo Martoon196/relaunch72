@@ -5,10 +5,10 @@
  * page — including failures, so an incomplete inventory is visible.
  */
 
-import { brandPageHtmlLines, parseHtmlPage, parseSitemap } from './html.js';
+import { brandPageHtmlRead, parseHtmlPage, parseSitemap } from './html.js';
 import { SafeFetchError, validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import type { InventoryPage, WebsiteInventory, WebsiteLook } from './types.js';
-import { BRAND_PAGE_LIMIT, brandPageRank, brandPageText } from './brand-dna.js';
+import { BRAND_PAGE_LIMIT, brandPageRank, brandPageTextRead } from './brand-dna.js';
 
 export interface InventoryOptions {
   readonly maxPages?: number;
@@ -120,10 +120,12 @@ export async function buildInventory(brandId: string, website: string, transport
       // forwards to a checkout or sign-in elsewhere is somebody else's words, not the brand's.
       const keepText = options.captureText === true && withText < BRAND_PAGE_LIMIT && brandPageRank(url) !== null && !res.truncated && sameSite(res.finalUrl, origin);
       // Brand DNA reads the page's structure only for the few pages whose words are kept.
-      const text = keepText ? brandPageText(brandPageHtmlLines(res.body.toString('utf8'))) : '';
+      const read = keepText ? brandPageTextRead(brandPageHtmlRead(res.body.toString('utf8'))) : null;
+      const text = read?.text ?? '';
       if (text) withText++;
       pages.push({
         ...(text ? { text } : {}),
+        ...(text && read!.actionLines.length ? { actionLines: read!.actionLines } : {}),
         url,
         canonical: parsed.canonical,
         title: parsed.title,
