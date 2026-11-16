@@ -159,7 +159,7 @@ BEGIN
    WHERE probe.workspace_id=p_workspace AND probe.source_id=source.id
     AND probe.source_sha256=source.sha256 AND probe.status='verified_technical') THEN
   RAISE EXCEPTION 'Independent source video probe must pass first' USING ERRCODE='55000'; END IF;
- IF (SELECT count(*) FROM app.creative_media_local_render_jobs WHERE workspace_id=p_workspace AND state IN('queued','claimed'))>=20 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=200000000 THEN RAISE EXCEPTION 'Media queue or output storage cap reached' USING ERRCODE='55000'; END IF;
+ IF (SELECT count(*) FROM app.creative_media_local_render_jobs WHERE workspace_id=p_workspace AND state IN('queued','claimed'))>=20 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=200000000 THEN RAISE EXCEPTION 'Media queue or output storage cap reached' USING ERRCODE='54000'; END IF;
  INSERT INTO app.creative_media_local_render_jobs(workspace_id,id,command_id,
    project_id,revision,source_id,source_sha256,plan_sha256,requested_by)
  VALUES(p_workspace,v_job_id,v_command_id,v_project_id,v_revision,source.id,
@@ -298,7 +298,7 @@ BEGIN
   RAISE EXCEPTION 'Offline renderer output integrity or technical metadata mismatch'
     USING ERRCODE='22023'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text,0));
- IF (SELECT count(*) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=50 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))+length>200000000 THEN RAISE EXCEPTION 'Private output storage cap reached' USING ERRCODE='55000'; END IF;
+ IF (SELECT count(*) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=50 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))+length>200000000 THEN RAISE EXCEPTION 'Private output storage cap reached' USING ERRCODE='54000'; END IF;
  blob:=gen_random_uuid();v_output_id:=gen_random_uuid();
  INSERT INTO app.seo_blog_blobs(workspace_id,id,mime,bytes,sha256)
  VALUES(p_workspace,blob,'video/mp4',p_bytes,public.digest(p_bytes,'sha256'));

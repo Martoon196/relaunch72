@@ -58,6 +58,7 @@ export class PgLocalRenderOwner {
        [workspaceId,this.sessionHash,action,JSON.stringify(body)])).rows[0]!.value);
   }catch(e){
    const code=(e as {code?:string}).code;
+   if(code==='54000')throw new SeoBlogError(429,'Media render queue or storage capacity reached');
    if(code==='42501')throw new SeoBlogError(403,'Owner workspace or source rights could not be confirmed');
    if(code==='40001'||code==='23505')throw new SeoBlogError(409,'Local render command or timeline changed');
    if(code==='55000')throw new SeoBlogError(409,'Exact latest timeline and independently measured source required');
@@ -227,7 +228,8 @@ export async function runQueuedLocalRender(
  try{
   const saved=await ports.ledger.complete(workspaceId,jobId,claim.claimToken,output);
   return {state:'completed',jobId,outputId:saved.id};
- }catch{
+ }catch(error){
+  if((error as {code?:string}).code==='54000'){await ports.ledger.fail(workspaceId,jobId,claim.claimToken,'tool_limit');return {state:'failed',jobId};}
   // Cannot tell whether transaction committed. Never retry automatically.
   return {state:'reconciliation_required',jobId};
  }
