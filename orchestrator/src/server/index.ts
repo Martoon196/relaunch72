@@ -1083,6 +1083,7 @@ async function main(): Promise<void> {
   const ppFollowup = postgresPortal?.ppFollowup;
   if (ppFollowup) console.info(JSON.stringify({ event: 'pp.followup.readiness', mode: ppFollowup.status.mode, ready: ppFollowup.status.ready, problems: ppFollowup.status.problems }));
   // PP follow-ups use the same bounce handler: blocked addresses are refused before a proof and again at the sender.
+  // PP-only by design until a later stage (generic follow-up engine); not an email-connect eligibility decision.
   const ppRecipients = emailBounces?.hasWorkspace(PP_FOLLOWUP_WORKSPACE_ID) ? { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } : undefined;
   // Release 2 of "Connect email": PP's stored connection, when it is in charge, is read every sweep (its own server token,
   // sender and stream; every send reserved against the caps and holds first). Otherwise the environment sender runs

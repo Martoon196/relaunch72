@@ -11,6 +11,9 @@ import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import type { EmailConnectionStore, EmailConnectionState } from '../email-connections/store.js';
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { createPostmarkServerApi, type PostmarkServerApi } from '../email-connections/postmark-account-api.js';
+import { confirmBounceWebhook, webhookCheckLine, type WebhookCheck } from '../email-connections/webhook-check.js';
+import { staticEligibility, type EmailConnectEligibility } from '../email-connections/eligibility.js';
+import { connectionWebhookUrl } from '../email-connections/service.js';
 import { EMAIL_TERMS_VERSION } from '../email-connections/terms.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
 import { refusesReservedRecipient } from '../email-bounces/undeliverable.js';
@@ -31,7 +34,7 @@ export const SENDING_MESSAGES = Object.freeze({
   testRefusedSender: 'The email service didn\'t accept the test from your address. Press Check again to confirm both records are still found, then try again.',
   testKeyUnreadable: 'We couldn\'t open your saved connection on our side. Press Repair (or Continue) on this page, then try again.',
   testReplayed: 'That test was already sent once. Check your inbox and spam folder.',
-  testReplayedRefused: 'That test did not go the first time. Refresh this page and press Send a test to me again.',
+  testReplayedRefused: 'That test did not go the first time. Refresh this page and send the test again.',
   testRefusedRecipient: (address: string) => `The email service won't send to ${address}: it bounced or was reported as spam before. Use another test address.`,
   testReserved: (address: string) => `${address} can't receive email. Use a real test address.`,
   testUnknown: 'We couldn\'t tell whether the test was sent. Check your inbox in a few minutes before trying again.',
@@ -39,17 +42,17 @@ export const SENDING_MESSAGES = Object.freeze({
   needBusinessName: 'Enter your business\'s real name (2 to 120 characters, without < > " \\ or @).',
   needPostalAddress: 'Enter your business\'s postal address on one line (10 to 300 characters, without < > " \\ or @).',
   needTestList: 'Enter up to 10 test addresses, separated by commas.',
-  requested: 'Waiting for approval. We will email you.',
-  requestedNoEmail: 'Waiting for approval. Check this page for the answer.',
+  requested: 'Waiting for approval. The platform owner approves every new sender, usually quickly. We will email you when it is done; nothing else is needed from you.',
+  requestedNoEmail: 'Waiting for approval. The platform owner approves every new sender, usually quickly. Check back on this page for the answer; nothing else is needed from you.',
   live: 'You are live. Your marketing emails will now go out.',
   test: 'You are testing. Only your test addresses get emails.',
-  unchanged: 'Nothing needed changing.',
+  unchanged: 'That was already done, so nothing needed changing.',
   paused: 'Paused. No marketing emails will go until you press Resume.',
   resumed: 'Resumed. Your marketing emails can go again.',
   resumedStillHeld: (why: string) => `Resumed. ${why}`,
   switchedOff: 'Email sending is switched off for this business. Only we can switch it back on.',
   protectionPaused: 'Your marketing emails are paused by our protection. Only we can restart them.',
-  needsWebhook: 'We couldn\'t confirm the email service will tell us about bounces. Press Repair or Check again, then try once more.',
+  needsWebhook: 'We couldn\'t confirm the email service will tell us about bounces. Press Repair bounce reporting below, then press Go live again.',
   needsTerms: 'Tick the latest email rules first.',
   needsFooter: 'Add your business\'s real name and postal address first. They go at the bottom of every marketing email.',
   needsTest: 'Send a test to yourself first. It must be accepted for sending since your email was last connected.',
@@ -81,9 +84,15 @@ export interface OwnerSendingView {
   readonly testList: readonly string[];
   /** Hard bounces this business may say "works now" for (at most 50, newest first). */
   readonly bounced: readonly { readonly email: string; readonly since: string }[];
+  /** An approval email can reach the owner (a working alert sender and an owner address): only then "We will email you". */
+  readonly willEmail?: boolean;
 }
 
-export type SendingResult = { readonly ok: boolean; readonly message: string };
+export type SendingResult = {
+  readonly ok: boolean; readonly message: string;
+  /** Go live was refused because the bounce webhook could not be confirmed: the page offers "Repair bounce reporting". */
+  readonly bounceRepair?: boolean;
+};
 
 const TEST_SUBJECT = (from: string) => `Test email from ${from}`;
 
@@ -173,13 +182,25 @@ export class OwnerSendingService {
     /** Whether alert emails can be sent (a platform sender is configured). */
     mailer?: () => boolean;
     /** Whether this deployment lets stored connections send (EMAIL_CONNECT enabled and bounce handling on). */
-    allowed?: boolean }) {
+    allowed?: boolean;
+    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
+    eligibility?: EmailConnectEligibility }) {
     this.fetcher = input.fetcher ?? fetch;
   }
   private channel(): BannerChannel { return { mailer: this.input.mailer?.() === true, allowed: this.input.allowed !== false }; }
 
   /** The database has 0156. */
   async available(): Promise<boolean> { return this.input.protection.present(); }
+
+  /**
+   * The light read behind the "Connect email" status card on the home and follow-ups pages: the sender's own config
+   * (one query: the stored status and mode, the owner's pause, protection, footer, test and approval flags). null: no
+   * connection row; 'absent': this database has no sending controls (0156). Never the counts, the vault or Postmark.
+   */
+  async entryConfig(workspaceId: string): Promise<SendingConfig | null | 'absent'> {
+    if (!(await this.input.protection.present())) return 'absent';
+    return this.input.protection.sendingConfig(workspaceId);
+  }
 
   async view(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<OwnerSendingView> {
     let sending: SendingState | null = null;
@@ -188,7 +209,8 @@ export class OwnerSendingService {
     const testList = sending.testRecipients.length ? sending.testRecipients : sending.defaultTestEmail ? [sending.defaultTestEmail] : [];
     const bounced = this.input.bounces ? this.input.bounces.registry.snapshot(identity.workspaceId).blocked.filter(item => item.reason === 'hard_bounce')
       .slice(0, 50).map(item => ({ email: item.email, since: item.since })) : [];
-    return { offered: true, sending, banner: bannerFor(connection, sending, this.channel()), testList, bounced };
+    const channel = this.channel();
+    return { offered: true, sending, banner: bannerFor(connection, sending, channel), testList, bounced, willEmail: channel.mailer && sending.ownerEmailCount > 0 };
   }
 
   async saveDetails(identity: PortalSessionIdentity, form: { businessName: string; postalAddress: string; testList: string }): Promise<SendingResult> {
@@ -255,20 +277,24 @@ export class OwnerSendingService {
     return { ok: true, message: replayed === list.length ? SENDING_MESSAGES.testReplayed : SENDING_MESSAGES.testSent };
   }
 
-  /** Whether Postmark has the bounce webhook saved for this business, verified, on its stream (asked now, with the server token). */
-  private async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<boolean> {
-    if (!connection.webhookId) return false;
-    try {
-      const token = await this.token(identity);
-      if (!token) return false;
-      const api = this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher });
-      return (await api.listWebhooks(connection.stream ?? 'broadcast')).some(hook => hook.id === connection.webhookId && hook.status === 'verified');
-    } catch { return false; }
+  /**
+   * Whether Postmark has the bounce webhook saved for this business, verified, on its stream (asked now, with the server
+   * token; see confirmBounceWebhook). Every outcome but "listed as verified" is logged as one
+   * 'email.protection.go_live_webhook' line.
+   */
+  async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<WebhookCheck> {
+    // Our bounce address for this business: the same value Connect gave Postmark (portal origin + the business's source key).
+    const business = (this.input.eligibility ?? staticEligibility).business(identity.workspaceId);
+    const expectedUrl = business && this.input.portalOrigin ? connectionWebhookUrl(this.input.portalOrigin, business) : null;
+    const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', expectedUrl, token: () => this.token(identity),
+      api: token => this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher }) });
+    if (check.reason !== 'listed_verified') this.input.log?.(webhookCheckLine('email.protection.go_live_webhook', identity.workspaceId, check));
+    return check;
   }
 
   /** test / live / pause / resume. */
   async command(identity: PortalSessionIdentity, connection: EmailConnectionState, action: 'test' | 'live' | 'pause' | 'resume'): Promise<SendingResult> {
-    const webhookOk = action === 'live' ? await this.webhookVerified(identity, connection) : false;
+    const webhookOk = action === 'live' ? (await this.webhookVerified(identity, connection)).confirmed : false;
     let outcome;
     try { outcome = await this.input.protection.command(identity.sessionToken, identity.workspaceId, action, EMAIL_TERMS_VERSION, webhookOk); }
     catch (error) { return this.refusal(error); }
@@ -286,7 +312,7 @@ export class OwnerSendingService {
       }
       case 'unchanged': return { ok: true, message: SENDING_MESSAGES.unchanged };
       case 'switched_off': return { ok: false, message: SENDING_MESSAGES.switchedOff };
-      case 'needs_webhook': return { ok: false, message: SENDING_MESSAGES.needsWebhook };
+      case 'needs_webhook': return { ok: false, message: SENDING_MESSAGES.needsWebhook, bounceRepair: true };
       case 'needs_terms': return { ok: false, message: SENDING_MESSAGES.needsTerms };
       case 'needs_footer': return { ok: false, message: SENDING_MESSAGES.needsFooter };
       case 'needs_test': return { ok: false, message: SENDING_MESSAGES.needsTest };

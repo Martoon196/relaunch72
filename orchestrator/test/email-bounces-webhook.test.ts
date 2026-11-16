@@ -236,3 +236,44 @@ test('the server answers the webhook on the canonical host and on the brand host
   assert.equal((await call('evil.example.test', '/api/provider-webhooks/postmark/mhp')).status, 421);
   assert.equal((await call('app.martinhowardproperty.co.uk', '/api/provider-webhooks/other')).status, 404); assert.equal(mhpHandled, 1);
 });
+
+// Postmark's documented sample payloads (Bounce, Spam complaint and Subscription change webhook pages), verbatim: these
+// are what Postmark posts to a new webhook to verify it.
+const DOC_SAMPLES = {
+  Bounce: { RecordType: 'Bounce', MessageStream: 'outbound', ID: 692560173, Type: 'HardBounce', TypeCode: 1, Name: 'Hard bounce', Tag: 'Test',
+    MessageID: '883953f4-6105-42a2-a16a-77a8eac79483', Metadata: { PropA: 'some value', PropB: 'some value' }, ServerID: 23,
+    Description: 'The server was unable to deliver your message (ex: unknown user, mailbox not found).', Details: 'Test bounce details', Email: 'margareth@nasa.com',
+    From: 'alanturing@computers.com', BouncedAt: '2026-11-05T16:33:54.9070259Z', DumpAvailable: true, Inactive: true, CanActivate: true, Subject: 'Saying Hello!',
+    Content: '<Full dump of bounce>' },
+  SpamComplaint: { RecordType: 'SpamComplaint', MessageStream: 'outbound', ID: 692560174, Type: 'SpamComplaint', TypeCode: 100001, Name: 'Spam complaint', Tag: 'welcome-email',
+    MessageID: '883953f4-6105-42a2-a16a-77a8eac79483', Metadata: { PropA: 'some value', PropB: 'some value' }, ServerID: 23,
+    Description: 'The subscriber explicitly marked this message as spam.', Details: 'Test spam complaint details', Email: 'margareth@nasa.com', From: 'alanturing@computers.com',
+    BouncedAt: '2026-11-05T16:33:54.9070259Z', DumpAvailable: true, Inactive: true, CanActivate: false, Subject: 'Saying Hello!', Content: '<Abuse report dump>' },
+  SubscriptionChange: { RecordType: 'SubscriptionChange', MessageID: '883953f4-6105-42a2-a16a-77a8eac79483', ServerID: 23, MessageStream: 'outbound',
+    ChangedAt: '2026-11-05T16:33:54.9070259Z', Recipient: 'margareth@nasa.com', Origin: 'Recipient', SuppressSending: true, SuppressionReason: 'HardBounce', Tag: 'welcome-email',
+    Metadata: { PropA: 'some value', PropB: 'some value' } },
+} as const;
+
+test('a stored connection answers Postmark\'s documented samples 200 with the right credentials and records nothing; wrong credentials are still refused', async () => {
+  const f = fixture();
+  const CONN = 'conn-d975ff66336a46c2b36bd7095a11af97', CONN_SECRET = 'conn-webhook-secret-synthetic-0123456789';
+  f.service.upsertSource({ key: CONN, workspaceId: PP, token: null, webhookSecret: CONN_SECRET, serverId: '5151', streams: new Map([['broadcast', 'marketing']]), connection: true });
+  const right = { authorization: basic(CONN, CONN_SECRET) };
+  for (const [name, sample] of Object.entries(DOC_SAMPLES)) {
+    // As documented (the "outbound" stream), and on our own Broadcast stream: the sample's ServerID is never ours.
+    for (const body of [sample, { ...sample, MessageStream: 'broadcast' }]) {
+      const answer = await f.post(CONN, body, right);
+      assert.equal(answer.status, 200, name);
+      assert.equal(answer.body.outcome, 'ignored', name);
+    }
+    // Wrong credentials: refused exactly as before, whatever the body.
+    for (const headers of [{} as Record<string, string>, { authorization: basic(CONN, 'x'.repeat(40)) }, { authorization: basic('someone', CONN_SECRET) }, { authorization: basic('pp', PP_SECRET) },
+      { 'x-postmark-webhook-secret': 'not-the-secret' }]) {
+      assert.equal((await f.post(CONN, sample, headers, 'POST', '198.51.100.7')).status, 401, `${name}: wrong credentials`);
+    }
+  }
+  assert.deepEqual(f.service.registry.snapshot(PP).blocked, [], 'no address blocked');
+  assert.equal(f.service.registry.snapshot(PP).month.bounced, 0);
+  assert.deepEqual(f.effects, [], 'nobody stopped');
+  assert.doesNotMatch(f.logs.join('\n'), /nasa\.com|computers\.com/u, 'no sample address in the log');
+});
