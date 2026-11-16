@@ -340,6 +340,8 @@ export interface WebsiteInventory {
   readonly pages: readonly InventoryPage[];
   readonly notes: readonly string[];
   readonly look?: WebsiteLook;
+  /** The business's keyword list, its cost ledger and call cache (SEO_BLOG_KEYWORD_POOL). Written only through the keyword boundary; a website refresh keeps it. */
+  readonly keywordPool?: import('./keyword-fill.js').InventoryKeywordPool;
 }
 
 // ─── Research ────────────────────────────────────────────────────────────────

@@ -84,8 +84,37 @@ export type BeginResult =
       readonly destination: Destination; readonly version: ArticleVersion;
     };
 
+/** What the keyword-list boundary sees: the brand, the fill job (inventory kind), the inventory record and this month's research attempts. */
+export interface KeywordBoundarySnapshot {
+  readonly brand: Brand;
+  readonly job: Job | null;
+  readonly jobs: readonly Job[];
+  readonly inventory: WebsiteInventory | null;
+  readonly usage: { readonly search_calls: number };
+}
+export interface KeywordBoundaryDecision {
+  readonly job: Job | null;
+  readonly writeJob: boolean;
+  readonly usage?: UsageRecord;
+  /** The new keyword list; written onto the existing inventory record, leaving the rest of it as it is. */
+  readonly keywordPool?: import('./keyword-fill.js').InventoryKeywordPool;
+}
+export interface KeywordBoundaryInput {
+  readonly brandId: string;
+  readonly jobId: string;
+  readonly now: string;
+  readonly decide: (snapshot: KeywordBoundarySnapshot) => KeywordBoundaryDecision;
+}
+
 export interface SeoBlogStore {
   campaignCopyBoundary(input: CampaignCopyBoundaryInput): Promise<Article>;
+  /**
+   * Keyword-list boundary (SEO_BLOG_KEYWORD_POOL): one short transaction that locks the brand, the inventory record
+   * and the fill job, calls `decide` synchronously, then writes the job, one usage entry and the keyword list
+   * together. A locked read-modify-write: the rest of the inventory record is left as it is. No supplier call ever
+   * happens inside it. Optional: a store without it never offers keyword lists.
+   */
+  keywordBoundary?(input: KeywordBoundaryInput): Promise<Job | null>;
   /** Genuine owner command; atomically append the exact target-reviewed version and invalidate approval. */
   reviewWebsiteTarget(input: WebsiteReviewInput): Promise<ArticleVersion>;
   programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null>;
@@ -426,7 +455,34 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   }
 
   async saveInventory(inventory: WebsiteInventory): Promise<void> {
-    this.inventories.set(inventory.brandId, clone(inventory));
+    // A website refresh never carries the keyword list; keep the stored one (written only through keywordBoundary).
+    const prior = this.inventories.get(inventory.brandId)?.keywordPool;
+    this.inventories.set(inventory.brandId, clone(prior && !('keywordPool' in inventory) ? { ...inventory, keywordPool: prior } : inventory));
+  }
+
+  async keywordBoundary(input: KeywordBoundaryInput): Promise<Job | null> {
+    const brand = this.brands.get(input.brandId);
+    if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    const jobs = [...this.jobs.values()].filter((j) => j.brandId === input.brandId && j.kind === 'inventory');
+    const job = jobs.find((j) => j.id === input.jobId) ?? null;
+    const since = input.now.slice(0, 7) + '-01T00:00:00.000Z';
+    const decision = input.decide(clone({ brand, job, jobs, inventory: this.inventories.get(input.brandId) ?? null,
+      usage: { search_calls: this.usage.filter((u) => u.brandId === input.brandId && u.kind === 'search_calls' && u.at >= since).reduce((n, u) => n + u.amount, 0) } }));
+    let next = decision.job;
+    if (decision.writeJob) {
+      if (!next || next.kind !== 'inventory' || next.brandId !== input.brandId || next.id !== input.jobId) throw new SeoBlogError(409, 'Keyword task scope changed.');
+      const previous = this.jobs.get(next.id);
+      if (!previous || previous.rowVersion !== next.rowVersion) throw new StaleWriteError('keyword job');
+      next = { ...clone(next), rowVersion: previous.rowVersion + 1 };
+    }
+    if (decision.keywordPool) {
+      const inventory = this.inventories.get(input.brandId);
+      if (!inventory) throw new SeoBlogError(409, 'Read the website before filling the keyword list.');
+      this.inventories.set(input.brandId, { ...inventory, keywordPool: clone(decision.keywordPool) });
+    }
+    if (decision.usage) this.usage.push(clone(decision.usage));
+    if (decision.writeJob && next) this.jobs.set(next.id, next);
+    return clone(next);
   }
 
   async getInventory(brandId: string): Promise<WebsiteInventory | null> {

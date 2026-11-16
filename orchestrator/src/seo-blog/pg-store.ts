@@ -14,7 +14,7 @@ import type { Pool } from 'pg';
 import { withTransaction, type DbTransaction } from '../db/transaction.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import type { DatabaseRequestContext } from '../db/rls.js';
-import type { AttachWorkspaceInput, BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
+import type { AttachWorkspaceInput, BeginDecision, BeginResult, CreateBrandInput, KeywordBoundaryInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
@@ -244,7 +244,43 @@ export class PgSeoBlogStore implements SeoBlogStore {
     const all = await this.records<BrandProfile>(brandId, 'profile');
     return all.sort((a, b) => b.version - a.version)[0] ?? null;
   }
-  saveInventory(inventory: WebsiteInventory): Promise<void> { return this.putRecord(inventory.brandId, 'inventory', 'current', inventory, 'upsert'); }
+  async saveInventory(inventory: WebsiteInventory): Promise<void> {
+    if ('keywordPool' in inventory) return this.putRecord(inventory.brandId, 'inventory', 'current', inventory, 'upsert');
+    // A website refresh never carries the keyword list: keep the stored one in the same statement (no lost update).
+    await this.tx(inventory.brandId, async (t) => {
+      await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id = $1 FOR UPDATE', [inventory.brandId]);
+      await t.query(`INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, 'inventory', 'current', $2)
+        ON CONFLICT (workspace_id, kind, id) DO UPDATE SET data = CASE WHEN app.seo_blog_records.data ? 'keywordPool'
+          THEN EXCLUDED.data || jsonb_build_object('keywordPool', app.seo_blog_records.data -> 'keywordPool') ELSE EXCLUDED.data END, updated_at = clock_timestamp()`,
+        [inventory.brandId, JSON.stringify(inventory)]);
+    });
+  }
+
+  async keywordBoundary(input: KeywordBoundaryInput): Promise<Job | null> {
+    return this.tx(input.brandId, async (t) => {
+      const locked = await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id=$1 FOR UPDATE', [input.brandId]);
+      if (!locked.rows.length) throw new SeoBlogError(404, 'Brand not found.');
+      const brand = (await t.query<{ brand: Brand }>('SELECT app_private.seo_blog_brand($1) AS brand', [input.brandId])).rows[0]!.brand;
+      const inventory = (await t.query<{ data: WebsiteInventory }>("SELECT data FROM app.seo_blog_records WHERE workspace_id=$1 AND kind='inventory' AND id='current' FOR UPDATE", [input.brandId])).rows[0]?.data ?? null;
+      const jobs = (await t.query<{ data: Job; row_version: string }>("SELECT data,row_version FROM app.seo_blog_jobs WHERE workspace_id=$1 AND kind='inventory' ORDER BY id FOR UPDATE", [input.brandId])).rows.map(withVersion);
+      const usage = Number((await t.query<{ amount: string }>("SELECT coalesce(sum(amount),0)::text AS amount FROM app.seo_blog_usage WHERE workspace_id=$1 AND kind='search_calls' AND at >= $2", [input.brandId, input.now.slice(0, 7) + '-01T00:00:00.000Z'])).rows[0]?.amount ?? 0);
+      const job = jobs.find((j) => j.id === input.jobId) ?? null;
+      const decision = input.decide({ brand: normaliseBrand(brand), job, jobs, inventory, usage: { search_calls: usage } });
+      if (decision.usage) await t.query('INSERT INTO app.seo_blog_usage(workspace_id,kind,amount,at,reference) VALUES($1,$2,$3,$4,$5)', [input.brandId, decision.usage.kind, decision.usage.amount, decision.usage.at, decision.usage.reference]);
+      if (decision.keywordPool) {
+        const written = await t.query("UPDATE app.seo_blog_records SET data=jsonb_set(data,'{keywordPool}',$2::jsonb,true),updated_at=clock_timestamp() WHERE workspace_id=$1 AND kind='inventory' AND id='current' RETURNING id", [input.brandId, JSON.stringify(decision.keywordPool)]);
+        if (!written.rows.length) throw new SeoBlogError(409, 'Read the website before filling the keyword list.');
+      }
+      if (!decision.writeJob) return decision.job;
+      const next = decision.job;
+      if (!next || next.kind !== 'inventory' || next.brandId !== input.brandId || next.id !== input.jobId || !job) throw new SeoBlogError(409, 'Keyword task scope changed.');
+      const { rowVersion, ...data } = next;
+      const saved = await t.query<{ data: Job; row_version: string }>('UPDATE app.seo_blog_jobs SET data=$3,state=$4,run_after=$5,lease_expires_at=$6,row_version=row_version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND row_version=$7 RETURNING data,row_version',
+        [input.brandId, next.id, JSON.stringify(data), next.state, next.runAfter, next.leaseExpiresAt, rowVersion]);
+      if (!saved.rows[0]) throw new StaleWriteError('keyword job');
+      return withVersion(saved.rows[0]);
+    });
+  }
   async getInventory(brandId: string): Promise<WebsiteInventory | null> { return (await this.records<WebsiteInventory>(brandId, 'inventory', 'current'))[0] ?? null; }
   savePlan(plan: TopicPlan): Promise<void> { return this.putRecord(plan.brandId, 'plan', plan.id, plan, 'upsert'); }
   async getPlan(brandId: string, planId: string): Promise<TopicPlan | null> { return (await this.records<TopicPlan>(brandId, 'plan', planId))[0] ?? null; }

@@ -80,6 +80,11 @@ interface PlanExecution {
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
 import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
+import { marketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
+import type { KeywordCandidate } from '../keyword/types.js';
+import type { PoolBusiness } from './keyword-pool.js';
+import type { KeywordChoices } from './keyword-store-shape.js';
+import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
@@ -133,6 +138,8 @@ export interface EngineDeps {
   readonly keywords?: KeywordProvider | null;
   /** SEO_BLOG_REQUIRE_FULL_ENGINE: planning and writing stop with a neutral message rather than produce a weaker article. Off by default. */
   readonly requireFullEngine?: boolean;
+  /** Keyword research for the business's keyword list (SEO_BLOG_KEYWORD_POOL). Absent: keyword lists are not offered. */
+  readonly keywordResearch?: KeywordResearchProvider | null;
   /** Read-only method assignments for the strict setting when the method switch is off (to tell an expected method from none). */
   readonly methodAssignments?: Pick<MethodStore, 'snapshot'>;
   readonly now?: () => string;
@@ -152,7 +159,9 @@ export interface EngineDeps {
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
 export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000,
   /** Brand DNA: up to twelve website pages (8,000 characters each) plus the owner's documents, and one possible correction pass. */
-  profileFromSite: 40_000, plan: 40_000, article: 32_000, promotion: 6_000, section: 8_000, searchPerPlan: 8 });
+  profileFromSite: 40_000, plan: 40_000, article: 32_000, promotion: 6_000, section: 8_000, searchPerPlan: 8,
+  /** Research attempts for one keyword-list fill at most (cached answers spend nothing). */
+  keywordFill: 6 });
 
 const JOB_MAX_ATTEMPTS = 3;
 /** Setup's documents-only extraction. Unchanged by Brand DNA. */
@@ -2180,6 +2189,116 @@ export class SeoBlogEngine {
     return { article, version, profile, brief };
   }
 
+  // ─── Keyword list (SEO_BLOG_KEYWORD_POOL) ────────────────────────────────
+
+  /** Whether keyword lists are offered by this engine (the switch is on and the store can hold them). */
+  get keywordListsReady(): boolean { return Boolean(this.deps.keywordResearch && this.store.keywordBoundary); }
+
+  /** Fill or refresh the business's keyword list. Idempotent per command; one research attempt per supplier call at most, cached answers spend nothing. */
+  async requestKeywordFill(actor: Actor, brandId: string, input: { commandId: string }): Promise<Job> {
+    const brand = await this.brandFor(actor, brandId);
+    if (!this.keywordListsReady) throw new SeoBlogError(409, FILL_MESSAGE.notAvailable, 'keywords_unavailable');
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
+    const prior = (await this.store.listJobs(brandId)).find((j) => j.idempotencyKey === `keywords:${input.commandId}`);
+    if (prior) return prior;
+    if (!brand.website) throw new SeoBlogError(409, FILL_MESSAGE.needsWebsite, 'not_ready');
+    const { profile, stale } = await this.currentFactsKey(brandId);
+    if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, FILL_MESSAGE.needsBrandDna, 'not_ready');
+    await this.requireBudget(brand, 'search_calls', 1);
+    return this.enqueue(brandId, 'inventory', `keywords:${input.commandId}`, { keywordFill: { commandId: input.commandId, attempts: [] }, requestedBy: actor.userId });
+  }
+
+  /** The stored keyword list (read only; a view never spends). */
+  async keywordList(actor: Actor, brandId: string): Promise<import('./keyword-fill.js').InventoryKeywordPool | null> {
+    await this.brandFor(actor, brandId);
+    return (await this.store.getInventory(brandId))?.keywordPool ?? null;
+  }
+
+  private keywordChoices(brand: Brand): KeywordChoices | null {
+    return ((brand.settings.programme ?? {}) as { keywordChoices?: KeywordChoices }).keywordChoices ?? null;
+  }
+
+  private async keywordBusiness(brand: Brand, profile: BrandProfile, inventory: WebsiteInventory): Promise<PoolBusiness> {
+    const planned = (await this.store.listBriefs(brand.id)).filter((b) => !['omitted', 'skipped'].includes(b.status))
+      .map((b) => ({ id: b.id, title: b.workingTitle, targetQuery: b.targetQuery }));
+    return { profile, brandName: brand.name, website: brand.website, pages: inventory.pages, planned, dismissed: dismissedPhrases(this.keywordChoices(brand)) };
+  }
+
+  /** Job handler: each supplier call reserves one research attempt first, saves its receipt after, and is never repeated automatically. */
+  private async runKeywordFill(claim: Job): Promise<void> {
+    const provider = this.deps.keywordResearch;
+    if (!provider || !this.store.keywordBoundary) throw new SeoBlogError(409, FILL_MESSAGE.notAvailable, 'keywords_unavailable');
+    const brand = await this.store.getBrand(claim.brandId);
+    if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    if (!brand.website) throw new SeoBlogError(409, FILL_MESSAGE.needsWebsite, 'not_ready');
+    const { profile, stale } = await this.currentFactsKey(brand.id);
+    if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, FILL_MESSAGE.needsBrandDna, 'not_ready');
+    let inventory = await this.store.getInventory(brand.id);
+    // Reading the website is free; the list is built against the current pages.
+    if (!inventory || Date.parse(this.now()) - Date.parse(inventory.fetchedAt) > 24 * 3600_000) inventory = await this.refreshInventory(brand.id);
+    const market = marketForLocale(brand.locale);
+    const business = await this.keywordBusiness(brand, profile, inventory);
+    const calls = fillCalls(business, market);
+    const candidates: KeywordCandidate[] = [];
+    let answered = 0;
+    for (const call of calls) {
+      const answer = await this.keywordCall(claim, provider, call, market);
+      if (answer) { answered++; candidates.push(...answer); }
+    }
+    if (calls.length && !answered) throw new SeoBlogError(409, FILL_MESSAGE.allFailed, 'keywords_unavailable');
+    let phrases = 0;
+    await this.store.keywordBoundary({ brandId: brand.id, jobId: claim.id, now: this.now(), decide: (s) => {
+      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, 'The keyword task lease ended.');
+      const rebuilt = rebuiltPool(storedPool(s.inventory, market), candidates, business, this.keywordChoices(s.brand) ?? { schema: 1, dismissed: [], chosen: [], ownerSeeds: [] }, this.now());
+      phrases = rebuilt.pool.rows.length;
+      return { job: { ...s.job, progress: FILL_MESSAGE.done, updatedAt: this.now() }, writeJob: true, keywordPool: rebuilt.pool };
+    } });
+    await this.log(brand.id, 'system', 'keywords.filled', `Keyword list refreshed: ${phrases} phrases.`, claim.id);
+  }
+
+  private keywordOwns(current: Job, claim: Job): boolean {
+    return current.state === 'running' && current.leaseOwner === claim.leaseOwner && current.attempts === claim.attempts;
+  }
+
+  /** One supplier call: served from the cache when fresh; otherwise reserved, made once, and its receipt saved. Null when it failed. */
+  private async keywordCall(claim: Job, provider: KeywordResearchProvider, call: FillCall, market: LabsMarket): Promise<readonly KeywordCandidate[] | null> {
+    const boundary = this.store.keywordBoundary!.bind(this.store);
+    let served: readonly KeywordCandidate[] | null | undefined;
+    let attempt: FillAttempt | null = null;
+    await boundary({ brandId: claim.brandId, jobId: claim.id, now: this.now(), decide: (s) => {
+      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, 'The keyword task lease ended.');
+      const hit = cachedFor(storedPool(s.inventory, market), call, this.now());
+      if (hit) { served = hit.rows; return { job: s.job, writeJob: false }; }
+      const attempts = fillAttempts(s.job);
+      const prior = attempts.find((a) => a.sha === call.sha);
+      if (prior && !prior.receivedAt) throw new SeoBlogError(409, FILL_MESSAGE.unknown, 'keywords_outcome_unknown');
+      if (prior) { served = null; return { job: s.job, writeJob: false }; }
+      const ceiling = s.brand.settings.budgets.searchCallsPerMonth;
+      if (ceiling <= 0 || s.usage.search_calls + 1 > ceiling) throw new BudgetExceededError('search_calls', s.usage.search_calls, ceiling, 1);
+      const now = this.now();
+      attempt = { sha: call.sha, endpoint: call.endpoint, nonce: randomUUID(), startedAt: now };
+      return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), attempts: [...attempts, attempt] } }, progress: 'Finding the searches that matter to your business.', updatedAt: now },
+        writeJob: true, usage: { brandId: claim.brandId, kind: 'search_calls', amount: 1, at: now, reference: `keywords:${claim.id}:${attempt.nonce}` } };
+    } });
+    if (served !== undefined) return served;
+    const reserved = attempt as FillAttempt | null;
+    if (!reserved) return null;
+    let answer: LabsCallResult<KeywordCandidate>;
+    try { answer = await runFillCall(provider, call, market); }
+    catch { answer = { endpoint: call.endpoint as never, status: 'failed', rows: [], skippedRows: 0, totalCount: null, providerReportedCost: null, taskId: null, diagnostic: researchDiagnostic(null) }; }
+    const status: 'ok' | 'no_data' | 'failed' = answer.status === 'ok' || answer.status === 'no_data' ? answer.status : 'failed';
+    const save = () => boundary({ brandId: claim.brandId, jobId: claim.id, now: this.now(), decide: (s) => {
+      if (!s.job) throw new SeoBlogError(404, 'Keyword task not found.');
+      const now = this.now();
+      // A late receipt is kept even if the lease ended, so the charge is never lost or paid twice.
+      const attempts = fillAttempts(s.job).map((a) => a.nonce === reserved.nonce ? { ...a, receivedAt: now, status, providerReportedCost: answer.providerReportedCost, rows: answer.rows.length, diagnosticCategory: answer.diagnostic?.category ?? null } : a);
+      const pool = withCachedCall(withCost(storedPool(s.inventory, market), reserved, answer, now), call, answer, now);
+      return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), attempts } }, updatedAt: now }, writeJob: true, keywordPool: pool };
+    } });
+    try { await save(); } catch { await save(); }
+    return status === 'failed' ? null : answer.rows;
+  }
+
   /**
    * The writing method for a business and step, without running it: 'off' when the method switch is off and no
    * assignment can be read; 'not_assigned' when the business has none (the house standard applies, as for clients);
@@ -3096,6 +3215,7 @@ export class SeoBlogEngine {
       current = await this.store.updateJob({ ...fresh, progress: progressLabel(job.kind), updatedAt: this.now() });
       const p = job.payload as Record<string, unknown>;
       if (isBrandDnaJob(job)) await this.runBrandDna(job);
+      else if (isKeywordFillJob(job)) await this.runKeywordFill(current);
       else if (p.stage !== undefined) throw new SeoBlogError(409, 'This worker does not support that task stage.');
       else if (job.kind === 'inventory') await this.refreshInventory(job.brandId);
       else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined },current);
