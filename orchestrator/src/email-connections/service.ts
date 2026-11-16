@@ -40,12 +40,12 @@
 import { randomBytes } from 'node:crypto';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import type { EmailConnectBusiness, EmailConnectConfig } from './config.js';
-import { staticEligibility, type EmailConnectEligibility } from './eligibility.js';
+import { emailConnectNotAllowedMessage, type EmailConnectEligibility } from './eligibility.js';
 import { connectionBounceSource } from './bounce-sources.js';
 import { freeMailboxDomain, lookUpCname, lookUpDnsHost, lookUpTxt, parseEmailAddress, publicSuffixOnly, reservedDomain, senderName, systemDnsResolver,
   type DnsHost, type DnsResolver, type DnsSeen } from './domains.js';
 import { createPostmarkAccountApi, POSTMARK_CODES, PostmarkAccountError, type PostmarkAccountApi, type PostmarkDomain, type PostmarkServerApi } from './postmark-account-api.js';
-import { EmailConnectionAbsentError, EmailConnectionForbiddenError, type DomainOrigin, type EmailConnectionDns, type EmailConnectionState, type EmailConnectionStep,
+import { EmailConnectionAbsentError, EmailConnectionForbiddenError, EmailConnectionNotAllowedError, type DomainOrigin, type EmailConnectionDns, type EmailConnectionState, type EmailConnectionStep,
   type EmailConnectionStore, type RunLock, type StepOutcome } from './store.js';
 import { EMAIL_TERMS_VERSION } from './terms.js';
 import type { EmailBounceSource } from '../email-bounces/index.js';
@@ -82,6 +82,7 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   needReplyTo: 'Enter a valid address for replies, or leave it empty.',
   alreadyConnected: 'Email is already connected for this business. To use another address, press Start again (or Disconnect, once connected) under More options first.',
   notOwner: 'Only an owner of this business can connect its email.',
+  /** Before 0157 (the static list). With 0157 the generic EMAIL_CONNECT_NOT_ALLOWED.database is shown: see notAllowedMessage. */
   notAllowed: 'Email can only be connected for Property Predator for now.',
   nothingToContinue: 'There is nothing to continue yet. Start with step 1 below.',
   checkBoth: 'Both found. Your email is connected.',
@@ -186,8 +187,8 @@ export class EmailConnectionService {
     /** Test seam for the webhook secret; production uses 32 random bytes. */
     secret?: () => string;
     lockWaitMs?: number;
-    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
-    eligibility?: EmailConnectEligibility;
+    /** Which businesses may connect: the one the platform composed. */
+    eligibility: EmailConnectEligibility;
   }) {
     const config = input.config;
     this.account = input.account ?? (config.enabled ? createPostmarkAccountApi({ accountToken: config.accountToken }) : null);
@@ -195,8 +196,11 @@ export class EmailConnectionService {
     this.resolver = input.resolver ?? systemDnsResolver();
     this.log = input.log ?? (() => undefined);
     this.secret = input.secret ?? (() => randomBytes(32).toString('base64url'));
-    this.eligibility = input.eligibility ?? staticEligibility;
+    this.eligibility = input.eligibility;
   }
+
+  /** The refusal for a business that is not allowed: names Property Predator only while 0157 is not applied (as before). */
+  get notAllowedMessage(): string { return emailConnectNotAllowedMessage(this.eligibility); }
 
   /** The configuration allows the feature (the database may still lack 0155: see available()). */
   get enabled(): boolean { return this.input.config.enabled && this.account !== null; }
@@ -206,7 +210,7 @@ export class EmailConnectionService {
 
   private business(identity: PortalSessionIdentity): EmailConnectBusiness {
     const business = this.eligibility.business(identity.workspaceId);
-    if (!business) throw new EmailConnectionError(403, EMAIL_CONNECTION_MESSAGES.notAllowed, 'not_allowed');
+    if (!business) throw new EmailConnectionError(403, this.notAllowedMessage, 'not_allowed');
     return business;
   }
 
@@ -217,6 +221,8 @@ export class EmailConnectionService {
 
   private storeError(error: unknown): Error {
     if (error instanceof EmailConnectionAbsentError) return new EmailConnectionError(404, EMAIL_CONNECTION_MESSAGES.off, 'off');
+    // Switched off by the founder since this process last read the list (the database said so first).
+    if (error instanceof EmailConnectionNotAllowedError) return new EmailConnectionError(403, emailConnectNotAllowedMessage({ fromDatabase: true }), 'not_allowed');
     if (error instanceof EmailConnectionForbiddenError) return new EmailConnectionError(403, EMAIL_CONNECTION_MESSAGES.notOwner, 'not_owner');
     return error instanceof EmailConnectionError || error instanceof StepFailure ? error : new EmailConnectionError(503, EMAIL_CONNECTION_MESSAGES.busy, 'store');
   }
@@ -267,8 +273,8 @@ export class EmailConnectionService {
   }
 
   /** Whether another business's connection row holds this domain; when that cannot be told, assumed yes (refuse). */
-  private async heldElsewhere(workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean> {
-    try { return await this.input.store.otherConnectionHolds(workspaceId, domain); } catch { return true; }
+  private async heldElsewhere(identity: PortalSessionIdentity, workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean> {
+    try { return await this.input.store.otherConnectionHolds(identity.sessionToken, workspaceId, domain); } catch { return true; }
   }
 
   /** The Return-Path host that proves THIS business created a domain with today's key (see vault.returnPathLabel). */
@@ -293,7 +299,7 @@ export class EmailConnectionService {
       if (!domain) outcome = 'domain_gone';
       else if (domain.dkimVerified || domain.returnPathVerified || domain.name !== state.domain || !state.domain
         || domain.returnPathHost !== this.proofHost(business.workspaceId, state.domain)
-        || await this.heldElsewhere(business.workspaceId, { id: domain.id, name: domain.name })) outcome = 'domain_kept';
+        || await this.heldElsewhere(identity, business.workspaceId, { id: domain.id, name: domain.name })) outcome = 'domain_kept';
       else { await this.account!.deleteDomain(state.domainId); outcome = 'domain_removed'; }
     } catch { outcome = 'domain_remove_failed'; }
     this.log(JSON.stringify({ event: 'email.connections.unverified_domain', level: outcome === 'domain_remove_failed' ? 'warn' : 'info', outcome, workspace: business.workspaceId.slice(0, 8) }));
@@ -423,7 +429,7 @@ export class EmailConnectionService {
         secret = this.secret();
         await store.saveSealed(token, ws, 'webhook_secret', config.vault.seal(ws, 'webhook_secret', secret));
       }
-      this.input.bounces?.apply(connectionBounceSource({ workspaceId: ws, serverId: String(server.id), stream: BROADCAST_STREAM, serverToken, webhookSecret: secret }, this.eligibility));
+      this.input.bounces?.apply(connectionBounceSource({ workspaceId: ws, serverId: String(server.id), stream: BROADCAST_STREAM, serverToken, webhookSecret: secret }));
 
       // 4. Webhook.
       await intend('webhook');
@@ -460,7 +466,7 @@ export class EmailConnectionService {
         const found = (await account.listDomains()).find(item => item.name === wanted);
         if (found) {
           const details = await account.getDomain(found.id);
-          const elsewhere = await this.heldElsewhere(ws, { id: details.id, name: details.name });
+          const elsewhere = await this.heldElsewhere(identity, ws, { id: details.id, name: details.name });
           if (details.name !== wanted || elsewhere) await taken(false);
           // Our own create whose answer was lost: it carries our proof and nobody has verified it.
           if (proven(details) && !details.dkimVerified && !details.returnPathVerified) { domain = details; origin = 'created'; }

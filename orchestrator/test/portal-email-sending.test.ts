@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createPostmarkAccountApi, EmailConnectionService, EmailConnectionVault, EMAIL_TERMS_VERSION, loadEmailConnectConfig } from '../src/email-connections/index.js';
 import { handleEmailConnection } from '../src/portal/email-connection-router.js';
@@ -33,7 +34,7 @@ async function setup() {
     return postmark.fetch(input, init);
   }) as typeof fetch;
   const config = loadEmailConnectConfig({ EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, { portalBaseUrl: ORIGIN });
-  const service = new EmailConnectionService({ config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
     resolver: fakeResolver({}), secret: () => SECRET, lockWaitMs: 2000 });
   const protection = new MemoryProtectionStore(counts({ mode: 'off', goLiveApprovedAt: null }));
   const lifts: string[] = [], reactivations: string[] = [];
@@ -47,7 +48,7 @@ async function setup() {
   } as never;
   const soon: string[] = [];
   let mailer = true;
-  const sending = new OwnerSendingService({ protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher, bounces,
+  const sending = new OwnerSendingService({ eligibility: staticEligibility, protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher, bounces,
     evaluator: { soon: ws => soon.push(ws) }, founder: async identity => identity.sessionToken === FOUNDER, portalOrigin: ORIGIN, mailer: () => mailer });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, identity = owner, headers: Record<string, string> = {}) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';

@@ -3,6 +3,7 @@
  * one business and with several (S-6), which Postmark bounce types count and where (S-7), and the sentences that had
  * to become true (small numbers, the account's own wording, slowed while not live, the ramp, a refused test replay).
  */
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ACCOUNT, RESTART_MIN_SENDS, accountDecision, decide, judge, recovered, sampleVerdict, tripFromNumbers, tripNumbers } from '../src/email-protection/rules.js';
@@ -149,7 +150,7 @@ test('"Send a test to me" replayed: "already sent" only when the first attempt w
   const store = new Store(counts(), () => NOW);
   const connection = { status: 'verified', fromAddress: 'hello@mail.pp-send-proof.co.uk', fromName: 'PP', replyTo: null, stream: 'broadcast', mode: 'test',
     protection: { state: 'ok', reason: null, since: null, dailyCap: 50, hourlyCap: 13, warmupStartedAt: null }, webhookId: 1 } as never;
-  const service = new OwnerSendingService({ protection: store, connections: { sealed: async () => ({ serverToken: 'x' }) } as never,
+  const service = new OwnerSendingService({ eligibility: staticEligibility, protection: store, connections: { sealed: async () => ({ serverToken: 'x' }) } as never,
     vault: { open: () => 'srv-token' } as never, fetcher: (async () => { throw new Error('never sent'); }) as never } as never);
   const identity = { sessionToken: OWNER, userId: PP_WS, workspaceId: PP_WS } as never;
   store.reserveAnswer = 'replayed_refused';

@@ -5,6 +5,7 @@
  * system, a second own pause within 90 days becomes off; protection events append-only; nothing reaches another
  * workspace; other database roles can call nothing. Postmark is not involved. All people and values are synthetic.
  */
+import { staticEligibility } from '../../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -54,7 +55,7 @@ test('0156 on real roles: owner and founder commands, reservations, counters, th
     await ownerQuery(admin, 'INSERT INTO app_private.seo_limit_operators(user_id) VALUES($1) ON CONFLICT DO NOTHING', [founder]);
     const ownerToken = await session(admin, owner, PP), adminToken = await session(admin, admin2, PP), founderToken = await session(admin, founder, OTHER_WS),
       strangerToken = await session(admin, stranger, OTHER_WS);
-    const connections = new PgEmailConnectionStore(identity), store = new PgEmailProtectionStore(identity);
+    const connections = new PgEmailConnectionStore(identity, { eligibility: staticEligibility }), store = new PgEmailProtectionStore(identity);
     const vault = new EmailConnectionVault(Buffer.alloc(32, 9));
 
     // Nothing is offered before a connection row exists; nobody but the owner reads the state.

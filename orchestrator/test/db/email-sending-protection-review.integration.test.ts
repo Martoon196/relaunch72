@@ -8,6 +8,7 @@
  *   - disconnecting while held holds (B1); tests to the business's own list go while the owner has paused.
  * Postmark is not involved. All people and values are synthetic.
  */
+import { staticEligibility } from '../../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -86,7 +87,7 @@ test('0156 review on real roles: B1, S2, S5, S6, S7, the apply checks, tests whi
   const identity = await loginRole(admin, 'r72_identity_command');
   try {
     const { ownerToken, founderToken } = await people(admin);
-    const connections = new PgEmailConnectionStore(identity), store = new PgEmailProtectionStore(identity);
+    const connections = new PgEmailConnectionStore(identity, { eligibility: staticEligibility }), store = new PgEmailProtectionStore(identity);
     await connect(connections, ownerToken, DOMAIN, true);
     await goLive(store, ownerToken, founderToken);
     const counts = async () => (await store.numbers())!.businesses.find(b => b.workspaceId === PP)!;
@@ -209,7 +210,7 @@ test('S1: at a year of 2,000 live sends a day the send path reads by index: no s
   const one = new pg.Pool({ connectionString: (identity as unknown as { options: { connectionString: string } }).options.connectionString, max: 1 });
   try {
     const { ownerToken, founderToken } = await people(admin);
-    const connections = new PgEmailConnectionStore(identity), store = new PgEmailProtectionStore(one);
+    const connections = new PgEmailConnectionStore(identity, { eligibility: staticEligibility }), store = new PgEmailProtectionStore(one);
     await connect(connections, ownerToken, DOMAIN, true);
     await goLive(new PgEmailProtectionStore(identity), ownerToken, founderToken);
     await ownerQuery(admin, `INSERT INTO app_private.email_send_events(workspace_id,kind,event_key,purpose,state,occurred_at,settled_at)

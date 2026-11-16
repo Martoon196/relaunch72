@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { EmailConnectionSecretField } from './vault.js';
-import { staticEligibility, type EmailConnectEligibility } from './eligibility.js';
+import type { EmailConnectEligibility } from './eligibility.js';
 
 export type EmailConnectionStatus = 'not_connected' | 'creating' | 'dns_pending' | 'verified' | 'needs_attention' | 'disconnected';
 export type EmailConnectionStep = 'server' | 'stream' | 'secret' | 'webhook' | 'domain';
@@ -63,9 +63,19 @@ export class EmailConnectionAbsentError extends Error {
 }
 /** The session is not an eligible owner of this workspace (42501 from the database). */
 export class EmailConnectionForbiddenError extends Error {
-  override readonly name = 'EmailConnectionForbiddenError';
-  constructor() { super('Business owner required.'); }
+  override readonly name: string = 'EmailConnectionForbiddenError';
+  constructor(message = 'Business owner required.') { super(message); }
 }
+/**
+ * The business is not on the active allow-list (0157: 42501 with DETAIL email_connect_not_allowed). A kind of
+ * EmailConnectionForbiddenError, so every caller that refused "not the owner" still refuses.
+ */
+export class EmailConnectionNotAllowedError extends EmailConnectionForbiddenError {
+  override readonly name = 'EmailConnectionNotAllowedError';
+  constructor() { super('Email is not switched on for this business.'); }
+}
+/** 0157's DETAIL for a business that is not on the active allow-list. */
+export const NOT_ALLOWED_DETAIL = 'email_connect_not_allowed';
 
 export interface EmailConnectionStore {
   state(sessionToken: string, workspaceId: string): Promise<EmailConnectionState>;
@@ -89,10 +99,11 @@ export interface EmailConnectionStore {
   /** Whether the database has 0155 (so an entry to the page may be shown). */
   present(): Promise<boolean>;
   /**
-   * Whether a connection row of ANOTHER workspace holds this Postmark domain id or domain name. Answers false only when
-   * that is certain; throws when it cannot tell (callers then refuse to delete or take over).
+   * Whether a connection row of ANOTHER workspace holds this Postmark domain id or domain name (asked with the owner's
+   * own session). Answers false only when that is certain; throws when it cannot tell (callers then refuse to delete or
+   * take over).
    */
-  otherConnectionHolds(workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean>;
+  otherConnectionHolds(sessionToken: string, workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean>;
 }
 
 /** A held run lock. lost() turns true if the lock's connection dropped: the run must stop at its next step. */
@@ -146,10 +157,10 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
   private absentUntil = 0;
   private answered = false;
   constructor(private readonly pool: Pick<Pool, 'query' | 'connect'>, private readonly options: { now?: () => number; log?: (line: string) => void;
-    /** A dedicated small pool for the run lock (the platform gives it one connection of its own). */
+    /** A dedicated small pool for the run lock (the platform gives it connections of its own). */
     lockPool?: Pick<Pool, 'connect'>;
-    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
-    eligibility?: EmailConnectEligibility } = {}) {}
+    /** Which businesses may connect: the one the platform composed (otherConnectionHolds asks whether 0157 is there). */
+    eligibility: EmailConnectEligibility }) {}
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
 
@@ -171,7 +182,7 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
         this.absentUntil = this.now() + RECHECK_MS;
         throw new EmailConnectionAbsentError();
       }
-      if (code === '42501') throw new EmailConnectionForbiddenError();
+      if (code === '42501') throw (error as { detail?: unknown })?.detail === NOT_ALLOWED_DETAIL ? new EmailConnectionNotAllowedError() : new EmailConnectionForbiddenError();
       throw error;
     }
   }
@@ -302,16 +313,20 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
   }
 
   /**
-   * 0155 pins app_private.email_connections to the Property Predator workspace, so while only that business is allowed
-   * no other row can exist: the answer is certainly false. Once a second business is allowed (a later migration lifts
-   * the pin and adds a definer read for this), this refuses until that read is wired here.
-   *
-   * STAGE 2 (database allow-list, migration 0157) replaces this count with a SQL read of whether another business's
-   * row holds the domain. Until then only the "how many are allowed" question goes through the eligibility seam.
+   * With 0157 (the allow-list read in the eligibility) the database answers, for the owner's own session, whether a
+   * connection row of another workspace holds this domain id or name (yes or no only). Without 0157, 0155 and 0156 pin
+   * every row to Property Predator, so for it the answer is certainly false, exactly as before; for anyone else (a
+   * second business could only be allowed by 0157) it cannot be told and this throws.
    */
-  async otherConnectionHolds(workspaceId: string, _domain: { id: number | null; name: string }): Promise<boolean> {
-    const others = (this.options.eligibility ?? staticEligibility).list().filter(business => business.workspaceId !== workspaceId.toLowerCase());
-    if (others.length === 0) return false;
-    throw new Error('Cannot tell whether another business holds this domain');
+  async otherConnectionHolds(sessionToken: string, workspaceId: string, domain: { id: number | null; name: string }): Promise<boolean> {
+    if (!this.options.eligibility.fromDatabase) {
+      const others = this.options.eligibility.list().filter(business => business.workspaceId !== workspaceId.toLowerCase());
+      if (others.length === 0) return false;
+      throw new Error('Cannot tell whether another business holds this domain');
+    }
+    const value = await this.call<unknown>('SELECT app_private.email_connection_domain_held($1,$2,$3,$4) AS value',
+      [sessionHash(sessionToken), workspaceId, domain.id, domain.name]);
+    if (typeof value !== 'boolean') throw new Error('Invalid email connection answer');
+    return value;
   }
 }
