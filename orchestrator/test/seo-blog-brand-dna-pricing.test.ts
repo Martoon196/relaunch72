@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import {
   brandDnaCard, brandPageText, brandPageTextRead, BRAND_DNA_RULES_VERSION, websiteDocuments, collapsedPositions, cleanProvenance, holdConflictedPrices, pricingAfterEdit, pricingEditText, repairProfileFacts, settleConflict, strictProfileProblems, type ProfileFacts,
 } from '../src/seo-blog/brand-dna.js';
-import { basisPositions, basisText, checkAllPricing, checkPricing, keyOf, proposedLines, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
+import { basisPositions, basisText, checkAllPricing, checkPricing, inCreditClause, keyOf, proposedLines, withoutMarkers } from '../src/seo-blog/brand-dna-rules.js';
 import { brandPageHtmlLines, brandPageHtmlRead } from '../src/seo-blog/html.js';
 import { buildAcquisitionEvidence } from '../src/seo-blog/acquisition-evidence.js';
 import { actionMarked, extractProfile, profileForPrompt } from '../src/seo-blog/generation.js';
@@ -647,6 +647,10 @@ test('round 9: every case the round-8 backstop left silent asks again (tiers, se
     '<h1>Learn property properly</h1><p>Join the Property Course, our flagship programme.</p><h2>The price</h2><p>£1,697 once</p>',
     '<h1>Stories</h1><blockquote>The Property Course changed how I buy.</blockquote><h2>Pricing</h2><p>£1,697 once, or 3 x £599</p>',
   ]) assert.ok(await asksAbout(join2, wdoc('d2', html, 'https://x.example/prices'), two, 'Property Course'), html);
+  // A price and a credit in one unbroken clause: the credit is about the nearest amount before it (the £47), not the £1,697.
+  assert.ok(await asksAbout(join, kdoc('d2', 'News. From March the Property Course is £1,697 with the £47 Deal Desk fee credited against it.', 'https://x.example/faq'), course, 'Property Course'));
+  assert.deepEqual([inCreditClause('The £1,697 with the £47 fee credited against it.', 4, 10), inCreditClause('The £1,697 with the £47 fee credited against it.', 20, 23)], [false, true]);
+  assert.deepEqual([inCreditClause('Credited against the course: £997, then £1,497', 29, 33), inCreditClause('• The £997 credits in full against One Lane Mentoring for 90 days.', 6, 10)], [true, true], 'with no amount before it, the nearest after');
   // Tiered names: one listed offer's name ends the other's.
   const tiers = wdoc('d1', '<h1>Coaching</h1><h2>Group Coaching</h2><p>£50 a month or £500 a year</p><h2>Coaching</h2><p>£200 a month</p>', 'https://x.example/join');
   assert.ok(await asksAbout(tiers, wdoc('d2', '<h1>Prices</h1><p>Group Coaching £60 a month</p>', 'https://x.example/prices'), [O('Group Coaching', '£50 a month', [L.other('£500 a year')]), O('Coaching', '£200 a month')], 'Group Coaching'));

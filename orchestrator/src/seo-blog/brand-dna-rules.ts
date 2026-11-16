@@ -850,15 +850,27 @@ const CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b/giu;
 const breakCache = new WeakMap<Structure, Map<number, { s: number; e: number }[]>>();
 /** The backstop's clause breaks: the structure check's (CLAUSE_BREAK, unchanged), plus sentence ends. */
 const CREDIT_CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b|[.!?](?=\s|$)/giu;
+const CREDIT_WORDS_ALL = new RegExp(CREDIT_WORDS.source, 'giu');
+const CLAUSE_AMOUNT = /[£$€¥]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:%|per\s?cent)/giu;
 /**
- * The cross-source backstop's credit test (accepted structures only): the amount at [s, e) of one stored line has a clause
- * (CREDIT_CLAUSE_BREAK, at most 300 characters either side) that is a credit or cross-reference ("credits in full",
- * "credited against / towards / to", "deducted"; never "with / on / interest-free credit").
+ * The cross-source backstop's credit test (accepted structures only): the amount at [s, e) of one stored line is the amount
+ * a credit or cross-reference in its own clause (CREDIT_CLAUSE_BREAK, at most 300 characters either side) is about
+ * ("credits in full", "credited against / towards / to", "deducted"; never "with / on / interest-free credit"). Each credit
+ * phrase is about the nearest amount before it in the clause, or, with none before it, the nearest amount after it: in
+ * "£1,697 with the £47 Deal Desk fee credited against it" only the £47 is.
  */
 export function inCreditClause(line: string, s: number, e: number): boolean {
   let cs = Math.max(0, s - 300), ce = Math.min(line.length, e + 300);
   for (const m of line.matchAll(CREDIT_CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
-  return CREDIT_WORDS.test(line.slice(cs, ce));
+  const clause = line.slice(cs, ce);
+  if (!CREDIT_WORDS.test(clause)) return false;
+  const amounts = [...clause.matchAll(CLAUSE_AMOUNT)].map((m) => cs + m.index!);
+  for (const c of clause.matchAll(CREDIT_WORDS_ALL)) {
+    const at = cs + c.index!, before = amounts.filter((a) => a < at), after = amounts.filter((a) => a > at);
+    const about = before.length ? before[before.length - 1] : after[0];
+    if (about !== undefined && about >= s && about < e) return true;
+  }
+  return false;
 }
 /** Every clause break on a line, found once per line (start and end positions in the basis). */
 function breaksOn(st: Structure, line: number): { s: number; e: number }[] {
