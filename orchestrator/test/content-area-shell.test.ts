@@ -14,6 +14,10 @@ import * as fx from './seo-blog-article-page-fixtures.js';
 import { articleId, BRAND_ID, call, HOSTILE_NAME, HOSTILE_TITLE, identity, NOW, SECRET, showcase, type Scenario } from './content-area-shell-fixtures.js';
 import { goldenPages, GOLDEN_BASE, GOLDEN_FILE, GOLDEN_NOW, type GoldenRecord } from './content-area-shell-golden.js';
 
+// The tests decide the switch themselves. A build machine may have the real setting in its environment (the live
+// service does once the preview is switched on), and it must not leak into the "server does not allow it" cases.
+delete process.env.CONTENT_AREA_PREVIEW;
+
 const GOLDEN: GoldenRecord = JSON.parse(gunzipSync(readFileSync(new URL(`./${GOLDEN_FILE}`, import.meta.url))).toString('utf8'));
 const B = `/portal/seo-blog/b/${BRAND_ID}`;
 const ON = { headers: { cookie: 'r72_content_look=new' }, input: { contentAreaPreview: 'enabled' } };
