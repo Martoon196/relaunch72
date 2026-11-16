@@ -31,9 +31,15 @@ import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
 import { logPortalSeoBlogCapabilities } from './seo-blog-capabilities.js';
+import { affiliateReader, affiliateStores, affiliateStudioEnabled, type AffiliateStores } from './affiliate-service.js';
 
 export interface PortalSeoBlogService {
   limitsFor?(identity: PortalSessionIdentity, requestId: string): SeoLimitsService;
+  /**
+   * Affiliate Studio (AFFILIATE_STUDIO=enabled, default off): the products and reports stores in this owner's own
+   * session. Absent: no affiliate route or screen exists.
+   */
+  affiliateFor?(identity: PortalSessionIdentity, requestId: string): AffiliateStores;
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
   engineFor(identity: PortalSessionIdentity, requestId: string): SeoBlogEngine;
   readonly generation: 'live' | 'unavailable';
@@ -90,6 +96,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
   const socialReady = promotionsReady && Boolean(socialPools);
   const zernioApiKey = env.ZERNIO_API_KEY?.trim() || null;
   const reservedProfileIds = seoBlogSocialReservedProfileIds(env);
+  const affiliateOn = affiliateStudioEnabled(env);
   const socialFor = (identity: PortalSessionIdentity, requestId: string) => socialReady && contentAdapterPool && socialPools
     ? createPgSeoBlogSocialRegistry({ zernioPool: socialPools.zernioPool, contentCommandPool, contentAdapterPool, identity, requestId, zernioApiKey, reservedProfileIds })
     : undefined;
@@ -110,6 +117,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     async creativeSavedImages(identity, _requestId, engine, brandId) {
       return env.CREATIVE_STUDIO_ENABLED?.trim() === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
     },
+    ...(affiliateOn ? { affiliateFor: (identity: PortalSessionIdentity, requestId: string) => affiliateStores(contentCommandPool, identity, requestId) } : {}),
     engineFor(identity, requestId) {
       const social = socialFor(identity, requestId);
       const media = createSeoBlogMediaRuntime({ contentPool: contentCommandPool, adapterPool: promotionsReady ? contentAdapterPool : undefined, env, identity,
@@ -119,6 +127,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
         ...(env.SEO_BLOG_METHOD_PACKS==='true'&&env.SEO_BLOG_CAMPAIGN_CREATORS==='true'?{creatorStore:new PgCampaignCreatorStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId})}:{}),
         ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId}),true)}:{}), llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
         ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
+        ...(affiliateOn ? { affiliate: affiliateReader(affiliateStores(contentCommandPool, identity, requestId)) } : {}),
         ...(social ? { social } : {}) });
     },
     async socialCallback(identity, requestId, input) {

@@ -48,6 +48,10 @@ import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
+import { affiliateGet, affiliatePost, affiliateReportsCard, affiliateSettingsCard, isAffiliateGet, isAffiliatePost } from './affiliate-routes.js';
+import { articlePills } from './affiliate-views.js';
+import { affiliateReader, type AffiliateStores } from './affiliate-service.js';
+import { linkStatus } from '../affiliate/article.js';
 import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, contentBusinessesPage, businessLine, writtenNeedsCount, contentErrorPage, needsQueue, type ContentAreaData, type FillFacts } from './content-area-pages.js';
 import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
 import { CONTENT_AREA_FONT_PATH, contentAreaFont } from './content-area-fonts.js';
@@ -266,6 +270,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const resumed = f('action') === 'policy' || !new RegExp(`^${UUID}$`, 'i').test(target) ? 0 : await engine.resumeAllowanceBlockedWrites(actor, target.toLowerCase()).catch(() => 0);
         return ok(`${SEO_BLOG_BASE}/limits`, `Limits saved. Usage history and publishing settings are unchanged.${resumed ? ` ${resumed === 1 ? '1 article that was waiting is' : `${resumed} articles that were waiting are`} being written now.` : ''}`);
       }
+      // Affiliate Studio: only in the new look with AFFILIATE_STUDIO on; otherwise these paths answer as before.
+      const affiliatePosting = previewOn && brandId && isAffiliatePost(rest) ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
+      if (affiliatePosting && brandId) return await affiliatePost({ res, engine, actor, brandId, rest, stores: affiliatePosting, f, all: (name) => form.fields.getAll(name), file: form.file, ok,
+        fail: (location, text) => { const [address, fragment] = location.split('#'); return redirect(res, `${address}?${signedMessage(input.sessionSecret, 'e', text)}${fragment ? `#${fragment}` : ''}`); } });
       return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
     }
     if (method !== 'GET' && method !== 'HEAD') throw new SeoBlogError(405, 'Use the controls on the page.');
@@ -452,8 +460,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
     if (rest === 'dna') return send(res, 200, brandDnaPage({ ...shell('setup'), switchTo: 'dna' }, await engine.brandDna(actor, brandId), randomUUID()));
+    const affiliate = previewOn ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
+    if (affiliate && isAffiliateGet(rest)) {
+      return send(res, 200, await affiliateGet({ engine, actor, brand, rest, stores: affiliate, shell: (place) => { const s = shell(place === 'articles' ? 'articles' : 'overview'); return { ...s, preview: { ...s.preview!, place } }; } }));
+    }
     if (previewOn) {
-      const page = await contentAreaPage(engine, actor, brand, rest, url, shell, previewData);
+      const page = await contentAreaPage(engine, actor, brand, rest, url, shell, previewData, affiliate);
       if (page !== null) return send(res, 200, page);
     }
     const tab = rest.split('/')[0] || 'overview';
@@ -505,7 +517,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const open = url.searchParams.getAll('open').filter((x) => (ARTICLE_FOLDS as readonly string[]).includes(x));
       // The website and time the main press would use, shown beside it and checked again when pressed.
       const plan = detail.version ? await engine.publishingPlan(actor, brandId, articleId) : undefined;
-      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social, jobs, resume, open, workingTitle, plan, now: plan?.now, checkSources: url.searchParams.getAll('checksource').slice(0, 5), mode: url.searchParams.get('edit') === '1' ? 'edit' : 'read' }));
+      // Product links: checked against the current products only when the owner's own session can read them.
+      const links = detail.version?.body.affiliate?.links.length ? await (async () => {
+        const stores = input.service.affiliateFor?.(identity, input.requestId);
+        if (!stores || stores.workspaceId !== brandId) return { status: null, actions: false };
+        const read = await affiliateReader(stores).read(brandId).catch(() => null);
+        return { status: read ? linkStatus(detail.version!.body.affiliate!, read.catalogue, read.settings) : null, actions: previewOn && Boolean(read) };
+      })() : undefined;
+      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social, jobs, resume, open, workingTitle, plan, now: plan?.now, checkSources: url.searchParams.getAll('checksource').slice(0, 5), mode: url.searchParams.get('edit') === '1' ? 'edit' : 'read', ...(links ? { affiliateLinks: links } : {}) }));
     }
     if (tab === 'calendar') {
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
@@ -514,7 +533,16 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const [articles, plans, destinations, readiness, jobs, campaignEntries] = await Promise.all([engine.listArticles(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId),engine.readiness(actor,brandId),engine.listJobs(actor,brandId),engine.campaignCalendar(actor,brandId)]);
       return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, readiness,jobs,campaignEntries, brandsAll: false }));
     }
-    if (tab === 'publishing') return send(res, 200, publishingPage(shell('publishing'), { usage: await engine.usage(actor, brandId) }));
+    if (tab === 'publishing') {
+      const html = publishingPage(shell('publishing'), { usage: await engine.usage(actor, brandId) });
+      // Affiliate Studio: the Amazon UK details card sits at the end of Settings (new look and switch on only).
+      if (affiliate && rest === 'publishing' && html.includes('</main>')) {
+        const card = await affiliateSettingsCard(affiliate, shell('publishing'), brand);
+        const at = html.lastIndexOf('</main>');
+        return send(res, 200, `${html.slice(0, at)}${card}${html.slice(at)}`);
+      }
+      return send(res, 200, html);
+    }
     if (tab === 'social') {
       if(rest==='social/calendar'){
         const today=new Date().toISOString().slice(0,10),end=new Date(Date.parse(`${today}T00:00:00.000Z`)+31*86_400_000).toISOString().slice(0,10);
@@ -566,7 +594,7 @@ async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: str
   return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList }, resume: { usage, profile: readiness?.profile ?? null, generation: readiness?.generation ?? null } };
 }
 
-async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null): Promise<string | null> {
+async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null, affiliate?: AffiliateStores): Promise<string | null> {
   // A move or schedule made in the existing diary comes back with its message: it returns to that diary, not the month view.
   const diary = url.searchParams.has('view') || url.searchParams.has('n') || url.searchParams.has('e');
   const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !diary ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results' : null;
@@ -579,9 +607,13 @@ async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand
     const month = (/^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : today).slice(0, 7);
     return contentCalendarPage(shell('calendar'), { ...data, month });
   }
-  if (page === 'articles') return contentArticlesPage(shell('articles'), data);
+  if (page === 'articles') return contentArticlesPage(shell('articles'), data, affiliate ? articlePills(brand, 'articles') : '');
   const s = shell('overview');
-  return contentResultsPage({ ...s, preview: { ...s.preview!, place: 'results' } }, data);
+  const results = { ...s, preview: { ...s.preview!, place: 'results' as const } };
+  if (!affiliate) return contentResultsPage(results, data);
+  // Affiliate Studio: what Amazon reported, from the files the owner uploads (no counting of our own).
+  const linked = await engine.linkedLiveArticles(actor, brand.id).catch(() => 0);
+  return contentResultsPage(results, data, await affiliateReportsCard(affiliate, results, brand, linked, data.now));
 }
 
 async function handlePost(

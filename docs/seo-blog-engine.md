@@ -170,6 +170,7 @@ relaunch72 service:
 | `ANTHROPIC_API_KEY` | Legacy fallback for workers or other profiles that permit the global credential. The scoped key takes precedence. Without either key, or with `SEO_BLOG_GENERATION=off`, generation is unavailable. |
 | `SEO_BLOG_DATAFORSEO_LOGIN` / `_PASSWORD` (or the existing `DATAFORSEO_*`) | Research. Without them, planning is blocked with "connect a research provider". |
 | `SEO_BLOG_KEYWORD_METRICS=dataforseo` | Optional measured demand; otherwise demand is labelled qualitative. |
+| `AFFILIATE_STUDIO=enabled` | Affiliate Studio screens, portal only, new look only, off by default: Products inside Articles, Write a product article, Amazon UK details in Settings, what Amazon reported in Results. Needs migration 0158; before it is applied every screen says products are not switched on yet. Product articles always wait for approval, get no social drafts, and carry code-rendered links and the disclosure (`src/affiliate/article.ts`, `render.ts`). |
 | `SEO_BLOG_MAX_DOCUMENT_BYTES`, `SEO_BLOG_MAX_IMAGE_BYTES`, `SEO_BLOG_WORKER_INTERVAL_MS`, `SEO_BLOG_WORKER_BATCH` | Optional limits. |
 
 Worker: a separate process `npm run serve:seo-blog-worker` with the same variables.

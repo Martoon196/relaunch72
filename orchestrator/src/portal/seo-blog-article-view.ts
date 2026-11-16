@@ -13,6 +13,8 @@
 import { randomUUID } from 'node:crypto';
 import { sha256, USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
 import { citationNumbers, renderMarkdown } from '../seo-blog/render.js';
+import { disclosureHtml, productLinkHtml } from '../affiliate/render.js';
+import { cleanDisplay } from '../affiliate/article.js';
 import { putBackOffers, withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
 import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
@@ -428,6 +430,8 @@ export interface ArticlePageData {
   readonly now?: string;
   /** The article's plan (search phrase, intent, demand) for the SEO report; null for articles planned before it was kept. */
   readonly articleBrief?: ArticleBrief | null;
+  /** Product links against the current products (Affiliate Studio); `actions` only when the switch is on. */
+  readonly affiliateLinks?: { readonly status: readonly { readonly productId: string; readonly name: string; readonly state: 'current' | 'changed' | 'retired' }[] | null; readonly actions: boolean };
 }
 
 /** The reading column: the article as it will be published (same renderer, same order, same citations). */
@@ -437,8 +441,10 @@ function readingColumn(b: Brand, a: Article, body: ArticleBody): string {
   const md = (text: string, sub = false) => renderMarkdown(text, cites.number, canonical, sub);
   return [
     `<h1 class="ap-title">${e(body.title)}</h1>`,
+    // Exactly as readers see it: the disclosure first and each product's link after its part (Affiliate Studio).
+    disclosureHtml(body.affiliate),
     `<div id="opening">${md(body.intro)}</div>`,
-    ...body.sections.map((s) => `<section class="ap-part" id="part-${e(s.id)}"><h2>${e(s.heading)}</h2>\n${md(s.body, true)}</section>`),
+    ...body.sections.map((s) => `<section class="ap-part" id="part-${e(s.id)}"><h2>${e(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}</section>`),
     body.faqs.length ? `<section class="ap-part" id="questions"><h2>Frequently asked questions</h2>\n${body.faqs.map((f, i) => `<div id="question-${i + 1}"><h3>${e(f.q)}</h3>\n${md(f.a)}</div>`).join('\n')}</section>` : '',
     `<div id="closing">${md(body.conclusion)}</div>`,
     body.cta ? (safeHttps(body.cta.url) ? `<p><a class="ap-cta" href="${e(body.cta.url)}" rel="noopener">${e(body.cta.label)}</a></p>` : `<p>${e(body.cta.label)}</p>`) : '',
@@ -698,6 +704,23 @@ function bar(inner: string): string {
   return `<div class="ap-bar" role="region" aria-label="What happens next">${inner}</div>`;
 }
 
+/** Product links (Affiliate Studio): each link's full destination, whether it is still current, and how to change it. */
+function productLinksFold(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string {
+  const a = v.body.affiliate;
+  if (!a?.links.length) return '';
+  const status = new Map((d.affiliateLinks?.status ?? []).map((s) => [s.productId, s.state]));
+  const stale = (d.affiliateLinks?.status ?? []).some((s) => s.state !== 'current');
+  const actions = d.affiliateLinks?.actions === true && d.article.delivery !== 'publishing';
+  const word = { current: 'Up to date', changed: 'The product or its link has changed', retired: 'You stopped using this product' } as const;
+  const items = a.links.map((l) => {
+    const state = status.get(l.productId);
+    return `<li><strong>${e(cleanDisplay(l.name))}</strong> <span class="ap-note">Affiliate link</span><br><span class="ap-url">${e(l.url)}</span>${state ? `<br><span class="ap-note">${e(word[state])}</span>` : ''}${actions ? `<form method="post" action="${e(`${base}/affiliate-remove`)}" class="ap-inline">${csrfField(shell.csrf)}${hidden({ versionId: v.id, productId: l.productId })}<button type="submit" class="secondary">Remove this link</button></form>` : ''}</li>`;
+  }).join('');
+  const update = actions && stale ? `<form method="post" action="${e(`${base}/affiliate-refresh`)}" class="ap-inline">${csrfField(shell.csrf)}${hidden({ versionId: v.id })}<button type="submit" class="secondary">Update the links</button></form>` : '';
+  return `<details class="ap-fold" id="product-links"${stale ? ' open' : ''}><summary><h2>Product links</h2></summary><div class="ap-fold-body"><p>Readers see the label at the top and a button after each product. ${stale ? 'Something has changed since this was written: update the links before you approve it.' : 'Every link matches your products.'}</p><ul>${items}</ul>${update}</div></details>
+`;
+}
+
 export function editorPage(shell: Shell, d: ArticlePageData): string {
   const b = shell.brand!;
   const a = d.article;
@@ -734,7 +757,7 @@ ${editingColumn(v.body)}
 ${readingColumn(b, a, v.body)}</article>
 <div class="ap-column">${postsSection(shell, d, v, base)}</div>
 <div class="ap-folds">
-${seoPanel(shell, d, v, open.has('seo'))}
+${productLinksFold(shell, d, v, base)}${seoPanel(shell, d, v, open.has('seo'))}
 ${googleFold(d, v, base, false, open.has('google'))}
 ${whereFold(shell, d, v, base, open.has('where'))}
 ${sourcesFold(v, open.has('sources'))}

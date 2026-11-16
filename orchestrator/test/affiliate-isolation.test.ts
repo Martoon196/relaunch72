@@ -28,13 +28,18 @@ function specifiers(text: string): string[] {
   return found;
 }
 
-test('no module under src/portal or src/seo-blog, nor anywhere else outside src/affiliate, imports src/affiliate', async () => {
+// Release 2 (screens): only these files may reach src/affiliate. The portal pieces run only with AFFILIATE_STUDIO on;
+// the article engine pieces act only on articles that carry products or product links.
+const WIRED = new Set(['portal/affiliate-service.ts', 'portal/affiliate-routes.ts', 'portal/affiliate-views.ts', 'portal/seo-blog-router.ts', 'portal/seo-blog-service.ts',
+  'portal/seo-blog-article-view.ts', 'seo-blog/engine.ts', 'seo-blog/types.ts', 'seo-blog/generation.ts', 'seo-blog/checks.ts', 'seo-blog/render.ts', 'seo-blog/publishers/content-api.ts']);
+
+test('only the wired files import src/affiliate; nothing else outside src/affiliate does', async () => {
   const files = await sources(SRC);
   assert.ok(files.length > 200, 'the source tree was found');
   assert.ok(files.some(f => f.startsWith(path.join(SRC, 'portal') + path.sep)) && files.some(f => f.startsWith(path.join(SRC, 'seo-blog') + path.sep)));
   const offenders: string[] = [];
   for (const file of files) {
-    if (file.startsWith(AFFILIATE)) continue;
+    if (file.startsWith(AFFILIATE) || WIRED.has(path.relative(SRC, file).split(path.sep).join('/'))) continue;
     const text = await readFile(file, 'utf8');
     for (const spec of specifiers(text)) {
       const target = spec.startsWith('.') ? path.resolve(path.dirname(file), spec) : spec;
