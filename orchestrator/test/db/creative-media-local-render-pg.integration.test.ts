@@ -20,7 +20,7 @@ import {PgCreativeMediaProductStore} from '../../src/creative-studio/media-produ
 import {PgMediaLinkEvidenceOwner} from '../../src/creative-studio/media-link-evidence.js';
 import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-canonical-handoff.js';
 import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../../src/creative-studio/media-private-files.js';
-import {PgPrivateObjectSources,PgPrivateObjectProbeWorker} from '../../src/creative-studio/media-object-sources.js';
+import {PgPrivateObjectSources,PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../src/creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../src/creative-studio/media-local-render.js';
 import {PgAffiliateStudioSignup,mediaSignupSourceHash} from '../../src/creative-studio/media-standalone-signup.js';
 import {PgSetupDeliveryService,SetupDeliveryKeyring,setupDeliveryAad} from '../../src/portal/setup-delivery-pg-service.js';
@@ -223,6 +223,7 @@ test('real native render starts from exact owned, independently probed source an
    const sources=new PgPrivateObjectSources(content,a.principal,files,flags),crossed=new PgPrivateObjectSources(content,b.principal,files,flags);
    const free=Buffer.alloc(24*1024*1024-bytes.length);free.writeUInt32BE(free.length,0);free.write('free',4,'ascii');const large=Buffer.concat([bytes,free]);
    const sourceId=randomUUID(),metadata={byteLength:large.length,sha256:sha(large),fileName:'large-owned.mp4',mime:'video/mp4' as const,rights:'owned' as const,evidenceSha256:null,rightsConfirmed:true};
+   await assert.rejects(sources.begin(a.brand.id,upload.id,metadata),/already catalogued/iu);
    await sources.begin(a.brand.id,sourceId,metadata);
    await assert.rejects(sources.complete(a.brand.id,sourceId));
    for(let i=0;i<Math.ceil(large.length/LARGE_MEDIA_PART_BYTES);i++)await sources.part(a.brand.id,sourceId,i,large.subarray(i*LARGE_MEDIA_PART_BYTES,(i+1)*LARGE_MEDIA_PART_BYTES));
@@ -234,6 +235,10 @@ test('real native render starts from exact owned, independently probed source an
    const queuedId=randomUUID();await a.owner.enqueue({workspaceId:a.brand.id,projectId:project,revision:1,jobId:queuedId,commandId:randomUUID(),sourceSha256:sha(large),planSha256:videoEditDigest(objectPlan),rightsConfirmed:true});
    const result=await runQueuedLocalRender(a.brand.id,queuedId,{ledger:new PgLocalRenderWorker(admin,'large-render-proof',flags),renderer:renderLocalVideo,objectRenderer:(object,probe,edit)=>renderLocalVideoFile(files,object,probe,edit)});
    assert.equal(result.state,'completed');assert.ok(result.outputId);assert.equal((await a.owner.load(a.brand.id,result.outputId!)).mime,'video/mp4');
+   const expired=randomUUID();await sources.begin(a.brand.id,expired,metadata);await sources.part(a.brand.id,expired,0,large.subarray(0,LARGE_MEDIA_PART_BYTES));
+   await admin.query("UPDATE app.creative_media_object_uploads SET expires_at=now()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,expired]);
+   const cleaned=await new PgPrivateObjectCleanupWorker(admin,'object-cleanup-proof',files,flags).sweep(a.brand.id);assert.ok(cleaned.some(x=>x.sourceId===expired&&x.state==='cleaned'));
+   assert.equal((await sources.source(a.brand.id,sourceId)).sha256,sha(large),'housekeeping must preserve completed canonical objects');
   });
   await t.test('native video handoff creates a genuine pending canonical approval and withdrawal blocks a fresh handoff',async()=>{
    await admin.query("ALTER ROLE r72_content_adapter PASSWORD 'local-methods-test-only'");

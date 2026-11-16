@@ -43,6 +43,7 @@ BEGIN
   IF u.id IS NOT NULL THEN
    IF u.metadata IS DISTINCT FROM p_input THEN RAISE EXCEPTION 'Object upload replay changed metadata' USING ERRCODE='40001'; END IF;
   ELSE
+   IF EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=p_id) THEN RAISE EXCEPTION 'Source identity already catalogued' USING ERRCODE='40001'; END IF;
    IF (SELECT count(*) FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND state='uploading' AND expires_at>clock_timestamp())>=3 THEN RAISE EXCEPTION 'Pending object upload cap reached' USING ERRCODE='55000'; END IF;
    SELECT coalesce(sum(byte_length),0) INTO total FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND storage_kind='private_object';
    total:=total+(SELECT coalesce(sum(byte_length),0) FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND state='uploading' AND expires_at>clock_timestamp());
@@ -59,6 +60,7 @@ BEGIN
   IF u.state='cancelled' OR (u.state='uploading' AND u.expires_at<=clock_timestamp()) THEN RAISE EXCEPTION 'Object upload closed or expired' USING ERRCODE='55000'; END IF;
   -- Bytes are independently checked by the private filesystem service and later worker probe.
   -- This record remains awaiting_probe, never technically or publicly approved.
+  IF EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=p_id AND (storage_kind IS DISTINCT FROM 'private_object' OR object_key IS DISTINCT FROM key OR sha256 IS DISTINCT FROM u.sha256 OR byte_length IS DISTINCT FROM u.byte_length)) THEN RAISE EXCEPTION 'Canonical object identity changed' USING ERRCODE='40001'; END IF;
   INSERT INTO app.creative_media_source_videos(workspace_id,id,command_id,blob_id,storage_kind,object_key,file_name,sha256,byte_length,mime,rights,evidence_sha256,owner_user_id)
    VALUES(p_workspace,p_id,p_id,NULL,'private_object',key,u.metadata->>'fileName',u.sha256,u.byte_length,u.metadata->>'mime',u.metadata->>'rights',u.metadata->>'evidenceSha256',actor) ON CONFLICT DO NOTHING;
   UPDATE app.creative_media_object_uploads SET state='completed' WHERE workspace_id=p_workspace AND id=p_id RETURNING * INTO u;
@@ -78,4 +80,30 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) TO r72_worker;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+-- Explicit scoped housekeeping for expired/cancelled staging and orphaned assembly.
+SET LOCAL ROLE r72_owner;
+ALTER TABLE app.creative_media_object_uploads ADD COLUMN last_cleanup_at timestamptz;
+CREATE POLICY creative_media_object_uploads_cleanup ON app.creative_media_object_uploads FOR ALL TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
+GRANT SELECT,UPDATE ON app.creative_media_object_uploads TO r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
+SET LOCAL ROLE r72_media_job_definer;
+CREATE FUNCTION app_private.creative_media_object_cleanup(p_workspace uuid,p_limit integer)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE u app.creative_media_object_uploads;result jsonb:='[]'::jsonb;
+BEGIN
+ IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped cleanup worker required' USING ERRCODE='42501'; END IF;
+ IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 10 THEN RAISE EXCEPTION 'Bounded cleanup required' USING ERRCODE='22023'; END IF;
+ FOR u IN SELECT * FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND (state='cancelled' OR (state='uploading' AND expires_at<=clock_timestamp()))
+  AND (last_cleanup_at IS NULL OR last_cleanup_at<clock_timestamp()-interval '1 hour')
+  ORDER BY last_cleanup_at NULLS FIRST,created_at,id LIMIT p_limit FOR UPDATE SKIP LOCKED LOOP
+  IF NOT EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=u.id) THEN
+   UPDATE app.creative_media_object_uploads SET state='cancelled',last_cleanup_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=u.id;
+   result:=result||jsonb_build_array(jsonb_build_object('workspaceId',p_workspace,'sourceId',u.id,'sha256',u.sha256,'byteLength',u.byte_length,'mime',u.metadata->>'mime',
+    'objectKey',p_workspace::text||'/'||u.id::text||'/'||u.sha256||CASE WHEN u.metadata->>'mime'='video/mp4' THEN '.mp4' ELSE '.webm' END));
+  END IF;
+ END LOOP;RETURN result;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.creative_media_object_cleanup(uuid,integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_object_cleanup(uuid,integer) TO r72_worker;
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;

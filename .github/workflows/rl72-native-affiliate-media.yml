@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: ['codex/relaunch72-platform-foundation']
     paths:
+      - 'orchestrator/src/portal/creative-media-*.ts'
+      - 'orchestrator/src/portal/media-streaming-sha256.ts'
+      - 'orchestrator/src/portal/media-cut-editor.ts'
+      - 'orchestrator/test/media-*.test.ts'
+      - 'orchestrator/test/creative-media-*.test.ts'
+      - 'orchestrator/test/db/creative-media-*.integration.test.ts'
       - 'orchestrator/src/creative-studio/**'
       - 'orchestrator/src/portal/creative-studio-view.ts'
       - 'orchestrator/src/portal/product-profile.ts'

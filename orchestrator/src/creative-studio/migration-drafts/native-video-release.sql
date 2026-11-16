@@ -36,7 +36,7 @@ GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
 SET LOCAL ROLE r72_media_job_definer;
 CREATE FUNCTION app_private.creative_media_video_ready(p_workspace uuid,p_job uuid,p_version uuid,p_require_release boolean)
 RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE v app.company_content_versions; o app.creative_media_local_render_outputs;r app.creative_media_local_output_reviews; manifest jsonb; grant_rec app.creative_media_video_releases;
+DECLARE v app.company_content_versions; o app.creative_media_local_render_outputs;r app.creative_media_local_output_reviews; manifest jsonb; grant_rec app.creative_media_video_releases;job_copy text;
 BEGIN
  IF app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RETURN false; END IF;
  SELECT version.* INTO v FROM app.company_content_versions version JOIN app.property_predator_owned_social_job_media media
@@ -47,6 +47,8 @@ BEGIN
    AND version.source_system='relaunch72.private-video' AND version.content_kind='video' AND version.content_mime_type='video/mp4';
  IF v.id IS NULL THEN RETURN false; END IF;
  manifest:=v.content_body::jsonb->'video';
+ SELECT text_body INTO job_copy FROM app.property_predator_owned_social_jobs WHERE workspace_id=p_workspace AND id=p_job;
+ IF job_copy IS DISTINCT FROM (v.content_body::jsonb->>'publicationCopy') THEN RETURN false; END IF;
  IF coalesce(manifest->>'outputId','')!~'^[a-f0-9-]{36}$' THEN RETURN false; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-output-review:'||p_workspace::text||':'||(manifest->>'outputId'),0));
  SELECT * INTO o FROM app.creative_media_local_render_outputs WHERE workspace_id=p_workspace AND id=(manifest->>'outputId')::uuid;
@@ -54,7 +56,7 @@ BEGIN
  IF o.id IS NULL OR r.decision IS DISTINCT FROM 'reviewed_private' OR r.revision IS DISTINCT FROM (manifest->>'reviewRevision')::integer
   OR o.sha256 IS DISTINCT FROM manifest->>'sha256' OR o.sha256 IS DISTINCT FROM encode(v.blob_sha256,'hex')
   OR o.source_sha256 IS DISTINCT FROM manifest->>'sourceSha256' OR o.plan_sha256 IS DISTINCT FROM manifest->>'planSha256'
-  OR v.blob_storage_key IS DISTINCT FROM 'seo-blog/blobs/'||p_workspace::text||'/'||o.blob_id::text
+  OR v.blob_storage_key IS DISTINCT FROM 'rl72-native-video/'||p_workspace::text||'/'||o.id::text||'/'||o.sha256||'.mp4'
   OR encode(v.brand_sha256,'hex') IS DISTINCT FROM encode(public.digest(to_jsonb(app_private.seo_blog_brand(p_workspace))::text,'sha256'),'hex')
   OR EXISTS(SELECT 1 FROM app.company_content_versions newer WHERE workspace_id=p_workspace AND content_item_id=v.content_item_id AND version_number>v.version_number)
   OR NOT EXISTS(SELECT 1 FROM app.company_content_source_attestations a WHERE a.workspace_id=p_workspace AND a.content_version_id=v.id AND a.content_sha256=v.content_sha256 AND a.blob_sha256=v.blob_sha256 AND a.brand_sha256=v.brand_sha256 AND a.checked_at<=clock_timestamp() AND a.expires_at>clock_timestamp())

@@ -24,7 +24,7 @@ export function localVideoDraftCommand(input:LocalVideoHandoffInput,manifest:Loc
  const content=JSON.stringify({schema:'relaunch72.video-draft/v1',platform:input.platform,title:input.title.trim(),publicationCopy:input.caption,video:manifest,distribution:'pending_canonical_review'});
  return {commandKey:'media-video:'+input.commandId,origin:'generated',kind:'video',title:input.title.trim(),contentMimeType:'video/mp4',content,
   source:{system:'relaunch72.private-video',itemId:manifest.outputId+':'+input.commandId,version:manifest.sha256+':review:'+manifest.reviewRevision},
-  blob:{storageKey:manifest.storageKey,sha256:manifest.sha256},brand:{snapshotRef:'workspace:'+manifest.workspaceId,sha256:manifest.brandSha256},
+  blob:{storageKey:'rl72-native-video/'+manifest.workspaceId+'/'+manifest.outputId+'/'+manifest.sha256+'.mp4',sha256:manifest.sha256},brand:{snapshotRef:'workspace:'+manifest.workspaceId,sha256:manifest.brandSha256},
   attestation:{catalogSha256:sha(JSON.stringify(manifest)),checkedAt:new Date(reviewed).toISOString(),expiresAt:new Date(reviewed+15*60*1000).toISOString()},
   metadata:{privateOnly:true,outputId:manifest.outputId,reviewRevision:manifest.reviewRevision,requiresVideoPublicationAdapter:true}};
 }

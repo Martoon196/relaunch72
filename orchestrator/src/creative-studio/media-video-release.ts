@@ -22,7 +22,7 @@ export class PgNativeVideoReleaseWorker {
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly requestId:string){}
  async load(workspace:string,jobId:string,storageKey:string,expectedSha:string){
   checkedEditId(workspace);checkedEditId(jobId);
-  if(!/^seo-blog\/blobs\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/u.test(storageKey)||!/^[a-f0-9]{64}$/u.test(expectedSha))throw new SeoBlogError(400,'Native video storage reference required');
+  if(!/^rl72-native-video\/[a-f0-9-]{36}\/[a-f0-9-]{36}\/[a-f0-9]{64}\.mp4$/u.test(storageKey)||!/^[a-f0-9]{64}$/u.test(expectedSha))throw new SeoBlogError(400,'Native video storage reference required');
   const row=await withTransaction(this.pool,{actorKind:'worker',workspaceId:workspace,requestId:this.requestId},async t=>(await t.query<{sha256:string;raw_bytes:Buffer}>('SELECT * FROM app_private.creative_media_video_release_by_key($1,$2,$3,$4)',[workspace,jobId,storageKey,expectedSha])).rows[0]);
   if(!row||row.sha256!==expectedSha||!Buffer.isBuffer(row.raw_bytes)||row.raw_bytes.length<1024||row.raw_bytes.length>=20000000||createHash('sha256').update(row.raw_bytes).digest('hex')!==expectedSha)throw new SeoBlogError(409,'Exact authorized MP4 unavailable');
   return Buffer.from(row.raw_bytes);
@@ -32,7 +32,7 @@ export function createNativeVideoMediaResolver(input:{store:Pick<PgNativeVideoRe
  return {async resolve(request){
   const env=input.env??process.env,urls:string[]=[];
   for(const item of request.media){
-   if(!item.storageKey.startsWith('seo-blog/blobs/')){const inherited=await input.legacy.resolve({...request,media:[item]});if(inherited.length!==1)throw new SeoBlogError(409,'Inherited media resolver mismatch');urls.push(inherited[0]!);continue;}
+   if(!item.storageKey.startsWith('rl72-native-video/')){const inherited=await input.legacy.resolve({...request,media:[item]});if(inherited.length!==1)throw new SeoBlogError(409,'Inherited media resolver mismatch');urls.push(inherited[0]!);continue;}
    if(env.CREATIVE_MEDIA!=='enabled'||env.RL72_MEDIA_VIDEO_RELEASE_ENABLED!=='true'||item.mimeType!=='video/mp4')throw new SeoBlogError(503,'Native video provider upload disabled');
    const bytes=await input.store.load(request.workspaceId,request.jobId,item.storageKey,item.blobSha256);
    const upload=await input.posting.prepareMediaUpload({requestId:request.jobId,filename:item.blobSha256+'.mp4',contentType:'video/mp4',size:bytes.length});

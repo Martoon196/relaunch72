@@ -43,10 +43,10 @@ test('public product template escapes owner text, preserves the direct Amazon ta
 test('video resolver rechecks release before and after upload and reuses the existing canonical media client',async()=>{
  const bytes=Buffer.alloc(1024);let checks=0,uploads=0,put=0;
  const resolver=createNativeVideoMediaResolver({store:{load:async()=>{checks++;return bytes;}},posting:{prepareMediaUpload:async()=>{uploads++;return{uploadUrl:'https://bucket.r2.cloudflarestorage.com/video',publicUrl:'https://media.zernio.com/temp/video.mp4',expiresIn:600};}},fetch:(async()=>{put++;return new Response('',{status:200});}) as typeof fetch,legacy:{resolve:async()=>[]},env:{CREATIVE_MEDIA:'enabled',RL72_MEDIA_VIDEO_RELEASE_ENABLED:'true'}});
- const result=await resolver.resolve({workspaceId:ws,jobId:id,media:[{storageKey:'seo-blog/blobs/'+ws+'/'+id,blobSha256:sha(bytes),mimeType:'video/mp4'}]});
+ const result=await resolver.resolve({workspaceId:ws,jobId:id,media:[{storageKey:'rl72-native-video/'+ws+'/'+id+'/'+sha(bytes)+'.mp4',blobSha256:sha(bytes),mimeType:'video/mp4'}]});
  assert.deepEqual(result,['https://media.zernio.com/temp/video.mp4']);assert.equal(checks,3);assert.equal(uploads,1);assert.equal(put,1);
  const blocked=createNativeVideoMediaResolver({store:{load:async()=>{throw Error('withdrawn');}},posting:{prepareMediaUpload:async()=>{throw Error('Must not upload');}},fetch,legacy:{resolve:async()=>[]},env:{CREATIVE_MEDIA:'enabled',RL72_MEDIA_VIDEO_RELEASE_ENABLED:'true'}});
- await assert.rejects(blocked.resolve({workspaceId:ws,jobId:id,media:[{storageKey:'seo-blog/blobs/'+ws+'/'+id,blobSha256:sha(bytes),mimeType:'video/mp4'}]}),/withdrawn/);
+ await assert.rejects(blocked.resolve({workspaceId:ws,jobId:id,media:[{storageKey:'rl72-native-video/'+ws+'/'+id+'/'+sha(bytes)+'.mp4',blobSha256:sha(bytes),mimeType:'video/mp4'}]}),/withdrawn/);
 });
 test('standalone setup delegates to canonical auth; signup is disabled before any identity or delivery write',async()=>{
  const hash=mediaSignupSourceHash('server-observed-source',Buffer.alloc(32,1));assert.equal(hash.length,32);assert.notDeepEqual(hash,mediaSignupSourceHash('server-observed-source',Buffer.alloc(32,2)));

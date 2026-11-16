@@ -11,7 +11,7 @@
  */
 import '../../config.js';
 import {PrivateMediaFiles} from '../../creative-studio/media-private-files.js';
-import {PgPrivateObjectProbeWorker} from '../../creative-studio/media-object-sources.js';
+import {PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../creative-studio/media-local-render.js';
 import { randomUUID } from 'node:crypto';
 import { createWorkerDatabasePool } from '../../db/pool.js';
@@ -30,7 +30,7 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]
 async function main():Promise<void>{
   const [action,workspaceId,id]=process.argv.slice(2);
   workerCommandGate(process.env,action??'');
-  if(!UUID.test(workspaceId??'')||(action!=='tick'&&!UUID.test(id??'')))
+  if(!UUID.test(workspaceId??'')||(!['tick','cleanup-objects'].includes(action??'')&&!UUID.test(id??'')))
     throw new Error('Exactly one workspace UUID and source/job UUID required.');
   const pool=createWorkerDatabasePool(process.env);
   try{
@@ -41,6 +41,7 @@ async function main():Promise<void>{
       return object??new PgVideoSourceProbeWorker(pool,requestId).run(ws,record);
     };
     const objectRenderer=files?((object:import('../../creative-studio/media-private-files.js').PrivateMediaObject,probe:import('../../creative-studio/media-source-probe.js').VideoProbe,plan:import('../../creative-studio/media-edit-plan.js').VideoEditPlan)=>renderLocalVideoFile(files,object,probe,plan)):undefined;
+    if(action==='cleanup-objects'){if(!files)throw new Error('Private object storage unavailable');console.log('private object cleanup:',await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(workspaceId!));return;}
     if(action==='tick'){
       const receipts=await runOfflineMediaTick(workspaceId!,{
         pending:(ws,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(ws,n),
