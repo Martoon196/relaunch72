@@ -70,7 +70,7 @@ test('the owner’s story: blocked for allowance, allowance made unlimited: the 
   const j = await job();
   assert.equal(j.state, 'blocked'); assert.ok(allowanceBlockedWrite(j), j.error ?? '');
   let page = visible((await call(service, 'GET', base)).body);
-  assert.equal(bar(page), 'Paused: waiting for more writing allowance this month.');
+  assert.equal(bar(page), 'Paused: waiting for more writing allowance this month. It starts again by itself when next month’s allowance begins, if not before.');
   assert.match(page, /data-primary href="[^"]*publishing#writing-budget">Check the allowance</);
   await unlimitedWriting(f);
   page = visible((await call(service, 'GET', base)).body);
