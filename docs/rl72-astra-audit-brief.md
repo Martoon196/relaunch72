@@ -4,7 +4,7 @@ PR #108 remains a draft. The branch is not approved for integration or live rele
 
 | Finding | Repair / remaining proof |
 | --- | --- |
-| 1. Renderer memory | Sequential per-clip encoding + concat demuxer, Linux child address-space/CPU limits, RSS watchdog, input codec/resolution whitelist. Synthetic moving 180-second 1080p stress completed under 1.5 GiB with 196,160 KiB combined sampled peak RSS (see committed evidence). **Real camera-footage proof remains missing.** |
+| 1. Renderer memory | Sequential per-clip encoding + concat demuxer, Linux child address-space/CPU limits, RSS watchdog, input codec/resolution whitelist. Synthetic moving 180-second 1080p stress completed under 1.5 GiB with 193,524 KiB combined sampled peak RSS (see committed evidence). **Real camera-footage proof remains missing.** |
 | 2. Worker | Default-off supervised offline loop, token lease heartbeat, fenced retries (three attempts), SQL queue and stored-output caps. Requires genuine PG tests and operator service supervision before enabling. |
 | 3. Zernio | The old fake social job fixture with `session_replication_role=replica` was removed. **Canonical planner → multi-day scheduled video → actual calling trigger is not proved and the fresh-attestation adapter is not implemented.** The 15-minute canonical freshness rule remains; do not extend it or mount this path. |
 | 4. Signup/billing | Removed standalone signup, its provisioning grant draft and UI, and separate Stripe checkout/webhook/receipt rail. Canonical paid-order and billing integration belongs to Claude. |

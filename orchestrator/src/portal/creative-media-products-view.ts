@@ -19,7 +19,7 @@ const linkLabel=(url:string):string=>{
 function productForm(shell:Shell, commandId:string, p?:AffiliateMediaProductRecord):string {
   const isEdit=Boolean(p), original=base(shell)+'/products';
   const rights=p?.source_rights??'none',network=p?.network??'amazon_associates';
-  return '<form method="post" action="'+original+'" class="cs-form">'+csrfField(shell.csrf)
+  return '<form method="post" enctype="multipart/form-data" action="'+original+'" class="cs-form">'+csrfField(shell.csrf)
     +'<input type="hidden" name="commandId" value="'+e(commandId)+'">'
     +'<input type="hidden" name="productId" value="'+e(p?.product_id??'')+'">'
     +'<input type="hidden" name="expectedRevision" value="'+String(p?.revision??0)+'">'

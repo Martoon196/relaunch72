@@ -1,13 +1,14 @@
 /**
- * Explicit CLI for the ONE canonical Creative Studio, no second data store.
+ * Default-off supervised offline service and diagnostic commands.
  * Usage:
+ *   npm --prefix orchestrator run media:worker -- serve
  *   npm --prefix orchestrator run media:worker -- probe <workspace-uuid> <source-uuid>
  *   npm --prefix orchestrator run media:worker -- probe-output <workspace-uuid> <output-uuid>
  *   npm --prefix orchestrator run media:worker -- render-local <workspace-uuid> <job-uuid>
  *   npm --prefix orchestrator run media:worker -- submit <workspace-uuid> <job-uuid>
  *   npm --prefix orchestrator run media:worker -- reconcile <workspace-uuid> <job-uuid>
- * Default OFF. Every invocation is scoped to one workspace and one job.
- * Does not loop, auto-publish, create customer charges or auto-retry paid calls.
+ * Default OFF. Service discovers bounded workspace UUID batches and enters each
+ * tenant scope. It polls offline work and cleanup; never retries paid calls.
  */
 import '../../config.js';
 import {runMediaService,PgMediaServiceDiscovery} from './service.js';

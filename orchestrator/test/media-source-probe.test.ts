@@ -16,6 +16,10 @@ test('rejects multi-video, invalid duration, codec, dimensions and fabricated fr
     {...valid,streams:[valid.streams[0],valid.streams[0]]},
     {...valid,streams:[{...valid.streams[0],codec_name:'unknown'}]},
     {...valid,streams:[{...valid.streams[0],width:0}]},
+    {...valid,streams:[{...valid.streams[0],width:3840,height:2160}]},
+    {...valid,streams:[{...valid.streams[0],width:1920,height:1920}]},
+    {...valid,streams:[{...valid.streams[0],avg_frame_rate:'120/1'}]},
+    {...valid,streams:[{...valid.streams[0],codec_name:'hevc'}]},
     {format:{duration:'180'},streams:[]},
   ])assert.equal(decodeFfprobe(p).status,'rejected');
 });

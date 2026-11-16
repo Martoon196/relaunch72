@@ -185,9 +185,9 @@ export class PgLocalRenderWorker {
  }
 }
 /**
- * One explicit, non-retrying worker invocation. No automatic queue polling.
+ * One fenced attempt used by diagnostic CLI or the supervised offline loop.
  * Loss of the output settlement acknowledgement leaves the claim on hold;
- * it never auto-reissues the output or starts a paid provider call.
+ * a later expired-lease retry is bounded and fenced; no paid call is started.
  */
 export async function runQueuedLocalRender(
  workspaceId:string,jobId:string,

@@ -15,7 +15,7 @@ BEGIN
  RETURN QUERY SELECT o.mime,b.bytes,o.sha256
  FROM app.creative_media_video_outputs o JOIN app.seo_blog_blobs b
  ON b.workspace_id=o.workspace_id AND b.id=o.blob_id
- WHERE o.workspace_id=p_workspace AND o.id=p_output AND o.state='captured_unverified'
+ WHERE o.workspace_id=p_workspace AND o.id=p_output AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='provider_output' AND e.id=p_output) AND o.state='captured_unverified'
  AND o.sha256=encode(b.sha256,'hex')
  AND o.sha256=encode(public.digest(b.bytes,'sha256'),'hex')
  AND o.byte_length=octet_length(b.bytes);

@@ -8,6 +8,11 @@ import {PgCreativeMediaProductStore} from './media-product-pg-store.js';
 import {PgMediaLinkEvidenceOwner} from './media-link-evidence.js';
 import {affiliateDirectLinkPreview} from './affiliate-direct-link.js';
 export interface AffiliatePublicPage {publicationId:string;productRevision:number;productName:string;merchantName:string;productUrl:string;affiliateUrl:string;network:'amazon_associates';disclosureVersion:string;registeredSite:string;origin:string;signingKeySha256:string}
+/** Trusted socket/proxy-resolved source only, never a browser form field. */
+export function mediaClickSourceHash(observedSource:string,key:Buffer):Buffer{
+ if(typeof observedSource!=='string'||!observedSource||observedSource.length>256||key.length!==32)throw new SeoBlogError(503,'Trusted click source configuration required');
+ return createHmac('sha256',key).update('rl72-click-source/v1:').update(observedSource).digest();
+}
 export function affiliateClickToken(publicationId:string,revision:number,key:Buffer,now=Date.now(),nonce:string=randomUUID()):string{
  checkedEditId(publicationId);checkedEditId(nonce);if(!Number.isInteger(revision)||revision<1||revision>1000||!Buffer.isBuffer(key)||key.length!==32)throw new SeoBlogError(503,'Affiliate click signing unavailable');
  const body=publicationId+'.'+nonce+'.'+(Math.floor(now/1000)+600)+'.'+revision;

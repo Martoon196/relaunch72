@@ -45,7 +45,7 @@ export class PgPrivateObjectProbeWorker {
   return withTransaction(this.pool,context,async t=>(await t.query<{v:{status:string;replayed:boolean}}>('SELECT app_private.creative_media_video_probe_record($1,$2,$3,$4) AS v',[ws,id,source.sha256,JSON.stringify(measured)])).rows[0]!.v);
  }
 }
-/** Manual bounded housekeeping. Completed catalogue sources are never selected. */
+/** Bounded staging housekeeping, automatically invoked by the dark service. */
 export class PgPrivateObjectCleanupWorker {
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly requestId:string,private readonly files:PrivateMediaFiles,private readonly env:NodeJS.ProcessEnv=process.env){}
  async sweep(workspace:string,limit=3){
