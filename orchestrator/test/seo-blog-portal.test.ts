@@ -19,7 +19,7 @@ test('article FAQ corrections save through the normal free editor with legacy-fo
  const base=`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`,before=(await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!,b=before.body,calls=f.h.llm.calls.length,usage=await engine.usage(OWNER,f.brand.id);
  const form={_csrf:csrf,versionId:before.id,title:b.title,slug:b.slug,seoTitle:b.seoTitle,metaDescription:b.metaDescription,excerpt:b.excerpt,intro:b.intro,conclusion:b.conclusion,imageUrl:b.image.url??'',imageAlt:b.image.alt,sectionId:b.sections.map(s=>s.id),sectionHeading:b.sections.map(s=>s.heading),sectionBody:b.sections.map(s=>s.body)};
  const questions=b.faqs.map(f=>f.q),answers=b.faqs.map(f=>f.a);answers[0]='Keep the source and its limitations visible when comparing the evidence.';
- const page=await call(service,who,'GET',base);assert.match(page.body,/name="faqQuestion"/);assert.match(page.body,/name="faqAnswer"/);
+ const page=await call(service,who,'GET',base+'?edit=1');assert.match(page.body,/name="faqQuestion"/);assert.match(page.body,/name="faqAnswer"/);
  for(const bad of [{faqAnswer:[]},{faqAnswer:['']},{faqQuestion:Array(9).fill('A question?'),faqAnswer:Array(9).fill('A useful answer.')}]){
   const invalidForm=Object.assign({...form,faqEditor:'1',faqQuestion:questions,faqAnswer:answers},bad);const result=await call(service,who,'POST',base+'/edit',invalidForm);assert.ok(new URL(result.headers.location!,'https://x').searchParams.has('e'));assert.equal((await engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,before.id);
  }
@@ -58,7 +58,7 @@ test('website target routes expose installed roots, preserve CSRF/owner/version 
   const denied=await call(service,who,'POST',path,{...form,_csrf:'wrong'});assert.equal(denied.status,303);assert.ok(new URL(denied.headers.location!,'https://x').searchParams.has('e'));assert.equal((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,old.id);const foreign=identity(STRANGER.userId);assert.equal((await call(service,foreign,'POST',path,{...form,_csrf:portalCsrfToken(SECRET,foreign.sessionToken)})).status,404);
   const saved=await call(service,who,'POST',path,form);assert.equal(saved.status,303);assert.ok(new URL(saved.headers.location!,'https://x').searchParams.has('n'));const current=(await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!;assert.equal(current.number,old.number+1);assert.equal(f.h.llm.calls.length,calls);assert.equal(f.h.site.posts,0);
   const stale=await call(service,who,'POST',path,form);assert.ok(new URL(stale.headers.location!,'https://x').searchParams.has('e'));assert.equal((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,current.id);
-  const editor=await call(service,who,'GET',`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`);assert.match(editor.body,/Reviewed URL/);assert.match(editor.body,/Save publishing target as a new version/);assert.ok(!editor.body.includes(f.destination.sealedCredential!));
+  const editor=await call(service,who,'GET',`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`);assert.match(editor.body,/It goes on <strong>Website<\/strong> at <span class="ap-url">https:\/\/bay\.example\/blog\//);assert.match(editor.body,/Which topics on Website should list it\?/);assert.match(editor.body,/>Save topics</);assert.ok(!editor.body.includes(f.destination.sealedCredential!));
 });
 
 test('profile issues are individually editable and explicitly resolved under the exact version without generation or lost sources', async () => {
