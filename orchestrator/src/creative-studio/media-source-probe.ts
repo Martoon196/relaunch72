@@ -32,10 +32,10 @@ export function decodeFfprobe(input:unknown):VideoProbe {
   const rate=String(v.avg_frame_rate??'').split('/');
   const fps=rate.length===2?Number(rate[0])/Number(rate[1]):Number(rate[0]);
   if(!Number.isFinite(d)||d<1||d>36000||
-    !Number.isInteger(width)||width<16||width>7680||
-    !Number.isInteger(height)||height<16||height>4320||
-    !Number.isFinite(fps)||fps<1||fps>240||
-    !['h264','hevc','vp8','vp9','av1'].includes(codec))return fail('unsupported');
+    !Number.isInteger(width)||width<16||width>1920||
+    !Number.isInteger(height)||height<16||height>1920||
+    !Number.isFinite(fps)||fps<1||fps>60||
+    codec!=='h264'||width*height>2073600)return fail('unsupported');
   const ms=Math.round(d*1000);
   return {status:'verified_technical',checkerVersion:VIDEO_PROBE_VERSION,durationMs:ms,
     width,height,frameRate:Math.round(fps*1000)/1000,videoCodec:codec,
@@ -44,10 +44,10 @@ export function decodeFfprobe(input:unknown):VideoProbe {
 export async function ffprobeFromBytes(bytes:Buffer,executable='ffprobe'):Promise<VideoProbe> {
   if(bytes.length<1024||bytes.length>20_000_000)throw new SeoBlogError(400,'Source size exceeds private blob limit');
   return new Promise(resolve=>{
-    const args=['-v','error','-protocol_whitelist','pipe','-format_whitelist','mov,matroska,webm','-show_entries',
+    const args=['-v','error','-protocol_whitelist','pipe','-format_whitelist','mov,matroska,webm','-max_alloc','67108864','-threads','1','-codec_whitelist','h264,aac,pcm_s16le','-show_entries',
       'format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate','-of','json','-i','pipe:0'];
     let out='',err='',done=false;
-    const child=spawn(executable,args,{shell:false,stdio:['pipe','pipe','pipe'],timeout:15_000});
+    const child=spawn('prlimit',['--as=402653184','--cpu=12','--nofile=64','--',executable,...args],{shell:false,stdio:['pipe','pipe','pipe'],timeout:15_000});
     const finish=(probe:VideoProbe)=>{
       if(done)return;done=true;resolve(probe);
     };

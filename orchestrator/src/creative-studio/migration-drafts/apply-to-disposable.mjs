@@ -28,15 +28,13 @@ const draftFiles=[
   "output-private-review.sql",
   "local-render-jobs.sql",
   "local-output-private-review.sql",
-  "resumable-video-uploads.sql",
   "media-worker-dispatch.sql",
   "local-video-canonical-handoff.sql",
-  "media-billing-receipts.sql",
   "affiliate-link-evidence.sql",
   "private-object-sources.sql",
   "native-video-release.sql",
-  "affiliate-studio-signup.sql",
-  "affiliate-link-distribution.sql"
+  "affiliate-link-distribution.sql",
+  "media-retention.sql"
 ];
 const client=new pg.Client({connectionString:DATABASE});
 await client.connect();

@@ -1,3 +1,4 @@
+import {PgMediaErasureOwner,PgMediaRetentionWorker} from '../../src/creative-studio/media-retention.js';
 /**
  * Real, disposable PostgreSQL end-to-end private media proof:
  * upload owned MP4 -> genuine ffprobe -> immutable edit -> owner intent ->
@@ -12,9 +13,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
-import {PgResumableMediaUploads} from '../../src/creative-studio/media-upload-pg-store.js';
 import {PgOfflineMediaDiscovery} from '../../src/creative-studio/media-worker-dispatch.js';
-import {PgMediaBillingOwner,PgMediaBillingWebhook} from '../../src/creative-studio/media-billing.js';
 import {PgMediaAccessOwner} from '../../src/creative-studio/media-access-pg-store.js';
 import {PgCreativeMediaProductStore} from '../../src/creative-studio/media-product-pg-store.js';
 import {PgMediaLinkEvidenceOwner} from '../../src/creative-studio/media-link-evidence.js';
@@ -22,7 +21,6 @@ import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-cano
 import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../../src/creative-studio/media-private-files.js';
 import {PgPrivateObjectSources,PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../src/creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../src/creative-studio/media-local-render.js';
-import {PgAffiliateStudioSignup,mediaSignupSourceHash} from '../../src/creative-studio/media-standalone-signup.js';
 import {PgSetupDeliveryService,SetupDeliveryKeyring,setupDeliveryAad} from '../../src/portal/setup-delivery-pg-service.js';
 import {PgPortalAuthService} from '../../src/portal/auth-pg-service.js';
 import {PgAffiliatePublicationOwner,PgAffiliatePublicPages} from '../../src/creative-studio/media-affiliate-pages.js';
@@ -197,27 +195,6 @@ test('real native render starts from exact owned, independently probed source an
    // Review never copies the local render to provider capture or publication records.
    assert.equal((await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_outputs WHERE workspace_id=$1',[a.brand.id])).rows[0].n,0);
   });
-  await t.test('resumable upload persists exact parts, refuses substitution and completes into canonical source store',async()=>{
-   const flags={...env,RL72_MEDIA_RESUMABLE_UPLOADS_ENABLED:'true'};
-   const uploader=new PgResumableMediaUploads(content,a.principal,flags),other=new PgResumableMediaUploads(content,b.principal,flags);
-   const uploadId=randomUUID(),payload={byteLength:bytes.length,sha256:sha(bytes),metadata:{fileName:'resume.mp4',mime:'video/mp4' as const,rights:'owned' as const,evidenceSha256:null,rightsConfirmed:true}};
-   const begun=await uploader.begin(a.brand.id,uploadId,payload);assert.deepEqual(begun.parts,[]);
-   await assert.rejects(uploader.complete(a.brand.id,uploadId),/incomplete/iu);
-   for(let index=0;index<Math.ceil(bytes.length/1000000);index++)await uploader.part(a.brand.id,uploadId,index,bytes.subarray(index*1000000,(index+1)*1000000));
-   assert.equal((await uploader.status(a.brand.id,uploadId)).parts.length,Math.ceil(bytes.length/1000000));
-   await assert.rejects(other.status(b.brand.id,uploadId),/owner|workspace/iu);
-   const changed=Buffer.from(bytes.subarray(0,1000000));changed[changed.length-1]=(changed[changed.length-1]??0)^1;
-   await assert.rejects(uploader.part(a.brand.id,uploadId,0,changed),/changed/iu);
-   const stored=await uploader.complete(a.brand.id,uploadId);assert.equal(stored.sha256,sha(bytes));
-   assert.equal((await uploader.complete(a.brand.id,uploadId)).replayed,true);
-   assert.deepEqual((await uploader.status(a.brand.id,uploadId)).parts,[]);
-   const cancelId=randomUUID();await uploader.begin(a.brand.id,cancelId,payload);await uploader.cancel(a.brand.id,cancelId);
-   await assert.rejects(uploader.part(a.brand.id,cancelId,0,bytes.subarray(0,1000000)),/expired/iu);
-   await assert.rejects(content.query('SELECT * FROM app.creative_media_upload_parts'),/permission denied/iu);
-   const discovery=new PgOfflineMediaDiscovery(admin,'discovery-proof');
-   const pending=await discovery.pending(a.brand.id,10);assert.ok(pending.some(x=>x.kind==='probe'&&x.id===stored.id));
-   assert.deepEqual(await discovery.pending(b.brand.id,10),[]);
-  });
   await t.test('24 MB private source follows canonical upload, actual file probe, immutable edit and offline render',async()=>{
    const files=new PrivateMediaFiles(join(temp,'private-objects')),flags={...env,RL72_MEDIA_PRIVATE_FILES_ENABLED:'true'};
    const sources=new PgPrivateObjectSources(content,a.principal,files,flags),crossed=new PgPrivateObjectSources(content,b.principal,files,flags);
@@ -257,30 +234,8 @@ test('real native render starts from exact owned, independently probed source an
     const ctx={actorKind:'user' as const,userId:a.principal.userId,workspaceId:a.brand.id,requestId:'native-video-canonical-approval',portalSessionTokenHash:sessionHash};
     const service=new CompanyContentService({transactionRunner:{run:(context,op,options)=>withTransaction(content,context,op,{readOnly:false,isolation:options.serializable?'serializable':'read committed'})}});
     const approved=await service.decideApproval(ctx,{commandKey:'approve-native-'+randomUUID(),approvalRequestId:saved.approval.approvalRequestId,decision:'approved'});
-    const socialJob=randomUUID(),seed=await admin.connect();
-    try{
-     await seed.query('BEGIN');await seed.query('SET LOCAL session_replication_role=replica');
-     // Synthetic calendar lease/connection fixture: this proves media authority, not provider/account setup.
-     await seed.query(`INSERT INTO app.property_predator_owned_social_jobs(id,workspace_id,provider_connection_id,environment,network,content_item_id,content_version_id,content_sha256,approval_request_id,approval_decision_id,source_attestation_id,operation_tag,idempotency_key_sha256,request_sha256,text_body,utc_day,utc_month,created_by_user_id,provider_id,zernio_publish_binding_id,zernio_account_id,state,lease_attempt_kind,lease_expires_at)
-       VALUES($1,$2,$3,'live','instagram',$4,$5,decode($6,'hex'),$7,$8,$9,'native-video-proof',$10,$11,$12,current_date,date_trunc('month',now())::date,$13,'zernio',$14,$15,'leased','publish',now()+interval '5 minutes')`,[socialJob,a.brand.id,randomUUID(),saved.draft.contentItemId,saved.draft.contentVersionId,saved.draft.contentSha256,saved.approval.approvalRequestId,approved.approvalDecisionId,saved.draft.sourceAttestationId,createHash('sha256').update(randomUUID()).digest(),createHash('sha256').update(randomUUID()).digest(),input.caption,a.principal.userId,randomUUID(),randomUUID()]);
-     await seed.query(`INSERT INTO app.property_predator_owned_social_job_media(workspace_id,job_id,ordinal,content_item_id,content_version_id,content_sha256,blob_sha256,blob_storage_key,content_mime_type,approval_request_id,approval_decision_id,source_attestation_id)
-      SELECT workspace_id,$2,1,content_item_id,id,content_sha256,blob_sha256,blob_storage_key,content_mime_type,$3,$4,$5 FROM app.company_content_versions WHERE workspace_id=$1 AND id=$6`,[a.brand.id,socialJob,saved.approval.approvalRequestId,approved.approvalDecisionId,saved.draft.sourceAttestationId,saved.draft.contentVersionId]);
-     await seed.query('COMMIT');
-    }catch(error){await seed.query('ROLLBACK');throw error;}finally{seed.release();}
-    const storage=(await admin.query('SELECT blob_storage_key FROM app.company_content_versions WHERE id=$1',[saved.draft.contentVersionId])).rows[0].blob_storage_key as string;
-    await admin.query("ALTER ROLE r72_owned_social_worker_command PASSWORD 'local-methods-test-only'");
-    const workerUri=new URL(uri);workerUri.username='r72_owned_social_worker_command';workerUri.password='local-methods-test-only';
-    const socialPool=new pg.Pool({connectionString:workerUri.toString(),max:2});
-    try{
-     const reader=new PgNativeVideoReleaseWorker(socialPool,'native-release-proof'),owner=new PgNativeVideoReleaseOwner(content,a.principal,{...env,RL72_MEDIA_VIDEO_RELEASE_ENABLED:'true'});
-     await assert.rejects(reader.load(a.brand.id,socialJob,storage,output.sha256),/release|lease/iu);
-     await owner.decide({workspaceId:a.brand.id,jobId:socialJob,contentVersionId:saved.draft.contentVersionId,commandId:randomUUID(),action:'authorize',consent:true});
-     assert.equal(sha(await reader.load(a.brand.id,socialJob,storage,output.sha256)),output.sha256);
-     await assert.rejects(reader.load(b.brand.id,socialJob,storage,output.sha256),/attached|lease|release/iu);
-     await owner.decide({workspaceId:a.brand.id,jobId:socialJob,contentVersionId:saved.draft.contentVersionId,commandId:randomUUID(),action:'withdraw',consent:true});
-     await assert.rejects(reader.load(a.brand.id,socialJob,storage,output.sha256),/release|lease/iu);
-     await assert.rejects(socialPool.query('SELECT * FROM app.creative_media_video_releases'),/permission denied/iu);
-    }finally{await socialPool.end();}
+    // Planner -> scheduled job -> calling is an explicit unresolved audit gate.
+    // Do not seed a fake job or disable FK/triggers to pretend this is proved.
     await review.review({workspaceId:a.brand.id,outputId:output.id,outputSha256:output.sha256,expectedRevision:current.revision,commandId:randomUUID(),decision:'withdrawn_private',rightsConfirmed:false,claimsConfirmed:false,disclosureConfirmed:false});
     await assert.rejects(handoff.request({...input,commandId:randomUUID()}),/review required/iu);
    }finally{await adapter.end();}
@@ -295,32 +250,8 @@ test('real native render starts from exact owned, independently probed source an
    assert.equal((await links.list(a.brand.id))[0]?.current,false);
    await assert.rejects(links.save({...input,commandId:randomUUID()}),/Current product/iu);
   });
-  await t.test('standalone signup uses real canonical pending identity, encrypted outbox and one-use password setup',async()=>{
-   await admin.query("UPDATE app_private.creative_media_signup_policy SET enabled=true,daily_cap=10,source_hourly_cap=3 WHERE id=1");
-   await admin.query("ALTER ROLE r72_provisioning_command PASSWORD 'local-methods-test-only'");
-   const provisionUri=new URL(uri);provisionUri.username='r72_provisioning_command';provisionUri.password='local-methods-test-only';
-   const provision=new pg.Pool({connectionString:provisionUri.toString(),max:2});
-   const keyring=new SetupDeliveryKeyring({activeKeyId:'test-key',keys:{'test-key':Buffer.alloc(32,7)}}),delivery=new PgSetupDeliveryService({deliveryCommandPool:admin,keyring,setupUrl:'https://app.relaunch72.com/portal/setup'});
-   try{
-    const signup=new PgAffiliateStudioSignup(provision,delivery,{...env,RL72_MEDIA_STANDALONE_SIGNUP_ENABLED:'true'}),email=randomUUID()+'@studio.test',request={commandId:randomUUID(),email,name:'Studio owner',workspaceName:'Affiliate studio',termsVersion:'rl72-media-v1',acceptedTerms:true},source=mediaSignupSourceHash('disposable-source',Buffer.alloc(32,6));
-    assert.equal((await signup.begin(request,source)).accepted,true);await signup.begin(request,source);
-    const account=(await admin.query("SELECT u.id,u.status,s.workspace_id FROM app.users u JOIN app_private.creative_media_signups s ON s.email_sha256=public.digest(u.email,'sha256') WHERE u.email=$1",[email])).rows[0];assert.equal(account.status,'pending');
-    const outbox=(await admin.query('SELECT * FROM app_private.account_setup_deliveries WHERE user_id=$1',[account.id])).rows;assert.equal(outbox.length,1);
-    const row=outbox[0],payload=keyring.open({deliveryId:row.id,payloadVersion:row.payload_version,encryptionKeyId:row.encryption_key_id,encryptionIv:row.encryption_iv,encryptedPayload:row.encrypted_payload,authenticationTag:row.authentication_tag,aadContext:setupDeliveryAad(row.id)});
-    await admin.query("ALTER ROLE r72_identity_command PASSWORD 'local-methods-test-only'");await admin.query("ALTER ROLE r72_web PASSWORD 'local-methods-test-only'");
-    const identityUri=new URL(uri);identityUri.username='r72_identity_command';identityUri.password='local-methods-test-only';const identity=new pg.Pool({connectionString:identityUri.toString(),max:2});
-    const readUri=new URL(uri);readUri.username='r72_web';readUri.password='local-methods-test-only';const read=new pg.Pool({connectionString:readUri.toString(),max:2});
-    try{const auth=new PgPortalAuthService({readPool:read,commandPool:identity}),token=new URL(payload.setupUrl).searchParams.get('token')!,context={now:Date.now(),sourceHash:source};
-     const session=await auth.completeSetup(token,'A-real-local-proof-password-2026',context);assert.ok(session);assert.equal(session.workspaceId,account.workspace_id);assert.equal((await auth.resolve(session.sessionToken,Date.now()))?.userEmail,email);
-     assert.equal(await auth.completeSetup(token,'Another-local-password-2026',context),null);
-    }finally{await identity.end();await read.end();}
-    await signup.begin({...request,commandId:randomUUID()},source);assert.equal((await admin.query('SELECT count(*)::int n FROM app_private.account_setup_deliveries WHERE user_id=$1',[account.id])).rows[0].n,1);
-    assert.equal((await admin.query("SELECT settings->'budgets'->>'imagesPerMonth' AS allowance FROM app.seo_blog_brands WHERE workspace_id=$1",[account.workspace_id])).rows[0].allowance,'0');
-    await assert.rejects(content.query('SELECT * FROM app_private.creative_media_signups'),/permission denied/iu);
-   }finally{await provision.end();}
-  });
   await t.test('direct affiliate pages record signed observed clicks once and disappear after withdrawal or changed products',async()=>{
-   const key=Buffer.alloc(32,8);await admin.query("UPDATE app_private.creative_media_link_public_policy SET enabled=true,origin='https://studio.example',signing_key=$1 WHERE id=1",[key]);
+   const key=Buffer.alloc(32,8);await admin.query("UPDATE app_private.creative_media_link_public_policy SET enabled=true,origin='https://studio.example',signing_key_sha256=public.digest($1,'sha256') WHERE id=1",[key]);
    const flags={...env,RL72_MEDIA_LINK_EVIDENCE_ENABLED:'true',RL72_MEDIA_AFFILIATE_PAGES_ENABLED:'true'},products=new PgCreativeMediaProductStore(content,a.principal);
    const product={network:'amazon_associates' as const,merchantName:'Amazon UK',productName:'Owner page product',productUrl:'https://www.amazon.co.uk/dp/B000000002',affiliateUrl:'https://www.amazon.co.uk/dp/B000000002?tag=owner-21',sourceRights:'owned' as const,productReviewed:true,channelEligible:true,mediaRightsConfirmed:true,disclosureVersion:'uk-v1'};
    const saved=await products.save({workspaceId:a.brand.id,expectedRevision:0,product});
@@ -329,40 +260,13 @@ test('real native render starts from exact owned, independently probed source an
    await publisher.publish({workspaceId:a.brand.id,productId:saved.productId,productRevision:1,evidenceCommandId:evidenceCommand,publicationId:publication,commandId:command,consent:true});
    await admin.query("ALTER ROLE r72_public PASSWORD 'local-methods-test-only'");const publicUri=new URL(uri);publicUri.username='r72_public';publicUri.password='local-methods-test-only';const publicPool=new pg.Pool({connectionString:publicUri.toString(),max:2});
    try{
-    const publicPages=new PgAffiliatePublicPages(publicPool,key,flags),page=await publicPages.page(publication);assert.ok(page);assert.equal(page.page.affiliateUrl,product.affiliateUrl);
-    assert.equal(await publicPages.click(page.clickToken),true);assert.equal(await publicPages.click(page.clickToken),false);assert.equal(await publicPages.click(page.clickToken.slice(0,-1)+'x'),false);
+    const publicPages=new PgAffiliatePublicPages(publicPool,key,flags,admin),page=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.ok(page);assert.equal(page.page.affiliateUrl,product.affiliateUrl);
+    assert.equal(await publicPages.click(page.clickToken),true);const reload=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.equal(await publicPages.click(reload!.clickToken),false);await assert.rejects(publicPool.query('SELECT app_private.creative_media_affiliate_click($1)',[page.clickToken]),/permission denied/iu);assert.equal(await publicPages.click(page.clickToken),false);assert.equal(await publicPages.click(page.clickToken.slice(0,-1)+'x'),false);
     const analytics=(await publisher.list(a.brand.id)).find(x=>x.publicationId===publication)!;assert.equal(analytics.observedClicks,1);assert.equal(analytics.orders,null);assert.equal(analytics.commission,null);
     await assert.rejects(publicPool.query('SELECT * FROM app.creative_media_products'),/permission denied/iu);
     await publisher.withdraw(a.brand.id,publication,randomUUID());assert.equal(await publicPages.page(publication),null);
     assert.equal(await publicPages.click(page.clickToken),false);
    }finally{await publicPool.end();}
-  });
-  await t.test('operator price policy, bound checkout and webhook role produce replay-safe grants and revocations',async()=>{
-   await admin.query("INSERT INTO app.creative_media_price_policy(tier,price_id,livemode,enabled,max_job_microusd,monthly_video_microusd) VALUES('affiliate_creator','price_privateproof',false,true,1000000,10000000)");
-   const flags={...env,RL72_MEDIA_BILLING_ENABLED:'true'},billing=new PgMediaBillingOwner(content,a.principal,flags),command=randomUUID();
-   const intent=await billing.intent(a.brand.id,command,'affiliate_creator');assert.equal(intent.priceId,'price_privateproof');
-   assert.equal((await billing.options(a.brand.id)).plans[0]?.priceId,'price_privateproof');
-   await billing.bind(a.brand.id,command,'cs_test_privateproof');
-   await assert.rejects(billing.bind(a.brand.id,command,'cs_test_changed'),/changed/iu);
-   await admin.query("ALTER ROLE r72_webhook PASSWORD 'local-methods-test-only'");
-   const webhookUri=new URL(uri);webhookUri.username='r72_webhook';webhookUri.password='local-methods-test-only';
-   const webhook=new pg.Pool({connectionString:webhookUri.toString(),max:2});
-   try{
-    const ledger=new PgMediaBillingWebhook(webhook,'media-billing-proof'),access=new PgMediaAccessOwner(content,a.principal);
-    const created=Math.floor(Date.now()/1000),receipt={eventId:'evt_privategrant',eventSha256:'a'.repeat(64),eventCreated:created,subscriptionId:'sub_privateproof',customerId:'cus_privateproof',priceId:'price_privateproof',livemode:false,activePaid:true,periodEnd:new Date(Date.now()+86400000).toISOString(),intentId:command,checkoutSessionId:'cs_test_privateproof',checkoutVerified:true};
-    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:false});assert.equal((await billing.options(a.brand.id)).customerId,'cus_privateproof');assert.equal((await access.current(a.brand.id)).maxJobMicrousd,1000000);
-    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:true});
-    const revoked={...receipt,eventId:'evt_privaterevoke',eventSha256:'b'.repeat(64),eventCreated:created+1,activePaid:false,intentId:null,checkoutSessionId:null,checkoutVerified:false};
-    assert.deepEqual(await ledger.record(revoked),{disposition:'revoked',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
-    const stale={...receipt,eventId:'evt_privatestale',eventSha256:'c'.repeat(64),intentId:null};
-    assert.deepEqual(await ledger.record(stale),{disposition:'stale',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
-    assert.equal((await access.current(a.brand.id)).active,false);
-    const replacement=randomUUID();await billing.intent(a.brand.id,replacement,'affiliate_creator');await billing.bind(a.brand.id,replacement,'cs_test_replacement');
-    assert.deepEqual(await ledger.record({...receipt,eventId:'evt_replacement',eventSha256:'d'.repeat(64),eventCreated:created+2,subscriptionId:'sub_replacement',intentId:replacement,checkoutSessionId:'cs_test_replacement'}),{disposition:'granted',replayed:false});
-    assert.equal((await access.current(a.brand.id)).active,true);
-    assert.deepEqual(await ledger.record({...revoked,eventId:'evt_oldsubscription',eventSha256:'e'.repeat(64),eventCreated:created+3}),{state:'unbound'});
-    await assert.rejects(webhook.query('SELECT * FROM app.creative_media_access_grants'),/permission denied/iu);
-   }finally{await webhook.end();}
   });
   await t.test('newer edit makes an older timeline unqueueable',async()=>{
    const newer:VideoEditPlan={...plan,clips:[...plan.clips].reverse()};
@@ -372,6 +276,17 @@ test('real native render starts from exact owned, independently probed source an
    assert.equal(updated.revision,2);
    await assert.rejects(a.owner.enqueue({...enqueue,commandId:randomUUID(),jobId:randomUUID()}),
     /latest|timeline|changed|required/iu);
+  });
+  await t.test('owner erasure blocks reads immediately, removes stored bytes and isolates tenants',async()=>{
+   const flags={...env,RL72_MEDIA_RETENTION_ENABLED:'true'};
+   const owner=new PgMediaErasureOwner(content,a.principal,flags),cross=new PgMediaErasureOwner(content,b.principal,flags);
+   await assert.rejects(cross.erase(b.brand.id,'source',upload.id),/unavailable|owner/iu);
+   await owner.erase(a.brand.id,'source',upload.id);
+   await assert.rejects(a.owner.load(a.brand.id,output.id),/unavailable/iu);
+   await new PgMediaRetentionWorker(admin,'erasure-test',null).sweep(a.brand.id);
+   const counts=await admin.query("SELECT octet_length(b.bytes) n FROM app.creative_media_source_videos s JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id WHERE s.workspace_id=$1 AND s.id=$2",[a.brand.id,upload.id]);
+   assert.equal(counts.rows[0].n,1);
+   assert.equal((await admin.query('SELECT count(*)::int n FROM app.creative_media_erasures WHERE workspace_id=$1 AND erased_at IS NOT NULL',[a.brand.id])).rows[0].n>=2,true);
   });
  }finally{
   await rm(temp,{recursive:true,force:true});

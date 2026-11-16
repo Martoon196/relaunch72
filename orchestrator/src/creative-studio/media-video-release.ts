@@ -9,11 +9,11 @@ import type {ZernioCalendarMediaResolver} from '../public-social-outbound/zernio
 import type {ZernioPostingClient} from '../public-social-outbound/zernio-posting-client.js';
 export class PgNativeVideoReleaseOwner {
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly principal:PgSeoBlogPrincipal,private readonly env:NodeJS.ProcessEnv=process.env){}
- async decide(input:{workspaceId:string;jobId:string;contentVersionId:string;commandId:string;action:'authorize'|'withdraw';consent:boolean}){
+ async decide(input:{workspaceId:string;jobId:string;contentVersionId:string;commandId:string;action:'withdraw';consent:boolean}){
   if(this.env.CREATIVE_MEDIA!=='enabled'||this.env.RL72_MEDIA_VIDEO_RELEASE_ENABLED!=='true')throw new SeoBlogError(503,'Native video release disabled');
   const p=this.principal;if(p.kind!=='user')throw new SeoBlogError(403,'Signed-in distribution owner required');
   for(const id of [input.workspaceId,input.jobId,input.contentVersionId,input.commandId])checkedEditId(id);
-  if(input.consent!==true||!['authorize','withdraw'].includes(input.action))throw new SeoBlogError(400,'Explicit exact-job release decision required');
+  if(input.consent!==true||input.action!=='withdraw')throw new SeoBlogError(400,'Explicit exact-job release decision required');
   const hash=createHash('sha256').update(p.sessionToken).digest(),payload=JSON.stringify(input);
   return withTransaction(this.pool,{actorKind:'user',workspaceId:input.workspaceId,userId:p.userId,requestId:p.requestId,portalSessionTokenHash:hash},async t=>(await t.query<{v:{state:string}}>('SELECT app_private.creative_media_video_release_owner($1,$2,$3) AS v',[input.workspaceId,hash,payload])).rows[0]!.v);
  }

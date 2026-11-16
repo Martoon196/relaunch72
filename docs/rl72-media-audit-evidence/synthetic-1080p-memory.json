@@ -1,0 +1,10 @@
+{
+  "exitCode": 0,
+  "aggregatePeakRssKiB": 192344,
+  "elapsedSeconds": 39.52,
+  "samples": 782,
+  "outerAddressSpaceLimitBytes": 1610612736,
+  "ffmpegAddressSpaceLimitBytes": 1073741824,
+  "input": "180 seconds moving testsrc2 1920x1080 30fps + real AAC sine; synthetic stress, not camera footage",
+  "timeline": "0-90 s plus 90-180 s, landscape, #ad, speed 1"
+}

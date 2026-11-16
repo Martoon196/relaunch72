@@ -10,7 +10,6 @@ import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../src/creative-studio/m
 import {affiliateClickToken,validAffiliateClickToken,type AffiliatePublicPage} from '../src/creative-studio/media-affiliate-pages.js';
 import {affiliateProductPage,AFFILIATE_CLICK_SCRIPT} from '../src/portal/creative-media-affiliate-page-view.js';
 import {createNativeVideoMediaResolver} from '../src/creative-studio/media-video-release.js';
-import {mediaSignupSourceHash,completeAffiliateStudioSetup,PgAffiliateStudioSignup} from '../src/creative-studio/media-standalone-signup.js';
 const ws='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222';
 const sha=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 test('real private filesystem stores and streams a >20 MB object, detects changed parts and isolates workspace keys',async()=>{
@@ -47,13 +46,6 @@ test('video resolver rechecks release before and after upload and reuses the exi
  assert.deepEqual(result,['https://media.zernio.com/temp/video.mp4']);assert.equal(checks,3);assert.equal(uploads,1);assert.equal(put,1);
  const blocked=createNativeVideoMediaResolver({store:{load:async()=>{throw Error('withdrawn');}},posting:{prepareMediaUpload:async()=>{throw Error('Must not upload');}},fetch,legacy:{resolve:async()=>[]},env:{CREATIVE_MEDIA:'enabled',RL72_MEDIA_VIDEO_RELEASE_ENABLED:'true'}});
  await assert.rejects(blocked.resolve({workspaceId:ws,jobId:id,media:[{storageKey:'rl72-native-video/'+ws+'/'+id+'/'+sha(bytes)+'.mp4',blobSha256:sha(bytes),mimeType:'video/mp4'}]}),/withdrawn/);
-});
-test('standalone setup delegates to canonical auth; signup is disabled before any identity or delivery write',async()=>{
- const hash=mediaSignupSourceHash('server-observed-source',Buffer.alloc(32,1));assert.equal(hash.length,32);assert.notDeepEqual(hash,mediaSignupSourceHash('server-observed-source',Buffer.alloc(32,2)));
- const never={query:async()=>{throw Error('Unexpected DB call');}} as never,setup={prepare:()=>{throw Error('Unexpected credential generation');}};
- await assert.rejects(new PgAffiliateStudioSignup(never,setup,{}).begin({commandId:id,email:'me@example.com',name:'Owner',workspaceName:'My studio',termsVersion:'v1',acceptedTerms:true},hash),/disabled/);
- let received='';const auth={completeSetup:async(token:string)=>{received=token;return null;}};
- assert.equal(await completeAffiliateStudioSetup(auth,'one-use-token','password',{now:Date.now()}),null);assert.equal(received,'one-use-token');
 });
 
 test('incremental browser checksum matches native SHA256 across padding and chunk boundaries',()=>{

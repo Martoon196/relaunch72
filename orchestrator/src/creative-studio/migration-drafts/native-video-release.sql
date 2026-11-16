@@ -13,7 +13,8 @@ CREATE TABLE app.creative_media_video_releases (
 CREATE TABLE app.creative_media_video_release_withdrawals (
  workspace_id uuid NOT NULL,job_id uuid NOT NULL,content_version_id uuid NOT NULL,command_id uuid NOT NULL,created_by uuid NOT NULL,
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(workspace_id,job_id,content_version_id),UNIQUE(workspace_id,command_id),
- FOREIGN KEY(workspace_id,job_id,content_version_id) REFERENCES app.creative_media_video_releases(workspace_id,job_id,content_version_id)
+ FOREIGN KEY(workspace_id,job_id) REFERENCES app.property_predator_owned_social_jobs(workspace_id,id),
+ FOREIGN KEY(workspace_id,content_version_id) REFERENCES app.company_content_versions(workspace_id,id)
 );
 DO $t$ DECLARE t text; BEGIN
  FOREACH t IN ARRAY ARRAY['creative_media_video_releases','creative_media_video_release_withdrawals'] LOOP
@@ -53,7 +54,7 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-output-review:'||p_workspace::text||':'||(manifest->>'outputId'),0));
  SELECT * INTO o FROM app.creative_media_local_render_outputs WHERE workspace_id=p_workspace AND id=(manifest->>'outputId')::uuid;
  SELECT * INTO r FROM app.creative_media_local_output_reviews WHERE workspace_id=p_workspace AND output_id=o.id ORDER BY revision DESC LIMIT 1;
- IF o.id IS NULL OR r.decision IS DISTINCT FROM 'reviewed_private' OR r.revision IS DISTINCT FROM (manifest->>'reviewRevision')::integer
+ IF EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND ((e.kind='local_output' AND e.id=o.id) OR (e.kind='source' AND e.id=(SELECT source_id FROM app.creative_media_local_render_jobs WHERE workspace_id=p_workspace AND id=o.job_id)))) OR o.id IS NULL OR r.decision IS DISTINCT FROM 'reviewed_private' OR r.revision IS DISTINCT FROM (manifest->>'reviewRevision')::integer
   OR o.sha256 IS DISTINCT FROM manifest->>'sha256' OR o.sha256 IS DISTINCT FROM encode(v.blob_sha256,'hex')
   OR o.source_sha256 IS DISTINCT FROM manifest->>'sourceSha256' OR o.plan_sha256 IS DISTINCT FROM manifest->>'planSha256'
   OR v.blob_storage_key IS DISTINCT FROM 'rl72-native-video/'||p_workspace::text||'/'||o.id::text||'/'||o.sha256||'.mp4'
@@ -64,11 +65,9 @@ BEGIN
     JOIN app.company_content_approval_requests req ON req.workspace_id=d.workspace_id AND req.id=d.approval_request_id
     WHERE m.workspace_id=p_workspace AND m.job_id=p_job AND m.content_version_id=v.id
      AND req.request_number=(SELECT max(request_number) FROM app.company_content_approval_requests WHERE workspace_id=p_workspace AND content_version_id=v.id)) THEN RETURN false; END IF;
- IF p_require_release THEN
-  SELECT * INTO grant_rec FROM app.creative_media_video_releases WHERE workspace_id=p_workspace AND job_id=p_job AND content_version_id=v.id;
-  IF grant_rec.output_id IS DISTINCT FROM o.id OR grant_rec.review_revision IS DISTINCT FROM r.revision OR grant_rec.output_sha256 IS DISTINCT FROM o.sha256
-   OR EXISTS(SELECT 1 FROM app.creative_media_video_release_withdrawals WHERE workspace_id=p_workspace AND job_id=p_job AND content_version_id=v.id) THEN RETURN false; END IF;
- END IF;
+ -- Canonical queue approval is the only publication approval. This adapter
+ -- adds exact-byte readiness and an owner takedown, never a second authorize UI.
+ IF EXISTS(SELECT 1 FROM app.creative_media_video_release_withdrawals WHERE workspace_id=p_workspace AND job_id=p_job AND content_version_id=v.id) THEN RETURN false; END IF;
  RETURN true;
 END $f$;
 CREATE FUNCTION app_private.creative_media_video_release_bytes(p_workspace uuid,p_job uuid,p_version uuid)
@@ -105,19 +104,12 @@ BEGIN
  actor:=app_private.seo_media_owner(p_workspace,p_session);
  IF p_input IS NULL OR jsonb_typeof(p_input) IS DISTINCT FROM 'object' OR octet_length(p_input::text)>1200 OR p_input->>'consent' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'Exact public distribution consent required' USING ERRCODE='22023'; END IF;
  j:=(p_input->>'jobId')::uuid;v:=(p_input->>'contentVersionId')::uuid;cmd:=(p_input->>'commandId')::uuid;
- IF j IS NULL OR v IS NULL OR cmd IS NULL OR coalesce(p_input->>'action','') NOT IN('authorize','withdraw') THEN RAISE EXCEPTION 'Exact release IDs required' USING ERRCODE='22023'; END IF;
+ IF j IS NULL OR v IS NULL OR cmd IS NULL OR coalesce(p_input->>'action','') NOT IN('withdraw') THEN RAISE EXCEPTION 'Exact release IDs required' USING ERRCODE='22023'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('media-public-release:'||p_workspace::text||':'||j::text,0));
  IF p_input->>'action'='withdraw' THEN
   INSERT INTO app.creative_media_video_release_withdrawals(workspace_id,job_id,content_version_id,command_id,created_by) VALUES(p_workspace,j,v,cmd,actor) ON CONFLICT (workspace_id,job_id,content_version_id) DO NOTHING;
   RETURN jsonb_build_object('state','withdrawn'); END IF;
- IF NOT app_private.creative_media_video_ready(p_workspace,j,v,false) THEN RAISE EXCEPTION 'Canonical approved current video required' USING ERRCODE='55000'; END IF;
- SELECT content_body::jsonb->'video' INTO manifest FROM app.company_content_versions WHERE workspace_id=p_workspace AND id=v;
- SELECT * INTO previous FROM app.creative_media_video_releases WHERE workspace_id=p_workspace AND command_id=cmd;
- IF previous.command_id IS NOT NULL AND (previous.job_id<>j OR previous.content_version_id<>v) THEN RAISE EXCEPTION 'Release command changed target' USING ERRCODE='40001'; END IF;
- INSERT INTO app.creative_media_video_releases(workspace_id,job_id,content_version_id,output_id,output_sha256,review_revision,command_id,created_by)
- VALUES(p_workspace,j,v,(manifest->>'outputId')::uuid,manifest->>'sha256',(manifest->>'reviewRevision')::integer,cmd,actor) ON CONFLICT (workspace_id,job_id,content_version_id) DO NOTHING;
- IF EXISTS(SELECT 1 FROM app.creative_media_video_release_withdrawals WHERE workspace_id=p_workspace AND job_id=j AND content_version_id=v) THEN RAISE EXCEPTION 'Release already withdrawn; plan a new job' USING ERRCODE='55000'; END IF;
- RETURN jsonb_build_object('state','authorized_for_exact_job','jobId',j,'contentVersionId',v);
+ RAISE EXCEPTION 'Use the canonical approval queue; no second video authorization' USING ERRCODE='22023';
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_video_release_owner(uuid,bytea,jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_release_owner(uuid,bytea,jsonb) TO r72_content_command;

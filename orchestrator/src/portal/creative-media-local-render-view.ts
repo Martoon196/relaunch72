@@ -1,3 +1,4 @@
+import {creativeMediaErasureForm} from './creative-media-erasure-view.js';
 /**
  * UNMOUNTED owner view for offline native video render requests.
  * Claude will connect GET/POST and private byte-range preview after reviewing
@@ -56,8 +57,8 @@ export function creativeMediaLocalRenderPage(shell:Shell, model:{
    +(o.durationMs/1000).toFixed(1)+'s'
    +'<p><video controls playsinline preload="none" width="320" src="'+path
    +'/local-outputs/'+e(o.id)+'/stream">Private review preview only</video></p>'
-   +'<p class="small muted">Output SHA256: '+e(o.sha256)
-   +'. Unapproved. Requires separate owner review and release checks.</p></li>').join('');
+   +'<p class="small muted">Private render'
+   +'. Canonical approval required.</p>'+creativeMediaErasureForm(shell,'local_output',o.id)+'</li>').join('');
  const intro='<section class="card"><h1>Offline native video renders</h1>'
   +'<p>Use an independently probed private video and your saved edit plan.'
   +' The trusted worker will trim clips, preserve audio, add captions and export a new private MP4.'

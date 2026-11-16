@@ -152,6 +152,10 @@ export class PgLocalRenderWorker {
     sourceSha256:row.source_sha256,bytes:row.raw_bytes?Buffer.from(row.raw_bytes):null,probe,
     ...(row.storage_kind==='private_object'?{object:{workspaceId,sourceId:row.source_id,sha256:row.source_sha256,byteLength:Number(row.source_byte_length),mime:row.source_mime,objectKey:row.object_key!}}:{})};
  }
+ async heartbeat(workspaceId:string,jobId:string,claimToken:string):Promise<boolean>{
+  checkedEditId(jobId);checkedEditId(claimToken);
+  return this.tx(workspaceId,async t=>(await t.query<{v:boolean}>('SELECT app_private.creative_media_render_heartbeat($1,$2,$3) AS v',[workspaceId,jobId,claimToken])).rows[0]!.v);
+ }
  async complete(workspaceId:string,jobId:string,claimToken:string,
    output:LocalRenderOutput):Promise<{id:string;sha256:string;state:'completed';replayed:boolean}>{
   if(!UUID.test(jobId)||!UUID.test(claimToken)
@@ -188,7 +192,7 @@ export class PgLocalRenderWorker {
 export async function runQueuedLocalRender(
  workspaceId:string,jobId:string,
  ports:{
-   readonly ledger:Pick<PgLocalRenderWorker,'claim'|'complete'|'fail'>;
+   readonly ledger:Pick<PgLocalRenderWorker,'claim'|'complete'|'fail'> & Partial<Pick<PgLocalRenderWorker,'heartbeat'>>;
    readonly objectRenderer?:(object:PrivateMediaObject,probe:VideoProbe,plan:VideoEditPlan)=>Promise<LocalRenderOutput>;
    readonly renderer:(source:{bytes:Buffer;sha256:string;probe:VideoProbe},
        plan:VideoEditPlan)=>Promise<LocalRenderOutput>;
@@ -196,6 +200,8 @@ export async function runQueuedLocalRender(
 ):Promise<{state:'completed'|'failed'|'reconciliation_required';jobId:string;outputId?:string}> {
  const claim=await ports.ledger.claim(workspaceId,jobId);
  let output:LocalRenderOutput;
+ let alive=true,busy=false;
+ const heartbeat=ports.ledger.heartbeat?setInterval(()=>{if(busy)return;busy=true;ports.ledger.heartbeat!(workspaceId,jobId,claim.claimToken).then(ok=>{if(!ok)alive=false;}).catch(()=>{alive=false;}).finally(()=>{busy=false;});},15000):null;
  try{
   if(claim.object){
    if(!ports.objectRenderer)throw new SeoBlogError(503,'Private object renderer unavailable');
@@ -206,15 +212,18 @@ export async function runQueuedLocalRender(
    bytes:claim.bytes,sha256:claim.sourceSha256,probe:claim.probe,
   },claim.plan);
   }
+  if(!alive)throw new SeoBlogError(409,'Render lease heartbeat lost');
   if(output.sourceSha256!==claim.sourceSha256||output.planSha256!==claim.planSha256)
    throw new SeoBlogError(422,'Native output is not tied to exact claimed timeline');
  }catch(error){
+  if(heartbeat)clearInterval(heartbeat);
   const code=error instanceof SeoBlogError && error.status===413?'tool_limit':
    error instanceof SeoBlogError && error.status===409?'source_changed':
    error instanceof SeoBlogError && error.status===503?'renderer_unavailable':'render_failed';
   await ports.ledger.fail(workspaceId,jobId,claim.claimToken,code);
   return {state:'failed',jobId};
  }
+ if(heartbeat)clearInterval(heartbeat);
  try{
   const saved=await ports.ledger.complete(workspaceId,jobId,claim.claimToken,output);
   return {state:'completed',jobId,outputId:saved.id};

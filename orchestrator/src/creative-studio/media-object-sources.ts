@@ -28,7 +28,7 @@ export class PgPrivateObjectSources {
 export async function probePrivateMediaFile(file:PrivateMediaFile):Promise<VideoProbe>{
  return new Promise(resolve=>{
   let stdout='',stderr='',done=false;const finish=(result:VideoProbe)=>{if(!done){done=true;resolve(result);}};
-  const child=spawn('ffprobe',['-v','error','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm','-show_entries','format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate','-of','json','-i',file.path],{shell:false,stdio:['ignore','pipe','pipe'],timeout:15000});
+  const child=spawn('prlimit',['--as=402653184','--cpu=12','--nofile=64','--','ffprobe','-max_alloc','67108864','-threads','1','-codec_whitelist','h264,aac,pcm_s16le','-v','error','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm','-show_entries','format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate','-of','json','-i',file.path],{shell:false,stdio:['ignore','pipe','pipe'],timeout:15000});
   child.stdout.on('data',(chunk:Buffer)=>{stdout+=chunk.toString();if(stdout.length>100000)child.kill('SIGKILL');});
   child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.toString();if(stderr.length>10000)child.kill('SIGKILL');});
   child.on('error',()=>finish({status:'rejected',checkerVersion:VIDEO_PROBE_VERSION,rejectionCode:'tool_unavailable'}));

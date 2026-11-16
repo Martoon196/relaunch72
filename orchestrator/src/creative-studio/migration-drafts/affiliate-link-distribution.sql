@@ -6,7 +6,7 @@ DO $role$ BEGIN
  GRANT r72_media_public_definer TO r72_owner;
 END $role$;
 SET LOCAL ROLE r72_owner;
-CREATE TABLE app_private.creative_media_link_public_policy(id integer PRIMARY KEY CHECK(id=1),enabled boolean NOT NULL DEFAULT false,origin text,signing_key bytea CHECK(signing_key IS NULL OR octet_length(signing_key)=32),CHECK(NOT enabled OR (origin IS NOT NULL AND origin~'^https://[a-z0-9.-]+$' AND signing_key IS NOT NULL)));
+CREATE TABLE app_private.creative_media_link_public_policy(id integer PRIMARY KEY CHECK(id=1),enabled boolean NOT NULL DEFAULT false,origin text,signing_key_sha256 bytea CHECK(signing_key_sha256 IS NULL OR octet_length(signing_key_sha256)=32),CHECK(NOT enabled OR (origin IS NOT NULL AND origin~'^https://[a-z0-9.-]+$' AND signing_key_sha256 IS NOT NULL)));
 INSERT INTO app_private.creative_media_link_public_policy VALUES(1,false,NULL,NULL);
 ALTER TABLE app_private.creative_media_link_public_policy ENABLE ROW LEVEL SECURITY;ALTER TABLE app_private.creative_media_link_public_policy FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON app_private.creative_media_link_public_policy FROM PUBLIC,r72_public,r72_web,r72_content_command;
@@ -28,6 +28,7 @@ CREATE TABLE app.creative_media_affiliate_clicks (
  workspace_id uuid NOT NULL,publication_id uuid NOT NULL,nonce uuid NOT NULL,occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(workspace_id,publication_id,nonce),FOREIGN KEY(workspace_id,publication_id) REFERENCES app.creative_media_affiliate_publications(workspace_id,id)
 );
+CREATE INDEX creative_media_click_cap ON app.creative_media_affiliate_clicks(publication_id,occurred_at);
 DO $t$ DECLARE t text;BEGIN
  FOREACH t IN ARRAY ARRAY['creative_media_affiliate_publications','creative_media_affiliate_withdrawals','creative_media_affiliate_clicks'] LOOP
   EXECUTE format('ALTER TABLE app.%I ENABLE ROW LEVEL SECURITY',t);EXECUTE format('ALTER TABLE app.%I FORCE ROW LEVEL SECURITY',t);
@@ -36,7 +37,7 @@ DO $t$ DECLARE t text;BEGIN
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_studio',t);
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_media_public_definer USING(true) WITH CHECK(true)',t||'_public_capability',t);
   EXECUTE format('GRANT SELECT ON app.%I TO r72_creative_studio_definer,r72_media_public_definer',t);
-  EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only()',t||'_immutable',t);
+  IF t<>'creative_media_affiliate_clicks' THEN EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only()',t||'_immutable',t); END IF;
   INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
  END LOOP;
  FOREACH t IN ARRAY ARRAY['creative_media_products','creative_media_link_evidence'] LOOP
@@ -91,7 +92,7 @@ SET LOCAL ROLE r72_media_public_definer;
 CREATE FUNCTION app_private.creative_media_affiliate_page(p_publication uuid)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
- RETURN (SELECT jsonb_build_object('publicationId',a.id,'productRevision',p.revision,'productName',p.product_name,'merchantName',p.merchant_name,'productUrl',p.product_url,'affiliateUrl',p.proposed_affiliate_url,'network',p.network,'disclosureVersion',p.disclosure_version,'registeredSite',e.registered_site,'origin',policy.origin,'signingKeySha256',encode(public.digest(policy.signing_key,'sha256'),'hex'))
+ RETURN (SELECT jsonb_build_object('publicationId',a.id,'productRevision',p.revision,'productName',p.product_name,'merchantName',p.merchant_name,'productUrl',p.product_url,'affiliateUrl',p.proposed_affiliate_url,'network',p.network,'disclosureVersion',p.disclosure_version,'registeredSite',e.registered_site,'origin',policy.origin,'signingKeySha256',encode(policy.signing_key_sha256,'hex'))
  FROM app.creative_media_affiliate_publications a JOIN app.creative_media_products p ON p.workspace_id=a.workspace_id AND p.product_id=a.product_id AND p.revision=a.product_revision
  JOIN app.creative_media_link_evidence e ON e.workspace_id=a.workspace_id AND e.command_id=a.evidence_command_id
  JOIN app_private.creative_media_link_public_policy policy ON policy.id=1 AND policy.enabled
@@ -108,7 +109,8 @@ BEGIN
  SELECT * INTO policy FROM app_private.creative_media_link_public_policy WHERE id=1 AND enabled;
  IF policy.id IS NULL THEN RETURN false; END IF;
  parts:=string_to_array(p_token,'.');payload:=parts[1]||'.'||parts[2]||'.'||parts[3]||'.'||parts[4];
- IF parts[5] IS DISTINCT FROM encode(public.hmac(convert_to(payload,'UTF8'),policy.signing_key,'sha256'),'hex') OR parts[3]::bigint<extract(epoch from clock_timestamp()) OR parts[3]::bigint>extract(epoch from clock_timestamp())+600 THEN RETURN false; END IF;
+ -- Only the dedicated backend capability may call this after constant-time HMAC verification.
+ IF parts[3]::bigint<extract(epoch from clock_timestamp()) OR parts[3]::bigint>extract(epoch from clock_timestamp())+600 THEN RETURN false; END IF;
  page:=app_private.creative_media_affiliate_page(parts[1]::uuid);
  IF page IS NULL OR page->>'productRevision' IS DISTINCT FROM parts[4] THEN RETURN false; END IF;
  SELECT workspace_id INTO ws FROM app.creative_media_affiliate_publications WHERE id=parts[1]::uuid;
@@ -119,5 +121,23 @@ BEGIN
 EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN RETURN false;
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_affiliate_page(uuid),app_private.creative_media_affiliate_click(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_private.creative_media_affiliate_page(uuid),app_private.creative_media_affiliate_click(text) TO r72_public;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_affiliate_page(uuid) TO r72_public;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_public_definer;
+
+SET LOCAL ROLE r72_owner;
+DO $role$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='r72_media_click_command') THEN CREATE ROLE r72_media_click_command NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $role$;
+GRANT USAGE ON SCHEMA app_private TO r72_media_click_command;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_affiliate_click(text) TO r72_media_click_command;
+GRANT DELETE ON app.creative_media_affiliate_clicks TO r72_media_public_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_media_public_definer;
+SET LOCAL ROLE r72_media_public_definer;
+CREATE FUNCTION app_private.creative_media_click_retention() RETURNS integer LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE n integer;
+BEGIN
+ DELETE FROM app.creative_media_affiliate_clicks WHERE (workspace_id,publication_id,nonce) IN
+ (SELECT workspace_id,publication_id,nonce FROM app.creative_media_affiliate_clicks WHERE occurred_at<clock_timestamp()-interval '30 days' ORDER BY occurred_at LIMIT 1000 FOR UPDATE SKIP LOCKED);
+ GET DIAGNOSTICS n=ROW_COUNT;RETURN n;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.creative_media_click_retention() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_click_retention() TO r72_worker;
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_public_definer;

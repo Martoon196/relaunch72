@@ -4,7 +4,7 @@ import type {VideoEditVersion} from '../creative-studio/media-edit-pg-store.js';
 import {layout,csrfField,type Shell} from './seo-blog-view.js';
 import {base,STYLE} from './creative-studio-view.js';
 const e=(v:unknown)=>String(v??'').replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-const blank={canvas:'portrait',disclosure:'',clips:[{startMs:0,endMs:5000,caption:'',transition:'cut',speed:1}]};
+const blank={canvas:'portrait',disclosure:'#ad',clips:[{startMs:0,endMs:5000,caption:'',transition:'cut',speed:1}]};
 export function creativeMediaEditorPage(shell:Shell,sources:readonly VideoSourceRow[],
   projects:readonly VideoEditVersion[],newCommand:()=>string):string{
  const select='<label>Owned/private source<select name="source" required>'+sources.map(s=>

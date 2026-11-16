@@ -59,7 +59,7 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
  const format=makeControl(details,'Output format','select',edit.canvas,
   value=>{edit.canvas=value;sync();summarise();},
   [['portrait','Portrait 9:16'],['square','Square 1:1'],['landscape','Landscape 16:9']]);
- const disclose=makeControl(details,'Disclosure','textarea',edit.disclosure,
+ const disclose=makeControl(details,'Required on-screen #ad disclosure','textarea',edit.disclosure,
   value=>{edit.disclosure=value;sync();},[]);
  const timeline=node('div');timeline.className='rl72-cut-clips';
  timeline.setAttribute('role','group');timeline.setAttribute('aria-label','Clip sequence');root.append(timeline);

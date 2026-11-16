@@ -28,7 +28,7 @@ test('bounded filter graph maps two clips, checked captions, audio, fade and mea
  assert.throws(()=>localRenderFilterGraph(plan,3000,true,['/tmp/a','https://bad.test/asset']),/not trusted/);
 });
 test('audio-less source receives bounded silent track without external media URLs',()=>{
- const graph=localRenderFilterGraph({...plan,canvas:'square',disclosure:''},3000,false,
+ const graph=localRenderFilterGraph({...plan,canvas:'square',disclosure:'#ad'},3000,false,
   ['/tmp/c0','/tmp/c1']);
  assert.match(graph.graph,/anullsrc=r=44100:cl=stereo/);
  assert.match(graph.graph,/scale=720:720/);

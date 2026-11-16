@@ -12,7 +12,7 @@ const ws='11111111-1111-4111-8111-111111111111',
  project='33333333-3333-4333-8333-333333333333',
  claim='44444444-4444-4444-8444-444444444444',
  user='55555555-5555-4555-8555-555555555555';
-const plan:VideoEditPlan={canvas:'square',disclosure:'',
+const plan:VideoEditPlan={canvas:'square',disclosure:'#ad',
  clips:[{startMs:0,endMs:2000,caption:'Test only',transition:'cut',speed:1}]};
 const bytes=Buffer.alloc(1024);
 const sourceSha=createHash('sha256').update(bytes).digest('hex');

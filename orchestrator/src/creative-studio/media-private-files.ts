@@ -30,6 +30,9 @@ export class PrivateMediaFiles {
   for(const part of parts){path=join(path,part);await mkdir(path,{mode:0o700}).catch(e=>{if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;});const info=await lstat(path);if(!info.isDirectory()||info.isSymbolicLink()||(info.mode&0o077)!==0)throw new SeoBlogError(409,'Unsafe private media directory');}
   return path;
  }
+ private async partReceipt(path:string,sha:string){
+  let fd;try{fd=await open(path+'.sha256',constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o400);await fd.writeFile(sha);await fd.sync();}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;}finally{await fd?.close();}
+ }
  async putPart(workspace:string,uploadId:string,index:number,totalBytes:number,bytes:Buffer):Promise<{sha256:string;replayed:boolean}>{
   const ws=checkedEditId(workspace),id=checkedEditId(uploadId),snapshot=Buffer.from(bytes);
   const expected=Math.min(LARGE_MEDIA_PART_BYTES,totalBytes-index*LARGE_MEDIA_PART_BYTES);
@@ -39,8 +42,8 @@ export class PrivateMediaFiles {
   try{
    const fd=await open(temp,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
    try{await fd.writeFile(snapshot);await fd.sync();}finally{await fd.close();}
-   try{await link(temp,path);return{sha256,replayed:false};}
-   catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;const previous=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{const old=await previous.readFile();if(old.length!==snapshot.length||createHash('sha256').update(old).digest('hex')!==sha256)throw new SeoBlogError(409,'Object part replay changed bytes');return{sha256,replayed:true};}finally{await previous.close();}}
+   try{await link(temp,path);await this.partReceipt(path,sha256);return{sha256,replayed:false};}
+   catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;const previous=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{const old=await previous.readFile();if(old.length!==snapshot.length||createHash('sha256').update(old).digest('hex')!==sha256)throw new SeoBlogError(409,'Object part replay changed bytes');await this.partReceipt(path,sha256);return{sha256,replayed:true};}finally{await previous.close();}}
   }finally{await unlink(temp).catch(()=>{});}
  }
  async assemble(input:PrivateMediaObject,uploadId:string):Promise<PrivateMediaFile>{
@@ -69,13 +72,20 @@ export class PrivateMediaFiles {
   const v=checkedObject(input);await this.dir(v.workspaceId,v.sourceId);const path=join(this.root,v.objectKey),fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
   try{const info=await fd.stat();if(!info.isFile()||info.size!==v.byteLength)throw new SeoBlogError(409,'Private object size changed');const hash=createHash('sha256'),buffer=Buffer.allocUnsafe(1024*1024);let position=0;while(position<info.size){const r=await fd.read(buffer,0,Math.min(buffer.length,info.size-position),position);if(!r.bytesRead)throw new SeoBlogError(409,'Private object truncated');hash.update(buffer.subarray(0,r.bytesRead));position+=r.bytesRead;}if(hash.digest('hex')!==v.sha256)throw new SeoBlogError(409,'Private object checksum changed');return Object.freeze({...v,path});}finally{await fd.close();}
  }
- async readRange(input:PrivateMediaObject,start:number,end:number){const file=await this.verify(input);if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<start||end>=file.byteLength)throw new SeoBlogError(416,'Invalid private object byte range');const fd=await open(file.path,constants.O_RDONLY|constants.O_NOFOLLOW);return fd.createReadStream({start,end,autoClose:true});}
+ // Immutable files are checksum-verified at assembly/probe/render boundaries.
+ // Range serving checks the opened inode and size, without O(file size) hashing.
+ async readRange(input:PrivateMediaObject,start:number,end:number){
+  const v=checkedObject(input);await this.dir(v.workspaceId,v.sourceId);
+  if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<start||end>=v.byteLength)throw new SeoBlogError(416,'Invalid private object byte range');
+  const fd=await open(join(this.root,v.objectKey),constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{const info=await fd.stat();if(!info.isFile()||info.size!==v.byteLength||(info.mode&0o222)!==0)throw new SeoBlogError(409,'Private immutable object changed');return fd.createReadStream({start,end,autoClose:true});}catch(e){await fd.close();throw e;}
+ }
  async parts(workspace:string,uploadId:string,totalBytes:number):Promise<Array<{index:number;sha256:string}>>{
   const dir=await this.dir(checkedEditId(workspace),'uploads',checkedEditId(uploadId)),parts:Array<{index:number;sha256:string}>=[];
   if(!Number.isSafeInteger(totalBytes)||totalBytes<1024||totalBytes>LARGE_MEDIA_MAX_BYTES)throw new SeoBlogError(400,'Bounded object size required');
   for(let index=0;index<Math.ceil(totalBytes/LARGE_MEDIA_PART_BYTES);index++){
    let fd;try{fd=await open(join(dir,index+'.part'),constants.O_RDONLY|constants.O_NOFOLLOW);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')continue;throw e;}
-   try{const info=await fd.stat();if(!info.isFile()||info.size!==Math.min(LARGE_MEDIA_PART_BYTES,totalBytes-index*LARGE_MEDIA_PART_BYTES))throw new SeoBlogError(409,'Saved object part changed');const hash=createHash('sha256'),buffer=Buffer.allocUnsafe(1048576);let offset=0;while(offset<info.size){const read=await fd.read(buffer,0,Math.min(buffer.length,info.size-offset),offset);if(!read.bytesRead)throw new SeoBlogError(409,'Saved object part truncated');hash.update(buffer.subarray(0,read.bytesRead));offset+=read.bytesRead;}parts.push({index,sha256:hash.digest('hex')});}finally{await fd.close();}
+   try{const info=await fd.stat();if(!info.isFile()||info.size!==Math.min(LARGE_MEDIA_PART_BYTES,totalBytes-index*LARGE_MEDIA_PART_BYTES))throw new SeoBlogError(409,'Saved object part changed');const receipt=await open(join(dir,index+'.part.sha256'),constants.O_RDONLY|constants.O_NOFOLLOW);try{const info=await receipt.stat();if(info.size!==64)throw new SeoBlogError(409,'Part receipt unavailable');const digest=(await receipt.readFile()).toString('ascii');if(!SHA.test(digest))throw new SeoBlogError(409,'Part receipt invalid');parts.push({index,sha256:digest});}finally{await receipt.close();}}finally{await fd.close();}
   }return parts;
  }
  async discardUncommitted(input:PrivateMediaObject):Promise<void>{const v=checkedObject(input);const path=await this.dir(v.workspaceId,v.sourceId);await rm(path,{recursive:true,force:true});}

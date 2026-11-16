@@ -30,9 +30,9 @@ export function checkVideoEditPlan(value:unknown):VideoEditPlan {
  if(!['portrait','square','landscape'].includes(String(v.canvas)))return bad('Choose a supported video format');
  if(!Array.isArray(v.clips)||v.clips.length<1||v.clips.length>EDIT_PLAN_MAX_CLIPS)
   return bad('Add between one and twelve timeline clips');
- if(typeof v.disclosure!=='string'||v.disclosure.length>280||
+ if(typeof v.disclosure!=='string'||!/(^|\s)#ad(\s|$)/iu.test(v.disclosure)||v.disclosure.length>280||
     /[<>\u0000-\u001f\u007f]/u.test(v.disclosure))
-  return bad('Disclosure needs a plain, reviewed statement');
+  return bad('An on-screen #ad disclosure is required for affiliate videos');
  let total=0;
  const clips=v.clips.map((item,i):VideoEditClip=>{
   if(!item||typeof item!=='object'||Array.isArray(item))return bad('Invalid clip '+(i+1));

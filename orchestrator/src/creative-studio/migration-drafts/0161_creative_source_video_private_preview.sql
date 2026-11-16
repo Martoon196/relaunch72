@@ -18,7 +18,7 @@ BEGIN
   SELECT s.mime,b.bytes,s.sha256
     FROM app.creative_media_source_videos s
     JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
-    WHERE s.workspace_id=p_workspace AND s.id=p_source
+    WHERE s.workspace_id=p_workspace AND s.id=p_source AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=s.id)
       AND s.state='awaiting_probe'
       AND s.sha256=encode(public.digest(b.bytes,'sha256'),'hex')
       AND s.sha256=encode(b.sha256,'hex')

@@ -86,7 +86,7 @@ BEGIN
  plan_data:=raw::jsonb;
  IF jsonb_typeof(plan_data)<>'object' OR plan_data->>'canvas' NOT IN('portrait','square','landscape')
  OR jsonb_typeof(plan_data->'clips')<>'array' OR jsonb_array_length(plan_data->'clips') NOT BETWEEN 1 AND 12
- OR coalesce(length(plan_data->>'disclosure'),0)>280 THEN
+ OR coalesce(length(plan_data->>'disclosure'),0)>280 OR coalesce(plan_data->>'disclosure','')!~*'(^|[[:space:]])#ad([[:space:]]|$)' THEN
   RAISE EXCEPTION 'Invalid or incomplete timeline payload' USING ERRCODE='22023'; END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(plan_data->'clips') c
   WHERE jsonb_typeof(c)<>'object' OR coalesce(c->>'startMs','')!~'^[0-9]{1,8}$'

@@ -70,7 +70,7 @@ export function localRenderFilterGraph(
     const segment = (clip.endMs - clip.startMs) / clip.speed / 1000;
     duration += segment;
     const caption = clip.caption.trim();
-    const disclosure = i === 0 ? p.disclosure.trim() : '';
+    const disclosure = p.disclosure.trim();
     const title = [caption, disclosure].filter(Boolean).join('  |  ').slice(0, 400);
     let graph = `[0:v:0]trim=start=${start}:end=${end},setpts=(PTS-STARTPTS)/${clip.speed},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p`;
     if (title) {
@@ -101,17 +101,19 @@ export function localRenderFilterGraph(
 async function runFFmpeg(binary: string, args: readonly string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false, stderr = '';
-    const child = spawn(binary, [...args], {
+    const child = spawn('prlimit', ['--as=1073741824', '--cpu=180', '--nofile=64', '--', binary, ...args], {
       shell: false, stdio: ['ignore', 'ignore', 'pipe'],
     });
+    const memoryWatch=setInterval(()=>{if(!child.pid)return;readFile('/proc/'+child.pid+'/status','utf8').then(status=>{const rss=Number(status.match(/^VmRSS:\s+(\d+)/mu)?.[1]??0);if(rss>262144){child.kill('SIGKILL');finish(new SeoBlogError(413,'Native renderer exceeded memory budget'));}}).catch(()=>{});},100);
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       fail(new SeoBlogError(504, 'Native render exceeded the safe processing deadline'));
-    }, 90_000);
+    }, 240_000);
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(memoryWatch);
       if (error) reject(error);
       else resolve();
     };
@@ -173,18 +175,36 @@ async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,c
     const captionFiles: string[] = [];
     for (const [i, clip] of checked.clips.entries()) {
       const path = join(dir,`caption-${i}.txt`);
-      const content = [clip.caption.trim(),i === 0 ? checked.disclosure.trim() : ''].filter(Boolean).join('  |  ');
+      const content = [clip.caption.trim(),checked.disclosure.trim()].filter(Boolean).join('  |  ');
       if (content) await writeFile(path, content, {flag:'wx',mode:0o600});
       captionFiles.push(path);
     }
+    // Each decoder sees exactly one bounded clip. Never fan a source into concat
+    // filters: later branches can retain minutes of decoded 1080p frames in RAM.
     const graph = localRenderFilterGraph(checked,measured.durationMs!,measured.audioPresent===true,captionFiles);
-    const args = ['-hide_banner','-nostdin','-loglevel','error','-y','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm','-i',inputPath,
-      '-filter_complex',graph.graph,'-map','[v]','-map','[a]',
-      '-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p',
-      '-c:a','aac','-b:a','96k','-ac','2',
-      '-threads','2','-fs',String(LOCAL_RENDER_MAX_BYTES),
-      '-movflags','+faststart',outputPath];
-    await (opts.render??runFFmpeg)(opts.ffmpeg??'ffmpeg',args);
+    const segments:string[]=[];
+    for(const [i,clip] of checked.clips.entries()) {
+      const segmentPath=join(dir,`segment-${i}.mp4`);
+      const duration=(clip.endMs-clip.startMs)/1000;
+      const single=localRenderFilterGraph({...checked,clips:[{...clip,startMs:0,endMs:clip.endMs-clip.startMs}],disclosure:checked.disclosure},Math.max(1000,clip.endMs-clip.startMs),measured.audioPresent===true,[captionFiles[i]!]);
+      const args=['-hide_banner','-nostdin','-loglevel','error','-y','-max_alloc','67108864',
+        '-threads','1','-filter_complex_threads','1','-protocol_whitelist','file,pipe',
+        '-format_whitelist','mov,matroska,webm','-codec_whitelist','h264,aac,pcm_s16le',
+        '-ss',String(clip.startMs/1000),'-t',String(duration),'-i',inputPath,
+        '-filter_complex',single.graph,'-map','[v]','-map','[a]',
+        '-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p',
+        '-x264-params','threads=1:lookahead_threads=1:rc-lookahead=4',
+        '-c:a','aac','-b:a','96k','-ac','2','-ar','44100','-threads','1',
+        '-fs',String(LOCAL_RENDER_MAX_BYTES),segmentPath];
+      await (opts.render??runFFmpeg)(opts.ffmpeg??'ffmpeg',args);
+      if((await stat(segmentPath)).size>=LOCAL_RENDER_MAX_BYTES)throw new SeoBlogError(413,'Segment exceeds private output capacity');
+      segments.push(segmentPath);
+    }
+    const list=join(dir,'segments.txt');
+    await writeFile(list,segments.map(path=>`file '${safe(path.split('/').at(-1)!)}'`).join('\n'),{flag:'wx',mode:0o600});
+    await (opts.render??runFFmpeg)(opts.ffmpeg??'ffmpeg',['-hide_banner','-nostdin','-loglevel','error','-y',
+      '-max_alloc','67108864','-threads','1','-f','concat','-safe','1','-protocol_whitelist','file,pipe',
+      '-i',list,'-c','copy','-fs',String(LOCAL_RENDER_MAX_BYTES),'-movflags','+faststart',outputPath]);
     const info = await stat(outputPath);
     if (info.size < 1024 || info.size >= LOCAL_RENDER_MAX_BYTES)
       throw new SeoBlogError(413, 'Native output is incomplete or exceeds private storage capacity');

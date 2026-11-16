@@ -8,7 +8,7 @@ import {PgCreativeMediaProductStore} from './media-product-pg-store.js';
 import {PgMediaLinkEvidenceOwner} from './media-link-evidence.js';
 import {affiliateDirectLinkPreview} from './affiliate-direct-link.js';
 export interface AffiliatePublicPage {publicationId:string;productRevision:number;productName:string;merchantName:string;productUrl:string;affiliateUrl:string;network:'amazon_associates';disclosureVersion:string;registeredSite:string;origin:string;signingKeySha256:string}
-export function affiliateClickToken(publicationId:string,revision:number,key:Buffer,now=Date.now(),nonce=randomUUID()):string{
+export function affiliateClickToken(publicationId:string,revision:number,key:Buffer,now=Date.now(),nonce:string=randomUUID()):string{
  checkedEditId(publicationId);checkedEditId(nonce);if(!Number.isInteger(revision)||revision<1||revision>1000||!Buffer.isBuffer(key)||key.length!==32)throw new SeoBlogError(503,'Affiliate click signing unavailable');
  const body=publicationId+'.'+nonce+'.'+(Math.floor(now/1000)+600)+'.'+revision;
  return body+'.'+createHmac('sha256',key).update(body).digest('hex');
@@ -39,14 +39,20 @@ export class PgAffiliatePublicationOwner {
  withdraw(workspaceId:string,publicationId:string,commandId:string){checkedEditId(publicationId);checkedEditId(commandId);return this.command(workspaceId,'withdraw',{publicationId,commandId,consent:true});}
 }
 export class PgAffiliatePublicPages {
- constructor(private readonly pool:Pick<Pool,'query'>,private readonly key:Buffer,private readonly env:NodeJS.ProcessEnv=process.env){}
+ constructor(private readonly pool:Pick<Pool,'query'>,private readonly key:Buffer,private readonly env:NodeJS.ProcessEnv=process.env,private readonly clickPool?:Pick<Pool,'query'>){}
  private gate(){if(this.env.CREATIVE_MEDIA!=='enabled'||this.env.RL72_MEDIA_AFFILIATE_PAGES_ENABLED!=='true'||!Buffer.isBuffer(this.key)||this.key.length!==32)throw new SeoBlogError(503,'Affiliate public pages unavailable');}
- async page(id:string):Promise<{page:AffiliatePublicPage;clickToken:string}|null>{
+ async page(id:string,observation?:{sourceHash:Buffer}):Promise<{page:AffiliatePublicPage;clickToken:string}|null>{
   this.gate();checkedEditId(id);const page=(await this.pool.query<{v:AffiliatePublicPage|null}>('SELECT app_private.creative_media_affiliate_page($1) AS v',[id])).rows[0]?.v;
   if(!page)return null;
   if(page.signingKeySha256!==createHash('sha256').update(this.key).digest('hex'))throw new SeoBlogError(503,'Affiliate click signing policy mismatch');
   const preview=affiliateDirectLinkPreview({network:page.network,product_url:page.productUrl,proposed_affiliate_url:page.affiliateUrl,owner_product_reviewed:true,owner_channel_eligible:true,disclosure_version:page.disclosureVersion});
-  if(preview.status==='blocked')return null;return {page,clickToken:affiliateClickToken(page.publicationId,page.productRevision,this.key)};
+  if(preview.status==='blocked')return null;// A server-derived, deployment-keyed source digest only. Never a browser field.
+  // Stable daily nonce bounds one source/page/day; repeat page loads cannot
+  // mint new countable clicks. Still unverified observations, never purchases.
+  if(!observation||observation.sourceHash.length!==32)return {page,clickToken:''};
+  const raw=createHmac('sha256',this.key).update('click-source/v2:'+id+':'+Math.floor(Date.now()/86400000)+':').update(observation.sourceHash).digest();raw[6]=(raw[6]!&15)|64;raw[8]=(raw[8]!&63)|128;
+  const hex=raw.subarray(0,16).toString('hex'),nonce=hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);
+  return {page,clickToken:affiliateClickToken(page.publicationId,page.productRevision,this.key,Date.now(),nonce)};
  }
- async click(token:string):Promise<boolean>{this.gate();if(!validAffiliateClickToken(token,this.key))return false;return (await this.pool.query<{accepted:boolean}>('SELECT app_private.creative_media_affiliate_click($1) AS accepted',[token])).rows[0]?.accepted===true;}
+ async click(token:string):Promise<boolean>{this.gate();if(!this.clickPool||!validAffiliateClickToken(token,this.key))return false;return (await this.clickPool.query<{accepted:boolean}>('SELECT app_private.creative_media_affiliate_click($1) AS accepted',[token])).rows[0]?.accepted===true;}
 }

@@ -14,6 +14,8 @@ CREATE TABLE app.creative_media_local_render_jobs (
  source_id uuid NOT NULL,
  source_sha256 text NOT NULL CHECK(source_sha256~'^[a-f0-9]{64}$'),
  plan_sha256 text NOT NULL CHECK(plan_sha256~'^[a-f0-9]{64}$'),
+ attempts integer NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 3),
+ retry_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  requested_by uuid NOT NULL REFERENCES app.users(id),
  rights_attested boolean NOT NULL DEFAULT true,
  state text NOT NULL DEFAULT 'queued'
@@ -128,7 +130,7 @@ BEGIN
  v_command_id:=(p_input->>'commandId')::uuid;
  v_project_id:=(p_input->>'projectId')::uuid;
  v_revision:=(p_input->>'revision')::integer;
- PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text||':'||v_project_id::text,0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text,0));
  SELECT * INTO existing FROM app.creative_media_local_render_jobs j
   WHERE j.workspace_id=p_workspace AND j.command_id=v_command_id;
  IF existing.id IS NOT NULL THEN
@@ -157,6 +159,7 @@ BEGIN
    WHERE probe.workspace_id=p_workspace AND probe.source_id=source.id
     AND probe.source_sha256=source.sha256 AND probe.status='verified_technical') THEN
   RAISE EXCEPTION 'Independent source video probe must pass first' USING ERRCODE='55000'; END IF;
+ IF (SELECT count(*) FROM app.creative_media_local_render_jobs WHERE workspace_id=p_workspace AND state IN('queued','claimed'))>=20 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=200000000 THEN RAISE EXCEPTION 'Media queue or output storage cap reached' USING ERRCODE='55000'; END IF;
  INSERT INTO app.creative_media_local_render_jobs(workspace_id,id,command_id,
    project_id,revision,source_id,source_sha256,plan_sha256,requested_by)
  VALUES(p_workspace,v_job_id,v_command_id,v_project_id,v_revision,source.id,
@@ -175,7 +178,7 @@ BEGIN
  RETURN QUERY SELECT o.mime,b.bytes,o.sha256
   FROM app.creative_media_local_render_outputs o
   JOIN app.seo_blog_blobs b ON b.workspace_id=o.workspace_id AND b.id=o.blob_id
-  WHERE o.workspace_id=p_workspace AND o.id=p_output
+  WHERE o.workspace_id=p_workspace AND o.id=p_output AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=p_output)
    AND o.sha256=encode(public.digest(b.bytes,'sha256'),'hex')
    AND o.sha256=encode(b.sha256,'hex')
    AND o.byte_length=octet_length(b.bytes);
@@ -203,7 +206,7 @@ BEGIN
    RAISE EXCEPTION 'Scoped local renderer worker required' USING ERRCODE='42501'; END IF;
  SELECT * INTO j FROM app.creative_media_local_render_jobs
   WHERE workspace_id=p_workspace AND id=p_job FOR UPDATE;
- IF j.id IS NULL OR j.state<>'queued' OR j.claim_token IS NOT NULL THEN
+ IF EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=j.source_id) OR j.id IS NULL OR j.state<>'queued' OR j.claim_token IS NOT NULL OR j.retry_at>clock_timestamp() OR j.attempts>=3 THEN
   RAISE EXCEPTION 'Offline render job cannot be claimed again' USING ERRCODE='55000'; END IF;
  -- Before committing a lease, validate all input references and blobs again.
  IF NOT EXISTS(SELECT 1 FROM app.creative_media_edit_projects p
@@ -222,7 +225,7 @@ BEGIN
     AND ((s.storage_kind='pg_blob' AND encode(public.digest(b.bytes,'sha256'),'hex')=s.sha256
     AND encode(b.sha256,'hex')=s.sha256 AND s.byte_length=octet_length(b.bytes)) OR (s.storage_kind='private_object' AND s.object_key IS NOT NULL))) THEN
   RAISE EXCEPTION 'Source or technical probe no longer matches' USING ERRCODE='55000'; END IF;
- UPDATE app.creative_media_local_render_jobs SET state='claimed',
+ UPDATE app.creative_media_local_render_jobs SET state='claimed',attempts=attempts+1,
   claim_token=gen_random_uuid(),claim_until=clock_timestamp()+interval '10 minutes',
   updated_at=clock_timestamp()
  WHERE workspace_id=p_workspace AND id=p_job RETURNING * INTO j;
@@ -263,7 +266,7 @@ BEGIN
    RETURN jsonb_build_object('id',stored.id,'sha256',stored.sha256,'replayed',true); END IF;
   RAISE EXCEPTION 'Completed job output changed on replay' USING ERRCODE='40001';
  END IF;
- IF j.state<>'claimed' OR j.claim_until<=clock_timestamp() THEN
+ IF EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=j.source_id) OR j.state<>'claimed' OR j.claim_until<=clock_timestamp() THEN
   RAISE EXCEPTION 'Live offline render lease required' USING ERRCODE='55000'; END IF;
  IF p_action='fail' THEN
   IF p_bytes IS NOT NULL OR p_media IS NULL
@@ -294,6 +297,8 @@ BEGIN
    OR jsonb_typeof(p_media->'audioPresent')<>'boolean' THEN
   RAISE EXCEPTION 'Offline renderer output integrity or technical metadata mismatch'
     USING ERRCODE='22023'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-local-render:'||p_workspace::text,0));
+ IF (SELECT count(*) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=50 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))+length>200000000 THEN RAISE EXCEPTION 'Private output storage cap reached' USING ERRCODE='55000'; END IF;
  blob:=gen_random_uuid();v_output_id:=gen_random_uuid();
  INSERT INTO app.seo_blog_blobs(workspace_id,id,mime,bytes,sha256)
  VALUES(p_workspace,blob,'video/mp4',p_bytes,public.digest(p_bytes,'sha256'));
@@ -312,5 +317,14 @@ REVOKE ALL ON FUNCTION app_private.creative_media_local_render_claim(uuid,uuid),
  app_private.creative_media_local_render_settle(uuid,uuid,uuid,text,jsonb,bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_local_render_claim(uuid,uuid),
  app_private.creative_media_local_render_settle(uuid,uuid,uuid,text,jsonb,bytea) TO r72_worker;
+CREATE FUNCTION app_private.creative_media_render_heartbeat(p_workspace uuid,p_job uuid,p_claim uuid)
+RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+ IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped worker required' USING ERRCODE='42501'; END IF;
+ UPDATE app.creative_media_local_render_jobs SET claim_until=clock_timestamp()+interval '10 minutes',updated_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_job AND claim_token=p_claim AND state='claimed' AND claim_until>clock_timestamp();
+ RETURN FOUND;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.creative_media_render_heartbeat(uuid,uuid,uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_render_heartbeat(uuid,uuid,uuid) TO r72_worker;
 RESET ROLE;SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;

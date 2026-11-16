@@ -28,7 +28,7 @@ BEGIN
  IF coalesce(p_action,'') NOT IN('begin','status','complete','cancel','source') OR p_input IS NULL OR jsonb_typeof(p_input) IS DISTINCT FROM 'object' OR octet_length(p_input::text)>4000 THEN RAISE EXCEPTION 'Invalid object upload command' USING ERRCODE='22023'; END IF;
  IF p_action='source' THEN
   RETURN (SELECT jsonb_build_object('workspaceId',s.workspace_id,'sourceId',s.id,'sha256',s.sha256,'byteLength',s.byte_length,'mime',s.mime,'objectKey',s.object_key)
-   FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND id=p_id AND storage_kind='private_object'); END IF;
+   FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND id=p_id AND storage_kind='private_object' AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=p_id)); END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('media-object-upload:'||p_workspace::text,0));
  SELECT * INTO u FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND id=p_id FOR UPDATE;
  IF p_action='begin' THEN
@@ -45,7 +45,7 @@ BEGIN
   ELSE
    IF EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=p_id) THEN RAISE EXCEPTION 'Source identity already catalogued' USING ERRCODE='40001'; END IF;
    IF (SELECT count(*) FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND state='uploading' AND expires_at>clock_timestamp())>=3 THEN RAISE EXCEPTION 'Pending object upload cap reached' USING ERRCODE='55000'; END IF;
-   SELECT coalesce(sum(byte_length),0) INTO total FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND storage_kind='private_object';
+   SELECT coalesce(sum(byte_length),0) INTO total FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND storage_kind='private_object' AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.id=creative_media_source_videos.id AND e.kind='source' AND e.erased_at IS NOT NULL);
    total:=total+(SELECT coalesce(sum(byte_length),0) FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND state='uploading' AND expires_at>clock_timestamp());
    IF total+(p_input->>'byteLength')::bigint>10737418240 THEN RAISE EXCEPTION 'Private workspace storage cap reached' USING ERRCODE='55000'; END IF;
    INSERT INTO app.creative_media_object_uploads(workspace_id,id,metadata,byte_length,sha256) VALUES(p_workspace,p_id,p_input,(p_input->>'byteLength')::bigint,p_input->>'sha256') RETURNING * INTO u;
@@ -76,7 +76,7 @@ CREATE FUNCTION app_private.creative_media_object_source_worker(p_workspace uuid
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped source worker required' USING ERRCODE='42501'; END IF;
- RETURN (SELECT jsonb_build_object('workspaceId',s.workspace_id,'sourceId',s.id,'sha256',s.sha256,'byteLength',s.byte_length,'mime',s.mime,'objectKey',s.object_key) FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND id=p_source AND storage_kind='private_object');
+ RETURN (SELECT jsonb_build_object('workspaceId',s.workspace_id,'sourceId',s.id,'sha256',s.sha256,'byteLength',s.byte_length,'mime',s.mime,'objectKey',s.object_key) FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND id=p_source AND storage_kind='private_object' AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=p_source));
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) TO r72_worker;

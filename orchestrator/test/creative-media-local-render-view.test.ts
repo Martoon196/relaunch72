@@ -8,7 +8,7 @@ const file={id:'22222222-2222-4222-8222-222222222222',sha256:'a'.repeat(64),
  rights:'owned',evidenceSha256:null,state:'awaiting_probe',createdAt:'2026-11-15T19:00:00Z'} as const;
 const edit={id:'33333333-3333-4333-8333-333333333333',revision:1,
  sourceId:file.id,sourceSha256:file.sha256,planSha256:'b'.repeat(64),
- plan:{canvas:'portrait',disclosure:'',clips:[
+ plan:{canvas:'portrait',disclosure:'#ad',clips:[
  {startMs:0,endMs:2000,caption:'hello',transition:'cut',speed:1}]},
  createdAt:'2026-11-15T19:00:00Z'} as const;
 const model={projects:[edit],sources:[file],probes:[

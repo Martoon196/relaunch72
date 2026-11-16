@@ -51,7 +51,7 @@ export function creativeMediaOutputReviewPage(
       +decisionForm(shell,r,newCommand,'rejected_private')+'</div>';
   return '<details class="card"><summary>Output '+e(output.id.slice(0,8))
    +' · <span class="pill warn">'+e(r.decision??'unreviewed')+'</span></summary>'
-   +'<p class="small muted">SHA256: '+e(output.sha256)+'</p>'
+
    +'<p>'+technical+'</p>'
    +'<p><video controls playsinline preload="none" width="320" src="'+base(shell)
    +'/outputs/'+e(output.id)+'/stream">Private video preview</video></p>'

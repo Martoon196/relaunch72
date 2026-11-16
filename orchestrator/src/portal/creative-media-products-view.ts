@@ -37,8 +37,8 @@ function productForm(shell:Shell, commandId:string, p?:AffiliateMediaProductReco
     +'<label>Source material rights</label><select name="sourceRights">'
     +['none','original','owned','licensed'].map((r)=>'<option value="'+r+'"'+selected(rights,r)+'>'+({none:'No source footage yet',original:'Original media being created',owned:'I own this footage',licensed:'Licensed third-party footage'} as Record<string,string>)[r]+'</option>').join('')
     +'</select>'
-    +'<label>Licence evidence SHA-256 (required for licensed source, not a licence itself)</label>'
-    +'<input name="evidenceSha256" maxlength="64" pattern="[a-f0-9]{64}" value="'+e(p?.evidence_sha256??'')+'">'
+    +'<label>Licence document (required for licensed footage)</label>'
+    +'<input type="file" name="licenceEvidence">'
     +'<label>Creative-kit disclosure version</label>'
     +'<input name="disclosureVersion" maxlength="60" required value="'+e(p?.disclosure_version??'draft')+'">'
     +'<div class="stack"><label><input type="checkbox" name="productReviewed" value="1"'+checked(p?.owner_product_reviewed??false)+'> I checked the merchant and product facts myself</label>'

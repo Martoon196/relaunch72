@@ -10,6 +10,8 @@
  * Does not loop, auto-publish, create customer charges or auto-retry paid calls.
  */
 import '../../config.js';
+import {runMediaService,PgMediaServiceDiscovery} from './service.js';
+import {PgMediaRetentionWorker} from '../../creative-studio/media-retention.js';
 import {PrivateMediaFiles} from '../../creative-studio/media-private-files.js';
 import {PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../creative-studio/media-local-render.js';
@@ -30,7 +32,7 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]
 async function main():Promise<void>{
   const [action,workspaceId,id]=process.argv.slice(2);
   workerCommandGate(process.env,action??'');
-  if(!UUID.test(workspaceId??'')||(!['tick','cleanup-objects'].includes(action??'')&&!UUID.test(id??'')))
+  if(action!=='serve'&&(!UUID.test(workspaceId??'')||(!['tick','cleanup-objects'].includes(action??'')&&!UUID.test(id??''))))
     throw new Error('Exactly one workspace UUID and source/job UUID required.');
   const pool=createWorkerDatabasePool(process.env);
   try{
@@ -41,6 +43,15 @@ async function main():Promise<void>{
       return object??new PgVideoSourceProbeWorker(pool,requestId).run(ws,record);
     };
     const objectRenderer=files?((object:import('../../creative-studio/media-private-files.js').PrivateMediaObject,probe:import('../../creative-studio/media-source-probe.js').VideoProbe,plan:import('../../creative-studio/media-edit-plan.js').VideoEditPlan)=>renderLocalVideoFile(files,object,probe,plan)):undefined;
+    if(action==='serve'){
+      const controller=new AbortController(),stop=()=>controller.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
+      const discovery=new PgMediaServiceDiscovery(pool,requestId);
+      try{await runMediaService({workspaces:after=>discovery.workspaces(after),clickRetention:()=>discovery.clickRetention(),
+       cleanup:async ws=>{await new PgMediaRetentionWorker(pool,requestId,files).sweep(ws);if(files)await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(ws,10);},
+       tick:ws=>runOfflineMediaTick(ws,{pending:(w,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(w,n),probe:probeSource,probeOutput:(w,id)=>new PgMediaOutputProbeWorker(pool,requestId).probe(w,id),render:(w,id)=>runQueuedLocalRender(w,id,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer})},{limit:1,signal:controller.signal}),
+       onError:()=>console.error('Offline media batch held; retrying after bounded delay')},{signal:controller.signal});}
+      finally{process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}return;
+    }
     if(action==='cleanup-objects'){if(!files)throw new Error('Private object storage unavailable');console.log('private object cleanup:',await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(workspaceId!));return;}
     if(action==='tick'){
       const receipts=await runOfflineMediaTick(workspaceId!,{
