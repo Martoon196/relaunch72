@@ -7,8 +7,8 @@
  */
 
 import type { BrandDnaState } from '../seo-blog/engine.js';
-import type { BrandDnaCard, DnaItem, DnaSource } from '../seo-blog/brand-dna.js';
-import { BRAND_DNA_MESSAGES, brandDnaPayload } from '../seo-blog/brand-dna.js';
+import type { BrandDnaCard, DnaItem, DnaPriceLine, DnaSource } from '../seo-blog/brand-dna.js';
+import { BRAND_DNA_MESSAGES, brandDnaPayload, pricingEditText } from '../seo-blog/brand-dna.js';
 import { profilePayload } from '../seo-blog/profile-jobs.js';
 import { escapeHtml as e } from './ui.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -58,9 +58,21 @@ ${c.options.map((o) => `<label class="choice"><input type="radio" name="choice" 
 <p style="margin:12px 0 0"><button class="secondary" type="submit">Save this answer</button></p></fieldset></form>`).join('')}</section>`;
 }
 
+/** An offer's checked price structure under its price (website door, rules v3): other prices, instalments, special offers. */
+function pricingLines(o: BrandDnaCard['offers'][number]): string {
+  const p = o.pricing;
+  if (!p) return '';
+  const line = (head: string, l: DnaPriceLine, extra = '') => `<span class="price">${head}: ${l.label ? `${e(l.label)} ` : ''}${e(l.text)}${extra}</span>${sourceLine(l.source)}`;
+  return [
+    ...p.also.map((l) => line('Also', l)),
+    ...p.plans.map((l) => line('Or pay in instalments', l, `${l.total ? ` (${e(l.total)})` : ''}${l.for ? ` for ${e(l.for)}` : ''}`)),
+    ...p.specials.map((l) => line('Special offer', l)),
+  ].join('');
+}
+
 function cardSections(card: BrandDnaCard): string {
   const offers = card.offers.length ? `<ul class="facts">${card.offers.map((o) => `<li><strong>${e(o.name)}</strong>${o.description ? `<br>${e(o.description)}` : ''}${sourceLine(o.source)}
-<span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}</li>`).join('')}</ul>`
+<span class="price">${o.priceOpen ? 'Price: choose the right one above' : o.price ? `Price: ${e(o.price)}` : 'Price: none found in your pages or documents'}</span>${o.price && !o.priceOpen ? sourceLine(o.priceSource) : ''}${pricingLines(o)}</li>`).join('')}</ul>`
     : '<p class="muted">We did not find anything you sell written down. Nothing was added.</p>';
   return `<section class="card"><h2>In a sentence</h2>${card.summary.trim() ? `<p>${e(card.summary)}</p>` : '<p class="notice">Add a one-line summary before you confirm. Use “Something not right? Change it” below.</p>'}${card.positioning ? `<p>${e(card.positioning)}</p>` : ''}<p class="muted">Summed up from the pages and documents listed under “Where we looked”.</p></section>
 <section class="card"><h2>What you sell</h2><p class="muted">${card.fromWebsite ? 'Each price is copied as your page writes it, with the line we found it on and the line naming what it is for. Read them before you confirm.' : 'Check each price against your own price list before you confirm.'}</p>${offers}</section>
@@ -99,13 +111,13 @@ function correctionForm(shell: Shell, state: BrandDnaState): string {
   const area = (id: string, label: string, value: string, hint = '') => `<label for="dna-${id}">${label}</label><textarea id="dna-${id}" name="${id}">${e(value)}</textarea>${hint ? `<small class="muted">${hint}</small>` : ''}`;
   const wanted = state.status !== 'confirmed' && (state.card?.leftOut.some((l) => l.fix === 'card') || !p.summary.trim());
   return `<details class="card" id="dna-change"${wanted ? ' open' : ''}><summary><strong>Something not right? Change it</strong></summary>
-<p class="muted">Use your own words. A line you add is marked “You told us”. To change a price, change it on your website or in your documents, then read your website again.</p>
+<p class="muted">Use your own words. A line you add is marked “You told us”. ${p.strict === true && p.offers.some((o) => o.pricing?.lines.length) ? 'You can correct or remove a price line below; a line you change is marked “You told us” and is kept as you wrote it.' : 'To change a price, change it on your website or in your documents, then read your website again.'}</p>
 ${state.status === 'confirmed' ? '<p class="notice">Saving a change makes a new card. Your content pauses until you confirm the new card.</p>' : ''}
 <form method="post" action="${link(shell, 'dna/edit')}">${csrfField(shell.csrf)}<input type="hidden" name="version" value="${p.version}">
 ${area('summary', 'In a sentence', p.summary)}${area('audiences', 'Who it is for', p.audiences.join('\n'), 'One per line.')}
 ${area('approvedClaims', 'What you can say', p.approvedClaims.join('\n'), 'One per line.')}${area('exclusions', 'Never say', p.exclusions.join('\n'), 'One per line.')}
 ${area('voiceDont', 'Words and styles to avoid', p.voice.dont.join('\n'), 'One per line.')}
-<p><button class="secondary" type="submit">Save my changes</button></p></form></details>`;
+${p.strict === true ? p.offers.map((o, i) => (o.pricing?.lines.length ? `${area(`pricing-${i}`, `Prices for ${e(o.name)}`, pricingEditText(o), 'One per line. Start each with “Also:”, “Instalments:” or “Special offer:”. Remove a line you do not want. A line you change is yours and is kept as you wrote it.')}\n` : '')).join('') : ''}<p><button class="secondary" type="submit">Save my changes</button></p></form></details>`;
 }
 
 function readForm(shell: Shell, state: BrandDnaState, options: { label: string; main: boolean; again: boolean; commandId: string }): string {

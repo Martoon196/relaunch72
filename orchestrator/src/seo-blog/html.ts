@@ -230,6 +230,9 @@ const namedBy = (text: string) => (text.includes(',') || /^M[rsx]|^Miss|^Dr/.tes
 /** A short line naming who said the line above it: marks it only beside italics, quote marks or a star rating. */
 const ATTRIBUTION = /^(?:[-–—]\s*)?(?:the\s+[\p{Lu}][\p{L}'’-]*\s+family|[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}(?:\s*,\s*[\p{L}\p{N}][\p{L}\p{N}\s'’-]*){0,2})\.?$/iu;
 
+/** Class or id name parts that make a link a button. */
+const BUTTON_PARTS = new Set(['btn', 'button', 'cta']);
+
 interface Segment { kind: 'heading' | 'item' | 'para' | 'row'; level: number; text: string; quoted: boolean; italic: boolean; stars: boolean; container: number }
 interface Cell { segments: Segment[]; text: string }
 interface TableCtx { rows: Cell[][]; row: Cell[] | null; cell: Cell | null; quoted: boolean }
@@ -237,7 +240,8 @@ interface TableCtx { rows: Cell[][]; row: Cell[] | null; cell: Cell | null; quot
 function classTokens(attrs: string): string[] {
   const out: string[] = [];
   if (!attrs || !/class|id/i.test(attrs)) return out;
-  for (const m of attrs.matchAll(/\b(class|id)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi)) out.push(...String(m[3] ?? m[4] ?? m[5] ?? '').toLowerCase().split(/\s+/).filter(Boolean));
+  // (Pushed one by one: spreading a very long class list into push() overflows the call stack.)
+  for (const m of attrs.matchAll(/\b(class|id)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi)) for (const k of String(m[3] ?? m[4] ?? m[5] ?? '').toLowerCase().split(/\s+/)) if (k) out.push(k);
   return out;
 }
 
@@ -250,6 +254,15 @@ function capHtml(html: string): string {
 
 /** The main content of an HTML page as Brand DNA lines (the same main-content choice as `parseHtmlPage`). */
 export function brandPageHtmlLines(html: string): string {
+  return brandPageHtmlRead(html).text;
+}
+
+/**
+ * The same read, with which of its lines (0-based, in `text`) were wholly action text on the page: a button, a
+ * button-styled link or a form control's label. The words are exactly `brandPageHtmlLines`; nothing marks those lines in
+ * them (the line numbers are kept beside the text, so a page's own "▸ " or any other glyph is only ever its own words).
+ */
+export function brandPageHtmlRead(html: string): { readonly text: string; readonly actionLines: readonly number[] } {
   const capped = capHtml(html);
   const lower = capped.toLowerCase();
   const bodyAt = lower.indexOf('<body'), bodyEnd = lower.lastIndexOf('</body>');
@@ -258,9 +271,9 @@ export function brandPageHtmlLines(html: string): string {
   for (const tag of ['main', 'article']) {
     const at = bl.search(new RegExp(`<${tag}\\b`));
     const end = at === -1 ? -1 : bl.indexOf(`</${tag}>`, at);
-    if (at !== -1 && end !== -1) return brandPageLines(body.slice(at, end + tag.length + 3));
+    if (at !== -1 && end !== -1) return readBrandPageLines(body.slice(at, end + tag.length + 3), false);
   }
-  return brandPageLines(body, true);
+  return readBrandPageLines(body, true);
 }
 
 /**
@@ -268,10 +281,14 @@ export function brandPageHtmlLines(html: string): string {
  * does when a page has no main element.
  */
 export function brandPageLines(input: string, dropChrome = false): string {
+  return readBrandPageLines(input, dropChrome).text;
+}
+
+function readBrandPageLines(input: string, dropChrome: boolean): { text: string; actionLines: number[] } {
   const html = capHtml(input);
   const lower = html.toLowerCase();
   const sink: string[][] = [[]];
-  const stack: { tag: string; quoted: boolean; stars: boolean }[] = [];
+  const stack: { tag: string; quoted: boolean; stars: boolean; action: boolean }[] = [];
   const open = new Map<string, number>(), overflow = new Map<string, number>();
   let quotedDepth = 0, struckDepth = 0, italicDepth = 0, starsDepth = 0;
   const headingLevels: number[] = [];
@@ -282,7 +299,11 @@ export function brandPageLines(input: string, dropChrome = false): string {
   let sectionText = false, sectionSibling = false, siblingOpened = false;
   /** An inline tag was passed since the last text: a letter or digit on both sides gets a space between them. */
   let inlineEdge = false;
-  let buffer = '', bufferItalicOnly = true, bufferHasText = false;
+  /** Action text: a button, a button-styled link, or a form control's label. A line made only of action text is recorded by
+   * its line number (`actionAt`, never in the words); a button inside a sentence stays inline and nothing else changes. */
+  const actionAt = new Set<number>();
+  let actionDepth = 0, formDepth = 0, lineAction = false, linePlain = false;
+  let buffer = '', bufferItalicOnly = true, bufferHasText = false, bufferTail = '';
   const tables: TableCtx[] = [];
   let lastSegment: Segment | null = null, containerSeq = 0;
   const containers: { id: number; para: boolean }[] = [];
@@ -300,10 +321,12 @@ export function brandPageLines(input: string, dropChrome = false): string {
     sink[sink.length - 1]!.push(marker + seg.text);
   };
   const flush = () => {
-    if (!bufferHasText) { buffer = ''; return; }
+    const actionLine = lineAction && !linePlain;
+    lineAction = false; linePlain = false;
+    if (!bufferHasText) { buffer = ''; bufferTail = ''; return; }
     let text = tidy(buffer);
     const italicOnly = bufferHasText && bufferItalicOnly;
-    buffer = ''; bufferItalicOnly = true; bufferHasText = false;
+    buffer = ''; bufferTail = ''; bufferItalicOnly = true; bufferHasText = false;
     if (!text) return;
     const level = headingLevels.length ? headingLevels[headingLevels.length - 1]! : 0;
     let kind: Segment['kind'] = level ? 'heading' : itemDepth > 0 ? 'item' : 'para';
@@ -330,20 +353,24 @@ export function brandPageLines(input: string, dropChrome = false): string {
       if (!prev.quoted) {
         prev.quoted = true;
         const lines = sink[sink.length - 1]!, t = tables[tables.length - 1];
-        if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) lines[lines.length - 1] = `❝ ${prev.text}`;
+        if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) { lines[lines.length - 1] = `❝ ${prev.text}`; actionAt.delete(lines.length - 1); }
       }
     }
     const seg: Segment = { kind, level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
     lastSegment = seg;
     emit(seg);
+    // Wholly action text, outside a table: its line number is recorded for the price-structure check (the words are unchanged).
+    if (actionLine && kind === 'para' && !seg.quoted && !tables[tables.length - 1]?.cell) actionAt.add(sink[sink.length - 1]!.length - 1);
   };
   const addText = (t: string) => {
     if (struckDepth > 0) return;
     if (inlineEdge && t) {
       inlineEdge = false;
-      if (/[\p{L}\p{N}]$/u.test(buffer) && /^[\p{L}\p{N}]/u.test(t)) buffer += ' ';
+      // (The buffer's last two code units are kept aside: reading the end of a long concatenated buffer would flatten it.)
+      if (/[\p{L}\p{N}]$/u.test(bufferTail) && /^[\p{L}\p{N}]/u.test(t)) { buffer += ' '; bufferTail = `${bufferTail.slice(-1)} `; }
     }
-    if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; }
+    bufferTail = t.length >= 2 ? t.slice(-2) : (bufferTail + t).slice(-2);
+    if (t !== ' ' && /\S/.test(t)) { bufferHasText = true; if (italicDepth === 0) bufferItalicOnly = false; if (actionDepth > 0) lineAction = true; else linePlain = true; }
     buffer += t;
   };
   const closeCell = (t: TableCtx) => {
@@ -408,7 +435,11 @@ export function brandPageLines(input: string, dropChrome = false): string {
       const quoted = QUOTED_TAGS.has(tag) || quotedByAttrs(tag, attrs, tokens);
       const stars = tokens.some((k) => STAR_TOKENS.has(k));
       if (stars) starContainers.add(currentContainer());
-      stack.push({ tag, quoted, stars });
+      const action = tag === 'button' || (tag === 'label' && formDepth > 0)
+        || (tag === 'a' && (/\brole\s*=\s*["']?button/i.test(attrs) || tokens.some((k) => k.split(/[-_]+/).some((part) => BUTTON_PARTS.has(part)))));
+      stack.push({ tag, quoted, stars, action });
+      if (action) actionDepth++;
+      if (tag === 'form') formDepth++;
       if (quotedSection && sectionSibling && !siblingOpened && stack.length === quotedSectionDepth + 1) siblingOpened = true;
       open.set(tag, (open.get(tag) ?? 0) + 1);
       if (quoted) quotedDepth++;
@@ -431,6 +462,8 @@ export function brandPageLines(input: string, dropChrome = false): string {
     while (stack.length) {
       const x = stack.pop()!;
       open.set(x.tag, open.get(x.tag)! - 1);
+      if (x.action) actionDepth--;
+      if (x.tag === 'form') formDepth--;
       if (x.quoted) quotedDepth--;
       if (x.stars) starsDepth--;
       if (STRUCK_TAGS.has(x.tag)) struckDepth--;
@@ -453,5 +486,5 @@ export function brandPageLines(input: string, dropChrome = false): string {
   }
   while (tables.length) closeTable();
   flush();
-  return sink[0]!.join('\n');
+  return { text: sink[0]!.join('\n'), actionLines: [...actionAt].sort((a, b) => a - b) };
 }
