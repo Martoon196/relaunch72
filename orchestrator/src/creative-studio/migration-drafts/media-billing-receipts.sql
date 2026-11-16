@@ -23,7 +23,7 @@ CREATE TABLE app.creative_media_checkout_intents (
 );
 CREATE TABLE app.creative_media_billing_bindings (
  workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id), subscription_id text NOT NULL,
- customer_id text NOT NULL, livemode boolean NOT NULL, last_event_created bigint NOT NULL DEFAULT 0,
+ customer_id text NOT NULL, tier text NOT NULL, livemode boolean NOT NULL, last_event_created bigint NOT NULL DEFAULT 0,
  active boolean NOT NULL DEFAULT false, PRIMARY KEY(workspace_id,subscription_id), UNIQUE(subscription_id,livemode),
  UNIQUE(workspace_id,livemode)
 );
@@ -51,6 +51,7 @@ GRANT SELECT ON app.creative_media_price_policy TO r72_creative_studio_definer;
 GRANT SELECT,INSERT,UPDATE ON app.creative_media_checkout_intents TO r72_creative_studio_definer;
 GRANT SELECT ON app.creative_media_checkout_intents,app.creative_media_price_policy TO r72_media_billing_definer;
 GRANT SELECT,INSERT,UPDATE ON app.creative_media_billing_bindings TO r72_media_billing_definer;
+GRANT SELECT ON app.creative_media_billing_bindings TO r72_creative_studio_definer;
 GRANT SELECT,INSERT ON app.creative_media_billing_events TO r72_media_billing_definer;
 CREATE POLICY creative_media_access_billing ON app.creative_media_access_grants FOR INSERT TO r72_media_billing_definer WITH CHECK(workspace_id=app_private.current_workspace_id());
 GRANT INSERT ON app.creative_media_access_grants TO r72_media_billing_definer;
@@ -73,6 +74,16 @@ BEGIN
   OR previous.created_at<clock_timestamp()-interval '23 hours' THEN RAISE EXCEPTION 'Checkout intent changed or expired' USING ERRCODE='40001'; END IF;
  RETURN jsonb_build_object('intentId',p_id,'workspaceId',p_workspace,'tier',policy.tier,'priceId',policy.price_id,'livemode',policy.livemode);
 END $f$;
+CREATE FUNCTION app_private.creative_media_checkout_options(p_workspace uuid,p_session bytea,p_live boolean)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+ IF p_session IS NULL OR app_private.current_actor_kind() IS DISTINCT FROM 'user' THEN RAISE EXCEPTION 'Owner session required' USING ERRCODE='42501'; END IF;
+ PERFORM app_private.seo_media_owner(p_workspace,p_session);
+ RETURN jsonb_build_object('customerId',(SELECT customer_id FROM app.creative_media_billing_bindings WHERE workspace_id=p_workspace AND livemode=p_live),
+  'plans',coalesce((SELECT jsonb_agg(jsonb_build_object('tier',tier,'priceId',price_id,'livemode',livemode) ORDER BY tier) FROM app.creative_media_price_policy WHERE enabled AND livemode=p_live),'[]'::jsonb));
+END $f$;
+REVOKE ALL ON FUNCTION app_private.creative_media_checkout_options(uuid,bytea,boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_checkout_options(uuid,bytea,boolean) TO r72_content_command;
 CREATE FUNCTION app_private.creative_media_checkout_bind(p_workspace uuid,p_session bytea,p_id uuid,p_stripe text)
 RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
@@ -124,22 +135,30 @@ BEGIN
   IF intent.id IS NULL OR intent.price_id IS DISTINCT FROM p_event->>'priceId' OR intent.livemode IS DISTINCT FROM (p_event->>'livemode')::boolean
    OR intent.created_at<clock_timestamp()-interval '24 hours' OR p_event->>'checkoutVerified' IS DISTINCT FROM 'true' OR intent.stripe_session_id IS NULL OR intent.stripe_session_id IS DISTINCT FROM p_event->>'checkoutSessionId' THEN
    RAISE EXCEPTION 'Owner-bound verified checkout required' USING ERRCODE='42501'; END IF;
-  INSERT INTO app.creative_media_billing_bindings(workspace_id,subscription_id,customer_id,livemode)
-   VALUES(p_workspace,p_event->>'subscriptionId',p_event->>'customerId',(p_event->>'livemode')::boolean) RETURNING * INTO binding;
+  INSERT INTO app.creative_media_billing_bindings(workspace_id,subscription_id,customer_id,tier,livemode)
+   VALUES(p_workspace,p_event->>'subscriptionId',p_event->>'customerId',intent.tier,(p_event->>'livemode')::boolean)
+   ON CONFLICT (workspace_id,livemode) DO UPDATE SET subscription_id=EXCLUDED.subscription_id,customer_id=EXCLUDED.customer_id,tier=EXCLUDED.tier,last_event_created=0,active=false
+    WHERE NOT app.creative_media_billing_bindings.active RETURNING * INTO binding;
+  IF binding.subscription_id IS NULL THEN RAISE EXCEPTION 'Existing active subscription must be managed first' USING ERRCODE='55000'; END IF;
  END IF;
  IF binding.customer_id IS DISTINCT FROM p_event->>'customerId' OR binding.livemode IS DISTINCT FROM (p_event->>'livemode')::boolean THEN RAISE EXCEPTION 'Billing identity mismatch' USING ERRCODE='42501'; END IF;
  v_active:=(p_event->>'activePaid')::boolean;
  IF created<binding.last_event_created OR (created=binding.last_event_created AND v_active AND NOT binding.active) THEN result:='stale';
  ELSE
-  SELECT * INTO policy FROM app.creative_media_price_policy WHERE price_id=p_event->>'priceId' AND livemode=binding.livemode AND enabled;
-  IF policy.tier IS NULL THEN RAISE EXCEPTION 'Unapproved subscription price' USING ERRCODE='55000'; END IF;
+  SELECT * INTO policy FROM app.creative_media_price_policy WHERE price_id=p_event->>'priceId' AND livemode=binding.livemode;
+  IF policy.tier IS NULL THEN
+   v_active:=false;
+   SELECT * INTO policy FROM app.creative_media_price_policy WHERE tier=binding.tier AND livemode=binding.livemode;
+  END IF;
+  IF policy.tier IS NULL THEN RAISE EXCEPTION 'Reviewed subscription policy unavailable' USING ERRCODE='55000'; END IF;
+  IF NOT policy.enabled THEN v_active:=false; END IF;
   until_at:=(p_event->>'periodEnd')::timestamptz;
   IF until_at IS NULL OR until_at<=clock_timestamp() OR until_at>clock_timestamp()+interval '2 years' THEN v_active:=false; END IF;
   INSERT INTO app.creative_media_access_grants(workspace_id,tier,source,receipt_id,valid_from,valid_until,max_job_microusd,monthly_video_microusd)
    VALUES(p_workspace,policy.tier,'billing_verified',p_event->>'eventId',now(),
     CASE WHEN v_active THEN until_at ELSE now()+interval '2 years' END,
     CASE WHEN v_active THEN policy.max_job_microusd ELSE 0 END,CASE WHEN v_active THEN policy.monthly_video_microusd ELSE 0 END);
-  UPDATE app.creative_media_billing_bindings SET active=v_active,last_event_created=created WHERE workspace_id=p_workspace AND subscription_id=binding.subscription_id;
+  UPDATE app.creative_media_billing_bindings SET active=v_active,tier=policy.tier,last_event_created=created WHERE workspace_id=p_workspace AND subscription_id=binding.subscription_id;
   result:=CASE WHEN v_active THEN 'granted' ELSE 'revoked' END;
  END IF;
  INSERT INTO app.creative_media_billing_events(workspace_id,event_id,input_sha256,disposition) VALUES(p_workspace,p_event->>'eventId',digest,result);

@@ -35,6 +35,8 @@ export class PgMediaBillingOwner {
   const hash=createHash('sha256').update(p.sessionToken).digest();
   return withTransaction(this.pool,{actorKind:'user',workspaceId:checkedEditId(ws),userId:p.userId,requestId:p.requestId,portalSessionTokenHash:hash},t=>run(t,hash));
  }
+ checkout(ws:string,commandId:string,tier:MediaTier,stripe:Pick<Stripe,'checkout'>){return createMediaSubscriptionCheckout({workspaceId:ws,commandId,tier,origin:this.env.RL72_MEDIA_BILLING_ORIGIN??''},{intent:(w,c,t)=>this.intent(w,c,t),create:(params,options)=>stripe.checkout.sessions.create(params,options),bind:(w,c,session)=>this.bind(w,c,session)});}
+ options(ws:string):Promise<{customerId:string|null;plans:Array<{tier:MediaTier;priceId:string;livemode:boolean}>}>{return this.command(ws,async(t,hash)=>(await t.query<{v:{customerId:string|null;plans:Array<{tier:MediaTier;priceId:string;livemode:boolean}>}}>('SELECT app_private.creative_media_checkout_options($1,$2,$3) AS v',[ws,hash,this.env.RL72_MEDIA_STRIPE_LIVEMODE==='true'])).rows[0]!.v);}
  intent(ws:string,command:string,tier:MediaTier):Promise<MediaBillingIntent>{checkedEditId(command);return this.command(ws,async(t,hash)=>(await t.query<{v:MediaBillingIntent}>('SELECT app_private.creative_media_checkout_intent($1,$2,$3,$4) AS v',[ws,hash,command,tier])).rows[0]!.v);}
  bind(ws:string,command:string,session:string):Promise<void>{checkedEditId(command);return this.command(ws,async(t,hash)=>{await t.query('SELECT app_private.creative_media_checkout_bind($1,$2,$3,$4)',[ws,hash,command,session]);});}
 }
@@ -76,4 +78,23 @@ export class PgMediaBillingWebhook {
   if(!ws)return {state:'unbound'};
   return withTransaction(this.pool,{actorKind:'webhook',workspaceId:ws,requestId:this.requestId},async t=>(await t.query<{v:unknown}>('SELECT app_private.creative_media_billing_receipt($1,$2) AS v',[ws,JSON.stringify(receipt)])).rows[0]!.v);
  }
+}
+
+/** Actual Stripe price labels and its existing customer portal; no invented offer amounts. */
+export async function mediaBillingPresentation(workspaceId:string,owner:Pick<PgMediaBillingOwner,'options'>,stripe:Pick<Stripe,'prices'>){
+ const options=await owner.options(workspaceId),plans:Array<{tier:MediaTier;label:string;priceLabel:string}>=[];
+ for(const plan of options.plans){
+  const price=await stripe.prices.retrieve(plan.priceId);
+  if(!price.active||price.livemode!==plan.livemode||price.unit_amount===null||!price.recurring||!['gbp','usd','eur'].includes(price.currency))continue;
+  const label=new Intl.NumberFormat('en-GB',{style:'currency',currency:price.currency}).format(price.unit_amount/100);
+  plans.push({tier:plan.tier,label:plan.tier.replaceAll('_',' '),priceLabel:label+' / '+(price.recurring.interval_count===1?'':price.recurring.interval_count+' ')+price.recurring.interval});
+ }
+ return {plans,canManage:options.customerId!==null};
+}
+export async function createMediaBillingPortal(workspaceId:string,origin:string,owner:Pick<PgMediaBillingOwner,'options'>,stripe:Pick<Stripe,'billingPortal'>){
+ const returnOrigin=billingOrigin(origin),options=await owner.options(checkedEditId(workspaceId));
+ if(!options.customerId)throw new SeoBlogError(404,'No verified media billing customer');
+ const session=await stripe.billingPortal.sessions.create({customer:options.customerId,return_url:returnOrigin+'/portal/media/billing'});
+ if(new URL(session.url).origin!=='https://billing.stripe.com')throw new SeoBlogError(409,'Unexpected Stripe billing portal destination');
+ return {url:session.url};
 }

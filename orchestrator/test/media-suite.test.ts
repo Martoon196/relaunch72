@@ -4,7 +4,7 @@ import Stripe from 'stripe';
 import {runOfflineMediaTick} from '../src/creative-studio/media-worker-dispatch.js';
 import {normalizeCompanyContentVersionCommand} from '../src/company-content-pg/validation.js';
 import {localVideoDraftCommand} from '../src/creative-studio/media-canonical-handoff.js';
-import {createMediaSubscriptionCheckout,handleMediaBillingWebhook,billingOrigin} from '../src/creative-studio/media-billing.js';
+import {createMediaSubscriptionCheckout,handleMediaBillingWebhook,billingOrigin,mediaBillingPresentation,createMediaBillingPortal} from '../src/creative-studio/media-billing.js';
 import {checkVideoEditPlan,videoEditDigest} from '../src/creative-studio/media-edit-plan.js';
 import {creativeMediaSuitePage} from '../src/portal/creative-media-suite-view.js';
 const ws='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222';
@@ -72,4 +72,14 @@ test('signed lifecycle webhook uses retrieved current subscription and paid invo
  const ports={record:async(r:unknown)=>{receipt=r;return r;}};
  await handleMediaBillingWebhook(raw,signature,fake,ports,flags);assert.equal((receipt as {activePaid:boolean}).activePaid,true);
  status='past_due';await handleMediaBillingWebhook(raw,signature,fake,ports,flags);assert.equal((receipt as {activePaid:boolean}).activePaid,false);
+});
+
+test('billing display retrieves actual operator prices and portal uses only the workspace-bound customer',async()=>{
+ const owner={options:async()=>({customerId:'cus_workspace',plans:[{tier:'affiliate_creator' as const,priceId:'price_actual',livemode:false}]})};
+ const stripe={prices:{retrieve:async()=>({active:true,livemode:false,unit_amount:4900,currency:'gbp',recurring:{interval:'month',interval_count:1}})}} as never;
+ const view=await mediaBillingPresentation(ws,owner,stripe);assert.equal(view.plans[0]?.priceLabel,'£49.00 / month');assert.equal(view.canManage,true);
+ let customer:unknown;
+ const portal={billingPortal:{sessions:{create:async(p:unknown)=>{customer=(p as {customer:string}).customer;return {url:'https://billing.stripe.com/p/session/test'};}}}} as never;
+ assert.match((await createMediaBillingPortal(ws,'https://app.relaunch72.com',owner,portal)).url,/billing.stripe.com/);assert.equal(customer,'cus_workspace');
+ await assert.rejects(createMediaBillingPortal(ws,'https://app.relaunch72.com',{options:async()=>({customerId:null,plans:[]})},portal),/No verified/);
 });

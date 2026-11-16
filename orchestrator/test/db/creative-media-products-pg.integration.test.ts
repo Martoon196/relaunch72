@@ -202,6 +202,10 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const reserved=await owner.reserve({workspaceId:a.brand.id,commandId,jobId,
         kind:'vizard_clip',request:source,estimatedMicrousd:400000,consent:true});
       assert.equal(reserved.state,'reserved');
+      // Workspace policy now permits 3m, but the immutable monthly grant permits 1m.
+      // The first unknown 500k plus this reserved 400k must hold 900k of that grant.
+      const blockedCommand=randomUUID();
+      await assert.rejects(owner.reserve({workspaceId:a.brand.id,commandId:blockedCommand,jobId:randomUUID(),kind:'vizard_clip',request:{...source,commandId:blockedCommand},estimatedMicrousd:200000,consent:true}),/budget|disabled/iu);
       const claim=await worker.claim(a.brand.id,jobId);
       await worker.submitted(a.brand.id,jobId,claim.claimToken,'provider-project-999');
       const bytes=Buffer.alloc(1024);bytes.writeUInt32BE(24,0);bytes.write('ftyp',4,'ascii');

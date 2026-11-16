@@ -240,6 +240,7 @@ test('real native render starts from exact owned, independently probed source an
    await admin.query("INSERT INTO app.creative_media_price_policy(tier,price_id,livemode,enabled,max_job_microusd,monthly_video_microusd) VALUES('affiliate_creator','price_privateproof',false,true,1000000,10000000)");
    const flags={...env,RL72_MEDIA_BILLING_ENABLED:'true'},billing=new PgMediaBillingOwner(content,a.principal,flags),command=randomUUID();
    const intent=await billing.intent(a.brand.id,command,'affiliate_creator');assert.equal(intent.priceId,'price_privateproof');
+   assert.equal((await billing.options(a.brand.id)).plans[0]?.priceId,'price_privateproof');
    await billing.bind(a.brand.id,command,'cs_test_privateproof');
    await assert.rejects(billing.bind(a.brand.id,command,'cs_test_changed'),/changed/iu);
    await admin.query("ALTER ROLE r72_webhook PASSWORD 'local-methods-test-only'");
@@ -248,12 +249,17 @@ test('real native render starts from exact owned, independently probed source an
    try{
     const ledger=new PgMediaBillingWebhook(webhook,'media-billing-proof'),access=new PgMediaAccessOwner(content,a.principal);
     const created=Math.floor(Date.now()/1000),receipt={eventId:'evt_privategrant',eventSha256:'a'.repeat(64),eventCreated:created,subscriptionId:'sub_privateproof',customerId:'cus_privateproof',priceId:'price_privateproof',livemode:false,activePaid:true,periodEnd:new Date(Date.now()+86400000).toISOString(),intentId:command,checkoutSessionId:'cs_test_privateproof',checkoutVerified:true};
-    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,1000000);
+    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:false});assert.equal((await billing.options(a.brand.id)).customerId,'cus_privateproof');assert.equal((await access.current(a.brand.id)).maxJobMicrousd,1000000);
     assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:true});
     const revoked={...receipt,eventId:'evt_privaterevoke',eventSha256:'b'.repeat(64),eventCreated:created+1,activePaid:false,intentId:null,checkoutSessionId:null,checkoutVerified:false};
     assert.deepEqual(await ledger.record(revoked),{disposition:'revoked',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
     const stale={...receipt,eventId:'evt_privatestale',eventSha256:'c'.repeat(64),intentId:null};
     assert.deepEqual(await ledger.record(stale),{disposition:'stale',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
+    assert.equal((await access.current(a.brand.id)).active,false);
+    const replacement=randomUUID();await billing.intent(a.brand.id,replacement,'affiliate_creator');await billing.bind(a.brand.id,replacement,'cs_test_replacement');
+    assert.deepEqual(await ledger.record({...receipt,eventId:'evt_replacement',eventSha256:'d'.repeat(64),eventCreated:created+2,subscriptionId:'sub_replacement',intentId:replacement,checkoutSessionId:'cs_test_replacement'}),{disposition:'granted',replayed:false});
+    assert.equal((await access.current(a.brand.id)).active,true);
+    assert.deepEqual(await ledger.record({...revoked,eventId:'evt_oldsubscription',eventSha256:'e'.repeat(64),eventCreated:created+3}),{state:'unbound'});
     await assert.rejects(webhook.query('SELECT * FROM app.creative_media_access_grants'),/permission denied/iu);
    }finally{await webhook.end();}
   });
