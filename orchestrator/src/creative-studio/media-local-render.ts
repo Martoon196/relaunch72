@@ -15,6 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SeoBlogError } from '../seo-blog/types.js';
 import { checkVideoEditPlan, videoEditDigest, type VideoEditPlan, type VideoCanvas } from './media-edit-plan.js';
+import {PrivateMediaFiles,type PrivateMediaObject} from './media-private-files.js';
+import {probePrivateMediaFile} from './media-object-sources.js';
 import { ffprobeFromBytes, VIDEO_PROBE_VERSION, type VideoProbe } from './media-source-probe.js';
 
 export const LOCAL_RENDER_MAX_BYTES = 20_000_000;
@@ -159,6 +161,15 @@ export async function renderLocalVideo(
     const inputPath = join(dir, 'source.mp4');
     const outputPath = join(dir, 'candidate.mp4');
     await writeFile(inputPath, source.bytes, {flag:'wx',mode:0o600});
+    return await renderInputFile(inputPath,dir,source.sha256,checked,measured,measure,opts);
+  } finally {
+    await rm(dir,{recursive:true,force:true,maxRetries:2});
+  }
+}
+
+async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,checked:VideoEditPlan,measured:VideoProbe,
+ measure:(bytes:Buffer)=>Promise<VideoProbe>,opts:{ffmpeg?:string;render?:(binary:string,args:readonly string[])=>Promise<void>}):Promise<LocalRenderOutput>{
+ const outputPath=join(dir,'candidate.mp4');
     const captionFiles: string[] = [];
     for (const [i, clip] of checked.clips.entries()) {
       const path = join(dir,`caption-${i}.txt`);
@@ -166,8 +177,8 @@ export async function renderLocalVideo(
       if (content) await writeFile(path, content, {flag:'wx',mode:0o600});
       captionFiles.push(path);
     }
-    const graph = localRenderFilterGraph(checked,measured.durationMs!,measured.audioPresent,captionFiles);
-    const args = ['-hide_banner','-nostdin','-loglevel','error','-y','-i',inputPath,
+    const graph = localRenderFilterGraph(checked,measured.durationMs!,measured.audioPresent===true,captionFiles);
+    const args = ['-hide_banner','-nostdin','-loglevel','error','-y','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm','-i',inputPath,
       '-filter_complex',graph.graph,'-map','[v]','-map','[a]',
       '-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p',
       '-c:a','aac','-b:a','96k','-ac','2',
@@ -193,9 +204,16 @@ export async function renderLocalVideo(
       audioPresent:outputProbe.audioPresent===true,
       renderVersion:LOCAL_RENDER_FFMPEG_VERSION,
       planSha256:videoEditDigest(checked),
-      sourceSha256:source.sha256,
+      sourceSha256:sourceSha256,
     };
-  } finally {
-    await rm(dir,{recursive:true,force:true,maxRetries:2});
-  }
+}
+
+/** Streaming large-source path; private source bytes never enter a whole-file Buffer. */
+export async function renderLocalVideoFile(files:PrivateMediaFiles,object:PrivateMediaObject,probe:VideoProbe,plan:VideoEditPlan):Promise<LocalRenderOutput>{
+ const input=await files.verify(object),fresh=await probePrivateMediaFile(input);
+ if(fresh.status!=='verified_technical'||probe.status!=='verified_technical'||fresh.checkerVersion!==probe.checkerVersion
+  ||fresh.durationMs!==probe.durationMs||fresh.width!==probe.width||fresh.height!==probe.height||fresh.videoCodec!==probe.videoCodec||fresh.audioPresent!==probe.audioPresent)throw new SeoBlogError(409,'Exact independently measured object source required');
+ const dir=await mkdtemp(join(tmpdir(),'rl72-object-render-'));
+ try{return await renderInputFile(input.path,dir,input.sha256,checkVideoEditPlan(plan),fresh,ffprobeFromBytes,{});}
+ finally{await rm(dir,{recursive:true,force:true,maxRetries:2});}
 }

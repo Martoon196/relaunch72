@@ -193,7 +193,8 @@ CREATE FUNCTION app_private.creative_media_local_render_claim(
 ) RETURNS TABLE(claim_token uuid,plan jsonb,plan_sha256 text,
  source_sha256 text,raw_bytes bytea,
  duration_ms bigint,width integer,height integer,frame_rate numeric,
- video_codec text,audio_present boolean,checker_version text)
+ video_codec text,audio_present boolean,checker_version text,
+ storage_kind text,object_key text,source_id uuid,source_byte_length bigint,source_mime text)
  LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE j app.creative_media_local_render_jobs;
 BEGIN
@@ -213,13 +214,13 @@ BEGIN
     WHERE pp.workspace_id=p_workspace AND pp.id=j.project_id)) THEN
   RAISE EXCEPTION 'Stale or changed immutable edit plan' USING ERRCODE='55000'; END IF;
  IF NOT EXISTS(SELECT 1 FROM app.creative_media_source_videos s
-   JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
+   LEFT JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
    JOIN app.creative_media_video_probes probe
      ON probe.workspace_id=s.workspace_id AND probe.source_id=s.id
    WHERE s.workspace_id=p_workspace AND s.id=j.source_id AND s.sha256=j.source_sha256
     AND probe.status='verified_technical' AND probe.source_sha256=s.sha256
-    AND encode(public.digest(b.bytes,'sha256'),'hex')=s.sha256
-    AND encode(b.sha256,'hex')=s.sha256 AND s.byte_length=octet_length(b.bytes)) THEN
+    AND ((s.storage_kind='pg_blob' AND encode(public.digest(b.bytes,'sha256'),'hex')=s.sha256
+    AND encode(b.sha256,'hex')=s.sha256 AND s.byte_length=octet_length(b.bytes)) OR (s.storage_kind='private_object' AND s.object_key IS NOT NULL))) THEN
   RAISE EXCEPTION 'Source or technical probe no longer matches' USING ERRCODE='55000'; END IF;
  UPDATE app.creative_media_local_render_jobs SET state='claimed',
   claim_token=gen_random_uuid(),claim_until=clock_timestamp()+interval '10 minutes',
@@ -228,17 +229,17 @@ BEGIN
  RETURN QUERY
  SELECT j.claim_token,p.plan,j.plan_sha256,j.source_sha256,b.bytes,
    probe.duration_ms,probe.width,probe.height,probe.frame_rate,
-   probe.video_codec,probe.audio_present,probe.checker_version
+   probe.video_codec,probe.audio_present,probe.checker_version,s.storage_kind,s.object_key,s.id,s.byte_length::bigint,s.mime
  FROM app.creative_media_edit_projects p
  JOIN app.creative_media_source_videos s
   ON s.workspace_id=p.workspace_id AND s.id=j.source_id
- JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
+ LEFT JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
  JOIN app.creative_media_video_probes probe
   ON probe.workspace_id=s.workspace_id AND probe.source_id=s.id
  WHERE p.workspace_id=p_workspace AND p.id=j.project_id AND p.revision=j.revision
   AND s.sha256=j.source_sha256 AND probe.status='verified_technical'
   AND probe.source_sha256=j.source_sha256
-  AND encode(public.digest(b.bytes,'sha256'),'hex')=j.source_sha256;
+  AND (s.storage_kind='private_object' OR encode(public.digest(b.bytes,'sha256'),'hex')=j.source_sha256);
 END $f$;
 CREATE FUNCTION app_private.creative_media_local_render_settle(
  p_workspace uuid,p_job uuid,p_claim uuid,p_action text,p_media jsonb,p_bytes bytea

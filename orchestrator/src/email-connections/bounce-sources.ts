@@ -10,20 +10,34 @@
  * A stored connection that cannot be opened (EMAIL_CONNECTION_KEY missing, lost or rotated) is reported as
  * unavailable, so its webhook answers 503 and Postmark retries, never 404 (which Postmark drops). One warning line
  * names the setting, never a value. Pressing Repair (or Continue) on the email page makes a new secret and webhook.
+ *
+ * A source FOLLOWS ITS STORED ROW, never the allow-list: a business the founder switched off keeps its bounce webhook
+ * answered, in this process and in one started later, for as long as its connection row exists (not disconnected), so
+ * bounces and complaints from mail it already sent are still recorded and Postmark never gets a 404. Its sending is
+ * stopped in the database instead (0157 email_send_reserve: 'not_allowed'). The allow-list is read again on the same
+ * tick (refreshEligibility), before the rows.
  */
 import type { EmailBounceService, EmailBounceSource, EmailBounceSourceLoader } from '../email-bounces/index.js';
-import { EMAIL_CONNECT_BUSINESSES, emailConnectBusiness } from './config.js';
+import { connectionSourceKey } from './config.js';
+import type { EmailConnectEligibility } from './eligibility.js';
 import type { EmailConnectionStore, StoredConnectionSource } from './store.js';
 import type { EmailConnectionVault } from './vault.js';
 
 const SECRET = /^[\x21-\x7e]{24,200}$/u;
 const FORCED_MIN_INTERVAL_MS = 5_000;
 
-/** One stored connection as a bounce source: its Broadcast stream is a marketing stream. */
+const WORKSPACE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+/** The shape of a stored connection's source key ("conn-" and the 32 hex digits of its workspace id). */
+const CONNECTION_KEY = /^conn-[0-9a-f]{32}$/u;
+
+/**
+ * One stored connection as a bounce source: its Broadcast stream is a marketing stream. Its key and workspace come from
+ * the stored row itself (the same key Connect gave Postmark), whatever the allow-list says now.
+ */
 export function connectionBounceSource(input: { workspaceId: string; serverId: string; stream: string; serverToken: string; webhookSecret: string }): EmailBounceSource {
-  const business = emailConnectBusiness(input.workspaceId);
-  if (!business || !SECRET.test(input.webhookSecret) || !/^[0-9]{1,20}$/u.test(input.serverId) || !/^[a-z0-9-]{1,60}$/u.test(input.stream)) throw new Error('Invalid stored email connection');
-  return Object.freeze({ key: business.sourceKey, workspaceId: business.workspaceId, token: input.serverToken, webhookSecret: input.webhookSecret,
+  const workspaceId = input.workspaceId.toLowerCase();
+  if (!WORKSPACE.test(workspaceId) || !SECRET.test(input.webhookSecret) || !/^[0-9]{1,20}$/u.test(input.serverId) || !/^[a-z0-9-]{1,60}$/u.test(input.stream)) throw new Error('Invalid stored email connection');
+  return Object.freeze({ key: connectionSourceKey(workspaceId), workspaceId, token: input.serverToken, webhookSecret: input.webhookSecret,
     serverId: input.serverId, streams: new Map([[input.stream, 'marketing' as const]]), connection: true });
 }
 
@@ -38,19 +52,26 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
   private sequence = 0;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
+  private readonly eligibility: EmailConnectEligibility;
 
   constructor(private readonly input: { store: Pick<EmailConnectionStore, 'sources'>; vault: EmailConnectionVault | null; service: EmailBounceService;
-    now?: () => number; log?: (line: string) => void }) {
+    now?: () => number; log?: (line: string) => void;
+    /** Which businesses may connect: the one the platform composed (only replacesSourceKey is read from it here). */
+    eligibility: EmailConnectEligibility;
+    /** Reads the allow-list again; run at the start of every refresh (the platform's database eligibility). */
+    refreshEligibility?: () => Promise<void> }) {
     this.now = input.now ?? Date.now;
     this.log = input.log ?? (() => undefined);
+    this.eligibility = input.eligibility;
   }
 
-  handles(key: string): boolean { return EMAIL_CONNECT_BUSINESSES.some(business => business.sourceKey === key); }
+  /** Every stored connection's address is ours to look up (allowed now or not): the row decides, not the list. */
+  handles(key: string): boolean { return CONNECTION_KEY.test(key); }
   unavailable(key: string): boolean { return this.unopenable.has(key); }
 
   private put(source: EmailBounceSource): void {
     const fresh = !this.input.service.dynamicSourceKeys().includes(source.key);
-    this.input.service.upsertSource(source, { replaces: emailConnectBusiness(source.workspaceId)?.replacesSourceKey ?? null });
+    this.input.service.upsertSource(source, { replaces: this.eligibility.business(source.workspaceId)?.replacesSourceKey ?? null });
     this.unopenable.delete(source.key);
     // A newly added source is read at once, so bounces from before the webhook existed are known straight away.
     if (fresh) void this.input.service.sweepSource(source).catch(() => undefined);
@@ -62,11 +83,12 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
     this.put(source);
   }
   remove(workspaceId: string): void {
-    const business = emailConnectBusiness(workspaceId);
-    if (!business) return;
-    this.appliedAt.set(business.sourceKey, ++this.sequence);
-    this.input.service.removeSource(business.sourceKey);
-    this.unopenable.delete(business.sourceKey);
+    const ws = workspaceId.toLowerCase();
+    if (!WORKSPACE.test(ws)) return;
+    const key = connectionSourceKey(ws);
+    this.appliedAt.set(key, ++this.sequence);
+    this.input.service.removeSource(key);
+    this.unopenable.delete(key);
   }
 
   private open(row: StoredConnectionSource): EmailBounceSource | null {
@@ -90,13 +112,14 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
     if (this.running) return this.running;
     const startedAt = this.sequence;
     const run = (async () => {
+      // The allow-list first (it never throws: a failed read keeps the last good list), then the rows.
+      await this.input.refreshEligibility?.().catch(() => undefined);
       const rows = await this.input.store.sources();
       const wanted = new Map<string, EmailBounceSource>(), unreadable = new Set<string>();
       for (const row of rows ?? []) {
-        const business = emailConnectBusiness(row.workspaceId);
-        if (!business) continue;
+        if (!WORKSPACE.test(row.workspaceId.toLowerCase())) continue;
         const source = this.open(row);
-        if (source) wanted.set(source.key, source); else unreadable.add(business.sourceKey);
+        if (source) wanted.set(source.key, source); else unreadable.add(connectionSourceKey(row.workspaceId));
       }
       // Anything apply() or remove() did after this read began is newer than what the read saw: left as it is.
       const touched = (key: string) => (this.appliedAt.get(key) ?? 0) > startedAt;

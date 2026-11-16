@@ -29,6 +29,25 @@ export function basisText(text: string | null | undefined): string {
   return String(text ?? '').replace(INVISIBLE, '').replace(FOOTNOTE, ' ').normalize('NFKC');
 }
 
+/**
+ * Where each position of `text` lands in `basisText(text)`: an exact map (index i of the text, at a code point's start,
+ * to its index in the basis; -1 for a removed character), or null when the basis cannot be rebuilt character by character
+ * (normalisation joining characters), so no position is certain.
+ */
+export function basisPositions(text: string): Int32Array | null {
+  const map = new Int32Array(text.length + 1).fill(-1);
+  let out = '', i = 0;
+  for (const ch of text) {
+    const piece = INVISIBLE.test(ch) ? '' : FOOTNOTE.test(ch) ? ' ' : ch;
+    INVISIBLE.lastIndex = 0; FOOTNOTE.lastIndex = 0;
+    if (piece) map[i] = out.length;
+    out += piece.normalize('NFKC');
+    i += ch.length;
+  }
+  map[text.length] = out.length;
+  return out === basisText(text) ? map : null;
+}
+
 export interface Tok { readonly w: string; readonly raw: string; readonly s: number; readonly e: number }
 /** A number keeps its internal commas and points ("1,500" and "1.5" are one word each, never "1 500" or "1 5"). */
 const TOKEN = /\p{N}+(?:[.,]\p{N}+)*|[\p{L}\p{M}][\p{L}\p{M}\p{N}]*|[£$€¥%+]/gu;
@@ -60,6 +79,12 @@ export function lineKind(line: string): { kind: LineKind; start: number; level: 
   for (const [m, kind] of MARKERS) if (line.startsWith(m)) return { kind, start: m.length, level: 0 };
   return { kind: 'para', start: 0, level: 0 };
 }
+/**
+ * Which lines of a website page were wholly a button, a button-styled link or a form label is recorded beside its text
+ * (`origin.actionLines`), never in it: every rule reads exactly the words 8eca59d stored, and only the price-structure
+ * check uses those line numbers (`CheckDocument.actionLines`).
+ */
+
 /** Stored page text as a person should read it: the structure markers removed. */
 export function withoutMarkers(text: string | null | undefined): string {
   return String(text ?? '').split('\n').map((l) => l.slice(lineKind(l).start)).join('\n');
@@ -554,6 +579,8 @@ function cardLabel(st: Structure, view: PriceView, i: number): boolean {
 }
 
 const RUN_LINES = 12, RUN_CHARS = 600;
+/** The structure check reads at most this many anchors and candidate occurrences per offer per document. */
+const ANCHOR_CAP = 50, OCCURRENCE_CAP = 200;
 const amountOnly = (st: Structure, view: PriceView, i: number) => {
   const l = st.lines[i]!, xs = view.byLine.get(i);
   return Boolean(xs?.length) && keyOf(st.basis.slice(l.contentStart, l.e)) === xs!.map((x) => x.key).join(' ');
@@ -574,6 +601,10 @@ export interface PriceReading {
   readonly anchorLine: ReadonlyMap<string, number>;
   /** Every amount the offer's own run (or sentence) holds was a candidate: none was set aside as a saving, deposit, bare percentage or other. */
   readonly onlyAmounts?: boolean;
+  /** For the structure check only (never read by the rule above): every candidate occurrence of the run(s) in page order. */
+  readonly all?: readonly { readonly x: PriceExpression; readonly anchorLine: number }[];
+  /** More anchors or candidates than the structure check reads (it then refuses). */
+  readonly capped?: boolean;
 }
 
 /** Names, keys and anchors of one document for one offer list, built once per check. */
@@ -659,7 +690,12 @@ function readPrices(st: Structure, anchors: Anchors, names: readonly string[], s
   const selfKey = nameKeys[self] ?? keyOf(name);
   const found = new Map<string, PriceExpression>();
   const anchorLine = new Map<string, number>();
-  const add = (x: PriceExpression, line: number) => { if (!found.has(x.key)) { found.set(x.key, x); anchorLine.set(x.key, line); } };
+  const all: { x: PriceExpression; anchorLine: number }[] = [];
+  const seen = new Set<PriceExpression>();
+  const add = (x: PriceExpression, line: number) => {
+    if (!seen.has(x) && all.length <= OCCURRENCE_CAP) { seen.add(x); all.push({ x, anchorLine: line }); }
+    if (!found.has(x.key)) { found.set(x.key, x); anchorLine.set(x.key, line); }
+  };
   let setAside = 0;
   const mine = anchors.anchors.filter((a) => a.offer === self);
   for (const a of mine) {
@@ -690,7 +726,7 @@ function readPrices(st: Structure, anchors: Anchors, names: readonly string[], s
   }
   // "Price on request" in the offer's own card: it has no written price.
   if (mine.length && noPrice) return { candidates: [], via: 'none', pricesAbove, anchorLine: new Map(), onlyAmounts: false };
-  if (mine.length) return { candidates: [...found.values()], via: found.size ? 'run' : 'none', pricesAbove, anchorLine, onlyAmounts: setAside === 0 };
+  if (mine.length) return { candidates: [...found.values()], via: found.size ? 'run' : 'none', pricesAbove, anchorLine, onlyAmounts: setAside === 0, all, capped: mine.length > ANCHOR_CAP || all.length > OCCURRENCE_CAP };
   // Prose fallback.
   for (const [h] of hits[self] ?? []) {
     const u = unitOfToken(st, h);
@@ -703,7 +739,7 @@ function readPrices(st: Structure, anchors: Anchors, names: readonly string[], s
     add(cands[0]!, u.line);
     if ((view.byUnit.get(u) ?? []).length !== 1) setAside++;
   }
-  return found.size === 1 ? { candidates: [...found.values()], via: 'prose', pricesAbove, anchorLine, onlyAmounts: setAside === 0 } : { candidates: [], via: 'none', pricesAbove, anchorLine: new Map() };
+  return found.size === 1 ? { candidates: [...found.values()], via: 'prose', pricesAbove, anchorLine, onlyAmounts: setAside === 0, all, capped: false } : { candidates: [], via: 'none', pricesAbove, anchorLine: new Map() };
 }
 
 export type PriceStatus = 'tied' | 'ambiguous' | 'untied';
@@ -729,6 +765,573 @@ export function priceLines(doc: { readonly text?: string | null }, names: readon
   const line = (i: number) => withoutMarkers(st.lines[i]!.text).trim();
   const a = r.anchorLine.get(x.key) ?? x.line;
   return a === x.line ? line(a) : `${line(a)} … ${line(x.line)}`;
+}
+
+// ─── 5b. Checking a price structure the model proposed ───────────────────────
+//
+// THE PRINCIPLE. The model reading the page proposes an offer's price structure; this code only accepts or refuses it,
+// line by line. It never fills a price the model left empty, never adds a line the model did not propose, never chooses
+// between amounts and never changes a role. When it cannot accept the whole of an offer's pricing it refuses the
+// structure, and the offer is handled exactly by the plain price rule above, as at 8eca59d. Every rule below can only make
+// acceptance harder: it starts from exactly the plain rule's reading of the offer's run, and every amount in that reading
+// must be accounted for.
+
+/** One line the model proposed. kind 'other': another ordinary price; 'plan': instalments; 'special': a named or limited price. */
+export interface ProposedPriceLine { readonly kind: 'other' | 'plan' | 'special'; readonly text: string; readonly label?: string | null; readonly for?: string | null; readonly total?: string | null }
+/** A line that passed the check, with where it was read. */
+export interface CheckedPriceLine { readonly role: 'other' | 'plan' | 'special'; readonly text: string; readonly label: string | null; readonly total: string | null; readonly for: string | null; readonly documentId: string; readonly quote: string }
+/** An accepted structure: its lines, and where the price itself was found (its document and line). */
+export interface CheckedPricing {
+  readonly lines: readonly CheckedPriceLine[]; readonly priceDocumentId: string; readonly priceQuote: string;
+  /** The occurrences ("document:position") inside this offer's own section that the accepted structure accounts for as its
+   * price or one of its lines: another offer's check may excuse exactly these (never an equal amount elsewhere). */
+  readonly claims?: readonly string[];
+  /** The same occurrences by where their first "£" stands ("document:position" in the basis), for the cross-source backstop. */
+  readonly claimedAmounts?: readonly string[];
+}
+/** A document as the structure check reads it: the plain text, and which of its lines were wholly action text on the page. */
+export interface CheckDocument { readonly id: string; readonly text?: string | null; readonly actionLines?: readonly number[] }
+
+/** The model's proposal, if it has the right shape (an empty `lines` list is a proposal of the price alone). */
+export function proposedLines(raw: unknown): ProposedPriceLine[] | null {
+  const lines = (raw as { lines?: unknown } | null | undefined)?.lines;
+  if (!Array.isArray(lines) || lines.length > 12) return null;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 300) : null);
+  const out: ProposedPriceLine[] = [];
+  for (const l of lines) {
+    const kind = (l as { kind?: unknown })?.kind, text = str((l as { text?: unknown })?.text);
+    if ((kind !== 'other' && kind !== 'plan' && kind !== 'special') || !text) return null;
+    out.push({ kind, text, label: str((l as { label?: unknown }).label), for: str((l as { for?: unknown }).for), total: str((l as { total?: unknown }).total) });
+  }
+  return out;
+}
+
+const COUNT_WORD = String.raw`(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty|twenty-four|thirty-six)`;
+const NUMBER_WORD: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, eighteen: 18, twenty: 20, 'twenty-four': 24, 'thirty-six': 36 };
+const PLAN_BEFORE = new RegExp(String.raw`(?:^|[\s(,:])((${COUNT_WORD})\s*[x×]\s*|(${COUNT_WORD})\s+(?:(?:equal|monthly|weekly|quarterly|annual|yearly|interest-free)\s+){0,2}(?:payments|instalments|installments)\s+of\s+)$`, 'iu');
+const PLAN_AFTER = new RegExp(String.raw`^\s*[x×]\s*(${COUNT_WORD})\b`, 'iu');
+/** After a plan only these may follow in its clause (so "2 x £80 tyres" is a quantity, not instalments). */
+const PLAN_NEXT = /^\s*(?:$|[.,;:!?)(\]|]|in total\b|total\b|payments?\b|instalments?\b|installments?\b|or\b|for\b|per month\b|a month\b|each month\b|monthly\b|weekly\b)/iu;
+/**
+ * Words that say a price is not the ordinary one (whole words; a hyphenated word is one word). STRONG words name an explicit
+ * offer or a different kind of charge; WEAK words are ordinary sequence and time words. Where each is read: see checkPricing.
+ */
+const STRONG_WORDS = ['webinar', 'founder', 'founders', 'founding', 'early bird', 'early-bird', 'launch price', 'introductory', 'intro price', 'sale', 'sale price', 'special offer', 'offer price',
+  'black friday', 'cyber monday', 'reduced', 'discount', 'discounted', 'new customers', 'existing customers', 'trial', 'taster', 'set-up', 'setup', 'joining fee', 'booking fee', 'admin fee',
+  'registration', 'enrolment', 'enrollment', 'assessment', 'call-out', 'callout', 'day pass', 'deposit', 'attendees'];
+// ("only" and "offer" are not cues: "Only £85 or £8 a month", "Our offer: £85 a year or £8 a month" are ordinary prices.)
+const WEAK_WORDS = ['first', 'then', 'until', 'ends', 'normally', 'usual', 'usually', 'limited'];
+const WORD = /[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu;
+const hyWords = (t: string) => [...basisText(t).toLowerCase().matchAll(WORD)].map((m) => m[0].replace(/’/g, "'"));
+const STRONG_SEQ = STRONG_WORDS.map((w) => hyWords(w)), WEAK_SEQ = WEAK_WORDS.map((w) => hyWords(w));
+const hasRun = (hay: readonly string[], needle: readonly string[]) => { if (!needle.length) return false; for (let i = 0; i + needle.length <= hay.length; i++) if (needle.every((w, j) => hay[i + j] === w)) return true; return false; };
+/** "was" with an amount after it; "now" when "was" comes before it on the price's line. */
+const WAS_AMOUNT = /(?<![\p{L}\p{N}])was(?![\p{L}\p{N}])[^£$€¥\d]{0,40}?(?:[£$€¥]\s?\d|\d[\d,.]*\s?(?:%|per\s?cent))/iu;
+const NOW = /(?<![\p{L}\p{N}])now(?![\p{L}\p{N}])/iu, WAS_THEN_NOW = /(?<![\p{L}\p{N}])was(?![\p{L}\p{N}])[\s\S]*(?<![\p{L}\p{N}])now(?![\p{L}\p{N}])/iu;
+const strongIn = (t: string, line: string) => { const w = hyWords(t); return STRONG_SEQ.some((v) => hasRun(w, v)) || WAS_AMOUNT.test(basisText(t)) || (NOW.test(t) && WAS_THEN_NOW.test(line)); };
+const weakIn = (t: string) => { const w = hyWords(t); return WEAK_SEQ.some((v) => hasRun(w, v)); };
+/** A credit or cross-reference: "credits in full", "credited against/towards/to", "deducted". "with credit", "on credit" excuse nothing. */
+const CREDIT_WORDS = /(?<!\b(?:with|on|interest-free)\s+)\bcredit(?:s|ed)?\s+(?:in full|against|towards|to)\b|\bdeducted\b/iu;
+const LABEL_EMPTY = new Set(['price', 'prices', 'cost', 'costs', 'fee', 'fees', 'a', 'an', 'per', 'each', 'every', 'the', 'month', 'months', 'year', 'years', 'week', 'weeks', 'day', 'days', 'hour', 'hours', 'annum', 'monthly', 'yearly', 'annually', 'weekly']);
+const MONEY = /[£$€¥]\s?\d|\d\s?%/u;
+const ONCE_TAIL = /\s+(?:once|one-off|one off|only)$/iu;
+const priceKey = (t: string) => keyOf(t.replace(ONCE_TAIL, ''));
+const periodWord = (x: PriceExpression) => { for (const w of x.key.split(' ')) { if (PERIODS.has(w)) return w.replace(/s$/, ''); if (w === 'pcm' || w === 'pm') return 'month'; if (w === 'pa') return 'year'; } return ''; };
+const amountNumber = (t: string) => { const m = /([£$€¥])\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?(?:%|per\s?cent)/iu.exec(t); return m ? { cur: m[1] ?? '%', n: Number((m[2] ?? m[3]!).replace(/,/g, '')) } : null; };
+const amountKey = (t: string) => { const a = amountNumber(t); return a ? `${a.cur}${a.n}` : ''; };
+/** `a` states a larger amount than `b` (same currency, or both percentages; a range by its lower end). */
+const dearer = (a: string, b: string) => { const x = amountNumber(a), y = amountNumber(b); return Boolean(x && y && x.cur === y.cur && x.n > y.n); };
+/** Words a one-off price's own clause may hold beside its amount. */
+const ONE_OFF_WORDS = new Set(['once', 'one-off', 'one', 'off', 'in', 'full', 'from', 'only', 'just', 'or', 'vat', 'inc', 'incl', 'including', 'exc', 'excl', 'excluding', 'ex', 'plus']);
+const PRICE_HEADING = /^(?:our\s+)?(?:price|prices|pricing|cost|costs)$/iu;
+
+/** The clause around an amount: between ; ( ) | spaced dashes, " or ", and commas not inside a number. */
+const CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b/giu;
+const breakCache = new WeakMap<Structure, Map<number, { s: number; e: number }[]>>();
+/** The backstop's clause breaks: the structure check's (CLAUSE_BREAK, unchanged), plus sentence ends. */
+const CREDIT_CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b|[.!?](?=\s|$)/giu;
+const CREDIT_WORDS_ALL = new RegExp(CREDIT_WORDS.source, 'giu');
+const CLAUSE_AMOUNT = /[£$€¥]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:%|per\s?cent)/giu;
+/**
+ * The cross-source backstop's credit test (accepted structures only): the amount at [s, e) of one stored line is the amount
+ * a credit or cross-reference in its own clause (CREDIT_CLAUSE_BREAK, at most 300 characters either side) is about
+ * ("credits in full", "credited against / towards / to", "deducted"; never "with / on / interest-free credit"). Each credit
+ * phrase is about the nearest amount before it in the clause, or, with none before it, the nearest amount after it: in
+ * "£1,697 with the £47 Deal Desk fee credited against it" only the £47 is. An amount with the offer's own name (`ownKey`, as
+ * keyOf gives it) earlier on its line is the offer's own price and is always read ("The Property Course is £1,697 and
+ * credits in full against Mentoring").
+ */
+export function inCreditClause(line: string, s: number, e: number, ownKey = ''): boolean {
+  let cs = Math.max(0, s - 300), ce = Math.min(line.length, e + 300);
+  for (const m of line.matchAll(CREDIT_CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
+  const clause = line.slice(cs, ce);
+  if (!CREDIT_WORDS.test(clause)) return false;
+  if (ownKey && ` ${keyOf(line.slice(0, s))} `.includes(` ${ownKey} `)) return false;
+  const amounts = [...clause.matchAll(CLAUSE_AMOUNT)].map((m) => cs + m.index!);
+  for (const c of clause.matchAll(CREDIT_WORDS_ALL)) {
+    const at = cs + c.index!, before = amounts.filter((a) => a < at), after = amounts.filter((a) => a > at);
+    const about = before.length ? before[before.length - 1] : after[0];
+    if (about !== undefined && about >= s && about < e) return true;
+  }
+  return false;
+}
+/** Every clause break on a line, found once per line (start and end positions in the basis). */
+function breaksOn(st: Structure, line: number): { s: number; e: number }[] {
+  let byLine = breakCache.get(st);
+  if (!byLine) { byLine = new Map(); breakCache.set(st, byLine); }
+  let list = byLine.get(line);
+  if (!list) {
+    const l = st.lines[line]!;
+    list = [...st.basis.slice(l.contentStart, l.e).matchAll(CLAUSE_BREAK)].map((m) => ({ s: l.contentStart + m.index!, e: l.contentStart + m.index! + m[0].length }));
+    byLine.set(line, list);
+  }
+  return list;
+}
+function clauseOf(st: Structure, x: PriceExpression): { s: number; e: number } {
+  const u = x.unit, from = Math.max(u?.s ?? st.lines[x.line]!.contentStart, x.s - 300), to = Math.min(u?.e ?? st.lines[x.line]!.e, x.e + 300);
+  const list = breaksOn(st, x.line);
+  // The last break ending at or before the amount (within the window), and the first starting at or after its end.
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid]!.e <= x.s) lo = mid + 1; else hi = mid; }
+  let s = from;
+  for (let k = lo - 1; k >= 0; k--) { const b = list[k]!; if (b.s >= from) { s = b.e; break; } if (b.e <= from) break; }
+  let e = to;
+  for (let k = lo; k < list.length; k++) { const b = list[k]!; if (b.s >= x.e) { if (b.s < to) e = b.s; break; } }
+  return { s, e };
+}
+/** The part of a clause inside the amount's own sentence (a full stop, "!" or "?" followed by a space ends a sentence). */
+function sentenceClause(st: Structure, x: PriceExpression, c: { s: number; e: number }): { s: number; e: number } {
+  let s = c.s, e = c.e;
+  for (const m of st.basis.slice(c.s, c.e).matchAll(/[.!?](?=\s|$)/gu)) { const at = c.s + m.index!; if (at < x.s) s = at + 1; else if (at >= x.e) { e = at; break; } }
+  return { s, e };
+}
+/** Clause and sentence breaks, for the part of the words before a colon that is the amount's own label. */
+const LABEL_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b|[.!?](?=\s)/iu;
+const shortLabel = (t: string) => { const w = t.trim().split(/\s+/).filter(Boolean); return w.length > 0 && w.length <= 6 && !MONEY.test(t); };
+/** The words around an amount that may label it, and the words a veto reads. */
+function placesOf(st: Structure, x: PriceExpression) {
+  const l = st.lines[x.line]!, text = st.basis;
+  const lineText = text.slice(l.contentStart, l.e);
+  const cells = l.kind === 'row' ? lineText.split(' | ') : null;
+  let cellBefore: string | null = null, cellAfter: string | null = null, own = lineText, ownS = l.contentStart, ownE = l.e, cell = -1;
+  if (cells) {
+    let at = l.contentStart;
+    for (let k = 0; k < cells.length; k++) {
+      const end = at + cells[k]!.length;
+      if (x.s >= at && x.s < end + 1) { own = cells[k]!; ownS = at; ownE = end; cell = k; cellBefore = cells[k - 1] ?? null; cellAfter = cells[k + 1] ?? null; break; }
+      at = end + 3;
+    }
+  }
+  const lead = text.slice(Math.max(l.contentStart, x.s - 200), x.s), bar = lead.lastIndexOf(' | ');
+  const head = bar >= 0 ? lead.slice(bar + 3) : lead;
+  const colon = head.includes(':') ? head.slice(0, head.lastIndexOf(':')) : null;
+  const nearAt = (step: number) => { for (let i = x.line + step; i >= 0 && i < st.lines.length; i += step) if (st.lines[i]!.text.trim()) return i; return -1; };
+  const aboveAt = nearAt(-1), belowAt = nearAt(1);
+  const near = (i: number) => { if (i < 0) return null; const p = st.lines[i]!, t = text.slice(p.contentStart, p.e); return shortLabel(t) ? t : null; };
+  const above = near(aboveAt), below = near(belowAt);
+  // A heading above is read by the veto, but is never a label ("Price list", "Our prices" name a section, not a price).
+  return { own, ownS, ownE, cell, cellBefore, cellAfter, colon, above, below,
+    aboveLabel: above !== null && st.lines[aboveAt]!.kind !== 'heading' ? above : null };
+}
+
+/** An amount labelled with another listed offer's name: in its clause, before its colon, the cell before it or the short line above. */
+function labelledForOther(st: Structure, x: PriceExpression, otherNameWords: readonly (readonly string[])[]): boolean {
+  if (!otherNameWords.length) return false;
+  const pl = placesOf(st, x), c = clauseOf(st, x);
+  return [st.basis.slice(c.s, c.e), pl.colon, pl.cellBefore, pl.aboveLabel].some((t) => t !== null && otherNameWords.some((n) => hasRun(hyWords(t), n)));
+}
+const otherNameWordsOf = (names: readonly string[], self: number) => names.map((n, i) => (i !== self && usableName(n) ? hyWords(n) : [])).filter((w) => w.length);
+
+const cardKeyCache = new WeakMap<Structure, Map<string, { line: number; s: number; heading: boolean }[]>>();
+/** Each heading's and table cell's key, once per page (for the "The" alias of an offer's own card). */
+function cardKeys(st: Structure): Map<string, { line: number; s: number; heading: boolean }[]> {
+  let m = cardKeyCache.get(st);
+  if (m) return m;
+  m = new Map();
+  const add = (k: string, v: { line: number; s: number; heading: boolean }) => { if (!k) return; const list = m!.get(k); if (list) list.push(v); else m!.set(k, [v]); };
+  st.lines.forEach((l, i) => {
+    if (l.kind === 'heading') add(keyOf(st.basis.slice(l.contentStart, l.e)), { line: i, s: l.s, heading: true });
+    else if (l.kind === 'row') for (const [cs, ce] of rowCells(st, l)) if (ce - cs <= 200) add(keyOf(st.basis.slice(cs, ce)), { line: i, s: cs, heading: false });
+  });
+  cardKeyCache.set(st, m);
+  return m;
+}
+const headingAboveCache = new WeakMap<Structure, Int32Array>();
+/** For each line, the nearest heading line above it (-1 for none), once per page. */
+function headingAbove(st: Structure): Int32Array {
+  let a = headingAboveCache.get(st);
+  if (a) return a;
+  a = new Int32Array(st.lines.length);
+  let h = -1;
+  for (let i = 0; i < st.lines.length; i++) { a[i] = h; if (st.lines[i]!.kind === 'heading') h = i; }
+  headingAboveCache.set(st, a);
+  return a;
+}
+
+/** Own sections: at most this many lines and characters from the anchor. */
+const SECTION_LINES = 30, SECTION_CHARS = 1500;
+/**
+ * The offer's OWN SECTION in one document (read by the structure check only): from each heading, table-row or list-item
+ * anchor of the offer to just before the next heading line or the next heading, row or list-item anchor of another listed
+ * offer, whichever comes first, at most 30 lines and 1,500 characters; for a table-row anchor, its cells up to the next cell
+ * that begins another offer's name (the whole row when it names one offer). Paragraph anchors have no own section.
+ * Returns the character spans and every candidate amount in them, in page order.
+ */
+function ownSection(st: Structure, names: readonly string[], self: number, cited = false): { spans: { s: number; e: number }[]; occs: PriceExpression[]; card: boolean; aliasSpans: { s: number; e: number }[] } {
+  const anchors = anchorsFor(st, names), view = priceView(st, names);
+  const selfKey = anchors.nameKeys[self] ?? keyOf(names[self] ?? '');
+  const otherAt = new Set<number>();
+  for (const a of anchors.anchors) if (a.offer !== self && anchors.nameKeys[a.offer] !== selfKey && st.lines[a.line]!.kind !== 'para') otherAt.add(a.line);
+  const spans: { s: number; e: number }[] = [];
+  const occs: PriceExpression[] = [];
+  const seen = new Set<PriceExpression>();
+  const take = (i: number, s: number, e: number) => { for (const x of view.byLine.get(i) ?? []) if (x.s >= s && x.s < e && !seen.has(x) && candidateFor(x, selfKey)) { seen.add(x); occs.push(x); } };
+  // The offer's own anchors, plus (here only, and on its cited page only) a heading or table-row cell that is exactly its name
+  // with or without a leading "The" ("Members' Room" for "The Members' Room"); never a list item or paragraph, never in the
+  // plain rule. (On other pages the check reads what it read before.)
+  const mine = anchors.anchors.filter((a) => a.offer === self), aliased = new Set<string>(), aliasSpans: { s: number; e: number }[] = [];
+  const alias = selfKey.startsWith('the ') ? selfKey.slice(4) : selfKey ? `the ${selfKey}` : '';
+  if (cited && alias && usableName(alias)) {
+    const at = new Set(mine.map((a) => `${a.line}:${a.s}`));
+    for (const c of cardKeys(st).get(alias) ?? []) {
+      if (c.heading) { if (!at.has(`${c.line}:${c.s}`)) { mine.push({ offer: self, line: c.line, s: c.s, end: -1 }); aliased.add(`${c.line}:${c.s}`); } continue; }
+      const next = anchors.anchors.filter((a) => a.line === c.line && a.s > c.s).map((a) => a.s).sort((p, q) => p - q)[0];
+      mine.push({ offer: self, line: c.line, s: c.s, end: next ?? st.lines[c.line]!.e }); aliased.add(`${c.line}:${c.s}`);
+    }
+    mine.sort((p, q) => p.line - q.line || p.s - q.s);
+  }
+  // With a heading or row of its own on the page (its own card), a list-item anchor of the offer that sits inside ANOTHER
+  // listed offer's heading section ("• The Members' Room founders' price…" inside the course card) is not its own section.
+  const card = mine.some((a) => st.lines[a.line]!.kind === 'heading' || st.lines[a.line]!.kind === 'row');
+  const otherHeading = new Set(anchors.anchors.filter((a) => a.offer !== self && anchors.nameKeys[a.offer] !== selfKey && st.lines[a.line]!.kind === 'heading').map((a) => a.line));
+  const insideOther = (line: number) => { const h = headingAbove(st)[line]!; return h >= 0 && otherHeading.has(h); };
+  for (const a of mine) {
+    const start = st.lines[a.line]!;
+    if (card && start.kind === 'item' && insideOther(a.line)) continue;
+    if (start.kind === 'row') { spans.push({ s: a.s, e: a.end }); if (aliased.has(`${a.line}:${a.s}`)) aliasSpans.push({ s: a.s, e: a.end }); take(a.line, a.s, a.end); continue; }
+    if (start.kind !== 'heading' && start.kind !== 'item') continue;
+    let end = start.e;
+    take(a.line, start.s, start.e + 1);
+    for (let i = a.line + 1; i < st.lines.length; i++) {
+      const l = st.lines[i]!;
+      if (i - a.line >= SECTION_LINES || l.e - start.s > SECTION_CHARS || l.kind === 'heading' || otherAt.has(i)) break;
+      take(i, l.s, l.e + 1); end = l.e;
+    }
+    spans.push({ s: start.s, e: end });
+    if (aliased.has(`${a.line}:${a.s}`)) aliasSpans.push({ s: start.s, e: end });
+    if (occs.length > OCCURRENCE_CAP) break;
+  }
+  occs.sort((p, q) => p.s - q.s);
+  return { spans, occs, card, aliasSpans };
+}
+
+/**
+ * Check one offer's proposed structure against its own run(s) in every document (the plain rule's reading, unchanged).
+ * Returns the accepted structure, or null when it is refused (then the plain rule applies to the offer). Refuses when:
+ *   - `price` is not a candidate of the run in its cited document, is not the first amount there, or is directly followed
+ *     by "in total". When the offer has its own card on the cited page (a heading or table-row anchor; on that page also a
+ *     heading or row that is its name with or without a leading "The"), the first amount is read from its own section only,
+ *     and a list item naming it inside another listed offer's heading section is not its own section (its amounts must
+ *     still be accounted for);
+ *   - the ordinary price is the cheaper one: a special line, or a labelled other line of the same period, states a larger
+ *     amount than `price` (same currency, or both percentages; a range by its lower end);
+ *   - a one-off `price` stands beside a non-plan line with a period and has a label of its own (words before its colon, a
+ *     short label cell before it, a short label line or heading above it that is not the offer's name or just "Price"), or
+ *     any word in its own clause besides the amount and once / one-off / in full / from / only / just / VAT words / or;
+ *   - the price's own words say it is not the ordinary price. STRONG words (an explicit offer or another kind of charge:
+ *     webinar, founder(s)/founding, early bird, launch price, introductory, intro price, sale, special offer, offer price,
+ *     Black Friday, Cyber Monday, reduced, discount(ed), new/existing customers, trial, taster, set-up, joining/booking/admin
+ *     fee, registration, enrolment, assessment, call-out, day pass, deposit, attendees; "was" with an amount after it; "now"
+ *     after "was" on the line) and WEAK words (first, then, until, ends, normally, usual(ly), limited) both
+ *     count in the price's OWN clause (cut at its sentence) and OWN label (the words before its colon, a short label cell
+ *     before it, a short label line or heading directly above it). STRONG words also count anywhere else on its line (its
+ *     cell, in a table row), in the cell after it, in a longer cell before it and on a short label line directly below it,
+ *     except inside the clause (cut at its sentence) of another amount on that line or in that cell that the structure
+ *     accounts for as a special or a labelled other line. A label line or cell between the price and another amount is never
+ *     excepted (it may be the price's own badge);
+ *   - a line's text is not a candidate of the run (a plan: an instalment form, not a quantity); a label is not one
+ *     unbroken run of whole words from the amount's clause, the words before its colon, the cell before it or the short
+ *     line above, or is empty of content, the offer's name, another listed offer's name, or just a price word or period;
+ *     an "other" line has no label and does not differ from `price` by period alone, or has no label while a short label
+ *     line directly above it or a label cell before it names it; a special has no label;
+ *   - a plan has no `for`, or its `for` is not a one-off price or special on the same line, or count × instalment is not
+ *     between the parent amount and one and a half times it; a proposed total is not the amount straight after it followed by "in total";
+ *   - any candidate of the run is not the price, a proposed line or a checked total, unless it is on a line that was wholly
+ *     action text and does not name the offer, or is a credit or cross-reference, or is the very occurrence another
+ *     listed offer's accepted check claims;
+ *   - two lines of the same kind and period (specials: and label words) give different amounts.
+ */
+export function checkPricing(documents: readonly CheckDocument[], names: readonly string[], self: number, price: string | null, proposed: readonly ProposedPriceLine[], citedId: string | null,
+  othersClaim: ReadonlySet<string> = new Set(), read?: Set<string>): CheckedPricing | null {
+  if (!price || !citedId) return null;
+  if (/^free$/iu.test(price.trim())) return proposed.length ? null : freeCheck(documents.find((d) => d.id === citedId), names, self);
+  // inRun: the plain rule's reading (8eca59d) holds it; mine: it lies in the offer's own section.
+  type Occ = { x: PriceExpression; st: Structure; doc: string; action: boolean; i: number; inRun: boolean; mine: boolean };
+  const occs: Occ[] = [];
+  const byLine = new Map<string, Occ[]>();
+  /** Documents where the offer has a card of its own (a heading or table-row anchor). */
+  const cardIn = new Set<string>();
+  /** Spans of the offer's own card found by its name with or without "The" (item 5): there the price may stand outside the plain run. */
+  const aliasAt: { doc: string; s: number; e: number }[] = [];
+  const selfKey = keyOf(names[self] ?? '');
+  for (const d of documents) {
+    const r = priceReading(d, names, self);
+    if (r.capped) return null;
+    const st = structureOfDoc(d), actions = new Set(d.actionLines ?? []);
+    const sec = ownSection(st, names, self, d.id === citedId); if (sec.card) cardIn.add(d.id);
+    for (const p of sec.aliasSpans) aliasAt.push({ doc: d.id, ...p });
+    const inSection = (x: PriceExpression) => sec.spans.some((p) => x.s >= p.s && x.s < p.e);
+    const run = new Set((r.all ?? []).map((o) => o.x));
+    // The union of the run and the own section, in page order.
+    const xs = [...run, ...sec.occs.filter((x) => !run.has(x))].sort((p, q) => p.s - q.s);
+    for (const x of xs) {
+      const occ: Occ = { x, st, doc: d.id, action: actions.has(x.line), i: occs.length, inRun: run.has(x), mine: inSection(x) };
+      occs.push(occ); read?.add(`${d.id}:${x.s}`);
+      const k = `${d.id}:${x.line}`; const list = byLine.get(k); if (list) list.push(occ); else byLine.set(k, [occ]);
+    }
+    // At most this many amounts across all documents: beyond it the structure is refused (the plain rule applies).
+    if (occs.length > OCCURRENCE_CAP) return null;
+  }
+  const quotes = new Map<string, string>();
+  const quoteOf = (o: Occ) => { const k = `${o.doc}:${o.x.line}`; let q = quotes.get(k); if (q === undefined) { q = withoutMarkers(o.st.lines[o.x.line]!.text).trim().slice(0, 300); quotes.set(k, q); } return q; };
+  const clauses = new Map<number, { s: number; e: number }>();
+  const clauseAt = (o: Occ) => { let c = clauses.get(o.i); if (!c) { c = clauseOf(o.st, o.x); clauses.set(o.i, c); } return c; };
+  const clauseText = (o: Occ) => { const c = clauseAt(o); return o.st.basis.slice(c.s, c.e); };
+  const otherKeys = names.map((n, i) => (i !== self && usableName(n) ? keyOf(n) : '')).filter(Boolean);
+  const namesSelf = (o: Occ) => ` ${keyOf(o.st.basis.slice(o.st.lines[o.x.line]!.contentStart, o.st.lines[o.x.line]!.e))} `.includes(` ${selfKey} `);
+  const besideOther = (o: Occ) => {
+    const l = o.st.lines[o.x.line]!, c = clauseAt(o);
+    const after = ` ${keyOf(o.st.basis.slice(o.x.e, Math.min(l.e, c.e, o.x.e + 120)))} `, before = ` ${keyOf(o.st.basis.slice(Math.max(l.contentStart, c.s, o.x.s - 120), o.x.s))} `;
+    return otherKeys.some((k) => after.startsWith(` ${k} `) || before.endsWith(` ${k} `));
+  };
+  // Excused: action text not naming the offer, a credit or cross-reference, an amount beside another listed offer's name, or
+  // the very occurrence another listed offer's accepted check claims in that offer's own section.
+  const excuses = new Map<number, boolean>();
+  const excused = (o: Occ) => { let v = excuses.get(o.i); if (v === undefined) { v = (o.action && !namesSelf(o)) || CREDIT_WORDS.test(clauseText(o)) || besideOther(o) || othersClaim.has(`${o.doc}:${o.x.s}`); excuses.set(o.i, v); } return v; };
+  // The price: the first accounted amount of the run and own section in its cited document, itself in the run.
+  const pk = priceKey(price);
+  // With its own card (heading or row) on the cited page, the first amount is read from its own section only.
+  const cited = occs.filter((o) => o.doc === citedId && !excused(o) && (!cardIn.has(o.doc) || o.mine)).sort((a, b) => a.x.s - b.x.s);
+  const first = cited[0];
+  if (!first || !(first.inRun || aliasAt.some((p) => p.doc === first.doc && first.x.s >= p.s && first.x.s < p.e)) || priceKey(first.x.text) !== pk) return null;
+  if (/^\s*in total\b/iu.test(first.st.basis.slice(first.x.e, first.x.e + 12))) return null;
+  const priceOcc = occs.filter((o) => priceKey(o.x.text) === pk);
+  const pricePeriod = periodWord(first.x);
+  const nameWords = hyWords(names[self] ?? '');
+  const otherNameWords = otherNameWordsOf(names, self);
+  const namedForOther = (o: Occ) => labelledForOther(o.st, o.x, otherNameWords);
+  /** A label of an amount's own that is not the offer's name: a short label line directly above it, or a short label cell before it. */
+  const labelledApart = (o: Occ) => {
+    if (o.doc === first.doc && o.x.line === first.x.line && placesOf(o.st, o.x).cell === placesOf(first.st, first.x).cell) return false;
+    const pl = placesOf(o.st, o.x);
+    const real = (t: string | null) => t !== null && shortLabel(t) && keyOf(t.replace(/:\s*$/u, '')) !== selfKey && hyWords(t).some((x) => /\p{L}{3,}/u.test(x) && !LABEL_EMPTY.has(x));
+    return (pl.aboveLabel !== null && !(o.doc === first.doc && o.x.line === first.x.line) && real(pl.aboveLabel)) || real(pl.cellBefore);
+  };
+  const labelOk = (o: Occ, label: string) => {
+    if (MONEY.test(label)) return false;
+    const w = hyWords(label);
+    if (!w.some((x) => /\p{L}{3,}/u.test(x) && !LABEL_EMPTY.has(x))) return false;
+    if (hasRun(nameWords, w)) return false;
+    // Never the name of another listed offer ("The Members' Room: £67 a month" is not Mentoring's line).
+    if (otherNameWords.some((n) => hasRun(w, n))) return false;
+    const pl = placesOf(o.st, o.x);
+    return [clauseText(o), pl.colon, pl.cellBefore, pl.aboveLabel].some((t) => t !== null && hasRun(hyWords(t), w));
+  };
+  const covered = new Set<number>(priceOcc.map((o) => o.i));
+  /** A non-plan line with a period (per month, a year, per visit …) is proposed. */
+  let periodic = false;
+  /** A plan's instalment and total occurrences that matched its written form. */
+  const planMatched = new Set<number>();
+  const out: CheckedPriceLine[] = [];
+  const specialKeys = new Set(proposed.filter((p) => p.kind === 'special').map((p) => keyOf(p.text)));
+  for (const p of proposed) {
+    const label = p.label ?? null;
+    if (p.kind !== 'plan') {
+      const k = keyOf(p.text);
+      if (k === pk || amountKey(p.text) === amountKey(price)) return null;
+      const cands = occs.filter((o) => o.x.key === k);
+      const hit = cands.find((o) => (label ? labelOk(o, label) : true));
+      if (!hit) return null;
+      if (p.kind === 'special' && !label) return null;
+      // The ordinary price is never the cheaper one: a special, or a labelled other line of the same period, that is dearer
+      // than `price` means a concession, sale, trial or intro price was given as the price.
+      if ((p.kind === 'special' || (p.kind === 'other' && label && periodWord(hit.x) === pricePeriod)) && dearer(hit.x.text, first.x.text)) return null;
+      if (periodWord(hit.x)) periodic = true;
+      if (p.kind === 'other' && !label) {
+        const pp = periodWord(hit.x); if (!pp || !pricePeriod || pp === pricePeriod) return null;
+        // An amount with a label of its own (a short line above it, a label cell before it) belongs to that label.
+        if (labelledApart(hit)) return null;
+      }
+      for (const o of cands) covered.add(o.i);
+      out.push({ role: p.kind, text: hit.x.text, label, total: null, for: null, documentId: hit.doc, quote: quoteOf(hit) });
+      continue;
+    }
+    // A plan: an instalment form around a candidate, not a quantity, paying off a one-off price on its line.
+    if (!p.for) return null;
+    const fk = priceKey(p.for);
+    if (fk !== pk && !specialKeys.has(keyOf(p.for))) return null;
+    const ak = amountKey(p.text);
+    let firstPlan: CheckedPriceLine | null = null;
+    for (const o of occs) {
+      if (amountKey(o.x.text) !== ak) continue;
+      const l = o.st.lines[o.x.line]!;
+      const before = o.st.basis.slice(Math.max(l.contentStart, o.x.s - 60), o.x.s), after = o.st.basis.slice(o.x.e, Math.min(l.e, o.x.e + 60));
+      const pb = PLAN_BEFORE.exec(before), pa = pb ? null : PLAN_AFTER.exec(after);
+      if (!pb && !pa) continue;
+      const start = pb ? o.x.s - pb[1]!.length : o.x.s, end = pa ? o.x.e + pa[0].length : o.x.e;
+      const written = o.st.basis.slice(start, end).replace(/\s+/g, ' ').trim();
+      if (keyOf(written) !== keyOf(p.text) || !PLAN_NEXT.test(o.st.basis.slice(end, l.e))) continue;
+      const countWord = (pb ? pb[2] ?? pb[3] : pa![1])!.toLowerCase();
+      const count = /^\d+$/.test(countWord) ? Number(countWord) : NUMBER_WORD[countWord] ?? 0;
+      const line = byLine.get(`${o.doc}:${o.x.line}`) ?? [];
+      // Its total: the amount straight after it, followed by "in total" (or "total" closing a bracket).
+      const y = line.find((q) => q.x.s >= end && q.x.s - end <= 4 && /^\s*[,(]?\s*$/u.test(o.st.basis.slice(end, q.x.s)) && /^\s*(?:in total\b|total\s*\))/iu.test(o.st.basis.slice(q.x.e, q.x.e + 12)));
+      covered.add(o.i); planMatched.add(o.i); if (y) { covered.add(y.i); planMatched.add(y.i); }
+      const total = y ? `${y.x.text}${/^\s*(?:in total|total)/iu.exec(o.st.basis.slice(y.x.e))![0]}`.replace(/\s+/g, ' ').trim() : null;
+      if (firstPlan) continue;
+      if (p.total && !(total !== null && keyOf(total) === keyOf(p.total))) continue;
+      // Its parent: a one-off price or special on the same line, before it; count × instalment within one to 1.5 times it.
+      const parents = line.filter((q) => q.x.e <= start && (priceKey(q.x.text) === pk || specialKeys.has(q.x.key)));
+      const mine = parents.filter((q) => (fk === pk ? priceKey(q.x.text) === pk : q.x.key === keyOf(p.for!)));
+      if (!mine.length) continue;
+      const parent = mine[mine.length - 1]!, pa2 = amountNumber(parent.x.text), ia = amountNumber(o.x.text);
+      if (periodWord(parent.x) || !pa2 || !ia || !count || count * ia.n < pa2.n || count * ia.n > 1.5 * pa2.n) return null;
+      const last = parents[parents.length - 1]!;
+      const direct = /^\s*,?\s*(?:or\s+)?$/iu.test(o.st.basis.slice(last.x.e, start));
+      const tied = parents.length === 1 || (direct && last === parent) ? parent.x.text : null;
+      firstPlan = { role: 'plan', text: written, label, total: p.total ? total : null, for: tied, documentId: o.doc, quote: quoteOf(o) };
+    }
+    if (!firstPlan) return null;
+    out.push(firstPlan);
+  }
+  // Every amount the plain rule reads in the run is accounted for.
+  for (const o of occs) {
+    // (The price's own amount written again, "instead of £67" beside "£67 a month", is the price.)
+    if (covered.has(o.i) || excused(o) || amountKey(o.x.text) === amountKey(price)) continue;
+    if (out.some((l) => l.role !== 'plan' && keyOf(l.text) === o.x.key)) continue;
+    return null;
+  }
+  // The price's own words. Both word lists apply in its OWN clause (within its sentence) and its OWN label (the words before
+  // its colon, a short label cell before it, a short label line or heading directly above it); STRONG words also apply on the
+  // rest of its line (its cell, in a table row), in the cell after it, in a longer cell before it and on a short label line
+  // directly below it, except in the clause (within its sentence) of another amount on the price's line, or in the cell after
+  // it, that the structure accounts for as a special or a labelled other line ("explained"). A word in the price's own clause
+  // or own label is never explained.
+  const st0 = first.st, fl = st0.lines[first.x.line]!, line0 = st0.basis.slice(fl.contentStart, fl.e), pl = placesOf(st0, first.x);
+  const own = sentenceClause(st0, first.x, clauseAt(first));
+  const colonLabel = pl.colon === null ? null : pl.colon.split(LABEL_BREAK).pop()!;
+  const cellLabel = pl.cellBefore !== null && shortLabel(pl.cellBefore) ? pl.cellBefore : null;
+  if ([st0.basis.slice(own.s, own.e), colonLabel, cellLabel, pl.above].some((t) => t !== null && (strongIn(t, line0) || weakIn(t)))) return null;
+  // A one-off price beside a line with a period is a fee beside a subscription when it has a label of its own (not the offer's
+  // name) or any other word in its own clause ("Sign-up fee: £30" / "Monthly membership: £45 a month").
+  if (periodic && !pricePeriod) {
+    const labelled = [colonLabel, cellLabel, pl.above].some((t) => t !== null && t.trim() !== '' && keyOf(t.replace(/:\s*$/u, '')) !== selfKey && !PRICE_HEADING.test(t.replace(/:\s*$/u, '').trim()));
+    const words = hyWords(st0.basis.slice(own.s, own.e)), amount = hyWords(first.x.text);
+    for (const w of amount) { const k = words.indexOf(w); if (k >= 0) words.splice(k, 1); }
+    if (labelled || words.some((w) => !ONE_OFF_WORDS.has(w))) return null;
+  }
+  const explainedKeys = new Set(out.filter((l) => l.role === 'special' || (l.role === 'other' && l.label)).map((l) => keyOf(l.text)));
+  const onLine = occs.filter((o) => o.doc === first.doc && o.x.line === first.x.line && explainedKeys.has(o.x.key));
+  const cut = [own, ...onLine.map((o) => sentenceClause(o.st, o.x, clauseAt(o)))];
+  const rest = (s0: number, e0: number) => { const parts: string[] = []; let at = s0; for (const c of [...cut].sort((a, b) => a.s - b.s)) { if (c.e <= at || c.s >= e0) continue; if (c.s > at) parts.push(st0.basis.slice(at, c.s)); at = Math.max(at, c.e); } if (at < e0) parts.push(st0.basis.slice(at, e0)); return parts.join(' | '); };
+  if (strongIn(rest(pl.ownS, pl.ownE), line0)) return null;
+  // (A label cell or label line between the price and another amount is never explained: it may as well be the price's own
+  // badge, as in the review's M1c "£997 / Webinar price / £1,497".)
+  if (pl.cellAfter !== null && strongIn(rest(pl.ownE + 3, pl.ownE + 3 + pl.cellAfter.length), line0)) return null;
+  if (pl.cellBefore !== null && cellLabel === null && strongIn(pl.cellBefore, line0)) return null;
+  if (pl.below !== null && strongIn(pl.below, line0)) return null;
+  // Two different amounts for the same kind and period (specials: and label words).
+  const groups = new Map<string, string>();
+  groups.set(`price|${pricePeriod}|`, amountKey(price));
+  for (const l of out) {
+    if (l.role === 'plan') continue;
+    const occ = occs.find((o) => o.x.text === l.text);
+    const g = `${l.role === 'other' && !l.label ? 'price' : l.role}|${occ ? periodWord(occ.x) : ''}|${l.role === 'special' ? hyWords(l.label ?? '').join(' ') : ''}`;
+    const a = amountKey(l.text);
+    if (groups.has(g) && groups.get(g) !== a) return null;
+    groups.set(g, a);
+  }
+  // Claimed: exactly the occurrences in the offer's own section that the check matched as the price, as a proposed line, or as
+  // a checked plan's instalment or total; never an equal amount written otherwise, nor one labelled with another offer's name.
+  const claimed = occs.filter((o) => o.mine && (priceKey(o.x.text) === pk || planMatched.has(o.i) || out.some((l) => l.role !== 'plan' && keyOf(l.text) === o.x.key)) && !namedForOther(o));
+  const claims = claimed.map((o) => `${o.doc}:${o.x.s}`);
+  const claimedAmounts = claimed.flatMap((o) => { const k = o.st.basis.slice(o.x.s, o.x.e).indexOf('£'); return k >= 0 ? [`${o.doc}:${o.x.s + k}`] : []; });
+  return { lines: out, priceDocumentId: first.doc, priceQuote: quoteOf(first), claims, claimedAmounts };
+}
+
+/** One offer for `checkAllPricing`: its index in `names`, its price, its proposal (null: none) and its cited document. */
+export interface PricingEntry { readonly self: number; readonly price: string | null; readonly proposed: readonly ProposedPriceLine[] | null; readonly citedId: string | null }
+/**
+ * Every offer's structure check, independent of order. An amount of one offer is excused when it is the very occurrence
+ * (document and position) that another listed offer's accepted check claims in that offer's own section: its price, a
+ * proposed line, or a checked plan's instalment or total, as written (never an equal amount written otherwise, nor one
+ * labelled with another listed offer's name). An offer with no proposal claims its price's occurrences, so written, in its
+ * own section of its cited document when the plain rule ties that price there. Repeated until nothing changes (excuses only grow, so it ends).
+ */
+export function checkAllPricing(documents: readonly CheckDocument[], names: readonly string[], entries: readonly PricingEntry[]): (CheckedPricing | null)[] {
+  const plainClaims = entries.map((e) => {
+    if (e.proposed || !e.price || !e.citedId || /^free$/iu.test(e.price.trim())) return [] as string[];
+    const doc = documents.find((d) => d.id === e.citedId);
+    if (!doc || priceStatus(e.price, doc, names, e.self).status !== 'tied') return [];
+    const st = structureOfDoc(doc), pk = priceKey(e.price), others = otherNameWordsOf(names, e.self);
+    return ownSection(st, names, e.self).occs.filter((x) => priceKey(x.text) === pk && !labelledForOther(st, x, others)).map((x) => `${doc.id}:${x.s}`);
+  });
+  const result: (CheckedPricing | null)[] = entries.map(() => null);
+  const claimsOf = (k: number) => result[k]?.claims ?? plainClaims[k]!;
+  // An offer is checked again only when a new excuse is one of the amounts it read (excuses never shrink).
+  const read = entries.map(() => new Set<string>()), tried = entries.map(() => null as Set<string> | null);
+  for (let pass = 0; pass <= entries.length; pass++) {
+    let changed = false;
+    for (const [k, e] of entries.entries()) {
+      if (result[k] || !e.proposed) continue;
+      const others = new Set<string>();
+      for (let j = 0; j < entries.length; j++) if (j !== k && entries[j]!.self !== e.self) for (const c of claimsOf(j)) others.add(c);
+      const before = tried[k];
+      if (before && ![...others].some((c) => !before.has(c) && read[k]!.has(c))) continue;
+      tried[k] = others;
+      const r = checkPricing(documents, names, e.self, e.price, e.proposed, e.citedId, others, read[k]!);
+      if (r) { result[k] = r; changed = true; }
+    }
+    if (!changed) break;
+  }
+  return result;
+}
+
+/**
+ * "Free" as the model's price (with a proposed structure): the offer's run holds no amount at all, and either its name
+ * says free, or a line or cell of its run is just Free / FREE / Free of charge / No charge / £0 that is not the value of
+ * a label ("Delivery | Free", "Home survey:" above it), unless that label is the offer's name or a price word.
+ */
+function freeCheck(doc: CheckDocument | undefined, names: readonly string[], self: number): CheckedPricing | null {
+  if (!doc) return null;
+  const st = structureOfDoc(doc);
+  const r = priceReading(doc, names, self);
+  if (r.candidates.length || r.onlyAmounts === false) return null;
+  const anchors = anchorsFor(st, names), mine = anchors.anchors.filter((a) => a.offer === self);
+  if (!mine.length) return null;
+  const nameKey = keyOf(names[self] ?? '');
+  const isFree = (t: string) => /^(?:free|free of charge|no charge|£0)[.!]*$/iu.test(t.trim());
+  const labelFine = (t: string | null) => t === null || keyOf(t.replace(/:\s*$/, '')) === nameKey || /^(?:price|cost|fee)s?:?$/iu.test(t.trim());
+  const view = priceView(st, names);
+  for (const a of mine) {
+    const start = st.lines[a.line]!;
+    if (/(?<![\p{L}-])free(?![\p{L}-])/iu.test(names[self] ?? '')) return { lines: [], priceDocumentId: doc.id, priceQuote: withoutMarkers(start.text).trim().slice(0, 300) };
+    if (start.kind === 'row') {
+      const cells = st.basis.slice(a.s, a.end).split(' | ');
+      for (let k = 1; k < cells.length; k++) if (isFree(cells[k]!) && (k === 1 ? labelFine(cells[0]!) : labelFine(cells[k - 1]!))) return { lines: [], priceDocumentId: doc.id, priceQuote: withoutMarkers(start.text).trim().slice(0, 300) };
+      continue;
+    }
+    for (let i = a.line + 1; i < Math.min(st.lines.length, a.line + RUN_LINES); i++) {
+      const l = st.lines[i]!;
+      if (l.kind === 'heading' || anchors.isAnchor.has(i) || view.byLine.get(i)?.length) break;
+      const t = st.basis.slice(l.contentStart, l.e);
+      if (l.kind === 'row') continue;
+      let prev: string | null = null;
+      for (let j = i - 1; j > a.line; j--) if (st.lines[j]!.text.trim()) { prev = st.basis.slice(st.lines[j]!.contentStart, st.lines[j]!.e); break; }
+      if (isFree(t) && (prev === null || !/:\s*$/.test(prev) || labelFine(prev))) return { lines: [], priceDocumentId: doc.id, priceQuote: withoutMarkers(l.text).trim().slice(0, 300) };
+    }
+  }
+  return null;
 }
 
 // ─── 6. Description fields ───────────────────────────────────────────────────

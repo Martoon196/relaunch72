@@ -101,6 +101,8 @@ export interface OwnerBannerInput {
   readonly needsTest?: boolean;
   /** Sending through stored connections is switched off on this deployment. */
   readonly switchedOffHere?: boolean;
+  /** 0157: the platform owner switched this business's email off (it is not on the active allow-list). */
+  readonly notAllowed?: boolean;
   /** This pause is the business's second own pause in 90 days (it stayed paused: fewer than 50 emails since the restart). */
   readonly secondPause?: boolean;
   /** An alert email about this step really went (or is queued with a working sender) to an owner address: only then "reply to our email". */
@@ -115,6 +117,8 @@ export interface Banner { readonly tone: 'alert' | 'notice' | 'ok'; readonly tit
 export function ownerBanner(input: OwnerBannerInput): Banner | null {
   const what = (trip: Trip | null, fallback: string | null = null) => { const t = ownerTripped(trip) || fallback || ''; return t ? `${t} ` : ''; };
   const tell = input.emailed ? 'reply to our email' : 'tell us (we can see this too)';
+  if (input.notAllowed) return { tone: 'alert', title: 'Email sending is switched off',
+    text: 'Email sending for this business has been switched off by the platform owner.' };
   if (input.state === 'off') return { tone: 'alert', title: 'Your email sending is switched off',
     text: `${what(input.trip)}It was paused twice within ${LADDER.secondPauseDays} days, so we switched it off to protect everyone who sends through our shared account. ${STILL_GOES} Your marketing emails are waiting and go only if we switch it back on: ${tell} to ask for a review.` };
   if (input.notConnected) return { tone: 'alert', title: 'Email is not connected right now',
@@ -130,9 +134,10 @@ export function ownerBanner(input: OwnerBannerInput): Banner | null {
   if (input.ownerPaused) return { tone: 'notice', title: 'You have paused your marketing emails',
     text: 'Nothing marketing goes until you press Resume; everything is waiting. Send a test to me still works.' };
   if (input.waitingApproval) return { tone: 'notice', title: 'Waiting for approval',
-    text: input.willEmail ? 'Waiting for approval. We will email you.' : 'Waiting for approval. Check this page for the answer.' };
+    text: input.willEmail ? 'Waiting for approval from the platform owner, which is usually quick. We will email you when it is done; nothing else is needed from you.'
+      : 'Waiting for approval from the platform owner, which is usually quick. Check back on your email page for the answer; nothing else is needed from you.' };
   if (input.mode === 'live' && input.needsApproval) return { tone: 'notice', title: 'Your new sending address needs approval',
-    text: 'Your sending address changed, so it needs our approval again. Press Go live to ask. Your marketing emails are waiting until then.' };
+    text: 'Your sending address changed, so it needs our approval again. Open your email page and follow the steps to go live again. Your marketing emails are waiting until then.' };
   if (input.mode === 'live' && input.needsTest) return { tone: 'notice', title: 'Send a test first',
     text: 'Your email was connected again, so send a test to yourself before your marketing emails go again. They are waiting until then.' };
   if (input.state === 'slowed') return { tone: 'notice', title: 'We have slowed your marketing emails',

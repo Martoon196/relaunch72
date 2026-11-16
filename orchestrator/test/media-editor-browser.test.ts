@@ -31,3 +31,16 @@ test('real browser: split, mute, undo, redo, duplicate and reorder preserve exac
   assert.equal(await page.locator('output').getAttribute('aria-live'),'polite');
  }finally{await browser.close();}
 });
+
+test('real browser runs the bounded checksum worker used by the 1 GB uploader',{skip:process.env.RL72_MEDIA_BROWSER_TESTS!=='true'?'Explicit media browser run only':false,timeout:30000},async()=>{
+ assert.ok(executable);const browser=await chromium.launch({executablePath:executable,headless:true,args:['--no-sandbox']});
+ try{
+  const {MEDIA_STREAMING_SHA256}=await import('../src/portal/media-streaming-sha256.js');const page=await browser.newPage();
+  const digest=await page.evaluate(async code=>{
+   const source=code+';self.onmessage=event=>{const hash=new RL72Sha256();hash.update(new Uint8Array(event.data));self.postMessage(hash.hex());};';
+   const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'})),worker=new Worker(url);URL.revokeObjectURL(url);
+   return await new Promise<string>((resolve,reject)=>{worker.onmessage=e=>{worker.terminate();resolve(e.data);};worker.onerror=e=>{worker.terminate();reject(Error(e.message));};worker.postMessage(new TextEncoder().encode('abc').buffer);});
+  },MEDIA_STREAMING_SHA256);
+  assert.equal(digest,'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+ }finally{await browser.close();}
+});

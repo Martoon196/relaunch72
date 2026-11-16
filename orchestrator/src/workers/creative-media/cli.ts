@@ -10,6 +10,9 @@
  * Does not loop, auto-publish, create customer charges or auto-retry paid calls.
  */
 import '../../config.js';
+import {PrivateMediaFiles} from '../../creative-studio/media-private-files.js';
+import {PgPrivateObjectProbeWorker} from '../../creative-studio/media-object-sources.js';
+import {renderLocalVideoFile} from '../../creative-studio/media-local-render.js';
 import { randomUUID } from 'node:crypto';
 import { createWorkerDatabasePool } from '../../db/pool.js';
 import { PgVideoSourceProbeWorker } from '../../creative-studio/media-source-probe.js';
@@ -32,16 +35,22 @@ async function main():Promise<void>{
   const pool=createWorkerDatabasePool(process.env);
   try{
     const requestId='rl72-media-worker-'+randomUUID();
+    const files=process.env.RL72_MEDIA_PRIVATE_FILES_ENABLED==='true'?new PrivateMediaFiles(process.env.RL72_MEDIA_PRIVATE_FILES_ROOT??''):null;
+    const probeSource=async(ws:string,record:string)=>{
+      const object=files?await new PgPrivateObjectProbeWorker(pool,requestId,files).run(ws,record):null;
+      return object??new PgVideoSourceProbeWorker(pool,requestId).run(ws,record);
+    };
+    const objectRenderer=files?((object:import('../../creative-studio/media-private-files.js').PrivateMediaObject,probe:import('../../creative-studio/media-source-probe.js').VideoProbe,plan:import('../../creative-studio/media-edit-plan.js').VideoEditPlan)=>renderLocalVideoFile(files,object,probe,plan)):undefined;
     if(action==='tick'){
       const receipts=await runOfflineMediaTick(workspaceId!,{
         pending:(ws,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(ws,n),
-        probe:(ws,record)=>new PgVideoSourceProbeWorker(pool,requestId).run(ws,record),
+        probe:(ws,record)=>probeSource(ws,record),
         probeOutput:(ws,record)=>new PgMediaOutputProbeWorker(pool,requestId).probe(ws,record),
-        render:(ws,record)=>runQueuedLocalRender(ws,record,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo}),
+        render:(ws,record)=>runQueuedLocalRender(ws,record,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer}),
       });console.log('offline media batch:',receipts);return;
     }
     if(action==='probe'){
-      const result=await new PgVideoSourceProbeWorker(pool,requestId).run(workspaceId!,id!);
+      const result=await probeSource(workspaceId!,id!);
       console.log('private video technical probe:',result.status,result.replayed?'already recorded':'new receipt');
       return;
     }
@@ -54,7 +63,7 @@ async function main():Promise<void>{
     if(action==='render-local'){
       const result=await runQueuedLocalRender(workspaceId!,id!,{
         ledger:new PgLocalRenderWorker(pool,requestId),
-        renderer:renderLocalVideo,
+        renderer:renderLocalVideo,objectRenderer,
       });
       console.log('private native offline render:',result.state,'job:',result.jobId);
       return;

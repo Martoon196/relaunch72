@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PostgresPortalDeps } from './router.js';
 import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
+import type { EmailEntryStatus } from './email-connection-progress.js';
 import { FOLLOWUP_EDITOR_SCRIPT } from '../followup-sequences/editor-client.js';
 import { FLOW_FORM_DRAFT, FLOW_FORM_SAVED, readNativeFlowForm, sendNativeFlow } from '../followup-sequences/http.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
@@ -18,6 +19,8 @@ const FLOW_FORM_CONTROL = [...FLOW_FORM_SAVED, 'runId', 'ackProofId'] as const;
 export async function handlePortalFollowupFlow(req: IncomingMessage, res: ServerResponse, url: URL, input: {
   portal: PostgresPortalDeps; flows: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'> & Partial<Pick<PortalFollowupFlowService, 'command'>>;
   identity: PortalSessionIdentity | null; requestId: string;
+  /** The "Connect email" status card, when Connect email is offered to this business (null: none). Never throws. */
+  emailEntry?: () => Promise<EmailEntryStatus | null>;
 }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (path !== BASE && !path.startsWith(`${BASE}/`)) return false;
   // Where "Back to your follow-ups" leads after a refused action: the flow the owner was on, read fresh.
@@ -32,7 +35,9 @@ export async function handlePortalFollowupFlow(req: IncomingMessage, res: Server
     // The people lists follow the flow on screen and, on a search, the name or email the owner typed.
     const page = async (extra: Partial<PortalFlowPageInput> = {}, search = '') => {
       const itemId = extra.detail?.review.contentItemId, view: PpFollowupView = { ...(itemId ? { itemId } : {}), ...(search ? { search } : {}) };
-      return renderPortalFlowPage({ snapshot: await flows.snapshot(identity, requestId, view), csrf: portalCsrfToken(portal.sessionSecret, identity.sessionToken), commandId: randomUUID(), now: portal.now?.() ?? Date.now(), ...extra });
+      const emailEntry = await input.emailEntry?.().catch(() => null) ?? null;
+      return renderPortalFlowPage({ snapshot: await flows.snapshot(identity, requestId, view), csrf: portalCsrfToken(portal.sessionSecret, identity.sessionToken), commandId: randomUUID(), now: portal.now?.() ?? Date.now(),
+        ...(emailEntry ? { emailEntry } : {}), ...extra });
     };
     if (path === `${BASE}/editor.js`) {
       if (url.search) throw new FlowWorkspaceError(400, 'Use the native editor script.');

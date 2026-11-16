@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createPostmarkAccountApi, EmailConnectionService, EmailConnectionVault, EMAIL_TERMS_VERSION, loadEmailConnectConfig } from '../src/email-connections/index.js';
 import { handleEmailConnection } from '../src/portal/email-connection-router.js';
@@ -33,7 +34,7 @@ async function setup() {
     return postmark.fetch(input, init);
   }) as typeof fetch;
   const config = loadEmailConnectConfig({ EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, { portalBaseUrl: ORIGIN });
-  const service = new EmailConnectionService({ config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
     resolver: fakeResolver({}), secret: () => SECRET, lockWaitMs: 2000 });
   const protection = new MemoryProtectionStore(counts({ mode: 'off', goLiveApprovedAt: null }));
   const lifts: string[] = [], reactivations: string[] = [];
@@ -47,7 +48,7 @@ async function setup() {
   } as never;
   const soon: string[] = [];
   let mailer = true;
-  const sending = new OwnerSendingService({ protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher, bounces,
+  const sending = new OwnerSendingService({ eligibility: staticEligibility, protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher, bounces,
     evaluator: { soon: ws => soon.push(ws) }, founder: async identity => identity.sessionToken === FOUNDER, portalOrigin: ORIGIN, mailer: () => mailer });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, identity = owner, headers: Record<string, string> = {}) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';
@@ -79,7 +80,8 @@ test('connected: the sending section, the footer details, the test list and the 
   const h = await setup();
   let page = await h.call('GET', '/portal/email');
   assert.equal(page.status, 200);
-  for (const text of ['<h2>Sending</h2>', 'Sending is not switched on yet.', 'Send a test to me', '>Go live<', 'Your business\'s real name', 'Postal address (one line)',
+  // Footer details saved and a test accepted (the fixture): step 5, "Go live" the one primary button; the rest under More options.
+  for (const text of ['<h2>Go live</h2>', 'Going live means your follow-up and marketing emails go out from', 'Send a test to me', '<button type="submit">Go live</button>', '<summary>More options</summary>', 'Your business\'s real name', 'Postal address (one line)',
     'Send tests to (up to 10 addresses, separated by commas; leave empty to use your own)']) assert.ok(page.body.includes(text), text);
   assert.doesNotMatch(page.body, /Sending is switched on in the next step/u, 'release 1\'s "next step" note is gone once sending is offered');
   assert.ok(page.body.includes('<span>gone&lt;b&gt;@pp-send-proof.co.uk</span>'), 'hard bounces are listed, escaped');
@@ -135,13 +137,14 @@ test('"Go live": Postmark is asked whether the webhook is verified; the first ti
   const h = await setup();
   let page = await h.call('POST', '/portal/email/go-live', h.form());
   assert.equal(page.status, 200);
-  assert.match(page.body, /Waiting for approval\. We will email you\./u);
+  assert.match(page.body, /Waiting for approval\. The platform owner approves every new sender, usually quickly\. We will email you when it is done; nothing else is needed from you\./u);
   assert.deepEqual(h.protection.commands.at(-1), { action: 'live', terms: EMAIL_TERMS_VERSION, webhookOk: true });
   assert.deepEqual(h.soon, [PP_WS]);
   // The banner says the same until the founder approves.
   h.protection.sending = { ...h.protection.sending, goLiveRequestedAt: '2026-11-20T00:00:00Z' };
   page = await h.call('GET', '/portal/email');
-  assert.match(page.body, /<h2>Waiting for approval<\/h2><p>Waiting for approval\. We will email you\.<\/p>/u);
+  assert.match(page.body, /<h2>Waiting for approval<\/h2>[^]*The platform owner approves every new sender, and it is usually quick\.[^]*We will email you when it is done\. Nothing else is needed from you\./u);
+  assert.equal(page.body.match(/<h2>Waiting for approval<\/h2>/gu)!.length, 1, 'said once, in the step itself (not again in a banner)');
   assert.doesNotMatch(page.body, />Go live</u, 'no second request button while waiting');
   // The webhook gone at Postmark: not verified, so the database is told so.
   h.postmark.servers[0]!.webhooks.length = 0;
@@ -156,7 +159,7 @@ test('"Go live": Postmark is asked whether the webhook is verified; the first ti
   }
   // Without a working alert sender we never promise an email.
   h.protection.commandAnswer = 'requested'; h.setMailer(false);
-  assert.match((await h.call('POST', '/portal/email/go-live', h.form())).body, /Waiting for approval\. Check this page for the answer\./u);
+  assert.match((await h.call('POST', '/portal/email/go-live', h.form())).body, /Waiting for approval\. The platform owner approves every new sender, usually quickly\. Check back on this page for the answer/u);
   h.setMailer(true); h.protection.commandAnswer = null;
   // Each mode button only from its own mode: "Back to testing" from live, "Start testing" from off.
   assert.match((await h.call('POST', '/portal/email/back-to-test', h.form())).body, /That isn&#39;t available from here\./u, 'mode is off: not from here');
@@ -293,4 +296,49 @@ test('review fixes on the page: a double submit sends one test; our own key fail
   h.protection.status_ = () => ({ ...status, undelivered: [{ workspaceId: PP_WS, audience: 'owner', kind: 'paused', at: '2026-11-20T10:00:00Z' }] });
   const founderPage = await h.call('GET', '/portal/email/founder', undefined, founderIdentity);
   assert.match(founderPage.body, /<strong>1 alert email could not be sent in the last 30 days<\/strong>, so it is shown here instead:<\/p><ul><li>A pause \(to the business owner\), 20 November<\/li>/u);
+});
+
+test('"Save and send me a test": the details are saved first, then one test, with one answer; a refused save sends nothing', async () => {
+  const h = await setup();
+  let page = await h.call('POST', '/portal/email/details', h.form({ businessName: 'A', postalAddress: '1 High Street, Leeds LS1 1AA', testList: '', then: 'test' }));
+  assert.equal(page.status, 409);
+  assert.ok(page.body.includes('Enter your business&#39;s real name'));
+  assert.equal(h.emails.length, 0, 'nothing sent when the save is refused');
+  page = await h.call('POST', '/portal/email/details', h.form({ businessName: 'Smith & Co Ltd', postalAddress: '1 High Street, Leeds LS1 1AA', testList: '', then: 'test' }));
+  assert.equal(page.status, 200);
+  assert.equal(h.protection.sending.businessName, 'Smith & Co Ltd', 'saved');
+  assert.equal(h.emails.length, 1, 'then one test');
+  assert.match(String(h.emails[0]!.body.TextBody), /Smith & Co Ltd · 1 High Street, Leeds LS1 1AA/u, 'with the footer just saved');
+  assert.match(page.body, /Sent\. Check your inbox and spam folder\.[^]*<h2>Did it arrive\?<\/h2>[^]*<a class="button" href="\/portal\/email">Yes, go to the last step<\/a>[^]*No, or it went to spam/u);
+  assert.equal((await h.call('POST', '/portal/email/details', h.form({ businessName: 'Smith & Co Ltd', postalAddress: '1 High Street, Leeds LS1 1AA', testList: '', then: 'live' }))).status, 400);
+  assert.equal(h.emails.length, 1);
+});
+
+test('the page\'s own once-a-minute check never repairs: unreadable secrets are reported, and nothing is created', async () => {
+  const h = await setup();
+  assert.equal((await h.call('POST', '/portal/email/check', h.form({ auto: 'no' }))).status, 400);
+  let page = await h.call('POST', '/portal/email/check', h.form({ auto: 'yes' }));
+  assert.equal(page.status, 200);
+  h.store.row!.sealedServerToken = new EmailConnectionVault(Buffer.alloc(32, 1)).seal(PP_WS, 'server_token', 'srv-other-key-0123456789abcdef');
+  const writes = h.postmark.calls.filter(c => c.method !== 'GET').length;
+  page = await h.call('POST', '/portal/email/check', h.form({ auto: 'yes' }));
+  assert.match(page.body, /Your email connection needs a repair before we can check\. Press Repair\./u);
+  assert.match(page.body, /<button type="submit">Repair<\/button>/u);
+  assert.equal(h.postmark.calls.filter(c => c.method !== 'GET').length, writes, 'no call that changes anything at the email service');
+  assert.equal(h.store.row!.status, 'verified');
+});
+
+test('the owner\'s own pause survives every move: after Back to testing the page still offers Resume, and Pause is offered in test mode', async () => {
+  const h = await setup();
+  h.store.row!.mode = 'live';
+  h.protection.sending = { ...h.protection.sending, approvedCurrent: true, goLiveApprovedAt: '2026-11-01T00:00:00Z', ownerPausedAt: '2026-11-17T00:00:00Z' };
+  let page = await h.call('GET', '/portal/email');
+  assert.match(page.body, /<button type="submit">Resume<\/button>/u, 'live and paused: Resume is the primary');
+  page = await h.call('POST', '/portal/email/back-to-test', h.form());
+  assert.match(page.body, /You are testing\./u);
+  assert.match(page.body, /You have paused your marketing emails[^]*action="\/portal\/email\/resume"[^]*>Resume<\/button>/u, 'the banner asks for Resume and it is there');
+  h.store.row!.mode = 'test';
+  h.protection.sending = { ...h.protection.sending, ownerPausedAt: null };
+  page = await h.call('GET', '/portal/email');
+  assert.match(page.body, /<summary>More options<\/summary>[^]*action="\/portal\/email\/pause"[^]*>Pause<\/button>/u, 'test mode, not paused: Pause under More options');
 });

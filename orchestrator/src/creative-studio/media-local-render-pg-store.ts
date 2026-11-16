@@ -6,6 +6,7 @@
  * The captured local output is an UNAPPROVED private render candidate.
  * Claude owns enabling/mounting the UI routes and numbered schema rollout.
  */
+import type {PrivateMediaObject} from './media-private-files.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { withTransaction } from '../db/transaction.js';
@@ -109,11 +110,12 @@ export class PgLocalRenderOwner {
 export interface LocalRenderClaim {
  readonly claimToken:string;
  readonly plan:VideoEditPlan;readonly planSha256:string;
- readonly sourceSha256:string;readonly bytes:Buffer;readonly probe:VideoProbe;
+ readonly sourceSha256:string;readonly bytes:Buffer|null;readonly object?:PrivateMediaObject;readonly probe:VideoProbe;
 }
 interface PgLocalClaim {
  readonly claim_token:string;readonly plan:VideoEditPlan;readonly plan_sha256:string;
- readonly source_sha256:string;readonly raw_bytes:Buffer;
+ readonly source_sha256:string;readonly raw_bytes:Buffer|null;
+ readonly storage_kind:'pg_blob'|'private_object';readonly object_key:string|null;readonly source_id:string;readonly source_byte_length:number|string;readonly source_mime:'video/mp4'|'video/webm';
  readonly duration_ms:string|number;readonly width:number;readonly height:number;
  readonly frame_rate:string|number;readonly video_codec:string;
  readonly audio_present:boolean;readonly checker_version:string;
@@ -133,12 +135,11 @@ export class PgLocalRenderWorker {
       'SELECT * FROM app_private.creative_media_local_render_claim($1,$2)',
       [workspaceId,jobId])).rows[0]);
   if(!row||!UUID.test(row.claim_token)||!SHA.test(row.source_sha256)
-    ||!SHA.test(row.plan_sha256)||!Buffer.isBuffer(row.raw_bytes))
+    ||!SHA.test(row.plan_sha256)||(row.storage_kind!=='private_object'&&!Buffer.isBuffer(row.raw_bytes)))
    throw new SeoBlogError(409,'Local render job claim is unavailable');
   const plan=checkVideoEditPlan(row.plan);
   if(videoEditDigest(plan)!==row.plan_sha256
-    ||sha(row.raw_bytes)!==row.source_sha256
-    ||row.raw_bytes.length>LOCAL_RENDER_MAX_BYTES)
+    ||(row.storage_kind!=='private_object'&&(!row.raw_bytes||sha(row.raw_bytes)!==row.source_sha256||row.raw_bytes.length>LOCAL_RENDER_MAX_BYTES)))
    throw new SeoBlogError(409,'Leased timeline or source SHA no longer matches');
   const probe:VideoProbe={status:'verified_technical',checkerVersion:row.checker_version,
     durationMs:Number(row.duration_ms),width:Number(row.width),height:Number(row.height),
@@ -148,7 +149,8 @@ export class PgLocalRenderWorker {
     ||!Number.isSafeInteger(probe.durationMs)||!Number.isFinite(probe.frameRate))
    throw new SeoBlogError(409,'Trusted technical probe is incomplete');
   return {claimToken:row.claim_token,plan,planSha256:row.plan_sha256,
-    sourceSha256:row.source_sha256,bytes:Buffer.from(row.raw_bytes),probe};
+    sourceSha256:row.source_sha256,bytes:row.raw_bytes?Buffer.from(row.raw_bytes):null,probe,
+    ...(row.storage_kind==='private_object'?{object:{workspaceId,sourceId:row.source_id,sha256:row.source_sha256,byteLength:Number(row.source_byte_length),mime:row.source_mime,objectKey:row.object_key!}}:{})};
  }
  async complete(workspaceId:string,jobId:string,claimToken:string,
    output:LocalRenderOutput):Promise<{id:string;sha256:string;state:'completed';replayed:boolean}>{
@@ -187,6 +189,7 @@ export async function runQueuedLocalRender(
  workspaceId:string,jobId:string,
  ports:{
    readonly ledger:Pick<PgLocalRenderWorker,'claim'|'complete'|'fail'>;
+   readonly objectRenderer?:(object:PrivateMediaObject,probe:VideoProbe,plan:VideoEditPlan)=>Promise<LocalRenderOutput>;
    readonly renderer:(source:{bytes:Buffer;sha256:string;probe:VideoProbe},
        plan:VideoEditPlan)=>Promise<LocalRenderOutput>;
  },
@@ -194,9 +197,15 @@ export async function runQueuedLocalRender(
  const claim=await ports.ledger.claim(workspaceId,jobId);
  let output:LocalRenderOutput;
  try{
+  if(claim.object){
+   if(!ports.objectRenderer)throw new SeoBlogError(503,'Private object renderer unavailable');
+   output=await ports.objectRenderer(claim.object,claim.probe,claim.plan);
+  }else{
+  if(!claim.bytes)throw new SeoBlogError(409,'Exact leased bytes unavailable');
   output=await ports.renderer({
    bytes:claim.bytes,sha256:claim.sourceSha256,probe:claim.probe,
   },claim.plan);
+  }
   if(output.sourceSha256!==claim.sourceSha256||output.planSha256!==claim.planSha256)
    throw new SeoBlogError(422,'Native output is not tied to exact claimed timeline');
  }catch(error){

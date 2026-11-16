@@ -16,8 +16,12 @@ export class EmailProtectionAbsentError extends Error {
   constructor() { super('Sender protection is not in this database yet.'); }
 }
 export class EmailProtectionForbiddenError extends Error {
-  override readonly name = 'EmailProtectionForbiddenError';
+  override readonly name: string = 'EmailProtectionForbiddenError';
   constructor() { super('Not allowed.'); }
+}
+/** The business is not on the active allow-list (0157). A kind of EmailProtectionForbiddenError. */
+export class EmailProtectionNotAllowedError extends EmailProtectionForbiddenError {
+  override readonly name = 'EmailProtectionNotAllowedError';
 }
 export class EmailProtectionInvalidError extends Error {
   override readonly name = 'EmailProtectionInvalidError';
@@ -25,12 +29,14 @@ export class EmailProtectionInvalidError extends Error {
 }
 
 export type ReserveOutcome = 'ok' | 'replayed' | 'replayed_refused' | 'replayed_unknown' | 'account_held' | 'off' | 'paused' | 'owner_paused' | 'not_live' | 'not_connected' | 'not_approved' | 'needs_test'
-  | 'sample_wait' | 'sample_held' | 'daily_cap' | 'hourly_cap' | 'test_limit';
+  | 'sample_wait' | 'sample_held' | 'daily_cap' | 'hourly_cap' | 'test_limit'
+  /** 0157: the founder switched this business's email off (it is not on the active allow-list). */
+  | 'not_allowed';
 export type SendingCommand = 'test' | 'live' | 'pause' | 'resume';
 export type SendingCommandOutcome = 'test' | 'live' | 'paused' | 'resumed' | 'unchanged' | 'requested' | 'already_requested' | 'not_connected' | 'switched_off'
   | 'needs_webhook' | 'needs_terms' | 'needs_footer' | 'needs_test';
 export type FounderAction = 'approve' | 'lift' | 'reinstate' | 'release_sample' | 'lift_account';
-export type FounderOutcome = 'done' | 'stale' | 'not_needed';
+export type FounderOutcome = 'done' | 'stale' | 'not_needed' | 'not_allowed';
 export type CounterKind = 'hard_bounce' | 'soft_bounce' | 'blocked' | 'complaint' | 'unsubscribe';
 
 /** What the sender reads each sweep. */
@@ -198,7 +204,7 @@ export class PgEmailProtectionStore implements EmailProtectionStore {
         this.absentUntil = this.now() + RECHECK_MS;
         throw new EmailProtectionAbsentError();
       }
-      if (code === '42501') throw new EmailProtectionForbiddenError();
+      if (code === '42501') throw (error as { detail?: unknown })?.detail === 'email_connect_not_allowed' ? new EmailProtectionNotAllowedError() : new EmailProtectionForbiddenError();
       if (code === '22023') throw new EmailProtectionInvalidError();
       throw error;
     }

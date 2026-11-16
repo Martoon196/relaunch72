@@ -5,10 +5,12 @@ SET LOCAL ROLE r72_owner;
 CREATE TABLE app.creative_media_source_videos(
   workspace_id uuid NOT NULL REFERENCES app.seo_blog_brands(workspace_id),
   id uuid NOT NULL DEFAULT gen_random_uuid(), command_id uuid NOT NULL,
-  blob_id uuid NOT NULL,
+  blob_id uuid,
+  storage_kind text NOT NULL DEFAULT 'pg_blob' CHECK(storage_kind IN('pg_blob','private_object')),
+  object_key text,
   file_name text NOT NULL CHECK(length(file_name) BETWEEN 1 AND 160),
   sha256 text NOT NULL CHECK(sha256~'^[a-f0-9]{64}$'),
-  byte_length integer NOT NULL CHECK(byte_length BETWEEN 1024 AND 20000000),
+  byte_length integer NOT NULL CHECK(byte_length BETWEEN 1024 AND 1073741824),
   mime text NOT NULL CHECK(mime IN ('video/mp4','video/webm')),
   rights text NOT NULL CHECK(rights IN ('owned','licensed')),
   evidence_sha256 text CHECK(evidence_sha256 IS NULL OR evidence_sha256~'^[a-f0-9]{64}$'),
@@ -17,6 +19,7 @@ CREATE TABLE app.creative_media_source_videos(
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,command_id),
   FOREIGN KEY(workspace_id,blob_id) REFERENCES app.seo_blog_blobs(workspace_id,id),
+  CHECK((storage_kind='pg_blob' AND blob_id IS NOT NULL AND object_key IS NULL AND byte_length<=20000000) OR (storage_kind='private_object' AND blob_id IS NULL AND object_key IS NOT NULL)),
   CHECK(rights<>'licensed' OR evidence_sha256 IS NOT NULL)
 );
 ALTER TABLE app.creative_media_source_videos ENABLE ROW LEVEL SECURITY;
@@ -58,7 +61,7 @@ BEGIN
     RETURN coalesce((SELECT jsonb_agg(jsonb_build_object(
       'id',s.id,'fileName',s.file_name,'sha256',s.sha256,'byteLength',s.byte_length,
       'mime',s.mime,'rights',s.rights,'evidenceSha256',s.evidence_sha256,
-      'state',s.state,'createdAt',s.created_at) ORDER BY s.created_at DESC)
+      'state',s.state,'createdAt',s.created_at,'storageKind',s.storage_kind) ORDER BY s.created_at DESC)
       FROM app.creative_media_source_videos s WHERE s.workspace_id=p_workspace),'[]'::jsonb);
   END IF;
   IF p_action<>'upload' OR p_command IS NULL OR p_meta IS NULL OR p_bytes IS NULL

@@ -5,6 +5,7 @@ import type { FollowupRunState } from '../followup-sequences/state.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 
 /** The workspace every 0152 table and function is pinned to. */
+// PP-only by design until a later stage (generic follow-up engine); not an email-connect eligibility decision.
 export const PP_FOLLOWUP_WORKSPACE_ID = 'd975ff66-336a-46c2-b36b-d7095a11af97';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const uuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
@@ -77,6 +78,7 @@ export function parsePpFollowupSnapshot(value: unknown): PpFollowupDatabaseSnaps
 export class PgPpFollowupRepository implements PpFollowupRepository, PpFollowupUnsubscriber {
   constructor(private readonly web: Pick<Pool, 'query'>, private readonly commands: Pick<Pool, 'query'>) {}
   private token(identity: PortalSessionIdentity): Buffer {
+    // PP-only by design until a later stage (generic follow-up engine); not an email-connect eligibility decision.
     if (identity.workspaceId !== PP_FOLLOWUP_WORKSPACE_ID || !identity.sessionToken) throw new FlowWorkspaceError(403, 'Open the Property Predator workspace first.');
     return createHash('sha256').update(identity.sessionToken).digest();
   }

@@ -9,6 +9,7 @@ const SHA=/^[a-f0-9]{64}$/u;
 export type VideoSourceRights='owned'|'licensed';
 export interface VideoSourceRow {
   id:string;fileName:string;sha256:string;byteLength:number;mime:'video/mp4'|'video/webm';
+  storageKind?:'pg_blob'|'private_object';
   rights:VideoSourceRights;evidenceSha256:string|null;state:'awaiting_probe';createdAt:string;
 }
 /** Only a container signature check. A decoder, rights audit and duration probe remain mandatory. */

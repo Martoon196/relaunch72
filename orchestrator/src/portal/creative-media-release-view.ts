@@ -1,0 +1,8 @@
+import {csrfField,type Shell} from './seo-blog-view.js';
+import {base} from './creative-studio-view.js';
+const e=(v:unknown)=>String(v??'').replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+/** Embed only with a saved canonical job/media snapshot from this owner workspace. */
+export function nativeVideoReleaseForm(shell:Shell,input:{jobId:string;contentVersionId:string;outputSha256:string;caption:string;network:string;scheduledFor:string;authorized:boolean},commandId:string):string{
+ const fields=csrfField(shell.csrf)+'<input type="hidden" name="jobId" value="'+e(input.jobId)+'"><input type="hidden" name="contentVersionId" value="'+e(input.contentVersionId)+'"><input type="hidden" name="commandId" value="'+e(commandId)+'">';
+ return '<section class="card"><h2>Exact video distribution</h2><p>'+e(input.network)+' · '+e(input.scheduledFor)+'</p><p>'+e(input.caption)+'</p><p>MP4 SHA256: <code>'+e(input.outputSha256)+'</code></p><form method="post" action="'+base(shell)+'/video-releases">'+fields+'<input type="hidden" name="action" value="'+(input.authorized?'withdraw':'authorize')+'">'+(input.authorized?'<input type="hidden" name="consent" value="1"><button type="submit">Withdraw remaining release permission</button>':'<label><input type="checkbox" name="consent" value="1" required> I authorize uploading this exact approved video and distributing it through this specific saved social job.</label><button type="submit">Authorize this exact job</button>')+'</form><p class="small muted">Withdrawal blocks future uploads and publishing attempts. It cannot erase an external operation already accepted by the provider.</p></section>';
+}

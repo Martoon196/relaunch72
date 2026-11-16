@@ -153,6 +153,11 @@ export interface KnowledgeOrigin {
   readonly kind: 'website';
   readonly url: string;
   readonly fetchedAt: IsoInstant;
+  /**
+   * Which lines (0-based) of the stored text were wholly action text on the page (a button, a button-styled link or a form
+   * label), recorded beside the text and never in it. Read only by the price-structure check. Absent on pages stored before.
+   */
+  readonly actionLines?: readonly number[];
 }
 
 export interface KnowledgeRef {
@@ -174,6 +179,45 @@ export interface ProfileOffer {
    * or null when they typed it themselves. Absent means the price came from `sourceDocumentId`.
    */
   readonly priceSourceDocumentId?: string | null;
+  /**
+   * Website door only (rules version 3): the offer's price structure as the page states it, each line copied from the page
+   * and given its role by rule. Never sent to any writing step (`profileForPrompt` and every other prompt strip it).
+   */
+  readonly pricing?: OfferPricing;
+}
+
+/**
+ * An offer as every writing step sees it: the price structure (and nothing else new) taken off, so prompts and writing
+ * checks receive exactly the shape they did before rules version 3.
+ */
+export function offerForWriting<T extends ProfileOffer>(offer: T): Omit<T, 'pricing'> {
+  if (!('pricing' in offer)) return offer;
+  const { pricing: _pricing, ...rest } = offer;
+  return rest;
+}
+
+/** An offer's price structure, as the model proposed it and the website door checked it line by line. */
+export interface OfferPricing {
+  readonly lines: readonly OfferPriceLine[];
+  /** Where the check found the price itself: its document and line (shown beside the price on the card). */
+  readonly priceDocumentId?: string | null;
+  readonly priceQuote?: string | null;
+}
+export interface OfferPriceLine {
+  /** 'other': another ordinary price of the offer (yearly beside monthly, a set-up fee…); 'plan': instalments; 'special': a time-limited, conditional or named price. */
+  readonly role: 'other' | 'plan' | 'special';
+  /** The page's own words (or the owner's, when `documentId` is null). */
+  readonly text: string;
+  /** The page's own words that name the line ("Webinar price", "founders' price", "Set-up fee"). */
+  readonly label?: string | null;
+  /** A plan's total, in the page's words ("£1,575 in total"). */
+  readonly total?: string | null;
+  /** A plan's price: the text of `price` or of a special line, only when the check could tie it. */
+  readonly for?: string | null;
+  /** The document it was read from; null when the owner typed it ("You told us"). */
+  readonly documentId: string | null;
+  /** The page line it came from, markers off. */
+  readonly quote: string | null;
 }
 
 /** One of the differing answers found for the same fact, with the exact words and where they were read. */
@@ -275,6 +319,8 @@ export interface InventoryPage {
   readonly editorial: boolean;
   /** Bounded page text. Present only on a Brand DNA website read, and never stored with the inventory. */
   readonly text?: string;
+  /** With `text`: which of its lines (0-based) were wholly action text on the page. Never stored with the inventory. */
+  readonly actionLines?: readonly number[];
 }
 
 /** What the home page itself declares about the brand's look. A proposal only: nothing is applied until the owner confirms it. */

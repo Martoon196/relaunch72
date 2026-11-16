@@ -20,9 +20,11 @@ import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
 import { handleEmailConnection } from './email-connection-router.js';
 import type { EmailConnectionService } from '../email-connections/service.js';
+import type { EmailConnectAllowlistService } from '../email-connections/allowlist.js';
 import type { OwnerSendingService } from '../email-protection/owner.js';
-import { emailConnectBusiness } from '../email-connections/config.js';
-const emailConnectionBusinessAllowed = (workspaceId: string): boolean => Boolean(emailConnectBusiness(workspaceId));
+/** Whether this business may use Connect email: asked of the eligibility the platform composed into the service (none: no). */
+export const emailConnectionBusinessAllowed = (deps: PostgresPortalDeps, workspaceId: string): boolean => deps.emailConnections?.eligibility?.allowed(workspaceId) === true;
+import { readEmailEntry, type EmailEntryStatus } from './email-connection-progress.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';
 import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
@@ -560,10 +562,12 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
   /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
-  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>
-    & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
+  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain' | 'eligibility'>
+    & Partial<Pick<EmailConnectionService, 'repairBounceReporting' | 'entryState'>>;
   /** Release 2 of "Connect email": sending controls and the founder's protection page (0156). */
-  emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
+  emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'> & Partial<Pick<OwnerSendingService, 'entryConfig'>>;
+  /** The founder's allow-list for Connect email (0157), on the founder's page. */
+  emailAllowlist?: Pick<EmailConnectAllowlistService, 'view' | 'act'>;
   /** Native webinars (migration 0144 + content identity). Cloudflare Stream is optional inside it. */
   webinars?: PgWebinarService;
   /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
@@ -1996,12 +2000,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres' && (p === '/portal/email' || p.startsWith('/portal/email/'))) {
     if (!deps.emailConnections) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Email connection isn\'t switched on yet.'); return; }
     await handleEmailConnection(req, res, url, { portal: deps, service: deps.emailConnections, identity: portalIdentity,
-      ...(deps.emailSending ? { sending: deps.emailSending } : {}) }); return;
+      ...(deps.emailSending ? { sending: deps.emailSending } : {}), ...(deps.emailAllowlist ? { allowlist: deps.emailAllowlist } : {}) }); return;
   }
   if (deps.kind === 'postgres' && (p === '/portal/follow-ups' || p.startsWith('/portal/follow-ups/'))) {
     if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }
     if (!resolvedRequestContext || !deps.abuse || !deps.abuseHashSecret) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Native flow access is temporarily unavailable.'); return; }
-    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId }); return;
+    const entryIdentity = portalIdentity, entryDeps = deps;
+    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId,
+      emailEntry: () => emailEntry(entryDeps, entryIdentity, entryIdentity?.workspaceId ?? '') }); return;
   }
   if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
     if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }
@@ -2801,8 +2807,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           dailyOutreachAvailable: profile.id === 'property_predator_growth',
           followupFlowsAvailable: Boolean(deps.followupFlows),
           approvalsAvailable: Boolean(deps.seoBlog || deps.followupFlows || deps.companyContent),
-          emailConnectAvailable: profile.id === 'property_predator_growth' && emailConnectionBusinessAllowed(snapshot.workspace.id)
+          // Product-profile gate kept as it is: Connect email is served only on the Property Predator growth portal (property_predator_growth) until a later stage opens it to other portal profiles; the allow-list (0157) decides which businesses on this portal may use it.
+          emailConnectAvailable: profile.id === 'property_predator_growth' && emailConnectionBusinessAllowed(deps, snapshot.workspace.id)
             && await (deps.emailConnections?.available() ?? Promise.resolve(false)),
+          emailStatus: await emailEntry(deps, portalIdentity, snapshot.workspace.id),
         }),
       }));
     } catch {
@@ -7578,4 +7586,22 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         deps.abuse!.complete(leaseHash, outcome)));
     }
   }
+}
+
+/**
+ * The "Connect email" status card for a page that offers sending email, under exactly the home page's gating (Property
+ * Predator's portal, a business allowed to connect, the feature on and the database at 0155). null: no card. Never throws.
+ */
+async function emailEntry(deps: PostgresPortalDeps, identity: PortalSessionIdentity | null, workspaceId: string): Promise<EmailEntryStatus | null> {
+  const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+  // Product-profile gate kept as it is: Connect email is served only on the Property Predator growth portal (property_predator_growth) until a later stage opens it to other portal profiles; the allow-list (0157) decides which businesses on this portal may use it.
+  if (!identity || profile.id !== 'property_predator_growth' || !emailConnectionBusinessAllowed(deps, workspaceId) || !deps.emailConnections) return null;
+  // The light read only (never the page's full view: no name-server look-up, secrets check, counts or Postmark),
+  // bounded by a short timeout; anything slow or failing falls back to the plain link.
+  const connections = deps.emailConnections, sending = deps.emailSending;
+  if (!connections.enabled || !connections.entryState) return null;
+  return readEmailEntry({
+    config: async () => sending?.entryConfig ? sending.entryConfig(workspaceId) : 'absent',
+    state: async () => connections.entryState!(identity),
+  });
 }

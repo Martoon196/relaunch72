@@ -44,7 +44,7 @@ export function decodeFfprobe(input:unknown):VideoProbe {
 export async function ffprobeFromBytes(bytes:Buffer,executable='ffprobe'):Promise<VideoProbe> {
   if(bytes.length<1024||bytes.length>20_000_000)throw new SeoBlogError(400,'Source size exceeds private blob limit');
   return new Promise(resolve=>{
-    const args=['-v','error','-show_entries',
+    const args=['-v','error','-protocol_whitelist','pipe','-format_whitelist','mov,matroska,webm','-show_entries',
       'format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate','-of','json','-i','pipe:0'];
     let out='',err='',done=false;
     const child=spawn(executable,args,{shell:false,stdio:['pipe','pipe','pipe'],timeout:15_000});
