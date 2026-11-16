@@ -30,6 +30,7 @@ import type { CreativeStudioService } from '../creative-studio/service.js';
 import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
+import { logPortalSeoBlogCapabilities } from './seo-blog-capabilities.js';
 
 export interface PortalSeoBlogService {
   limitsFor?(identity: PortalSessionIdentity, requestId: string): SeoLimitsService;
@@ -82,6 +83,7 @@ export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRun
 export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool, socialPools?: PortalSeoBlogSocialPools,
   crmCommandPool?: Pool): PortalSeoBlogService {
   const runtime = seoBlogRuntime(env);
+  logPortalSeoBlogCapabilities({ search: runtime.search.mode, keywords: runtime.keywords?.mode ?? 'off', methods: env.SEO_BLOG_METHOD_PACKS === 'true' });
   const transport = new GuardedFetchTransport();
   const publishers = defaultPublishers();
   const promotionsReady = env.R72_CONTENT_ENABLED === 'true' && Boolean(contentAdapterPool);
