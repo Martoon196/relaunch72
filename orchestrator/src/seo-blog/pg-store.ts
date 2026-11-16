@@ -671,6 +671,14 @@ export class PgSeoBlogStore implements SeoBlogStore {
     }, true);
   }
 
+  async listBlockedWrites(brandId: string): Promise<Job[]> {
+    return this.tx(brandId, async (t) => {
+      // Bounded, oldest first: enough for any real backlog without reading every task the business ever had.
+      const r = await t.query<{ data: Job; row_version: string }>("SELECT data, row_version FROM app.seo_blog_jobs WHERE workspace_id = $1 AND kind = 'write' AND state = 'blocked' ORDER BY created_at ASC LIMIT 1000", [brandId]);
+      return r.rows.map(withVersion);
+    }, true);
+  }
+
   async listJobs(brandId: string): Promise<Job[]> {
     return this.tx(brandId, async (t) => {
       const r = await t.query<{ data: Job; row_version: string }>('SELECT data, row_version FROM app.seo_blog_jobs WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 200', [brandId]);

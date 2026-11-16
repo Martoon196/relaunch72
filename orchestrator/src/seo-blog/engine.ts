@@ -2925,7 +2925,8 @@ export class SeoBlogEngine {
 
   async listJobs(actor: Actor, brandId: string): Promise<Job[]> {
     await this.brandFor(actor, brandId);
-    return (await this.store.listJobs(brandId)).map(imageJobDto);
+    // Pages judge a waiting write from its own task, so an older waiting write is included even past the newest tasks.
+    return (await this.jobsWithWaitingWrites(brandId)).map(imageJobDto);
   }
   async imageJobStatus(actor: Actor, brandId: string, articleId: string, jobId: string): Promise<{ id: string; state: Job['state']; detail: string; prepared: boolean }> {
     await this.brandFor(actor, brandId);
@@ -3124,15 +3125,17 @@ export class SeoBlogEngine {
    * row-version check means a job is requeued at most once even when two passes race.
    */
   private async resumeAllowanceWrites(brand: Brand, why: 'allowance' | 'new_month' | 'daily' | 'worker'): Promise<number> {
-    if (brand.settings.pauseAll) return 0;
-    const jobs = await this.store.listJobs(brand.id);
+    const jobs = await this.jobsWithWaitingWrites(brand.id);
+    // Skipped for a pause or unconfirmed details: keep next month's wake-up, so a write never loses its automatic way back.
+    const keepWake = async () => { if (why !== 'worker' && jobs.some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id); };
+    if (brand.settings.pauseAll) { await keepWake(); return 0; }
     const month = monthStart(this.now()).slice(0, 7);
     // A pass the worker makes by itself requeues a job at most once a month: if it stops again for the allowance
     // (for example a copy step's own reservation rule), it waits for the owner, a new month or a raised allowance.
     const waiting = jobs.filter(allowanceBlockedWrite).filter((j) => why === 'allowance' || why === 'new_month' || j.payload.allowanceResumedMonth !== month).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
     if (!waiting.length) return 0;
     const { profile, stale } = await this.currentFactsKey(brand.id);
-    if (!profile?.confirmedAt || stale) return 0;
+    if (!profile?.confirmedAt || stale) { await keepWake(); return 0; }
     const ceiling = monthlyCeiling(brand.settings, 'model_tokens');
     const used = await this.store.usageSince(brand.id, 'model_tokens', monthStart(this.now()));
     let committed = jobs.filter((j) => isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length * USAGE_ESTIMATES.article;
@@ -3153,8 +3156,16 @@ export class SeoBlogEngine {
       resumed++;
       await this.log(brand.id, 'system', 'job.resumed_allowance', `Article writing queued again automatically: ${reason}.`, job.id);
     }
-    if (why !== 'worker' && (await this.store.listJobs(brand.id)).some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id);
+    if (why !== 'worker' && (await this.jobsWithWaitingWrites(brand.id)).some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id);
     return resumed;
+  }
+
+  /** The business's tasks, with every waiting article write read directly (not only those among the newest tasks). */
+  private async jobsWithWaitingWrites(brandId: string): Promise<Job[]> {
+    const jobs = await this.store.listJobs(brandId);
+    if (!this.store.listBlockedWrites) return jobs;
+    const seen = new Set(jobs.map((j) => j.id));
+    return [...jobs, ...(await this.store.listBlockedWrites(brandId)).filter((j) => !seen.has(j.id))];
   }
 
   /** Owner-side: after saving a higher allowance, resume what now fits. Returns how many articles were queued again. */
