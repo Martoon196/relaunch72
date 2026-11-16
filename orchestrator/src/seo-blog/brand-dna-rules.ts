@@ -857,13 +857,16 @@ const CLAUSE_AMOUNT = /[£$€¥]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:%
  * a credit or cross-reference in its own clause (CREDIT_CLAUSE_BREAK, at most 300 characters either side) is about
  * ("credits in full", "credited against / towards / to", "deducted"; never "with / on / interest-free credit"). Each credit
  * phrase is about the nearest amount before it in the clause, or, with none before it, the nearest amount after it: in
- * "£1,697 with the £47 Deal Desk fee credited against it" only the £47 is.
+ * "£1,697 with the £47 Deal Desk fee credited against it" only the £47 is. An amount with the offer's own name (`ownKey`, as
+ * keyOf gives it) earlier on its line is the offer's own price and is always read ("The Property Course is £1,697 and
+ * credits in full against Mentoring").
  */
-export function inCreditClause(line: string, s: number, e: number): boolean {
+export function inCreditClause(line: string, s: number, e: number, ownKey = ''): boolean {
   let cs = Math.max(0, s - 300), ce = Math.min(line.length, e + 300);
   for (const m of line.matchAll(CREDIT_CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
   const clause = line.slice(cs, ce);
   if (!CREDIT_WORDS.test(clause)) return false;
+  if (ownKey && ` ${keyOf(line.slice(0, s))} `.includes(` ${ownKey} `)) return false;
   const amounts = [...clause.matchAll(CLAUSE_AMOUNT)].map((m) => cs + m.index!);
   for (const c of clause.matchAll(CREDIT_WORDS_ALL)) {
     const at = cs + c.index!, before = amounts.filter((a) => a < at), after = amounts.filter((a) => a > at);

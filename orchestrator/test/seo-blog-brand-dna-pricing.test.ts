@@ -658,6 +658,44 @@ test('round 9: every case the round-8 backstop left silent asks again (tiers, se
   assert.ok(await asksAbout(gold, wdoc('d2', '<h1>Compare</h1><p>Gold Membership: £60 a month</p>', 'https://x.example/prices'), [O('Gold Membership', '£50 a month', [L.other('£500 a year')]), O('Membership', '£20 a month')], 'Gold Membership'));
 });
 
+test('round 10: an amount with the offer\'s own name earlier on its line is read even beside a credit phrase (the review\'s n_near and n_prev)', async () => {
+  const L = { plan: (text: string, f: string) => ({ kind: 'plan', text, for: f }) };
+  const O = (name: string, price: string, lines?: unknown[]) => ({ name, description: '', price, url: null, sourceDocumentId: 'd1', ...(lines ? { pricing: { lines } } : {}) });
+  const join = kdoc('d1', '# Join\n## Property Course\n£1,497 once, or 3 x £525\n## Mentoring\n£3,997 or 6 x £699\n## Deal Desk\n£47 once', 'https://x.example/join');
+  const offers = [O('Property Course', '£1,497', [L.plan('3 x £525', '£1,497')]), O('Mentoring', '£3,997', [L.plan('6 x £699', '£3,997')]), O('Deal Desk', '£47')];
+  for (const text of [
+    'News. From March the Property Course is £1,697 with the £47 Deal Desk fee credited against it.',
+    'News. Your £47 Deal Desk fee and the Property Course at £1,697 are credited against Mentoring.',
+    'News. From March the Property Course is £1,697 and is credited against Mentoring later.',
+    'News. Property Course buyers note: the £1,697 course price credits in full for 90 days.',
+    'News. The Property Course is £1,697 once your deposit is deducted.',
+    'News. Property Course: credited against it are the £47 fee and the £1,697 you pay.',
+    'News. Property Course: deducted from the £1,697 price is your £47 fee.',
+    'News. The Property Course is £1,697 and 50% is credited against Mentoring.',
+    'News. Property Course £1,697, credited against Mentoring, or £599 a month.',
+    'News. Property Course £1,697 credited against Mentoring, or £599 a month.',
+    'News. Property Course £1,697 or 3 x £599 credited against Mentoring.',
+    'News. Property Course £1,697 credited to Mentoring and the £47 deducted too.',
+    'News. The Property Course is £1.7k with the £47 Deal Desk fee credited against it.',
+    'News. The Property Course is £1,697 with the $60 fee credited against it.',
+    'News. The Property Course is £1,697.Fees are credited against it.',
+    'How much is the Property Course? £1,697! Fees are credited against it.',
+    'News. The Property Course costs approx. £1,697 with the £47 fee credited against it.',
+    'News. With your £47 fee credited against it the Property Course is £1,697.',
+    'News. Property Course £1,697 with credit to spread it and the £47 fee deducted.',
+    'News. The Property Course is £1,697.50 with the £47.00 fee credited against it.',
+    'News. The Property Course is £ 1,697 with the £ 47 fee credited against it.',
+    'Good to know. The Property Course is £1,697 and credits in full against Mentoring for 90 days.',
+    'We have rebuilt the Property Course. The new price is £1,697 and it credits in full against Mentoring.',
+    '| Property Course | 26 modules | £1,697 credited against Mentoring',
+  ]) assert.ok((await make([join, kdoc('d2', text, 'https://x.example/faq')], { offers })).profile.conflicts.some((c) => c.offer === 'Property Course'), text);
+  // Still not read: the real Join page's credit sentences, which do not name the offer they are read for.
+  assert.equal(inCreditClause('• The £997 credits in full against One Lane Mentoring for 90 days.', 6, 10, keyOf("The Members' Room")), true);
+  assert.equal(inCreditClause('Applications for the next cohort are open. The £997 course price credits in full for 90 days.', 47, 51, keyOf('One Lane Mentoring')), true);
+  // (Accepted, as on the real Mentoring page: the name as a heading and the credit sentence on the next line stays unread.)
+  assert.equal((await make([join, kdoc('d2', '## Property Course\nThe £1,697 fee credits in full against Mentoring.', 'https://x.example/faq')], { offers })).profile.conflicts.some((c) => c.offer === 'Property Course'), false);
+});
+
 // ─── Performance (the review's B2 inputs) ────────────────────────────────────
 
 test('performance: the review\'s slow inputs, with structures proposed, each finish under 2 seconds (best of three, measured alone)', () => {

@@ -771,11 +771,12 @@ function pricesNear(text: string, name: string, otherNames: readonly string[], i
     for (const m of window.matchAll(PRICE_PHRASE)) {
       // (Accepted structures only: that very occurrence is another accepted offer's.)
       if (ignoreAt?.(from + m.index!)) continue;
-      // (Accepted structures only: its own clause, cut at sentence ends too, is a credit or cross-reference.)
+      // (Accepted structures only: its own clause, cut at sentence ends too, is a credit or cross-reference, and this offer's
+      // name does not stand earlier on its line.)
       if (refine) {
         const pound = m[0].indexOf('£'), s0 = refine.toText[from + m.index! + pound]!, e0 = refine.toText[from + m.index! + m[0].replace(/[\s,]+$/u, '').length - 1]! + 1;
         const ls = text.lastIndexOf('\n', s0 - 1) + 1, le = text.indexOf('\n', s0);
-        if (inCreditClause(text.slice(ls, le === -1 ? text.length : le), s0 - ls, e0 - ls)) continue;
+        if (inCreditClause(text.slice(ls, le === -1 ? text.length : le), s0 - ls, e0 - ls, keyOf(name))) continue;
       }
       const amountText = /£\s?(\d[\d,]*(?:\.\d{1,2})?)\s?(k|m)?/i.exec(m[0]);
       if (!amountText) continue;
