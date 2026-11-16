@@ -186,6 +186,11 @@ export interface SeoBlogStore {
   listJobs(brandId: string): Promise<Job[]>;
 
   recordUsage(usage: UsageRecord): Promise<void>;
+  /**
+   * Article writes stopped and waiting (kind write, state blocked), read directly however many other tasks the
+   * business has: listJobs returns only the newest 200 in PostgreSQL. Optional: without it, listJobs is used.
+   */
+  listBlockedWrites?(brandId: string): Promise<Job[]>;
   usageSince(brandId: string, kind: UsageKind, sinceIso: string): Promise<number>;
   recordActivity(event: ActivityEvent): Promise<void>;
   listActivity(brandId: string, limit: number): Promise<ActivityEvent[]>;
@@ -670,6 +675,9 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   }
 
   async recordUsage(usage: UsageRecord): Promise<void> { this.usage.push(clone(usage)); }
+  async listBlockedWrites(brandId: string): Promise<Job[]> {
+    return [...this.jobs.values()].filter((j) => j.brandId === brandId && j.kind === 'write' && j.state === 'blocked').map(clone);
+  }
   async usageSince(brandId: string, kind: UsageKind, sinceIso: string): Promise<number> {
     return this.usage.filter((u) => u.brandId === brandId && u.kind === kind && u.at >= sinceIso).reduce((n, u) => n + u.amount, 0);
   }
