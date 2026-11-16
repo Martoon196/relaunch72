@@ -9,6 +9,7 @@
 import type { Shell, SeoBlogTab } from './seo-blog-view.js';
 import { escapeHtml as e } from './ui.js';
 import { CONTENT_AREA_TOKENS } from './content-area-theme.js';
+import { CONTENT_AREA_FONT_FACES } from './content-area-fonts.js';
 
 const BASE = '/portal/seo-blog';
 
@@ -24,6 +25,8 @@ export interface ContentAreaPreview {
   readonly place?: ContentAreaPlace;
   /** Set when ongoing production is held by something the owner can fix (the Calendar's own reason). */
   readonly autopilot?: ContentAreaAutopilot;
+  /** On an article that needs the owner: where it sits among those that need him (shown above the page, outside it). */
+  readonly queue?: { readonly index: number; readonly total: number; readonly next: string | null };
 }
 
 export interface ContentAreaAutopilot {
@@ -119,13 +122,32 @@ export function contentAreaLayout(shell: Shell, title: string, body: string, ext
 <div class="ca-biz-panel">${shell.brands.length > 1 ? `<form method="get" action="${BASE}/switch"><label for="ca-brand-switch">Open another business</label><select id="ca-brand-switch" name="brand">${shell.brands.map((x) => `<option value="${e(x.id)}"${x.id === b.id ? ' selected' : ''}>${e(x.name)}</option>`).join('')}</select><input type="hidden" name="to" value="${e(stay)}"><button type="submit" class="ca-btn-2">Open</button></form>` : ''}<a href="${BASE}">All your businesses</a></div></details>`;
   const auto = autopilot(shell);
   const more = PLACES.filter(([p]) => !PHONE.includes(p));
-  return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · ${e(b.name)}</title><style>${legacyCss}</style><style>${CONTENT_AREA_TOKENS}${CONTENT_AREA_CSS}</style>${extraHead}${feedbackHead}</head><body class="ca">${feedbackStatus}<a class="ca-skip" href="#ca-main">Skip to the page</a>
+  return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · ${e(b.name)}</title><style>${legacyCss}</style><style>${CONTENT_AREA_FONT_FACES}${CONTENT_AREA_TOKENS}${CONTENT_AREA_CSS}</style>${extraHead}${feedbackHead}</head><body class="ca">${feedbackStatus}<a class="ca-skip" href="#ca-main">Skip to the page</a>
 <div class="ca-app"><aside class="ca-side" aria-label="${e(b.name)}">${switcher}
 <nav class="ca-nav" aria-label="Content area">${PLACES.map(([p, label, tab]) => link(p, label, tab, 'ca-nav-item')).join('')}</nav>
 <div class="ca-foot"><p class="ca-auto"><span class="ca-dot${auto.on ? ' on' : ''}" aria-hidden="true"></span><strong>${e(auto.title)}</strong><span>${e(auto.line)}${auto.fix ? ` <a href="${e(auto.fix.href)}">${e(auto.fix.label)}</a>` : ''}</span></p>
 <details class="ca-tools"><summary>More tools</summary><ul>${otherTools(shell)}</ul></details>${oldLook(shell, 'ca-oldlook')}</div></aside>
-<main id="ca-main" class="ca-main" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${body}</main></div>
-<nav class="ca-tabbar" aria-label="Content area (phone)">${PLACES.filter(([p]) => PHONE.includes(p)).map(([p, label, tab]) => link(p, label, tab, 'ca-tab')).join('')}<details class="ca-tab-more"><summary class="ca-tab${more.some(([p]) => p === place) ? ' ca-on' : ''}">${icon('more')}<span>More</span></summary><div class="ca-sheet"><ul>${more.map(([p, label, tab]) => `<li><a href="${href(tab)}"${p === place ? ' aria-current="page"' : ''}>${icon(p)}<span>${e(label)}</span></a></li>`).join('')}</ul><ul class="ca-sheet-tools">${otherTools(shell)}</ul>${oldLook(shell, 'ca-oldlook')}</div></details></nav>
+<main id="ca-main" class="ca-main" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${queue(shell)}${body}</main></div>
+<nav class="ca-tabbar" aria-label="Content area (phone)">${PLACES.filter(([p]) => PHONE.includes(p)).map(([p, label, tab]) => link(p, label, tab, 'ca-tab')).join('')}<details class="ca-tab-more"><summary class="ca-tab${more.some(([p]) => p === place) ? ' ca-on' : ''}">${icon('more')}<span>More</span></summary><div class="ca-sheet" role="dialog" aria-label="More"><span class="ca-sheet-grip" aria-hidden="true"></span><p class="ca-sheet-title">More</p><ul>${more.map(([p, label, tab]) => `<li><a href="${href(tab)}"${p === place ? ' aria-current="page"' : ''}>${icon(p)}<span>${e(label)}</span></a></li>`).join('')}</ul><ul class="ca-sheet-tools">${otherTools(shell)}</ul>${oldLook(shell, 'ca-oldlook')}</div></details></nav>
+<script src="${BASE}/content-area.js" defer></script></body></html>`;
+}
+
+/** "1 of 5 that need you · Next": where an article sits among those that need him, above the page (the page itself is untouched). */
+function queue(shell: Shell): string {
+  const q = shell.preview?.queue;
+  if (!q || q.total < 1) return '';
+  return `<nav class="ca-queue" aria-label="Articles that need you"><span><b>${q.index} of ${q.total}</b> ${q.total === 1 ? 'that needs you' : 'that need you'}</span>${q.next ? `<a href="${e(q.next)}">Next ${icon('down', 16)}</a>` : ''}</nav>`;
+}
+
+/**
+ * The shell for pages that belong to no single business ("Your businesses", "Usage and limits", errors): the same look,
+ * a slim top bar with the app's name, the way back to the businesses and "Back to the old look". No sidebar.
+ */
+export function contentAreaTopLayout(shell: Shell, title: string, body: string, extraHead: string, legacyCss: string, feedbackHead = '', feedbackStatus = ''): string {
+  const app = shell.applicationName ?? 'Content';
+  return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · ${e(app)}</title><style>${legacyCss}</style><style>${CONTENT_AREA_FONT_FACES}${CONTENT_AREA_TOKENS}${CONTENT_AREA_CSS}</style>${extraHead}${feedbackHead}</head><body class="ca ca-topped">${feedbackStatus}<a class="ca-skip" href="#ca-main">Skip to the page</a>
+<header class="ca-topbar"><a class="ca-topbar-app" href="${BASE}"><span class="ca-biz-av" aria-hidden="true">${e(initials(app))}</span><span>${e(app)}</span></a><nav class="ca-topbar-links" aria-label="Content">${shell.limitsAvailable ? `<a href="${BASE}/limits">Usage and limits</a>` : ''}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to the portal'}</a>${oldLook(shell, 'ca-oldlook')}</nav></header>
+<main id="ca-main" class="ca-main ca-main-top" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${body}</main>
 <script src="${BASE}/content-area.js" defer></script></body></html>`;
 }
 
@@ -188,24 +210,47 @@ body.ca main{max-width:none}
 .ca-main .ap-pic img,.ca-main .ap-pic-empty{border-radius:var(--ca-radius-m)}
 .ca-main .ap-fix,.ca-main .ap-putback,.ca-main .ap-post,.ca-main .ap-serp{border-radius:var(--ca-radius-m)}
 .ca-main .dna fieldset{border-radius:var(--ca-radius-m)}
+.ca-main .ap-read{padding:32px 48px 48px}.ca-main .ap-read p,.ca-main .ap-read li{line-height:1.75}
+.ca-main .ap-bar{max-width:calc(var(--col) + 80px);padding:10px 10px 10px 24px}
+.ca-main .ap-column,.ca-main .ap-folds,.ca-main .ap-posts{max-width:calc(var(--col) + 80px)}
+.ca-main .ap-folds{border-top:0;background:var(--ca-surface);border-radius:var(--ca-radius-l);box-shadow:var(--ca-shadow);padding:4px 24px;margin-top:28px}
+.ca-main .ap-fold:last-child{border-bottom:0}
+.ca-main .ap-pic figcaption{margin-top:6px}
+.ca-queue{max-width:calc(42rem + 80px);margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px;color:var(--ca-muted)}
+.ca-queue b{color:var(--ca-ink);font-weight:700}.ca-queue a{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 6px;color:var(--ca-link);font-weight:700}.ca-queue a .ca-ic{transform:rotate(-90deg)}
+.ca-topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 20px;padding:14px 28px;background:var(--ca-deep);color:var(--ca-on-deep-2);--ca-focus:var(--ca-focus-on-deep)}
+.ca-topbar a{color:var(--ca-on-deep-2)}
+.ca-topbar-app{display:flex;align-items:center;gap:10px;color:var(--ca-on-deep)!important;font-weight:700;text-decoration:none;min-height:44px}
+.ca-topbar-links{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;font-size:14px}.ca-topbar-links a{min-height:44px;display:inline-flex;align-items:center}
+.ca-topbar .ca-oldlook{margin:0}.ca-topbar .ca-quiet{color:var(--ca-on-deep);min-height:44px}
+.ca-main-top{max-width:1120px;margin:0 auto}
 @media (max-width:700px){
 .ca-app{display:block;min-height:0;background:none}
-.ca-side{position:static;height:auto;width:auto;padding:12px 16px;gap:0;overflow:visible}
+.ca-side{position:sticky;top:0;z-index:30;height:auto;width:auto;padding:10px 16px;gap:0;overflow:visible;box-shadow:0 6px 18px -12px rgba(0,0,0,.45)}
 .ca-side .ca-nav,.ca-side .ca-foot{display:none}
-.ca-main{padding:24px 16px 28px}
-.ca-main .ap-bar{border-radius:var(--ca-radius-l);margin:0 0 20px}
-.ca-main .ap-read{padding:18px 18px 28px;border-radius:var(--ca-radius-l)}
-.ca-tabbar{display:flex;position:sticky;bottom:12px;margin:0 12px 12px;z-index:40;padding:6px;border-radius:var(--ca-radius-pill);background:var(--ca-deep);box-shadow:0 12px 28px -10px rgba(0,0,0,.5);--ca-focus:var(--ca-focus-on-deep)}
-.ca-tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 0;border-radius:var(--ca-radius-pill);color:var(--ca-on-deep-2);font:600 11px/1 var(--ca-font-body);text-decoration:none;position:relative;list-style:none;cursor:pointer}
+.ca-biz>summary{min-height:48px;padding:6px 12px 6px 6px;border-radius:var(--ca-radius-pill)}
+.ca-biz-panel{position:absolute;left:0;right:0;top:calc(100% + 8px);z-index:45}
+.ca-main{padding:22px 16px 24px}
+.ca-main .ap-bar{border-radius:var(--ca-radius-l);margin:0 0 18px;padding:14px 16px;top:72px}
+.ca-main .ap-read{padding:16px 16px 28px;border-radius:var(--ca-radius-l)}
+.ca-main .ap-folds{padding:2px 16px}
+.ca-queue{margin-bottom:8px}
+.ca-topbar{padding:10px 16px}.ca-topbar-links{gap:0 14px}
+.ca-tabbar{display:flex;position:sticky;bottom:12px;margin:0 12px 12px;z-index:40;padding:6px;gap:2px;border-radius:var(--ca-radius-pill);background:var(--ca-deep);box-shadow:0 14px 30px -12px rgba(0,0,0,.55);--ca-focus:var(--ca-focus-on-deep)}
+.ca-tab{z-index:1;flex:1;min-width:0;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:6px 0;border-radius:var(--ca-radius-pill);color:var(--ca-on-deep-2);font:600 11px/1 var(--ca-font-body);text-decoration:none;position:relative;list-style:none;cursor:pointer}
 .ca-tab::-webkit-details-marker{display:none}
-.ca-tab[aria-current=page],.ca-tab.ca-on{background:var(--ca-surface);color:var(--ca-ink)}
-.ca-tab .ca-count{position:absolute;top:2px;right:calc(50% - 22px);min-width:18px;height:18px;font-size:11px;padding:0 5px}
-.ca-tab-more{flex:1;display:flex}.ca-tab-more>summary{width:100%}
-.ca-sheet{position:absolute;left:0;right:0;bottom:calc(100% + 10px);max-height:70vh;overflow:auto;padding:14px;border-radius:var(--ca-radius-l);background:var(--ca-surface);color:var(--ca-ink);box-shadow:var(--ca-shadow-pop);--ca-focus:var(--ca-link)}
-.ca-sheet ul{list-style:none;margin:0;padding:0;display:grid;gap:2px}.ca-sheet a{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 10px;border-radius:var(--ca-radius-s);color:var(--ca-ink);text-decoration:none;font-weight:600}
+.ca-tab[aria-current=page],.ca-tab.ca-on{background:var(--ca-surface);color:var(--ca-ink);font-weight:700}
+.ca-tab .ca-count{position:absolute;top:3px;right:calc(50% - 24px);min-width:18px;height:18px;font-size:11px;padding:0 5px}
+.ca-tab-more{flex:1;min-width:0;display:flex}.ca-tab-more>summary{width:100%}
+.ca-tab-more[open]::before{content:"";position:fixed;inset:0;z-index:0;background:rgba(7,26,29,.45)}
+.ca-sheet{position:fixed;left:8px;right:8px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:2;max-height:calc(100vh - 120px);overflow:auto;padding:10px 16px 16px;border-radius:var(--ca-radius-xl);background:var(--ca-surface);color:var(--ca-ink);box-shadow:0 -18px 40px -16px rgba(0,0,0,.45);--ca-focus:var(--ca-link)}
+.ca-sheet-grip{display:block;width:44px;height:5px;margin:2px auto 10px;border-radius:var(--ca-radius-pill);background:var(--ca-line)}
+.ca-sheet-title{margin:0 4px 8px;font:var(--ca-weight-display) 20px/1.2 var(--ca-font-display)}
+.ca-sheet ul{list-style:none;margin:0;padding:0;display:grid;gap:2px}.ca-sheet a{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 12px;border-radius:var(--ca-radius-pill);color:var(--ca-ink);text-decoration:none;font-weight:600}
 .ca-sheet a[aria-current=page]{background:var(--ca-glow)}
-.ca-sheet-tools{margin-top:10px!important;padding-top:10px!important;border-top:1px solid var(--ca-line)!important}.ca-sheet-tools a{min-height:40px;font-weight:500}
-.ca-sheet .ca-oldlook{margin-top:8px}.ca-sheet .ca-quiet{color:var(--ca-link)}
+.ca-sheet-tools{margin-top:10px!important;padding-top:10px!important;border-top:1px solid var(--ca-line)!important}.ca-sheet-tools a{min-height:44px;font-weight:500}
+.ca-sheet .ca-oldlook{margin-top:8px}.ca-sheet .ca-quiet{color:var(--ca-link);min-height:44px}
+.ca-tabbar:has(.ca-tab-more[open]){z-index:60}
 }
 @media (prefers-reduced-motion:no-preference){.ca-nav-item,.ca-tab{transition:background-color .15s}}
 `;
@@ -213,13 +258,16 @@ body.ca main{max-width:none}
 /** Closes the business switcher, "More tools" and the phone "More" sheet on Escape or a tap outside (served same-origin). */
 export const CONTENT_AREA_SCRIPT = `(() => {
   const sel = 'details.ca-tab-more,details.ca-biz,details.ca-tools';
+  // Some existing links point at the set-up page's former "websites" anchor: take them to its website section.
+  if (location.hash === '#websites') { const w = document.getElementById('website-connection'); if (w) w.scrollIntoView(); }
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     for (const d of document.querySelectorAll(sel)) if (d.open) { d.open = false; const s = d.querySelector('summary'); if (s) s.focus(); }
   });
   document.addEventListener('click', (ev) => {
     const inside = ev.target instanceof Element ? ev.target.closest(sel) : null;
-    for (const d of document.querySelectorAll(sel)) if (d.open && d !== inside) d.open = false;
+    // A tap outside, or on the dimmed backdrop (which belongs to the "More" sheet's own element), closes it.
+    for (const d of document.querySelectorAll(sel)) if (d.open && (d !== inside || ev.target === d)) d.open = false;
   });
 })();
 `;

@@ -137,7 +137,6 @@ jobs:
     env:
       RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
       RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-      RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -148,6 +147,8 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Install controllable clock in disposable PostgreSQL only
+        env:
+          RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
         shell: bash
         run: |
           docker exec -u 0 -i "$RL72_MEDIA_CLOCK_CONTAINER" bash -s <<'CLOCK'
@@ -178,6 +179,8 @@ jobs:
           node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
           node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
       - name: Prove planner to native video calling after three elapsed days
+        env:
+          RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
         run: node --import tsx --test orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts
       - name: Measure continuous live-action 1080p under aggregate memory limit
         run: sh orchestrator/test/tools/media-real-footage-memory.sh

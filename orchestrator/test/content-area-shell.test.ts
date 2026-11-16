@@ -14,6 +14,10 @@ import * as fx from './seo-blog-article-page-fixtures.js';
 import { articleId, BRAND_ID, call, HOSTILE_NAME, HOSTILE_TITLE, identity, NOW, SECRET, showcase, type Scenario } from './content-area-shell-fixtures.js';
 import { goldenPages, GOLDEN_BASE, GOLDEN_FILE, GOLDEN_NOW, type GoldenRecord } from './content-area-shell-golden.js';
 
+// The tests decide the switch themselves. A build machine may have the real setting in its environment (the live
+// service does once the preview is switched on), and it must not leak into the "server does not allow it" cases.
+delete process.env.CONTENT_AREA_PREVIEW;
+
 const GOLDEN: GoldenRecord = JSON.parse(gunzipSync(readFileSync(new URL(`./${GOLDEN_FILE}`, import.meta.url))).toString('utf8'));
 const B = `/portal/seo-blog/b/${BRAND_ID}`;
 const ON = { headers: { cookie: 'r72_content_look=new' }, input: { contentAreaPreview: 'enabled' } };
@@ -50,7 +54,7 @@ test(`with the preview off, every page and form post is byte-identical to the fo
       // While the server allows the preview, the switch itself exists for people who manage a business: its page, its
       // post and its script. Everything else, including the switch for someone who manages none, stays as it was.
       const allowed = env === 'enabled' || opts?.input?.contentAreaPreview === 'enabled';
-      const newWhenAllowed = (key: string) => !key.startsWith('stranger:') && /:(look-unknown|look-back|look|post-look|script-unknown|anonymous-script)$/.test(key) || key === 'post:look';
+      const newWhenAllowed = (key: string) => !key.startsWith('stranger:') && /:(look-unknown|look-back|look|post-look|script-unknown|anonymous-script|font-unknown|anonymous-font)$/.test(key) || key === 'post:look';
       let compared = 0;
       for (const key of Object.keys(GOLDEN)) {
         if (allowed && newWhenAllowed(key)) continue;
@@ -112,7 +116,8 @@ test('the article page and Brand DNA keep their own content, forms and wording i
     const inner = (html: string) => { const from = html.indexOf(start); return html.slice(from, html.indexOf('</main>', from)); };
     assert.ok(inner(before.body).length > 200, path);
     assert.equal(inner(after.body).replace(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/g, 'ID'), inner(before.body).replace(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/g, 'ID'), `${path}: the page itself is unchanged`);
-    assert.equal(after.headers['content-security-policy'], before.headers['content-security-policy']);
+    // The shell's page adds only its own fonts to the policy; the page without the shell is unchanged.
+    assert.equal(after.headers['content-security-policy'], `${before.headers['content-security-policy']}; font-src 'self'`);
     assert.doesNotMatch(after.body, /<script(?![^>]*src="\/portal\/seo-blog\/)/, 'no inline script');
   }
   const dna = await call(service, identity(OWNER.userId), 'GET', `${R}/dna`, ON);
