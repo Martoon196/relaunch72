@@ -270,6 +270,10 @@ export interface ProgrammeSummary {
   readonly next: {readonly label:string;readonly tab:string};
   readonly health: string;
   readonly diagnostic: ResearchDiagnostic | null;
+  /** True only while an automatic research retry is really queued or running (no hold). */
+  readonly retrying?: boolean;
+  /** The hold's reason, when research is held. */
+  readonly holdReason?: string | null;
   readonly lastSuccessAt: string | null;
   readonly metricsWarning: string | null;
 }
@@ -281,10 +285,10 @@ export function programmeSummary(input:{brand:Brand;jobs:readonly Job[];profileS
   const diagnostic=hold?.diagnostic??latest?.diagnostic??null;
   const active=plans.find((j)=>['queued','running'].includes(j.state));
   const oldBlock=plans.find((j)=>['blocked','failed'].includes(j.state)&&(!programmeRun(j)||!!programmeRun(j)?.attempts.length));
-  const base={health:!input.researchConfigured?'Not configured':diagnostic?'Needs attention':oldBlock&&!success?'Earlier planning task needs attention':success?'Last source research succeeded':'Configured · not yet verified by a successful run',diagnostic,lastSuccessAt:success?.receivedAt??null,metricsWarning:plans.map((j)=>programmeRun(j)?.metricsWarning?.summary).find(Boolean)??null};
+  const base={health:!input.researchConfigured?'Not configured':diagnostic?'Needs attention':oldBlock&&!success?'Earlier planning task needs attention':success?'Last source research succeeded':'Configured · not yet verified by a successful run',diagnostic,retrying:Boolean(active)&&!hold,holdReason:hold?.reason??null,lastSuccessAt:success?.receivedAt??null,metricsWarning:plans.map((j)=>programmeRun(j)?.metricsWarning?.summary).find(Boolean)??null};
   if(input.brand.settings.pauseAll) return {...base,state:'paused',title:'Programme paused',detail:'New research and draft production wait for your instruction. Existing drafts remain available.',next:{label:'Review pause controls',tab:'publishing'}};
   if(input.profileState!=='confirmed') return {...base,state:'needs_setup',title:'Your brand profile needs review',detail:input.profileState==='stale'?'Guidance changed after confirmation. Extract and review the current profile before production.':'Review the extracted facts and confirm the profile. The programme will not invent missing facts or confirm it for you.',next:{label:'Review and confirm profile',tab:'setup#brand-profile'}};
-  if(hold) return {...base,state:'held',title:'Research needs your attention',detail:diagnostic?`${researchWords(diagnostic).summary} ${researchWords(diagnostic).next}`:'An earlier planning outcome needs review. Saved results and usage history remain available; no new automatic run will silently restart it.',next:{label:'Review research and resume',tab:'topics#research-status'}};
+  if(hold) return {...base,state:'held',title:'Research needs your attention',detail:diagnostic?`${researchWords(diagnostic,{reason:hold.reason,retrying:false}).summary} ${researchWords(diagnostic,{reason:hold.reason,retrying:false}).next}`:'An earlier planning outcome needs review. Saved results and usage history remain available; no new automatic run will silently restart it.',next:{label:'Review research and resume',tab:'topics#research-status'}};
   if(active) return {...base,state:active.state==='queued'&&programmeRun(active)?.retries?'waiting_retry':'working',title:active.state==='queued'&&programmeRun(active)?.retries?'A bounded research retry is queued':'Your next content plan is in progress',detail:ownerWords(active.progress),next:{label:'Open programme tasks',tab:'activity'}};
   if(!input.canPlan) return {...base,state:'needs_setup',title:'One setup step is holding production',detail:input.missing.map(ownerWords).join(' '),next:{label:input.missing.some((x)=>/budget|allowance/i.test(x))?'Review programme allowances':'Finish brand setup',tab:input.missing.some((x)=>/budget|allowance/i.test(x))?'publishing':'setup'}};
   if(input.drafts) return {...base,state:'needs_review',title:`${input.drafts} draft${input.drafts===1?' is':'s are'} ready for your review`,detail:'Proposed dates are editorial intentions. Approval and a publication schedule are separate decisions.',next:{label:'Review the draft diary',tab:'calendar'}};

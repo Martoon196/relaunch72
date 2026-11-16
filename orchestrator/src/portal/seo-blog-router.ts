@@ -20,7 +20,7 @@ import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/eng
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
-import { ownerWords } from '../seo-blog/owner-words.js';
+import { noticeWords, ownerWords } from '../seo-blog/owner-words.js';
 import { EXISTING_WORKSPACE, namesExistingWorkspace } from '../seo-blog/existing-workspace.js';
 
 /** The founder's own account cannot manage the MHP workspace until it has opened Marketing in the MHP portal (0124). */
@@ -95,25 +95,41 @@ function redirect(res: ServerResponse, location: string): void {
   res.end();
 }
 
-/** Notices are signed so a crafted link cannot display arbitrary text in the product. */
-function signedMessage(secret: string, kind: 'n' | 'e', text: string): string {
-  const m = Buffer.from(text.slice(0, 400)).toString('base64url');
-  const s = createHmac('sha256', secret).update(`seo-blog:${kind}:${m}`).digest('base64url').slice(0, 22);
-  return `${kind}=${m}&s=${s}`;
+/**
+ * Notices are signed so a crafted link cannot display arbitrary text in the product. They are put in the owner's
+ * words before signing, so the address never carries the engine's raw text: an error through `ownerWords`, a
+ * success line through `noticeWords`. The founder reads success lines as written, and for an error the raw text
+ * travels beside it (signed, as `d`) for their Technical detail.
+ */
+function signedMessage(secret: string, kind: 'n' | 'e', text: string, founder = false): string {
+  const shown = kind === 'e' ? ownerWords(text) : founder ? text : noticeWords(text);
+  const m = Buffer.from(shown.slice(0, 400)).toString('base64url');
+  const d = founder && kind === 'e' && shown !== text ? Buffer.from(text.slice(0, 400)).toString('base64url') : '';
+  const s = createHmac('sha256', secret).update(`seo-blog:${kind}:${m}${d ? `:d:${d}` : ''}`).digest('base64url').slice(0, 22);
+  return `${kind}=${m}${d ? `&d=${d}` : ''}&s=${s}`;
 }
 
-function readMessage(secret: string, url: URL): { notice: string | null; error: string | null } {
+function readMessage(secret: string, url: URL): { notice: string | null; error: string | null; messageDetail: string | null } {
   const sig = url.searchParams.get('s') ?? '';
+  const d = url.searchParams.get('d') ?? '';
   for (const kind of ['n', 'e'] as const) {
     const m = url.searchParams.get(kind);
     if (!m) continue;
-    const expected = createHmac('sha256', secret).update(`seo-blog:${kind}:${m}`).digest('base64url').slice(0, 22);
+    const expected = createHmac('sha256', secret).update(`seo-blog:${kind}:${m}${d ? `:d:${d}` : ''}`).digest('base64url').slice(0, 22);
     if (sig.length === expected.length && timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
       const text = Buffer.from(m, 'base64url').toString('utf8');
-      return kind === 'n' ? { notice: text, error: null } : { notice: null, error: text };
+      const messageDetail = d ? Buffer.from(d, 'base64url').toString('utf8') : null;
+      return kind === 'n' ? { notice: text, error: null, messageDetail } : { notice: null, error: text, messageDetail };
     }
   }
-  return { notice: null, error: null };
+  return { notice: null, error: null, messageDetail: null };
+}
+
+/** Whether the signed-in person is the founder (the "Usage and limits" rule). Unknown counts as no. */
+async function isFounder(input: SeoBlogRouteInput): Promise<boolean> {
+  if (!input.identity) return false;
+  const limits = input.service.limitsFor?.(input.identity, input.requestId);
+  return limits ? await limits.allowed().catch(() => false) : false;
 }
 
 async function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
@@ -221,9 +237,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
   const back = (tab: string) => `${SEO_BLOG_BASE}/b/${brandId}/${tab}`;
+  // Set once a POST has been accepted for handling: whether notices are signed for the founder.
+  let founder = false;
   const ok = (location: string, text: string) => {
     const [address,fragment]=location.split('#');
-    return redirect(res, `${address}${address!.includes('?') ? '&' : '?'}${signedMessage(input.sessionSecret, 'n', text)}${fragment?'#'+fragment:''}`);
+    return redirect(res, `${address}${address!.includes('?') ? '&' : '?'}${signedMessage(input.sessionSecret, 'n', text, founder)}${fragment?'#'+fragment:''}`);
   };
 
   try {
@@ -267,12 +285,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const resumed = f('action') === 'policy' || !new RegExp(`^${UUID}$`, 'i').test(target) ? 0 : await engine.resumeAllowanceBlockedWrites(actor, target.toLowerCase()).catch(() => 0);
         return ok(`${SEO_BLOG_BASE}/limits`, `Limits saved. Usage history and publishing settings are unchanged.${resumed ? ` ${resumed === 1 ? '1 article that was waiting is' : `${resumed} articles that were waiting are`} being written now.` : ''}`);
       }
+      founder = await isFounder(input);
       // Production rules are founder-only: anyone else gets the same answer as an action that does not exist.
-      if (brandId && rest.split('/')[0] === 'methods') {
-        const methodsLimits = input.service.limitsFor?.(identity, input.requestId);
-        if (!methodsLimits || !(await methodsLimits.allowed())) throw new SeoBlogError(404, 'That action was not found.');
-      }
-      return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
+      if (brandId && rest.split('/')[0] === 'methods' && !founder) throw new SeoBlogError(404, 'That action was not found.');
+      return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input, founder);
     }
     if (method !== 'GET' && method !== 'HEAD') throw new SeoBlogError(405, 'Use the controls on the page.');
 
@@ -313,7 +329,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
-    if (rest === 'image/status') return send(res, 200, JSON.stringify(await engine.imageJobStatus(actor, brandId, url.searchParams.get('article') ?? '', url.searchParams.get('job') ?? '')), 'application/json; charset=utf-8');
+    if (rest === 'image/status') { const st = await engine.imageJobStatus(actor, brandId, url.searchParams.get('article') ?? '', url.searchParams.get('job') ?? ''); return send(res, 200, JSON.stringify({ ...st, detail: ownerWords(st.detail) }), 'application/json; charset=utf-8'); }
     const privateImage = new RegExp(`^media/(${UUID})/([0-9a-f]{64})\\.jpg$`, 'i').exec(rest);
     if (privateImage) {
       const image = await engine.privateCampaignImage(actor, brandId, privateImage[1]!, privateImage[2]!);
@@ -540,13 +556,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     throw new SeoBlogError(404, 'That page was not found.');
   } catch (error) {
     const known = error instanceof SeoBlogError;
-    const message = known ? error.message : 'The SEO blog area is temporarily unavailable. Nothing was changed.';
+    // A refusal shown on a page (a GET, a 404, or a 5xx) is put in the owner's words like any other error.
+    const message = known ? ownerWords(error.message) : 'The SEO blog area is temporarily unavailable. Nothing was changed.';
     if (!known) console.error('seo-blog: request failed', (error as Error).name);
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
       const articleAction = rest.split('/')[2] ?? '';
       const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}`
         : rest.startsWith('creative/') ? creativeReturnPage(rest) : rest.split('/')[0] || 'overview';
-      return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
+      return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', error.message, founder)}`);
     }
     const status = known ? error.status : 503;
     if (previewOn) {
@@ -594,7 +611,7 @@ async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand
 
 async function handlePost(
   res: ServerResponse, engine: SeoBlogEngine, actor: Actor, path: string, brandId: string | null, rest: string, form: FormData,
-  f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void, input: SeoBlogRouteInput,
+  f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void, input: SeoBlogRouteInput, founder = false,
 ): Promise<void> {
   if (path === `${SEO_BLOG_BASE}/brands/existing`) {
     // Martin Howard Property's existing workspace, then the same Brand DNA door as a newly added business.
@@ -602,7 +619,7 @@ async function handlePost(
     try { used = await engine.attachExistingWorkspace(actor, { commandId: f('commandId') ?? '' }); }
     catch (error) {
       if (error instanceof SeoBlogError && error.status < 500) {
-        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message)}#${EXISTING_WORKSPACE_ANCHOR}`);
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message, founder)}#${EXISTING_WORKSPACE_ANCHOR}`);
       }
       throw error;
     }
@@ -614,7 +631,7 @@ async function handlePost(
     if (namesExistingWorkspace(f('name') ?? '', f('website')) && !(await engine.managesExistingWorkspace(actor))) {
       const limits = input.service.limitsFor?.(input.identity!, input.requestId);
       if (limits && await limits.allowed().catch(() => false)) {
-        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', FOUNDER_WITHOUT_WORKSPACE)}#add-business`);
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', FOUNDER_WITHOUT_WORKSPACE, founder)}#add-business`);
       }
     }
     // A new business lands on the Brand DNA door ("Start with your website"), not on the long setup page.
@@ -628,16 +645,16 @@ async function handlePost(
         const here = brands.find((b) => b.id.toLowerCase() === EXISTING_WORKSPACE.id);
         if (here) return ok(`${SEO_BLOG_BASE}/b/${here.id}/dna`, `${EXISTING_WORKSPACE.name} is already here.`);
         if (await engine.existingWorkspaceOffer(actor).catch(() => false)) {
-          return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', `${EXISTING_WORKSPACE.name} already has a workspace. Use the ${EXISTING_WORKSPACE.name} card on this page instead.`)}#${EXISTING_WORKSPACE_ANCHOR}`);
+          return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', `${EXISTING_WORKSPACE.name} already has a workspace. Use the ${EXISTING_WORKSPACE.name} card on this page instead.`, founder)}#${EXISTING_WORKSPACE_ANCHOR}`);
         }
-        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message)}#add-business`);
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', error.message, founder)}#add-business`);
       }
       // Stay on the form with the reason (a name that is too short, a duplicate, or an account that may not add one).
       if (error instanceof SeoBlogError && error.status < 500 && error.status !== 404) {
         // The engine says "brand"; every page says "business".
         const text = error.status === 403 ? 'Only the account owner can add a business. Ask them to add it.'
           : error.message.replace(/^Enter a brand name/u, 'Enter a business name');
-        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', text)}#add-business`);
+        return redirect(res, `${SEO_BLOG_BASE}?${signedMessage(input.sessionSecret, 'e', text, founder)}#add-business`);
       }
       throw error;
     }

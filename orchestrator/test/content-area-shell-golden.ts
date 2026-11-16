@@ -21,7 +21,8 @@ export const GOLDEN_FILE = 'content-area-shell-golden.json.gz';
  * every scenario's overview and root, and the real engine's overview, setup, topics, publishing, social and methods
  * (now a founder-only page: a client gets the not-found answer), before and after the form posts. Recorded again on top
  * of foundation 46dedb7 (SEO report lifted out, as the shell test compares), for the same entries only, when the
- * writing allowance became "about N more articles" for the owner.
+ * writing allowance became "about N more articles" for the owner. Then engine:social and after-posts:social only, when
+ * the social page stopped showing a client the social posting supplier's setup steps (the founder keeps them).
  */
 export const GOLDEN_BASE = '744a19d';
 
