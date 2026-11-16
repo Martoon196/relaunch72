@@ -589,13 +589,16 @@ test('the owner\'s REAL pages, honest answer cited to the Home table: one questi
 });
 
 test('round 8, the backstop for an accepted structure: credit clauses and passing mentions across a heading are not read; every real disagreement still asks', async () => {
-  const room = kdoc('d1', "## The Members' Room\n£67 a month or £670 a year", 'https://x.example/join');
+  // (One Lane Mentoring is a listed offer: its card is on the cited page, with no price.)
+  const room = kdoc('d1', "## The Members' Room\n£67 a month or £670 a year\n## One Lane Mentoring\nNinety days in a group.", 'https://x.example/join');
   const offers = [{ name: "The Members' Room", description: '', price: '£67 a month', url: null, sourceDocumentId: 'd1', pricing: { lines: [{ kind: 'other', text: '£670 a year' }] } },
     { name: 'One Lane Mentoring', description: '', price: null, url: null, sourceDocumentId: 'd1' }];
   const asks = async (text: string, url: string | null = null) => (await make([room, kdoc('d2', text, url)], { offers })).profile.conflicts.map((c) => c.offer);
   // Not read: a credit clause beside the name; a passing mention's window stops at the next heading.
   assert.deepEqual(await asks("## Course\n• The Members' Room is included.\n• The £997 credits in full against One Lane Mentoring for 90 days.", 'https://x.example/course'), []);
-  assert.deepEqual(await asks("Private includes the course and the Members' Room included.\n### Standard\n£3,997\nor 6 monthly payments of £699", 'https://x.example/m'), []);
+  // (Round 9: only under a heading that names another listed offer, as on the real Mentoring page.)
+  assert.deepEqual(await asks("### One Lane Mentoring: in a group\nIt includes the course and the Members' Room.\n### Standard\n£3,997\nor 6 monthly payments of £699", 'https://x.example/m'), []);
+  assert.deepEqual(await asks("## About\nIt includes the course and the Members' Room.\n### Standard\n£77 a month", 'https://x.example/m'), ["The Members' Room"], 'under a heading naming no other offer: the full window');
   // Still asked: a different price on the name's own line, below a name standing on its own line (even past a heading), in
   // the same sentence as a passing mention, and a credit-looking sentence that states the price.
   assert.deepEqual(await asks("Price list\nThe Members' Room is now £77 a month."), ["The Members' Room"]);
@@ -604,10 +607,51 @@ test('round 8, the backstop for an accepted structure: credit clauses and passin
   assert.deepEqual(await asks("The Members' Room costs £77 a month with credit towards nothing"), ["The Members' Room"]);
   assert.deepEqual(await asks("The Members' Room is £77 a month, on credit to anyone"), ["The Members' Room"]);
   // Without an accepted structure the backstop is 8eca59d's: the same credit clause is read.
-  const single = kdoc('d1', "## The Members' Room\n£67 a month", 'https://x.example/join');
+  const single = kdoc('d1', "## The Members' Room\n£67 a month\n## One Lane Mentoring\nNinety days in a group.", 'https://x.example/join');
   const course = kdoc('d2', "## Course\n• The Members' Room is included.\n• The £997 credits in full against One Lane Mentoring for 90 days.", 'https://x.example/course');
   const plain = await make([single, course], { offers: offers.map(({ pricing: _p, ...o }) => o) });
   assert.deepEqual(plain.profile.conflicts.map((c) => [c.offer, c.detail]), [["The Members' Room", 'Your website pages and documents give different prices for this. Nothing was chosen for you.']]);
+});
+
+// ─── Round 9: the review's cases the round-8 backstop left silent (4239e2d and 8eca59d asked) ─────
+
+test('round 9: every case the round-8 backstop left silent asks again (tiers, sentence ends, trailing commas, neighbouring credit sentences, heading clips)', async () => {
+  const L = { plan: (text: string, f: string) => ({ kind: 'plan', text, for: f }), other: (text: string) => ({ kind: 'other', text }) };
+  const O = (name: string, price: string, lines?: unknown[]) => ({ name, description: '', price, url: null, sourceDocumentId: 'd1', ...(lines ? { pricing: { lines } } : {}) });
+  const asksAbout = async (first: KnowledgeDocument, second: KnowledgeDocument, offers: unknown[], about: string) => (await make([first, second], { offers })).profile.conflicts.some((c) => c.offer === about);
+  // The review's a_back: stored text, the course and Mentoring structured, the Deal Desk plain.
+  const join = kdoc('d1', '# Join\n## Property Course\n£1,497 once, or 3 x £525\n## Mentoring\n£3,997 or 6 x £699\n## Deal Desk\n£47 once', 'https://x.example/join');
+  const course = [O('Property Course', '£1,497', [L.plan('3 x £525', '£1,497')]), O('Mentoring', '£3,997', [L.plan('6 x £699', '£3,997')]), O('Deal Desk', '£47')];
+  for (const text of [
+    'About the Property Course. From March it costs £1,697. Deal Desk payments are credited against it.',
+    '# Changes\n• We have updated the Property Course for 2027. It is now £1,697. Anything already paid is deducted.',
+    'About the Property Course. From March it costs £1,697, and Deal Desk payments are credited against it.',
+    'Prices from March. Property Course £1,697 Mentoring £3,997 Deal Desk £47.',
+    'Prices from March\nProperty Course £1,697 Mentoring £3,997 Deal Desk £47',
+    'About the Property Course. It is £1,697. Mentoring is extra.',
+    'Prices from March. Property Course £1,697, Mentoring £3,997, Deal Desk £47.',
+    '# Learn property properly\nJoin the Property Course, our flagship programme.\n## The price\n£1,697 once',
+    '# What you get\n• Everything in the Property Course and more.\n### Investment\n£1,697',
+    '## 2027 price\n£1,697\n## About\nThis is the price of the Property Course from March.',
+  ]) assert.ok(await asksAbout(join, kdoc('d2', text, 'https://x.example/faq'), course, 'Property Course'), text);
+  // The review's a_nat and a_final: html pages through the reader.
+  const join2 = wdoc('d1', '<h1>Join</h1><h2>Property Course</h2><p>£1,497 once, or 3 x £525</p><h2>Mentoring</h2><p>£3,997 or 6 x £699</p>', 'https://x.example/join');
+  const two = [O('Property Course', '£1,497', [L.plan('3 x £525', '£1,497')]), O('Mentoring', '£3,997', [L.plan('6 x £699', '£3,997')])];
+  for (const html of [
+    '<h1>Fees</h1><p>Our prices from March are Property Course £1,697, Mentoring £3,997.</p>',
+    '<h1>News</h1><p>The Property Course has a new price. It is £1,697. Mentoring stays at £3,997.</p>',
+    '<h1>Changes</h1><ul><li>We have updated the Property Course for 2027. It is now £1,697. Anything already paid is deducted.</li></ul>',
+    '<h1>News</h1><p>We have rebuilt the Property Course. The new price is £1,697. Taster-day fees are credited against it.</p>',
+    '<h1>Fees</h1><p>Prices from March. Property Course £1,697, Mentoring £3,997.</p>',
+    '<h1>Questions</h1><h2>What is the Property Course?</h2><p>A 26-module programme you take at your own pace.</p><h2>What does it cost?</h2><p>£1,697 once.</p>',
+    '<h1>Learn property properly</h1><p>Join the Property Course, our flagship programme.</p><h2>The price</h2><p>£1,697 once</p>',
+    '<h1>Stories</h1><blockquote>The Property Course changed how I buy.</blockquote><h2>Pricing</h2><p>£1,697 once, or 3 x £599</p>',
+  ]) assert.ok(await asksAbout(join2, wdoc('d2', html, 'https://x.example/prices'), two, 'Property Course'), html);
+  // Tiered names: one listed offer's name ends the other's.
+  const tiers = wdoc('d1', '<h1>Coaching</h1><h2>Group Coaching</h2><p>£50 a month or £500 a year</p><h2>Coaching</h2><p>£200 a month</p>', 'https://x.example/join');
+  assert.ok(await asksAbout(tiers, wdoc('d2', '<h1>Prices</h1><p>Group Coaching £60 a month</p>', 'https://x.example/prices'), [O('Group Coaching', '£50 a month', [L.other('£500 a year')]), O('Coaching', '£200 a month')], 'Group Coaching'));
+  const gold = wdoc('d1', '<h1>Join</h1><h2>Gold Membership</h2><p>£50 a month or £500 a year</p><h2>Membership</h2><p>£20 a month</p>', 'https://x.example/join');
+  assert.ok(await asksAbout(gold, wdoc('d2', '<h1>Compare</h1><p>Gold Membership: £60 a month</p>', 'https://x.example/prices'), [O('Gold Membership', '£50 a month', [L.other('£500 a year')]), O('Membership', '£20 a month')], 'Gold Membership'));
 });
 
 // ─── Performance (the review's B2 inputs) ────────────────────────────────────

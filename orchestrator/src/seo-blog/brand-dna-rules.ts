@@ -848,18 +848,17 @@ const PRICE_HEADING = /^(?:our\s+)?(?:price|prices|pricing|cost|costs)$/iu;
 /** The clause around an amount: between ; ( ) | spaced dashes, " or ", and commas not inside a number. */
 const CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b/giu;
 const breakCache = new WeakMap<Structure, Map<number, { s: number; e: number }[]>>();
+/** The backstop's clause breaks: the structure check's (CLAUSE_BREAK, unchanged), plus sentence ends. */
+const CREDIT_CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b|[.!?](?=\s|$)/giu;
 /**
- * The cross-source backstop's form of the structure check's excuse (accepted structures only): the amount at [s, e) of one
- * stored line has a clause (the same clause breaks, at most 300 characters either side) that is a credit or cross-reference
- * ("credits in full", "credited against / towards / to", "deducted"; never "with / on / interest-free credit"), or the amount
- * stands directly beside another listed offer's name (`otherKeys`, as keyOf gives them).
+ * The cross-source backstop's credit test (accepted structures only): the amount at [s, e) of one stored line has a clause
+ * (CREDIT_CLAUSE_BREAK, at most 300 characters either side) that is a credit or cross-reference ("credits in full",
+ * "credited against / towards / to", "deducted"; never "with / on / interest-free credit").
  */
-export function creditOrBesideOther(line: string, s: number, e: number, otherKeys: readonly string[]): boolean {
+export function inCreditClause(line: string, s: number, e: number): boolean {
   let cs = Math.max(0, s - 300), ce = Math.min(line.length, e + 300);
-  for (const m of line.matchAll(CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
-  if (CREDIT_WORDS.test(line.slice(cs, ce))) return true;
-  const after = ` ${keyOf(line.slice(e, Math.min(ce, e + 120)))} `, before = ` ${keyOf(line.slice(Math.max(cs, s - 120), s))} `;
-  return otherKeys.some((k) => k && (after.startsWith(` ${k} `) || before.endsWith(` ${k} `)));
+  for (const m of line.matchAll(CREDIT_CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
+  return CREDIT_WORDS.test(line.slice(cs, ce));
 }
 /** Every clause break on a line, found once per line (start and end positions in the basis). */
 function breaksOn(st: Structure, line: number): { s: number; e: number }[] {
