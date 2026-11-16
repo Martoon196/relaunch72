@@ -48,7 +48,7 @@ test('measured searches show the number and when it was measured, never who meas
   const m = visible(page(briefs.measured));
   assert.match(m, /1,300 searches a month in Google/);
   assert.match(m, /Measured on 3 November 2026\./);
-  assert.match(m, /depends on where the page ranks in Google, so we do not guess a number/);
+  assert.match(m, /depends on where the page ranks in Google\./);
   assert.doesNotMatch(m, /42|competition/i, 'competition is not shown');
   for (const b of [briefs.unmeasured, briefs.none, briefs.zeroless]) {
     const demand = /How many people search for this(.*?)How many visits/.exec(visible(page(b)))![1]!;

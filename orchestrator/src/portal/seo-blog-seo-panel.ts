@@ -66,7 +66,7 @@ function longDate(iso: string): string | null {
   if (!Number.isFinite(t)) return null;
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(t));
 }
-const VISITS = 'How many visits this brings depends on where the page ranks in Google, so we do not guess a number.';
+const VISITS = 'How many visits this brings depends on where the page ranks in Google.';
 
 function aimCard(brief: ArticleBrief | null | undefined): string {
   if (!brief) return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3><p>The search phrase is not on record for this article. It was planned before we kept this information.</p><p class="ap-note">The score below still checks everything that does not need the phrase.</p></section>`;
