@@ -1,5 +1,5 @@
 /**
- * Whether "Connect email" is switched on, and for which businesses.
+ * Whether "Connect email" is switched on.
  *
  * On only when ALL of these hold; otherwise it is off, the page says so plainly and start-up carries on:
  *   EMAIL_CONNECT           exactly "enabled"
@@ -7,14 +7,13 @@
  *   EMAIL_CONNECTION_KEY    32 random bytes, base64 (seals the saved server token and webhook secret)
  *   PORTAL_BASE_URL         an https origin (the bounce webhook address Postmark posts to is built from it)
  * Problems name settings only, never a value.
+ *
+ * WHICH businesses may connect is decided in eligibility.ts (the allow-list seam), not here.
  */
 import { EMAIL_CONNECTION_KEY_ENV, EmailConnectionVault } from './vault.js';
 
 export const EMAIL_CONNECT_ENV = 'EMAIL_CONNECT';
 export const POSTMARK_ACCOUNT_TOKEN_ENV = 'POSTMARK_ACCOUNT_TOKEN';
-
-/** Property Predator: the first, and in this release the only, business allowed to connect email. */
-export const PP_EMAIL_WORKSPACE_ID = 'd975ff66-336a-46c2-b36b-d7095a11af97';
 
 export interface EmailConnectBusiness {
   readonly workspaceId: string;
@@ -30,12 +29,6 @@ export interface EmailConnectBusiness {
 
 /** The Postmark bounce source key of a stored connection: "conn-" and all 32 hex digits of the workspace id (37 characters). */
 export const connectionSourceKey = (workspaceId: string): string => `conn-${workspaceId.toLowerCase().replace(/-/gu, '')}`;
-
-export const EMAIL_CONNECT_BUSINESSES: readonly EmailConnectBusiness[] = Object.freeze([
-  Object.freeze({ workspaceId: PP_EMAIL_WORKSPACE_ID, name: 'Property Predator', sourceKey: connectionSourceKey(PP_EMAIL_WORKSPACE_ID), replacesSourceKey: null }),
-]);
-export const emailConnectBusiness = (workspaceId: string): EmailConnectBusiness | undefined =>
-  EMAIL_CONNECT_BUSINESSES.find(business => business.workspaceId === workspaceId.toLowerCase());
 
 export type EmailConnectConfig =
   | { readonly enabled: true; readonly accountToken: string; readonly vault: EmailConnectionVault; readonly webhookOrigin: string; readonly problems: readonly [] }

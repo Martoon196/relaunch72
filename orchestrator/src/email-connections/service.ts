@@ -39,7 +39,8 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
-import { emailConnectBusiness, type EmailConnectBusiness, type EmailConnectConfig } from './config.js';
+import type { EmailConnectBusiness, EmailConnectConfig } from './config.js';
+import { staticEligibility, type EmailConnectEligibility } from './eligibility.js';
 import { connectionBounceSource } from './bounce-sources.js';
 import { freeMailboxDomain, lookUpCname, lookUpDnsHost, lookUpTxt, parseEmailAddress, publicSuffixOnly, reservedDomain, senderName, systemDnsResolver,
   type DnsHost, type DnsResolver, type DnsSeen } from './domains.js';
@@ -170,6 +171,8 @@ export class EmailConnectionService {
   private readonly secret: () => string;
   /** Runs in progress in THIS process, by workspace: a second window for the same business is told at once. */
   private readonly inFlight = new Set<string>();
+  /** Which businesses may connect: the one the platform composed (the portal's entries and page ask it here too). */
+  readonly eligibility: EmailConnectEligibility;
 
   constructor(private readonly input: {
     config: EmailConnectConfig;
@@ -183,6 +186,8 @@ export class EmailConnectionService {
     /** Test seam for the webhook secret; production uses 32 random bytes. */
     secret?: () => string;
     lockWaitMs?: number;
+    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
+    eligibility?: EmailConnectEligibility;
   }) {
     const config = input.config;
     this.account = input.account ?? (config.enabled ? createPostmarkAccountApi({ accountToken: config.accountToken }) : null);
@@ -190,6 +195,7 @@ export class EmailConnectionService {
     this.resolver = input.resolver ?? systemDnsResolver();
     this.log = input.log ?? (() => undefined);
     this.secret = input.secret ?? (() => randomBytes(32).toString('base64url'));
+    this.eligibility = input.eligibility ?? staticEligibility;
   }
 
   /** The configuration allows the feature (the database may still lack 0155: see available()). */
@@ -199,7 +205,7 @@ export class EmailConnectionService {
   async available(): Promise<boolean> { return this.enabled && await this.input.store.present().catch(() => false); }
 
   private business(identity: PortalSessionIdentity): EmailConnectBusiness {
-    const business = emailConnectBusiness(identity.workspaceId);
+    const business = this.eligibility.business(identity.workspaceId);
     if (!business) throw new EmailConnectionError(403, EMAIL_CONNECTION_MESSAGES.notAllowed, 'not_allowed');
     return business;
   }
@@ -417,7 +423,7 @@ export class EmailConnectionService {
         secret = this.secret();
         await store.saveSealed(token, ws, 'webhook_secret', config.vault.seal(ws, 'webhook_secret', secret));
       }
-      this.input.bounces?.apply(connectionBounceSource({ workspaceId: ws, serverId: String(server.id), stream: BROADCAST_STREAM, serverToken, webhookSecret: secret }));
+      this.input.bounces?.apply(connectionBounceSource({ workspaceId: ws, serverId: String(server.id), stream: BROADCAST_STREAM, serverToken, webhookSecret: secret }, this.eligibility));
 
       // 4. Webhook.
       await intend('webhook');

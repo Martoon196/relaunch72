@@ -30,7 +30,6 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import type { PostgresPortalDeps } from './router.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import { FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
-import { EMAIL_CONNECT_BUSINESSES } from '../email-connections/config.js';
 import { EMAIL_CONNECTION_MESSAGES, EmailConnectionError, type EmailConnectionService } from '../email-connections/service.js';
 import { EMAIL_CONNECTION_COPY_SCRIPT, EMAIL_CONNECTION_ROUTE as BASE, renderEmailConnectionPage, renderEmailConnectionProblem, renderFounderProtectionPage,
   type EmailConnectionPageInput } from './email-connection-view.js';
@@ -70,7 +69,7 @@ async function readForm(req: IncomingMessage, required: readonly string[], optio
 
 export async function handleEmailConnection(req: IncomingMessage, res: ServerResponse, url: URL, input: {
   portal: Pick<PostgresPortalDeps, 'productProfile' | 'portalBaseUrl' | 'sessionSecret'>;
-  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'> & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
+  service: Pick<EmailConnectionService, 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain' | 'eligibility'> & Partial<Pick<EmailConnectionService, 'repairBounceReporting'>>;
   identity: PortalSessionIdentity | null;
   /** Release 2's sending controls; absent: the page is exactly release 1's. */
   sending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'>;
@@ -110,7 +109,8 @@ export async function handleEmailConnection(req: IncomingMessage, res: ServerRes
       const business = url.searchParams.get('business');
       // The Business picker offers only the businesses allowed to connect email (Property Predator for now), and only
       // the one this session has selected; another id is refused.
-      if (business !== null && (!EMAIL_CONNECT_BUSINESSES.some(item => item.workspaceId === business) || business !== identity.workspaceId)) {
+      // Exactly an allowed id as listed (lower case): another spelling of it is refused, as before.
+      if (business !== null && (service.eligibility.business(business)?.workspaceId !== business || business !== identity.workspaceId)) {
         throw new RouteError(404, EMAIL_CONNECTION_MESSAGES.notAllowed);
       }
       send(res, 200, await page(url.searchParams.get('agree') === 'yes' ? { agreed: true } : {})); return true;

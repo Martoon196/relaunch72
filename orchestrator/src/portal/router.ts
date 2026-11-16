@@ -21,8 +21,8 @@ import { handleSeoBlog } from './seo-blog-router.js';
 import { handleEmailConnection } from './email-connection-router.js';
 import type { EmailConnectionService } from '../email-connections/service.js';
 import type { OwnerSendingService } from '../email-protection/owner.js';
-import { emailConnectBusiness } from '../email-connections/config.js';
-const emailConnectionBusinessAllowed = (workspaceId: string): boolean => Boolean(emailConnectBusiness(workspaceId));
+/** Whether this business may use Connect email: asked of the eligibility the platform composed into the service (none: no). */
+export const emailConnectionBusinessAllowed = (deps: PostgresPortalDeps, workspaceId: string): boolean => deps.emailConnections?.eligibility.allowed(workspaceId) === true;
 import { readEmailEntry, type EmailEntryStatus } from './email-connection-progress.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';
@@ -561,7 +561,7 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
   /** "Connect email" (0155). Composed whenever the identity command role is; it says plainly when it is switched off. */
-  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain'>
+  emailConnections?: Pick<EmailConnectionService, 'enabled' | 'available' | 'view' | 'connect' | 'continue' | 'check' | 'disconnect' | 'useExistingDomain' | 'eligibility'>
     & Partial<Pick<EmailConnectionService, 'repairBounceReporting' | 'entryState'>>;
   /** Release 2 of "Connect email": sending controls and the founder's protection page (0156). */
   emailSending?: Pick<OwnerSendingService, 'view' | 'saveDetails' | 'sendTest' | 'command' | 'liftAddress' | 'founderView' | 'founderAct'> & Partial<Pick<OwnerSendingService, 'entryConfig'>>;
@@ -2804,7 +2804,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           dailyOutreachAvailable: profile.id === 'property_predator_growth',
           followupFlowsAvailable: Boolean(deps.followupFlows),
           approvalsAvailable: Boolean(deps.seoBlog || deps.followupFlows || deps.companyContent),
-          emailConnectAvailable: profile.id === 'property_predator_growth' && emailConnectionBusinessAllowed(snapshot.workspace.id)
+          emailConnectAvailable: profile.id === 'property_predator_growth' && emailConnectionBusinessAllowed(deps, snapshot.workspace.id)
             && await (deps.emailConnections?.available() ?? Promise.resolve(false)),
           emailStatus: await emailEntry(deps, portalIdentity, snapshot.workspace.id),
         }),
@@ -7590,7 +7590,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
  */
 async function emailEntry(deps: PostgresPortalDeps, identity: PortalSessionIdentity | null, workspaceId: string): Promise<EmailEntryStatus | null> {
   const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
-  if (!identity || profile.id !== 'property_predator_growth' || !emailConnectionBusinessAllowed(workspaceId) || !deps.emailConnections) return null;
+  if (!identity || profile.id !== 'property_predator_growth' || !emailConnectionBusinessAllowed(deps, workspaceId) || !deps.emailConnections) return null;
   // The light read only (never the page's full view: no name-server look-up, secrets check, counts or Postmark),
   // bounded by a short timeout; anything slow or failing falls back to the plain link.
   const connections = deps.emailConnections, sending = deps.emailSending;
