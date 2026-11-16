@@ -25,7 +25,9 @@ export function withoutCitations(text: string): string {
 const normal = (text: string) => text.replace(/\r\n?/g, '\n');
 
 interface Anchor { readonly offset: number; readonly raw: string }
-interface Unit { readonly start: number; readonly end: number; readonly text: string }
+/** `key` is the text compared between versions: a numbered list item without its number, so renumbering is not an edit. */
+interface Unit { readonly start: number; readonly end: number; readonly text: string; readonly key: string; readonly keyStart: number }
+const LIST_NUMBER = /^\d{1,3}[.)][ \t]+/;
 
 function strip(text: string): { plain: string; anchors: Anchor[] } {
   const anchors: Anchor[] = [];
@@ -53,7 +55,8 @@ export function sentenceUnits(text: string): Unit[] {
     const body = m[0].trim();
     if (!body) continue;
     const start = m.index! + lead;
-    out.push({ start, end: start + body.length, text: body });
+    const number = LIST_NUMBER.exec(body)?.[0].length ?? 0;
+    out.push({ start, end: start + body.length, text: body, key: body.slice(number), keyStart: start + number });
   }
   return out;
 }
@@ -104,20 +107,27 @@ export interface RestoredText {
   readonly typedRemoved: number;
   /** Edited sentences that kept their sources (same numbers, most words): the owner should check them. Source ids of each. */
   readonly keptOnEdited: readonly (readonly string[])[];
+  /** Sentences changed back to how they were in the previous version, whose sources from it came back. */
+  readonly restoredFromEarlier: number;
 }
 
 /** Anything that looks like a citation marker, as typed or pasted by the owner. */
 const TYPED = /[ \t]*\[src:[^\]\n]*\]/gi;
 
-export function restoreCitationsDetailed(stored: string, edited: string): RestoredText {
+/**
+ * `previous` is the version saved before `stored` (when there is one): a sentence the owner changes back to exactly
+ * how it was there gets that version's sources back, so "change it back" really undoes a lost source.
+ */
+export function restoreCitationsDetailed(stored: string, edited: string, previous?: string | null): RestoredText {
   const typedRemoved = (normal(edited).match(TYPED) ?? []).length;
   const next = normal(edited).replace(TYPED, '');
   const { plain: rawPlain } = strip(stored);
   const plainNormal = normal(rawPlain);
-  const none = { droppedMarkers: 0, droppedSentences: 0, typedRemoved, keptOnEdited: [] as string[][] };
+  const none = { droppedMarkers: 0, droppedSentences: 0, typedRemoved, keptOnEdited: [] as string[][], restoredFromEarlier: 0 };
   if (next === plainNormal || next.trim() === plainNormal.trim()) return { ...none, text: stored };
   const { plain, anchors } = strip(normal(stored));
-  if (!anchors.length) return { ...none, text: next };
+  const earlier = previous ? strip(normal(previous)) : null;
+  if (!anchors.length && !earlier?.anchors.length) return { ...none, text: next };
   const before = sentenceUnits(plain);
   const after = sentenceUnits(next);
   // Which stored sentence each marker belongs to: the sentence it sits in or directly after; a marker before a
@@ -137,19 +147,19 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
   });
   const matched = new Map<number, number>(); // stored unit → edited unit (word for word)
   const usedAfter = new Set<number>();
-  for (const [i, j] of lcs(before.map((u) => u.text), after.map((u) => u.text))) { matched.set(i, j); usedAfter.add(j); }
+  for (const [i, j] of lcs(before.map((u) => u.key), after.map((u) => u.key))) { matched.set(i, j); usedAfter.add(j); }
   // Moved sentences: still word for word, elsewhere.
   for (let i = 0; i < before.length; i++) {
     if (matched.has(i) || !owner.includes(i)) continue;
-    const j = after.findIndex((u, k) => !usedAfter.has(k) && u.text === before[i]!.text);
+    const j = after.findIndex((u, k) => !usedAfter.has(k) && u.key === before[i]!.key);
     if (j >= 0) { matched.set(i, j); usedAfter.add(j); }
   }
   // Identical twin sentences whose order changed: which one is which cannot be known, so their sources are not guessed.
-  const count = (xs: readonly Unit[]) => { const m = new Map<string, number>(); for (const u of xs) m.set(u.text, (m.get(u.text) ?? 0) + 1); return m; };
+  const count = (xs: readonly Unit[]) => { const m = new Map<string, number>(); for (const u of xs) m.set(u.key, (m.get(u.key) ?? 0) + 1); return m; };
   const inBefore = count(before), inAfter = count(after);
   let possible = 0; for (const [text, n] of inBefore) possible += Math.min(n, inAfter.get(text) ?? 0);
-  const inOrder = lcs(before.map((u) => u.text), after.map((u) => u.text)).length;
-  const twin = (i: number) => (inBefore.get(before[i]!.text) ?? 0) > 1 || (inAfter.get(before[i]!.text) ?? 0) > 1;
+  const inOrder = lcs(before.map((u) => u.key), after.map((u) => u.key)).length;
+  const twin = (i: number) => (inBefore.get(before[i]!.key) ?? 0) > 1 || (inAfter.get(before[i]!.key) ?? 0) > 1;
   if (possible > inOrder) for (const i of [...matched.keys()]) if (owner.includes(i) && twin(i)) matched.delete(i);
   // A cited twin keeps its source only where at least one of its neighbours is still beside it.
   for (const [i, j] of [...matched]) {
@@ -159,7 +169,7 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
     if (!prevOk && !nextOk) matched.delete(i);
   }
   // Edited sentences: only a single changed sentence between the same unchanged neighbours, with the same claim.
-  const storedTexts = new Set(before.map((u) => u.text));
+  const storedTexts = new Set(before.map((u) => u.key));
   const reworded = new Map<number, number>();
   for (let i = 0; i < before.length; i++) {
     if (matched.has(i) || !owner.includes(i)) continue;
@@ -173,8 +183,9 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
     const editedGap = after.map((u, k) => ({ u, k })).filter(({ k }) => k > lo && k < hi && !usedAfter.has(k));
     if (storedGap.length !== 1 || editedGap.length !== 1) continue;
     const target = editedGap[0]!;
-    if (storedTexts.has(target.u.text)) continue; // a word-for-word stored sentence is never someone else's target
-    if (!sameClaim(before[i]!.text, target.u.text)) continue;
+    if (storedTexts.has(target.u.key)) continue; // a word-for-word stored sentence is never someone else's target
+    // Compared without list numbers: a list item's own number is not a figure in its sentence.
+    if (!sameClaim(before[i]!.key, target.u.key)) continue;
     reworded.set(i, target.k);
   }
   const inserts: { at: number; raw: string; order: number }[] = [];
@@ -192,7 +203,8 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
         if (next.slice(t.end, t.end + gap.length) === gap) inserts.push({ at: t.end + gap.length, raw: a.raw, order: n }); else { droppedMarkers++; droppedUnits.add(i); }
         return;
       }
-      if (a.offset >= u.start) { inserts.push({ at: t.start + (a.offset - u.start), raw: a.raw, order: n }); return; }
+      if (a.offset >= u.keyStart) { inserts.push({ at: t.keyStart + (a.offset - u.keyStart), raw: a.raw, order: n }); return; }
+      if (a.offset >= u.start) { inserts.push({ at: t.start + Math.min(a.offset - u.start, t.keyStart - t.start), raw: a.raw, order: n }); return; }
       // A leading marker keeps its place when the space before the sentence is the same; otherwise it goes before the sentence.
       const gap = plain.slice(a.offset, u.start);
       inserts.push(next.slice(t.start - gap.length, t.start) === gap ? { at: t.start - gap.length, raw: a.raw, order: n } : { at: t.start, raw: a.raw.trimStart(), order: n });
@@ -208,6 +220,22 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
     }
     droppedMarkers++; droppedUnits.add(i);
   });
+  // Sentences changed back to exactly how they were in the version before: their sources from that version return.
+  let restoredFromEarlier = 0;
+  if (earlier?.anchors.length) {
+    const prevUnits = sentenceUnits(earlier.plain);
+    const targeted = new Set([...[...matched].filter(([i]) => owner.includes(i)).map(([, j]) => j), ...reworded.values()]);
+    after.forEach((t, j) => {
+      if (targeted.has(j) || storedTexts.has(t.key) || after.filter((x) => x.key === t.key).length !== 1) return;
+      const same = prevUnits.filter((x) => x.key === t.key);
+      if (same.length !== 1) return;
+      const u = same[0]!;
+      const mine = earlier.anchors.filter((a) => a.offset > u.keyStart && a.offset <= u.end);
+      if (!mine.length) return;
+      restoredFromEarlier++;
+      mine.forEach((a, k) => inserts.push({ at: t.keyStart + (a.offset - u.keyStart), raw: a.raw, order: anchors.length + k }));
+    });
+  }
   let out = next;
   for (const x of inserts.sort((p, q) => q.at - p.at || q.order - p.order)) {
     let raw = x.raw;
@@ -220,7 +248,7 @@ export function restoreCitationsDetailed(stored: string, edited: string): Restor
     return { ...none, text: next, droppedMarkers: anchors.length, droppedSentences: new Set(owner).size };
   }
   const keptOnEdited = [...reworded.keys()].map((i) => anchors.filter((_, n) => owner[n] === i).map((a) => /\[src:([A-Za-z0-9-]+)\]/.exec(a.raw)![1]!));
-  return { text: out, droppedMarkers, droppedSentences: droppedUnits.size, typedRemoved, keptOnEdited };
+  return { text: out, droppedMarkers, droppedSentences: droppedUnits.size, typedRemoved, keptOnEdited, restoredFromEarlier };
 }
 
 /** Put the stored text's citation markers back into the owner's edited (marker-free) text. */
@@ -251,7 +279,7 @@ function restorables(earlierStored: string, currentStored: string): Restorable[]
   const { plain: cp } = strip(current);
   const before = sentenceUnits(ep), after = sentenceUnits(cp);
   const currentIds = new Set([...current.matchAll(/\[src:([A-Za-z0-9-]+)\]/g)].map((m) => m[1]!));
-  const matched = new Map(lcs(before.map((u) => u.text), after.map((u) => u.text)));
+  const matched = new Map(lcs(before.map((u) => u.key), after.map((u) => u.key)));
   const usedAfter = new Set(matched.values());
   const out: Restorable[] = [];
   before.forEach((u, i) => {
@@ -265,6 +293,12 @@ function restorables(earlierStored: string, currentStored: string): Restorable[]
     const lo = prev >= 0 ? matched.get(prev)! : -1, hi = next < before.length ? matched.get(next)! : after.length;
     const gap = after.map((x, k) => ({ x, k })).filter(({ k }) => k > lo && k < hi && !usedAfter.has(k));
     if (storedGap.length !== 1 || gap.length > 1) return;
+    // Not offered when it could not come back exactly: the same sentence appears twice (which one was it?), it
+    // is a numbered item whose list was renumbered since, or the item that replaced it carries another number.
+    if (before.filter((x) => x.key === u.key).length > 1 || after.some((x) => x.key === u.key)) return;
+    const prefix = (x: Unit) => x.text.slice(0, x.keyStart - x.start);
+    if (prefix(u) && [...matched].some(([bi, aj]) => before[bi]!.text !== after[aj]!.text)) return;
+    if (gap.length && prefix(gap[0]!.x) !== prefix(u)) return;
     // A deleted one is attached to the neighbour it sat closest to (a list item to its list, not across a blank line).
     const sepBefore = prev >= 0 ? ep.slice(before[prev]!.end, u.start) : null, sepAfter = next < before.length ? ep.slice(u.end, before[next]!.start) : null;
     const at: Restorable['at'] = gap.length ? { start: gap[0]!.x.start, end: gap[0]!.x.end }

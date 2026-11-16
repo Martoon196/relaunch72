@@ -10,7 +10,7 @@ import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
 import { portalCsrfToken } from '../src/portal/session.js';
 import type { PortalSeoBlogService } from '../src/portal/seo-blog-service.js';
 import type { PortalSessionIdentity } from '../src/portal/auth-service.js';
-import { putBackSentence, sentencesToPutBack, withoutCitations } from '../src/seo-blog/citation-edit.js';
+import { putBackSentence, restoreCitationsDetailed, sentencesToPutBack, withoutCitations } from '../src/seo-blog/citation-edit.js';
 import { OWNER } from './seo-blog-fixtures.js';
 import { websiteFixture } from './seo-blog-website-fixtures.js';
 
@@ -111,9 +111,9 @@ test('F3: plain approval says what will really happen (owner hold with a time; a
   assert.equal((await t.get()).status, 'Published');
 });
 
-async function editFirstCited(s: Awaited<ReturnType<typeof setup>>, change: (plain: string) => string) {
+async function editFirstCited(s: Awaited<ReturnType<typeof setup>>, change: (plain: string) => string, part?: number) {
   const v = (await s.get()).version!;
-  const i = v.body.sections.findIndex((x) => /\[src:/.test(x.body));
+  const i = part ?? v.body.sections.findIndex((x) => /\[src:/.test(x.body));
   const b = v.body;
   return call(s.service, 'POST', `${s.base}/edit`, [['_csrf', csrf], ['versionId', v.id], ['citationsHidden', '1'], ['title', b.title], ['slug', b.slug], ['seoTitle', b.seoTitle], ['metaDescription', b.metaDescription], ['excerpt', b.excerpt], ['intro', withoutCitations(b.intro)], ['conclusion', withoutCitations(b.conclusion)], ['imageUrl', b.image.url ?? ''], ['imageAlt', b.image.alt],
     ...b.sections.flatMap((x, k) => [['sectionId', x.id], ['sectionHeading', x.heading], ['sectionBody', k === i ? change(withoutCitations(x.body)) : withoutCitations(x.body)]] as [string, string][])]);
@@ -128,7 +128,7 @@ test('F4: "below" only when the page offers to put the wording back', async () =
   const t = await setup();
   const r = message(await editFirstCited(t, (p) => p.split(/(?<=\.)\s+/).map((x, k) => (k < 3 ? `${x.replace(/\.$/, '')} (changed ${k} and 4${k}%).` : x)).join(' ')));
   assert.match(r.text, /source links? (was|were) removed/); assert.doesNotMatch(r.text, /below/);
-  assert.match(r.text, /To keep a source, change the sentence back as it was in Edit, or see Earlier versions\./);
+  assert.match(r.text, /To get a source back, change that sentence back exactly as it was the next time you edit\./);
   assert.doesNotMatch(visible((await call(t.service, 'GET', t.base)).body), /id="put-back"/);
 });
 
@@ -164,4 +164,73 @@ test('F6: put-back is bound to the current version’s parent; a version from tw
   const r = message(await call(s.service, 'POST', `${s.base}/put-back`, crafted));
   assert.equal(r.ok, false); assert.match(r.text, /The article changed/);
   assert.equal((await s.get()).version!.id, v3.id);
+});
+
+// ─── Follow-up round 2: numbered lists, "change it back", and two plain-approval wordings ───
+
+test('R1: renumbering a numbered list keeps the sources of items whose words did not change', () => {
+  const A = '[src:5452de1e-e616-492b-8fa5-eb393534457d]', B = '[src:0f9a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b]';
+  const list = `Steps:\n\n1. Find three similar homes that let recently ${A}\n2. Allow 3 months for the works to finish ${B}\n3. Use the middle figure`;
+  const plain = withoutCitations(list);
+  const count = (t: string) => (t.match(/\[src:/g) ?? []).length;
+  const inserted = restoreCitationsDetailed(list, plain.replace('1. Find', '1. Read the plan\n2. Find').replace('2. Allow', '3. Allow').replace('3. Use', '4. Use'));
+  assert.equal(inserted.text, `Steps:\n\n1. Read the plan\n2. Find three similar homes that let recently ${A}\n3. Allow 3 months for the works to finish ${B}\n4. Use the middle figure`);
+  const deleted = restoreCitationsDetailed(list, 'Steps:\n\n1. Allow 3 months for the works to finish\n2. Use the middle figure');
+  assert.equal(deleted.text, `Steps:\n\n1. Allow 3 months for the works to finish ${B}\n2. Use the middle figure`); assert.equal(deleted.droppedSentences, 1);
+  // Only item 2 edited: its own number 2 -> 3 is not a figure, but "3 months" -> "2 months" is, so its source goes.
+  const figure = restoreCitationsDetailed(list, plain.replace('2. Allow 3 months', '3. Allow 2 months'));
+  assert.equal(count(figure.text), 1); assert.doesNotMatch(figure.text, /0f9a2b3c/); assert.equal(figure.droppedSentences, 1);
+  // A deleted numbered item whose list was renumbered since is not offered for put-back (it could not come back exactly).
+  assert.deepEqual(sentencesToPutBack(`1. Keep 8% for the works ${A}\n2. Check rents\n3. Pay stamp duty`, '1. Check rents\n2. Pay stamp duty'), []);
+  // An identical twin item: which one was deleted cannot be known, so nothing is offered.
+  assert.deepEqual(sentencesToPutBack(`- Check rents ${A}\n- Keep 8% back\n- Check rents`, '- Keep 8% back\n- Check rents'), []);
+});
+
+test('R1: changing a sentence back exactly as it was restores its source (and the save message says only true things)', async () => {
+  const s = await setup();
+  const v1 = (await s.get()).version!;
+  const i = v1.body.sections.findIndex((x) => /\[src:/.test(x.body));
+  // Change the cited sentence and both its neighbours: nothing can be put back, so the advice is "change it back".
+  const firstSentences = (p: string) => p.split(/(?<=\.)\s+/).map((x, k) => (k < 3 ? `${x.replace(/\.$/, '')} (changed ${k} and 4${k}%).` : x)).join(' ');
+  const r = message(await editFirstCited(s, firstSentences));
+  assert.match(r.text, /To get a source back, change that sentence back exactly as it was the next time you edit\./);
+  const v2 = (await s.get()).version!; assert.doesNotMatch(v2.body.sections[i]!.body, /\[src:/);
+  // Doing exactly that: the earlier text saved again brings the sources back.
+  const back = message(await editFirstCited(s, () => withoutCitations(v1.body.sections[i]!.body), i));
+  assert.match(back.text, /sentences? you changed back (has its source|have their sources) again/);
+  assert.equal((await s.get()).version!.body.sections[i]!.body, v1.body.sections[i]!.body);
+});
+
+test('W1: a time on a website that is not connected right now: checked again at its time (content API answers, so it goes out)', async () => {
+  const s = await setup();
+  let a = (await s.get()).article;
+  await s.f.h.engine.schedule(OWNER, s.f.brand.id, s.f.articleId, a.rowVersion, { localDate: '2026-11-03', localTime: '09:00', destinationId: s.f.destination.id });
+  await s.f.h.store.saveDestination({ ...(await s.f.h.store.getDestination(s.f.brand.id, s.f.destination.id))!, status: 'failed' });
+  const r = message(await call(s.service, 'POST', `${s.base}/approve`, [['_csrf', csrf], ['versionId', (await s.get()).version!.id]]));
+  assert.equal(r.text, 'Approved. It is planned for Website, which is not connected right now. At its time the connection is checked again: if the website answers, it goes out; if not, it is held and you choose a new time.');
+  s.f.h.clock.set('2026-11-03T09:01:00.000Z'); await s.f.h.engine.tick('w');
+  assert.equal((await s.get()).status, 'Published');
+  void a;
+});
+
+test('W2: on hold with a time that has just passed: "Allow it to go out" alone publishes it at the next pass, and the answer says so', async () => {
+  const s = await setup();
+  let a = (await s.get()).article;
+  await s.f.h.engine.schedule(OWNER, s.f.brand.id, s.f.articleId, a.rowVersion, { localDate: '2026-11-02', localTime: '10:30', destinationId: s.f.destination.id });
+  a = (await s.get()).article; await s.f.h.engine.hold(OWNER, s.f.brand.id, s.f.articleId, a.rowVersion, true);
+  s.f.h.clock.set('2026-11-02T10:45:00.000Z');
+  const page = visible((await call(s.service, 'GET', s.base)).body);
+  assert.match(page, />Approve<\/button><span class="ap-note"> It stays on hold; once you allow it to go out, it goes out within minutes\.<\/span>/);
+  const r = message(await call(s.service, 'POST', `${s.base}/approve`, [['_csrf', csrf], ['versionId', (await s.get()).version!.id]]));
+  assert.equal(r.text, 'Approved. It is on hold. Its time has just passed, so if you choose “Allow it to go out” now, it goes onto your website within the next few minutes.');
+  await s.f.h.engine.tick('w'); assert.equal((await s.get()).status, 'Held');
+  a = (await s.get()).article; await s.f.h.engine.hold(OWNER, s.f.brand.id, s.f.articleId, a.rowVersion, false);
+  await s.f.h.engine.tick('w'); assert.equal((await s.get()).status, 'Published');
+  // More than two hours past: allow it, then choose a new time.
+  const t = await setup();
+  a = (await t.get()).article;
+  await t.f.h.engine.schedule(OWNER, t.f.brand.id, t.f.articleId, a.rowVersion, { localDate: '2026-11-02', localTime: '10:30', destinationId: t.f.destination.id });
+  a = (await t.get()).article; await t.f.h.engine.hold(OWNER, t.f.brand.id, t.f.articleId, a.rowVersion, true);
+  t.f.h.clock.set('2026-11-02T13:00:00.000Z');
+  assert.equal(message(await call(t.service, 'POST', `${t.base}/approve`, [['_csrf', csrf], ['versionId', (await t.get()).version!.id]])).text, 'Approved. It is on hold and its time passed too long ago: allow it to go out, then choose a new time.');
 });

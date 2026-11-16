@@ -638,7 +638,7 @@ function moreMenu(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: str
     const many = (d.plan?.websitesOnRecord ?? d.destinations.length) > 1;
     const future = s && Date.parse(s.publishAtUtc) > Date.parse(now);
     if (!s) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
-    else if (a.hold?.reason === 'owner') items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve', { cls: 'ap-menu-button', note: future ? `It goes out on ${shortWhen(s.localDate, null, now.slice(0, 10))} at ${s.localTime.replace(/^0(\d)/, '$1')} only once you allow it to go out.` : 'It stays on hold; allow it to go out and choose a new time.' }));
+    else if (a.hold?.reason === 'owner') items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve', { cls: 'ap-menu-button', note: future ? `It goes out on ${shortWhen(s.localDate, null, now.slice(0, 10))} at ${s.localTime.replace(/^0(\d)/, '$1')} only once you allow it to go out.` : Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS ? 'It stays on hold; once you allow it to go out, it goes out within minutes.' : 'It stays on hold; allow it to go out, then choose a new time.' }));
     else if (a.hold) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve', { cls: 'ap-menu-button', note: 'It will not go out until you choose a new time.' }));
     else if (Date.parse(s.publishAtUtc) > Date.parse(now) && !plannedSiteGone(a, d.destinations)) {
       const site = many ? ` on ${d.destinations.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : '';
@@ -707,15 +707,23 @@ ${rewriteFold(shell, v, base, open.has('rewrite'))}
  * a future time means it goes out then; a time that passed less than the worker's missed-time window ago means it
  * goes out at the next worker pass; an older one is held for a new time.
  */
-export function approvedOutcome(a: Article, b: Pick<Brand, 'settings'>, destinations: readonly Pick<Destination, 'id' | 'label' | 'status'>[], now: string): string {
+export function approvedOutcome(a: Article, b: Pick<Brand, 'settings'>, destinations: readonly Pick<Destination, 'id' | 'label' | 'status' | 'type'>[], now: string): string {
   const s = a.schedule;
   if (!s) return 'Approved. It will not go out until it has a time.';
   const when = longWhen(s.localDate, s.localTime, now.slice(0, 10));
   const future = Date.parse(s.publishAtUtc) > Date.parse(now);
-  if (a.hold?.reason === 'owner') return future ? `Approved. It is on hold, so it goes out on ${when} only once you choose “Allow it to go out”.` : 'Approved. It is on hold and its time has passed: allow it to go out, then choose a new time.';
+  const recent = !future && Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS;
+  if (a.hold?.reason === 'owner') return future ? `Approved. It is on hold, so it goes out on ${when} only once you choose “Allow it to go out”.`
+    : recent ? 'Approved. It is on hold. Its time has just passed, so if you choose “Allow it to go out” now, it goes onto your website within the next few minutes.'
+    : 'Approved. It is on hold and its time passed too long ago: allow it to go out, then choose a new time.';
   if (a.hold) return 'Approved. It will not go out until you choose a new time.';
   const gone = plannedSiteGone(a, destinations);
-  if (gone) return `Approved. It was planned for ${gone.label}, which is not connected any more, so it will not go out until you reconnect it or choose another website.`;
+  if (gone) {
+    // Websites with a live connection check (content API, WordPress) are checked again at the publishing time.
+    const rechecked = ['content_api', 'wordpress'].includes(destinations.find((d) => d.id === s.destinationId)?.type ?? '');
+    return rechecked ? `Approved. It is planned for ${gone.label}, which is not connected right now. At its time the connection is checked again: if the website answers, it goes out; if not, it is held and you choose a new time.`
+      : `Approved. It is planned for ${gone.label}, which is not connected right now. Unless you reconnect it before its time, it will be held and you choose a new time.`;
+  }
   if (b.settings.pauseAll) return future ? `Approved. Publishing is paused for this business: switch it back on before ${when}, or it will be held.` : 'Approved. Publishing is paused for this business, so it will be held; choose a new time after switching publishing back on.';
   if (future) return `Approved. It goes out on ${when}.`;
   return Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS ? 'Approved. Its time has just passed, so it goes onto your website within the next few minutes.' : 'Approved. Its time passed too long ago, so it will be held; choose a new time.';
