@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { autopilotStatement, contentKeywordsPage, keywordsPageState, keywordState, rollupLine, STATE_LABEL, type KeywordsPageData } from '../src/portal/content-area-keywords.js';
+import { autopilotStatement, contentKeywordsPage, ESTIMATE_EXPLAINED, keywordsPageState, keywordState, rollupLine, STATE_LABEL, type KeywordsPageData } from '../src/portal/content-area-keywords.js';
 import { contentHomePage } from '../src/portal/content-area-pages.js';
 import type { InventoryKeywordPool } from '../src/seo-blog/keyword-fill.js';
 import type { StoredKeywordRow } from '../src/seo-blog/keyword-store-shape.js';
@@ -89,19 +89,22 @@ test('the place: an eighth, between Brand DNA and Calendar, under More on a phon
 test('each row: phrase, monthly searches with the month, easier / medium / harder, what the searcher wants, and the labelled estimate', () => {
   const { brand: b, data: d } = fullFixture();
   const v = visible(main(contentKeywordsPage(shell(), b, d)));
-  assert.match(v, /tenancy deposit protection Live About 1,300 searches a month, measured October 2026 How hard Easier What the searcher wants Learn Could bring about 140 to 380 visits a month if it reaches the top three\. Estimate\./);
+  assert.match(v, /tenancy deposit protection Live About 1,300 searches a month, measured October 2026 How hard Easier Wants to Learn About 140 to 380 visits a month if top three\. Estimate\./);
   assert.match(v, /deposit protection deadline Ready About 480 searches a month, measured October 2026 How hard Medium/);
-  assert.match(v, /return tenancy deposit Being written .*?What the searcher wants Compare/);
+  assert.match(v, /return tenancy deposit Being written .*?Wants to Compare/);
   assert.match(v, /deposit dispute evidence Chosen .*?How hard Harder/);
-  // A wider phrase shows its own number, labelled as the wider phrase, and no estimate.
-  assert.match(v, /prescribed information checklist Suggested About 720 searches a month for the wider phrase, measured October 2026 How hard Not rated yet What the searcher wants Learn how long to protect/, 'no estimate for a wider phrase');
+  // A wider phrase shows its number, naming the wider phrase, and no estimate (review 6-C).
+  assert.match(v, /prescribed information checklist Suggested About 720 searches a month for the wider phrase "prescribed information", measured October 2026 How hard Not rated yet Wants to Learn how long to protect/, 'no estimate for a wider phrase');
   // Observed only: no number, no estimate.
-  assert.match(v, /how long to protect a deposit Suggested No search number yet How hard Not rated yet What the searcher wants Not known yet No search number yet, so no estimate\./);
+  assert.match(v, /how long to protect a deposit Suggested No search number yet How hard Not rated yet Wants to Not known yet No search number yet, so no estimate\./);
   // Too few searches: fewer than 10.
-  assert.match(v, /cheap deposit insurance Suggested About 8 searches a month.*?What the searcher wants Buy Could bring fewer than 10 visits a month if it reaches the top three\. Estimate\./);
-  // Every number shown as an estimate carries its condition and the word.
-  for (const m of v.matchAll(/Could bring [^.]*\./g)) assert.match(m[0], /if it reaches the top three\./);
-  assert.equal((v.match(/Could bring/g) ?? []).length, (v.match(/Estimate\./g) ?? []).length - 1, 'the roll-up line is the one extra Estimate');
+  assert.match(v, /cheap deposit insurance Suggested About 8 searches a month.*?Wants to Buy Fewer than 10 visits a month if top three\. Estimate\./);
+  // The full sentence is said once at the top; each row carries the short form with its condition and the word.
+  assert.equal(v.split(ESTIMATE_EXPLAINED).length - 1, 1);
+  const rows = [...v.matchAll(/(?:About [\d,]+ to [\d,]+|Up to about [\d,]+|Fewer than 10) visits a month[^.]*\. Estimate\./g)];
+  assert.ok(rows.length >= 5);
+  for (const m of rows) assert.match(m[0], /if top three\. Estimate\.$/);
+  assert.doesNotMatch(v, /Could bring about [\d,]+ to [\d,]+ visits a month if it reaches/, 'the long sentence is not repeated on every row');
 });
 
 test('the seven states are derived (only "Not for us" is stored), and in-progress phrases come first', () => {
@@ -118,8 +121,8 @@ test('the seven states are derived (only "Not for us" is stored), and in-progres
   // Not for us: folded, never in the list.
   assert.match(html, /<details class="kw-fold"><summary>Not for us \(1\)<\/summary><ul class="kw-plain"><li>deposit loans for students<\/li><\/ul><\/details>/);
   assert.ok(!order.includes('dismissed'));
-  // Next up, with its one-sentence reason.
-  assert.match(visible(html), /landlord deposit scheme comparison Suggested Next up .*?We chose this because/);
+  // Nothing the planner is not bound to is promised (review 6-A): no "Next up" mark on any row.
+  assert.doesNotMatch(visible(html), /Next up|write these|next to fill/);
 });
 
 test('the roll-up line is worded exactly as the addendum: chosen phrases, one per article, with the uncounted ones said', () => {
@@ -128,22 +131,23 @@ test('the roll-up line is worded exactly as the addendum: chosen phrases, one pe
   assert.equal(rollupLine(b, d), 'The 4 keywords you have chosen could bring about 240 to 690 visits a month if they all reach the top three. Estimate.');
   const withNone = { ...d, briefs: [...d.briefs, brief('b-none', 'some unmeasured phrase', 'accepted', null, 'none')] };
   assert.equal(rollupLine(b, withNone), 'The 4 keywords you have chosen could bring about 240 to 690 visits a month if they all reach the top three. Estimate. 1 more has no search number yet and is not counted.');
-  // Nothing chosen and autopilot on: what autopilot will write next.
+  // Nothing chosen: no roll-up, even with autopilot on and phrases it may consider (review 6-A: nothing unbound is promised).
   const lined = { ...d, briefs: [], articles: [] };
-  assert.equal(rollupLine(b, lined), 'The 1 keyword autopilot will write next could bring about 5 to 30 visits a month if it reaches the top three. Estimate.');
+  assert.equal(rollupLine(b, lined), null);
   assert.equal(rollupLine(brand({ ongoingProduction: false }), lined), null);
   const html = contentKeywordsPage(shell(), b, d);
-  assert.match(visible(main(html)), /The 4 keywords you have chosen could bring about 240 to 690 visits a month if they all reach the top three\. Estimate\. How we work this out/);
+  assert.match(visible(main(html)), /The 4 keywords you have chosen could bring about 240 to 690 visits a month if they all reach the top three\. Estimate\. Visit figures on each keyword are what it could bring each month if its article reaches the top three on Google\. Estimate\. How we work this out/);
   assert.ok(visible(html).includes(ESTIMATE_DISCLOSURE));
   assert.match(html, /<details class="kw-how"><summary>How we work this out<\/summary>/);
 });
 
-test('the plain autopilot statement, from the business settings', () => {
-  assert.equal(autopilotStatement(brand({ ongoingProduction: true, autoAcceptPlans: true }), 7), 'Autopilot is on. If you do not choose, we will write these 7 next to fill Tuesday and Thursday at 9:00.');
-  assert.equal(autopilotStatement(brand({ ongoingProduction: true, autoAcceptPlans: false }), 7), 'Autopilot is on. We have lined up these 7. Say yes to start.');
-  assert.equal(autopilotStatement(brand({ ongoingProduction: false }), 7), 'Autopilot is off. Nothing is written until you choose.');
-  assert.equal(autopilotStatement(brand({ ongoingProduction: true, pauseAll: true }), 7), 'Publishing is paused. Nothing is written or goes out until you switch it back on in Settings.');
-  assert.equal(autopilotStatement(brand({ ongoingProduction: true }), 0), 'Autopilot is on. There is nothing lined up from your keywords yet.');
+test('the plain autopilot statement, from the business settings and what is really queued; it promises no particular keyword', () => {
+  const idle = { planning: false };
+  assert.equal(autopilotStatement(brand({ ongoingProduction: true, autoAcceptPlans: true }), idle), 'Autopilot is on. When it next plans articles to fill Tuesday and Thursday at 9:00, each keyword it chooses shows here as Chosen.');
+  assert.equal(autopilotStatement(brand({ ongoingProduction: true, autoAcceptPlans: false }), idle), 'Autopilot is on. When it plans, it suggests articles for you to say yes to. Each keyword you say yes to shows here as Chosen.');
+  assert.equal(autopilotStatement(brand({ ongoingProduction: true }), { planning: true }), 'Autopilot is planning your next articles now. Each keyword an article is planned for will show here.');
+  assert.equal(autopilotStatement(brand({ ongoingProduction: false }), idle), 'Autopilot is off. Nothing is written until you choose.');
+  assert.equal(autopilotStatement(brand({ ongoingProduction: true, pauseAll: true }), idle), 'Publishing is paused. Nothing is written or goes out until you switch it back on in Settings.');
 });
 
 test('page states: not built, building, no data, thin, measured; no numbers are ever invented', () => {
