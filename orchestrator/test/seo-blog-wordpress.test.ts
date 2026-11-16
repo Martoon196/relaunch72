@@ -243,36 +243,67 @@ test('focus phrase off (the default): the WordPress payload carries no target ph
   assert.deepEqual(Object.keys(sent.wordpress).sort(), ['brandId', 'citations', 'destinationId', 'protocol', 'robots', 'social']);
 });
 
-test('focus phrase on: the target phrase goes to the plugin for Yoast SEO and Rank Math; the rest of the payload is unchanged', async () => {
-  const off = await publishOne({});
-  const { sent, brief } = await publishOne({ wordpressFocusPhrase: true });
-  assert.deepEqual(sent.wordpress.seo, { focusPhrase: brief.targetQuery, secondaryPhrases: [] });
-  const { seo: _seo, ...rest } = sent.wordpress;
-  const strip = (x: Record<string, any>) => { const { operationId: _o, articleId: _a, versionId: _v, contentSha: _c, marker: _m, articleHtml: _h, wordpress: _w, target: _t, ...r } = x; return r; };
-  assert.deepEqual(Object.keys(rest).sort(), Object.keys(off.sent.wordpress).sort());
-  assert.deepEqual(Object.keys(strip(sent)).sort(), Object.keys(strip(off.sent)).sort());
-});
-
-test('focus phrase on: a measured phrase from keyword-first planning is preferred, with up to four secondary phrases', async () => {
-  const { sent } = await publishOne({ wordpressFocusPhrase: true }, async (h, brandId, briefId) => {
-    const b = (await h.store.getBrief(brandId, briefId))!;
-    await h.store.saveBrief({ ...b, seo: { primary: { phrase: '  buy to let   mortgage ', basis: 'measured' }, secondary: ['buy to let rates', 'buy to let mortgage', 'landlord mortgage', 'portfolio mortgage', 'limited company mortgage', 'extra'].map((phrase) => ({ phrase })) } } as never);
+/**
+ * The payload as bytes with each run's own identifiers (UUIDs, and the hashes and markers built from them) replaced by
+ * their order of first appearance, so two separate publications of the same article compare byte for byte.
+ */
+function canonicalPayload(payload: unknown): string {
+  const seen = new Map<string, string>();
+  return JSON.stringify(payload).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}/g, (m) => {
+    if (!seen.has(m)) seen.set(m, `<id${seen.size}>`);
+    return seen.get(m)!;
   });
-  assert.deepEqual(sent.wordpress.seo, { focusPhrase: 'buy to let mortgage', secondaryPhrases: ['buy to let rates', 'landlord mortgage', 'portfolio mortgage', 'limited company mortgage'] });
+}
+
+const withSeo = (seo: unknown) => async (h: ReturnType<typeof harness>, brandId: string, briefId: string) => {
+  const b = (await h.store.getBrief(brandId, briefId))!;
+  await h.store.saveBrief({ ...b, seo } as never);
+};
+
+test('focus phrase on, no measured phrase on the brief: nothing is sent; the payload is byte-identical to the switch-off payload', async () => {
+  const off = await publishOne({});
+  const on = await publishOne({ wordpressFocusPhrase: true });
+  assert.ok(on.brief.targetQuery, 'the fixture brief has a question-style search target that must not be sent');
+  assert.equal('seo' in on.sent.wordpress, false);
+  assert.equal(canonicalPayload(on.sent), canonicalPayload(off.sent));
 });
 
-test('plugin 1.2.0 writes the focus fields with the keep-a-person\'s-edit rule (PHP, no WordPress install), and the version is bumped everywhere', async () => {
+test('focus phrase on, a primary phrase whose basis is "none" (the fallback copy of the question): nothing is sent', async () => {
+  const off = await publishOne({});
+  const on = await publishOne({ wordpressFocusPhrase: true }, withSeo({ primary: { phrase: 'how does tenancy deposit protection work?', basis: 'none' }, secondary: [{ phrase: 'deposit protection' }] }));
+  assert.equal('seo' in on.sent.wordpress, false);
+  assert.equal(canonicalPayload(on.sent), canonicalPayload(off.sent));
+});
+
+test('focus phrase on: a measured phrase from keyword-first planning is sent, with up to four secondary phrases; nothing else changes', async () => {
+  const off = await publishOne({});
+  const { sent } = await publishOne({ wordpressFocusPhrase: true }, withSeo({ primary: { phrase: '  buy to let   mortgage ', basis: 'measured' }, secondary: ['buy to let rates', 'buy to let mortgage', 'landlord mortgage', 'portfolio mortgage', 'limited company mortgage', 'extra'].map((phrase) => ({ phrase })) }));
+  assert.deepEqual(sent.wordpress.seo, { focusPhrase: 'buy to let mortgage', secondaryPhrases: ['buy to let rates', 'landlord mortgage', 'portfolio mortgage', 'limited company mortgage'] });
+  assert.notEqual(canonicalPayload(sent), canonicalPayload(off.sent));
+  const { seo: _seo, ...rest } = sent.wordpress;
+  assert.equal(canonicalPayload({ ...sent, wordpress: rest }), canonicalPayload(off.sent));
+});
+
+test('focus phrase on: other measured bases (wider phrase, observed) are sent too; a trailing question mark is stripped', async () => {
+  for (const basis of ['parent_phrase', 'observed']) {
+    const { sent } = await publishOne({ wordpressFocusPhrase: true }, withSeo({ primary: { phrase: 'tenancy deposit protection?', basis }, secondary: [{ phrase: 'deposit scheme ? ' }, { phrase: 'tenancy deposit protection' }] }));
+    assert.deepEqual(sent.wordpress.seo, { focusPhrase: 'tenancy deposit protection', secondaryPhrases: ['deposit scheme'] }, basis);
+  }
+});
+
+test('plugin 1.2.0 writes the focus fields with the keep-a-person\'s-edit rule (PHP, no WordPress install), and the version is bumped everywhere', async (t) => {
   const { execFileSync } = await import('node:child_process');
   const { readFileSync } = await import('node:fs');
   const root = new URL('../../wordpress-plugin/', import.meta.url);
-  let php = true; try { execFileSync('php', ['-v'], { stdio: 'ignore' }); } catch { php = false; }
-  if (php) for (const mode of ['yoast', 'rank_math', 'standalone']) {
-    const out = execFileSync('php', [new URL('test-harness/focus-phrase-test.php', root).pathname, mode], { encoding: 'utf8' });
-    assert.match(out, new RegExp(`Focus phrase \\(${mode}\\): written only when sent`));
-  }
   const main = readFileSync(new URL('relaunch72-publisher/relaunch72-publisher.php', root), 'utf8');
   assert.match(main, /Version:\s+1\.2\.0/); assert.match(main, /R72PUB_VERSION', '1\.2\.0'/);
   assert.match(readFileSync(new URL('relaunch72-publisher/readme.txt', root), 'utf8'), /Stable tag: 1\.2\.0[\s\S]*= 1\.2\.0 =/);
   const seo = readFileSync(new URL('relaunch72-publisher/includes/class-r72pub-seo.php', root), 'utf8');
   assert.match(seo, /'_yoast_wpseo_focuskw'/); assert.match(seo, /'rank_math_focus_keyword'/);
+  let php = true; try { execFileSync('php', ['-v'], { stdio: 'ignore' }); } catch { php = false; }
+  if (!php) { t.skip('PHP is not installed: the plugin\'s own focus-phrase test did not run, so this is not proof of the plugin'); return; }
+  for (const mode of ['yoast', 'rank_math', 'standalone']) {
+    const out = execFileSync('php', [new URL('test-harness/focus-phrase-test.php', root).pathname, mode], { encoding: 'utf8' });
+    assert.match(out, new RegExp(`Focus phrase \\(${mode}\\): written only when sent`));
+  }
 });

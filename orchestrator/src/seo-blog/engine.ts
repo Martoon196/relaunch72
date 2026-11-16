@@ -2851,18 +2851,20 @@ export class SeoBlogEngine {
   }
 
   /**
-   * The target phrase for the website's SEO plugin: the measured phrase on the brief when keyword-first planning gave
-   * it one, otherwise the brief's search target. Single spaces, at most 100 characters; up to four secondary phrases.
+   * The target phrase for the website's SEO plugin: only the measured phrase keyword-first planning put on the brief
+   * (`brief.seo.primary`, basis other than "none"). With none, nothing is sent: the brief's question-style search target
+   * is not a keyphrase, and a whole question in the plugin's focus field would only make its score look bad. Single
+   * spaces, no trailing question mark, at most 100 characters; up to four secondary phrases (the plugin uses them where
+   * it can: Rank Math takes them, Yoast keeps the primary only).
    */
   private async focusFor(brandId: string, version: ArticleVersion): Promise<PublishInput['focus']> {
     const brief = await this.store.getBrief(brandId, version.briefId);
-    if (!brief) return null;
-    const clean = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, 100) : '');
-    const seo = (brief as { seo?: { primary?: { phrase?: unknown; basis?: unknown }; secondary?: readonly { phrase?: unknown }[] } }).seo;
-    const measured = seo?.primary && seo.primary.basis !== 'none' ? clean(seo.primary.phrase) : '';
-    const phrase = measured || clean(brief.targetQuery);
+    const seo = brief?.seo;
+    if (!seo?.primary || seo.primary.basis === 'none') return null;
+    const clean = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().replace(/[?\uFF1F]+$/u, '').trim().slice(0, 100).trim() : '');
+    const phrase = clean(seo.primary.phrase);
     if (!phrase) return null;
-    const secondary = measured ? [...new Set((seo?.secondary ?? []).map((x) => clean(x?.phrase)).filter((x) => x && x !== phrase))].slice(0, 4) : [];
+    const secondary = [...new Set((Array.isArray(seo.secondary) ? seo.secondary : []).map((x) => clean(x?.phrase)).filter((x) => x && x !== phrase))].slice(0, 4);
     return { phrase, secondary };
   }
 
