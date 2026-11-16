@@ -250,8 +250,8 @@ test('0157 applied to a database at 0156 with Property Predator live changes no 
     assert.deepEqual(before.writeAnswers.slice(0, 5), ['ok', 'replayed', 'accepted', 'replayed', 'ok']);
     assert.deepEqual(before.writeAnswers.slice(8, 12), ['paused', 'owner_paused', 'resumed', 'unchanged']);
 
-    // 0157, by the same runner, on this live database.
-    const result = await runMigrations(admin);
+    // 0157, by the same runner, on this live database (and nothing after it: later files are separate releases).
+    const result = await runMigrations(admin, await prefixDirectory(157));
     assert.deepEqual(result.applied, [EMAIL_ALLOWLIST_MIGRATION]);
     const after = await record();
     assert.deepEqual(after.readAnswers, before.readAnswers, 'every Property Predator read answers exactly as before');
