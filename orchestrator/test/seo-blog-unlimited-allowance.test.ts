@@ -16,7 +16,9 @@ test('an "unlimited" monthly allowance reads Unlimited, never 9,007,199,254,740,
     assert.equal(r.status, 200);
     assert.doesNotMatch(r.body, /9,007,199,254,740,991|9007199254740991/);
     assert.match(visible(r.body), /Unlimited model tokens/);
-    assert.match(visible(r.body), /37 \/ Unlimited/);
-    assert.match(visible(r.body), /Writing: 412,000 of Unlimited tokens/);
+    assert.match(visible(r.body), /37 used · Unlimited/);
+    assert.match(visible(r.body), /Writing: 412,000 tokens used · Unlimited/);
+    assert.match(visible(r.body), /Research: 37 supplier attempts used · Unlimited/);
+    assert.doesNotMatch(visible(r.body), /of Unlimited/);
   } finally { mock.timers.reset(); }
 });
