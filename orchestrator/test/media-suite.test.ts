@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Stripe from 'stripe';
 import {runOfflineMediaTick} from '../src/creative-studio/media-worker-dispatch.js';
+import {normalizeCompanyContentVersionCommand} from '../src/company-content-pg/validation.js';
 import {localVideoDraftCommand} from '../src/creative-studio/media-canonical-handoff.js';
 import {createMediaSubscriptionCheckout,handleMediaBillingWebhook,billingOrigin} from '../src/creative-studio/media-billing.js';
 import {checkVideoEditPlan,videoEditDigest} from '../src/creative-studio/media-edit-plan.js';
@@ -29,6 +30,7 @@ test('canonical handoff binds video digest, review and caption without granting 
  const manifest={schema:'relaunch72.private-video/v1' as const,workspaceId:ws,outputId:id,sha256:'a'.repeat(64),sourceSha256:'b'.repeat(64),planSha256:'c'.repeat(64),byteLength:1024,durationMs:1000,width:720,height:1280,audioPresent:true,storageKey:'private/blob',reviewRevision:1,reviewedAt:now.toISOString(),reviewedBy:id,brandSha256:'d'.repeat(64)};
  const input={workspaceId:ws,outputId:id,outputSha256:manifest.sha256,reviewRevision:1,commandId:ws,title:'My video',caption:'#ad An owner reviewed caption',platform:'instagram' as const};
  const command=localVideoDraftCommand(input,manifest,now);
+ assert.doesNotThrow(()=>normalizeCompanyContentVersionCommand(command));
  assert.equal(command.kind,'video');assert.equal(JSON.parse(command.content).distribution,'pending_canonical_review');
  assert.equal(command.blob.sha256,manifest.sha256);
  assert.throws(()=>localVideoDraftCommand({...input,outputSha256:'f'.repeat(64)},manifest,now),/Exact reviewed/);

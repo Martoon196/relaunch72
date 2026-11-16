@@ -5,7 +5,8 @@ import {existsSync} from 'node:fs';
 import {chromium} from 'playwright-core';
 import {MEDIA_CUT_EDITOR_SCRIPT} from '../src/portal/media-cut-editor.js';
 const executable=process.env.MEDIA_BROWSER_EXECUTABLE??['/usr/bin/chromium','/usr/bin/google-chrome','/usr/bin/google-chrome-stable'].find(existsSync);
-test('real browser: split, mute, undo, redo, duplicate and reorder preserve exact owner save payload',{skip:process.env.RL72_MEDIA_BROWSER_TESTS!=='true'?'Explicit media browser run only':executable?false:'System Chromium unavailable',timeout:30000},async()=>{
+test('real browser: split, mute, undo, redo, duplicate and reorder preserve exact owner save payload',{skip:process.env.RL72_MEDIA_BROWSER_TESTS!=='true'?'Explicit media browser run only':false,timeout:30000},async()=>{
+ assert.ok(executable,'Explicit browser proof requires a system Chromium executable');
  const browser=await chromium.launch({executablePath:executable,headless:true,args:['--no-sandbox']});
  try{
   const page=await browser.newPage({viewport:{width:390,height:844}});

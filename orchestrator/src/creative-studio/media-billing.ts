@@ -44,6 +44,7 @@ export class PgMediaBillingOwner {
 export async function handleMediaBillingWebhook(raw:Buffer,signature:string,stripe:Pick<Stripe,'webhooks'|'checkout'|'subscriptions'>,ports:{record:(receipt:VerifiedMediaBillingReceipt)=>Promise<unknown>},env:NodeJS.ProcessEnv=process.env){
  if(env.CREATIVE_MEDIA!=='enabled'||env.RL72_MEDIA_BILLING_ENABLED!=='true'||!env.RL72_MEDIA_STRIPE_WEBHOOK_SECRET)throw new SeoBlogError(503,'Media billing webhook disabled');
  if(!Buffer.isBuffer(raw)||raw.length<2||raw.length>1000000||typeof signature!=='string'||signature.length>2048)throw new SeoBlogError(400,'Bounded raw Stripe webhook required');
+ raw=Buffer.from(raw);
  let event:Stripe.Event;
  try{event=stripe.webhooks.constructEvent(raw,signature,env.RL72_MEDIA_STRIPE_WEBHOOK_SECRET,300);}catch{throw new SeoBlogError(400,'Invalid Stripe webhook signature');}
  const live=env.RL72_MEDIA_STRIPE_LIVEMODE==='true';

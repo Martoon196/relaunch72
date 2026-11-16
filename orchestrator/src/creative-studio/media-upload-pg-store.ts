@@ -13,7 +13,8 @@ export class PgResumableMediaUploads {
   const p=this.principal;
   if(p.kind!=='user')throw new SeoBlogError(403,'Signed-in source owner required');
   const ws=checkedEditId(workspace),upload=checkedEditId(id),hash=createHash('sha256').update(p.sessionToken).digest();
-  try{return await withTransaction(this.pool,{actorKind:'user',workspaceId:ws,userId:p.userId,requestId:p.requestId,portalSessionTokenHash:hash},async t=>(await t.query<{v:T}>('SELECT app_private.creative_media_upload($1,$2,$3,$4,$5,$6) AS v',[ws,hash,action,upload,JSON.stringify(input),bytes])).rows[0]!.v);}
+  const payload=JSON.stringify(input);
+  try{return await withTransaction(this.pool,{actorKind:'user',workspaceId:ws,userId:p.userId,requestId:p.requestId,portalSessionTokenHash:hash},async t=>(await t.query<{v:T}>('SELECT app_private.creative_media_upload($1,$2,$3,$4,$5,$6) AS v',[ws,hash,action,upload,payload,bytes])).rows[0]!.v);}
   catch(e){const code=(e as {code?:string}).code;
    if(code==='42501')throw new SeoBlogError(403,'Private upload owner or workspace rejected');
    if(code==='40001'||code==='23505'||code==='55000')throw new SeoBlogError(409,'Upload changed, expired, incomplete or over staging limit');

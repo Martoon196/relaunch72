@@ -22,7 +22,7 @@ export function localVideoDraftCommand(input:LocalVideoHandoffInput,manifest:Loc
  const reviewed=Date.parse(manifest.reviewedAt),age=now.getTime()-reviewed;
  if(!Number.isFinite(age)||age<0||age>14*60*1000)throw new SeoBlogError(409,'Record a fresh private review before requesting canonical video approval');
  const content=JSON.stringify({schema:'relaunch72.video-draft/v1',platform:input.platform,title:input.title.trim(),publicationCopy:input.caption,video:manifest,distribution:'pending_canonical_review'});
- return {commandKey:'media-video:'+input.commandId,origin:'edited',kind:'video',title:input.title.trim(),contentMimeType:'application/vnd.relaunch72.video-draft+json',content,
+ return {commandKey:'media-video:'+input.commandId,origin:'generated',kind:'video',title:input.title.trim(),contentMimeType:'application/vnd.relaunch72.video-draft+json',content,
   source:{system:'relaunch72.private-video',itemId:manifest.outputId+':'+input.commandId,version:manifest.sha256+':review:'+manifest.reviewRevision},
   blob:{storageKey:manifest.storageKey,sha256:manifest.sha256},brand:{snapshotRef:'workspace:'+manifest.workspaceId,sha256:manifest.brandSha256},
   attestation:{catalogSha256:sha(JSON.stringify(manifest)),checkedAt:new Date(reviewed).toISOString(),expiresAt:new Date(reviewed+15*60*1000).toISOString()},
