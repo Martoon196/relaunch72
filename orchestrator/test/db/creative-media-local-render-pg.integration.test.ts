@@ -278,6 +278,14 @@ test('real native render starts from exact owned, independently probed source an
    await assert.rejects(a.owner.enqueue({...enqueue,commandId:randomUUID(),jobId:randomUUID()}),
     /latest|timeline|changed|required/iu);
   });
+  await t.test('stale queued timelines become permanent failures instead of blocking every service tick',async()=>{
+   const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!,staleJob=randomUUID();
+   await a.owner.enqueue({...enqueue,jobId:staleJob,commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
+   await editor.save({workspaceId:a.brand.id,projectId,commandId:randomUUID(),expectedRevision:current.revision,sourceId:upload.id,sourceSha256:upload.sha256,plan:{...current.plan,clips:current.plan.clips.map((clip,index)=>({...clip,caption:clip.caption+(index===0?' changed':'' )}))}});
+   await assert.rejects(new PgLocalRenderWorker(admin,'stale-proof',env).claim(a.brand.id,staleJob),/unavailable/iu);
+   assert.equal((await admin.query('SELECT state FROM app.creative_media_local_render_jobs WHERE workspace_id=$1 AND id=$2',[a.brand.id,staleJob])).rows[0].state,'failed');
+   assert.equal((await new PgOfflineMediaDiscovery(admin,'stale-discovery').pending(a.brand.id,10)).some(x=>x.id===staleJob),false);
+  });
   await t.test('offline leases heartbeat, fence expired attempts and stop retrying after three claims',async()=>{
    const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!;
    const retryJob=randomUUID();await a.owner.enqueue({...enqueue,jobId:retryJob,commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
@@ -294,6 +302,12 @@ test('real native render starts from exact owned, independently probed source an
     if(attempt<3)await admin.query("UPDATE app.creative_media_local_render_jobs SET retry_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,retryJob]);
    }
    const final=(await admin.query('SELECT state,attempts FROM app.creative_media_local_render_jobs WHERE workspace_id=$1 AND id=$2',[a.brand.id,retryJob])).rows[0];assert.deepEqual(final,{state:'failed',attempts:3});
+  });
+  await t.test('the SQL queue cap rejects a twenty-first outstanding render',async()=>{
+   const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!;
+   const request=()=>({...enqueue,jobId:randomUUID(),commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
+   for(let n=0;n<20;n++)await a.owner.enqueue(request());
+   await assert.rejects(a.owner.enqueue(request()),/cap|storage/iu);
   });
   await t.test('owner erasure blocks reads immediately, removes stored bytes and isolates tenants',async()=>{
    const flags={...env,RL72_MEDIA_RETENTION_ENABLED:'true'};

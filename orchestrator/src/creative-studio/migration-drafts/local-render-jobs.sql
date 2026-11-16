@@ -215,7 +215,7 @@ BEGIN
    AND p.plan_sha256=j.plan_sha256
    AND p.revision=(SELECT max(pp.revision) FROM app.creative_media_edit_projects pp
     WHERE pp.workspace_id=p_workspace AND pp.id=j.project_id)) THEN
-  RAISE EXCEPTION 'Stale or changed immutable edit plan' USING ERRCODE='55000'; END IF;
+  UPDATE app.creative_media_local_render_jobs SET state='failed',claim_token=gen_random_uuid(),error_code='source_changed',updated_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_job;RETURN; END IF;
  IF NOT EXISTS(SELECT 1 FROM app.creative_media_source_videos s
    LEFT JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id
    JOIN app.creative_media_video_probes probe
@@ -224,7 +224,7 @@ BEGIN
     AND probe.status='verified_technical' AND probe.source_sha256=s.sha256
     AND ((s.storage_kind='pg_blob' AND encode(public.digest(b.bytes,'sha256'),'hex')=s.sha256
     AND encode(b.sha256,'hex')=s.sha256 AND s.byte_length=octet_length(b.bytes)) OR (s.storage_kind='private_object' AND s.object_key IS NOT NULL))) THEN
-  RAISE EXCEPTION 'Source or technical probe no longer matches' USING ERRCODE='55000'; END IF;
+  UPDATE app.creative_media_local_render_jobs SET state='failed',claim_token=gen_random_uuid(),error_code='source_changed',updated_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_job;RETURN; END IF;
  UPDATE app.creative_media_local_render_jobs SET state='claimed',attempts=attempts+1,
   claim_token=gen_random_uuid(),claim_until=clock_timestamp()+interval '10 minutes',
   updated_at=clock_timestamp()
