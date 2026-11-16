@@ -5,15 +5,16 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { portalCsrfToken } from '../src/portal/session.js';
 import { contentArticlesPage } from '../src/portal/content-area-pages.js';
 import { OWNER } from './seo-blog-fixtures.js';
 import { websiteFixture } from './seo-blog-website-fixtures.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
 import { articleId, BRAND_ID, call, HOSTILE_NAME, HOSTILE_TITLE, identity, NOW, SECRET, showcase, type Scenario } from './content-area-shell-fixtures.js';
-import { goldenPages, GOLDEN_NOW } from './content-area-shell-golden.js';
+import { goldenPages, GOLDEN_BASE, GOLDEN_FILE, GOLDEN_NOW, type GoldenRecord } from './content-area-shell-golden.js';
 
-const GOLDEN: Record<string, string> = JSON.parse(readFileSync(new URL('./content-area-shell-golden.json', import.meta.url), 'utf8'));
+const GOLDEN: GoldenRecord = JSON.parse(gunzipSync(readFileSync(new URL(`./${GOLDEN_FILE}`, import.meta.url))).toString('utf8'));
 const B = `/portal/seo-blog/b/${BRAND_ID}`;
 const ON = { headers: { cookie: 'r72_content_look=new' }, input: { contentAreaPreview: 'enabled' } };
 const csrf = portalCsrfToken(SECRET, identity().sessionToken);
@@ -24,34 +25,48 @@ async function on(scenario: Scenario, path: string, settings = {}) {
   return call(showcase(scenario, settings).service, identity(), 'GET', path, ON);
 }
 
-test('with the preview off, every existing page is identical to d7417c5 (switch absent, cookie absent, or both wrong)', async () => {
-  mock.timers.enable({ apis: ['Date'], now: Date.parse(GOLDEN_NOW) });
+/** Where two recordings first differ, for a readable failure. */
+function firstDifference(a: string, b: string): string {
+  let i = 0; while (i < a.length && a[i] === b[i]) i++;
+  return `at ${i}: recorded …${JSON.stringify(a.slice(Math.max(0, i - 80), i + 80))}… now …${JSON.stringify(b.slice(Math.max(0, i - 80), i + 80))}…`;
+}
+
+test(`with the preview off, every page and form post is byte-identical to the foundation (${GOLDEN_BASE}): status, every header and the whole body`, async () => {
+  const saved = process.env.CONTENT_AREA_PREVIEW;
   try {
-    const saved = process.env.CONTENT_AREA_PREVIEW;
-    try {
-      const cases: [string, Parameters<typeof goldenPages>[0], string | undefined][] = [
-        ['no switch, no cookie', {}, undefined],
-        ['cookie but no switch', { headers: { cookie: 'r72_content_look=new' } }, undefined],
-        ['switch on (environment) but no cookie', {}, 'enabled'],
-        ['switch on (input) but the cookie says old', { headers: { cookie: 'r72_content_look=old; other=new' }, input: { contentAreaPreview: 'enabled' } }, undefined],
-        ['cookie but the switch is not exactly "enabled"', { headers: { cookie: 'r72_content_look=new' } }, 'true'],
-      ];
-      for (const [name, opts, env] of cases) {
-        if (env === undefined) delete process.env.CONTENT_AREA_PREVIEW; else process.env.CONTENT_AREA_PREVIEW = env;
-        const { prints } = await goldenPages(opts);
-        assert.deepEqual(Object.keys(prints).sort(), Object.keys(GOLDEN).sort(), name);
-        // The switch page itself is new: it exists only while the server allows the preview.
-        const allowed = env === 'enabled' || opts?.input?.contentAreaPreview === 'enabled';
-        for (const key of Object.keys(GOLDEN)) if (!(allowed && key.endsWith(':look-unknown'))) assert.equal(prints[key], GOLDEN[key], `${name}: ${key} changed`);
+    const cases: [string, Parameters<typeof goldenPages>[0], string | undefined][] = [
+      ['no switch, no cookie', {}, undefined],
+      ['cookie but no switch', { headers: { cookie: 'r72_content_look=new' } }, undefined],
+      ['switch on (environment) but no cookie', {}, 'enabled'],
+      ['switch on (input) but the cookie says old', { headers: { cookie: 'r72_content_look=old; other=new' }, input: { contentAreaPreview: 'enabled' } }, undefined],
+      ['cookie but the switch is not exactly "enabled"', { headers: { cookie: 'r72_content_look=new' } }, 'true'],
+    ];
+    for (const [name, opts, env] of cases) {
+      if (env === undefined) delete process.env.CONTENT_AREA_PREVIEW; else process.env.CONTENT_AREA_PREVIEW = env;
+      mock.timers.enable({ apis: ['Date'], now: Date.parse(GOLDEN_NOW) });
+      let now: Awaited<ReturnType<typeof goldenPages>>;
+      try { now = await goldenPages(opts); } finally { mock.timers.reset(); }
+      assert.deepEqual(Object.keys(now).sort(), Object.keys(GOLDEN).sort(), name);
+      // While the server allows the preview, the switch itself exists for people who manage a business: its page, its
+      // post and its script. Everything else, including the switch for someone who manages none, stays as it was.
+      const allowed = env === 'enabled' || opts?.input?.contentAreaPreview === 'enabled';
+      const newWhenAllowed = (key: string) => !key.startsWith('stranger:') && /:(look-unknown|look-back|look|post-look|script-unknown|anonymous-script)$/.test(key) || key === 'post:look';
+      let compared = 0;
+      for (const key of Object.keys(GOLDEN)) {
+        if (allowed && newWhenAllowed(key)) continue;
+        const was = JSON.stringify(GOLDEN[key]), is = JSON.stringify(now[key]);
+        if (was !== is) assert.fail(`${name}: ${key} changed ${firstDifference(was, is)}`);
+        compared++;
       }
-    } finally { if (saved === undefined) delete process.env.CONTENT_AREA_PREVIEW; else process.env.CONTENT_AREA_PREVIEW = saved; }
-  } finally { mock.timers.reset(); }
+      assert.ok(compared > 150, `${name}: ${compared} requests compared`);
+    }
+  } finally { if (saved === undefined) delete process.env.CONTENT_AREA_PREVIEW; else process.env.CONTENT_AREA_PREVIEW = saved; }
 });
 
 test('with the preview on, the seven places land on real pages, with the right one marked and the badge counting what needs him', async () => {
   mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
   try {
-    const places: [string, string, string][] = [['Home', `${B}/overview`, 'Good afternoon'], ['Brand DNA', `${B}/dna`, ''], ['Calendar', `${B}/calendar`, 'November 2026'], ['Articles', `${B}/articles`, 'Ready for you'],
+    const places: [string, string, string][] = [['Home', `${B}/overview`, 'Good afternoon'], ['Brand DNA', `${B}/dna`, ''], ['Calendar', `${B}/calendar`, 'November 2026'], ['Articles', `${B}/articles`, 'Needs you'],
       ['Social', `${B}/social`, ''], ['Results', `${B}/results`, 'We do not count readers yet'], ['Settings', `${B}/publishing`, 'Publishing']];
     const home = await on('busy', `${B}/overview`);
     assert.equal(home.status, 200);
@@ -70,9 +85,9 @@ test('with the preview on, the seven places land on real pages, with the right o
       assert.ok((r.body.match(/data-primary/g) ?? []).length <= 1, `${label}: at most one main action`);
       assert.doesNotMatch(visible(r.body), /[–—]/, `${label}: no long dashes`);
     }
-    // The badge is the articles list's own "Ready for you" count, and is absent when nothing needs him.
+    // The badge is the articles list's own "Needs you" count, and is absent when nothing needs him.
     const list = await on('busy', `${B}/articles`);
-    assert.match(list.body, /id="ca-g-ready" class="ca-h2">Ready for you<\/h2><span class="ca-gcount ca-gcount-needs"><span class="ca-sr">: <\/span>5<\/span>/);
+    assert.match(list.body, /id="ca-g-ready" class="ca-h2">Needs you<\/h2><span class="ca-gcount ca-gcount-needs"><span class="ca-sr">: <\/span>5<\/span>/);
     for (const scenario of ['calm', 'new'] as const) assert.doesNotMatch((await on(scenario, `${B}/overview`)).body, /class="ca-count"/, scenario);
     // A tool that is not one of the seven places (Activity) opens in the shell with nothing marked.
     const activity = await on('busy', `${B}/activity`);
@@ -144,7 +159,7 @@ test('the calendar shows live, going out, needs you, being written and the empty
     assert.match(day(25), /We will fill this/);
     assert.doesNotMatch(day(24), /ca-cal-item/, 'Tuesday is not a publishing day');
     assert.equal(page.match(/data-primary/g)!.length, 1);
-    assert.match(page, /data-primary>Read the 5 that need you/);
+    assert.match(page, /data-primary>Start with the first of the 5 that need you/);
     assert.match(page, /href="[^"]+\/calendar\?view=month&amp;date=2026-11-01">Move dates and schedule drafts by hand/);
     const manual = await on('busy', `${B}/calendar?view=month&date=2026-11-01`);
     assert.match(manual.body, /<h1>Content calendar<\/h1>/, 'the existing diary stays one step away');

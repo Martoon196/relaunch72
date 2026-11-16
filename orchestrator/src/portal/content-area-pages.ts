@@ -2,15 +2,21 @@
  * The content area preview's own screens: Home ("what needs you"), the Calendar month, the Articles list and an honest
  * Results page, plus the page that switches the preview on or off for a browser.
  *
- * Everything shown is read from the business's real records through the same rules the existing pages use
- * (`situation` and `writingStatus` from the article page). No number is shown that the system does not have.
- * Native links and forms only; no script.
+ * Everything shown is read from the business's real records through the rules the existing pages use: `situation`
+ * and `writingStatus` from the article page, `plannedSiteGone` from the publishing plan, and the engine's own conditions
+ * for writing ahead (see `fillOutlook`). The shell never says something the article page or the engine would contradict,
+ * and shows no number the system does not have.
  */
 import { addDays, utcToLocal } from '../seo-blog/schedule.js';
-import type { Article, ArticleBody, ArticleBrief, Brand, Destination, Job } from '../seo-blog/types.js';
-import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
+import { plannedSiteGone } from '../seo-blog/publishing-plan.js';
+import { monthlyCeiling } from '../seo-blog/limits.js';
+import { legacyPlanningHold } from '../seo-blog/programme.js';
+import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
+import { USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
+import type { Article, ArticleBody, ArticleBrief, Brand, Destination, Job, TopicPlan, UsageKind } from '../seo-blog/types.js';
+import { csrfField, layout, SEO_BLOG_BASE, type BrandDnaDoorStatus, type Shell } from './seo-blog-view.js';
 import { longWhen, safeHttps, situation, writingStatus, type ArticleListRow, type Situation } from './seo-blog-article-view.js';
-import { autopilot, icon, publishingDays } from './content-area-layout.js';
+import { autopilot, publishingDays } from './content-area-layout.js';
 import { CONTENT_AREA_TOKENS } from './content-area-theme.js';
 import { escapeHtml as e } from './ui.js';
 
@@ -24,6 +30,16 @@ export interface ContentAreaData {
   readonly now: string;
 }
 
+/** What the engine needs before it writes for an empty publishing day (all read-only). */
+export interface FillFacts {
+  readonly readiness: BrandReadiness | null;
+  readonly usage: Record<UsageKind, number> | null;
+  readonly dna: BrandDnaDoorStatus | undefined;
+  readonly plans: readonly TopicPlan[];
+}
+
+type Problem = 'paused' | 'site_gone' | 'no_website' | 'failed' | 'writing' | 'held' | 'owner_hold' | 'read';
+
 interface Item {
   readonly row: ArticleListRow | null;
   readonly brief: ArticleBrief | null;
@@ -33,9 +49,15 @@ interface Item {
   readonly excerpt: string;
   readonly picture: string | null;
   readonly alt: string;
+  /** What the article page says (with the business paused, that is "Publishing is paused" for every article). */
   readonly sit: Situation | null;
+  /** The article's own state with the pause set aside: what would need the owner once publishing is back on. */
+  readonly own: Situation | null;
+  readonly gone: { readonly id: string; readonly label: string } | null;
   readonly retryJobId: string | null;
   readonly link: { href: string; label: string } | null;
+  /** Set when this needs the owner, with the kind of problem. */
+  readonly problem: Problem | null;
 }
 
 const brandHref = (b: Brand, path: string) => `${SEO_BLOG_BASE}/b/${b.id}/${path}`;
@@ -45,8 +67,10 @@ function local(iso: string, tz: string): { date: string; time: string } {
 }
 const weekday = (date: string) => utcToLocal(`${date}T12:00:00Z`, 'UTC').weekday;
 const dayName = (date: string, style: 'short' | 'long' = 'short') => new Date(`${date}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: style, timeZone: 'UTC' });
+const longDay = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 const monthName = (date: string) => new Date(`${date.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const suggestedAt = (brief: ArticleBrief | null) => (brief as (ArticleBrief & { suggestedAtUtc?: string | null }) | null)?.suggestedAtUtc ?? null;
 
 /** The picture the owner sees for an article (a privately reviewed hero comes from the private route), as on the article page. */
 function pictureSrc(b: Brand, article: Article, image: ArticleBody['image'] | undefined): string | null {
@@ -56,93 +80,181 @@ function pictureSrc(b: Brand, article: Article, image: ArticleBody['image'] | un
   return safeHttps(image.url);
 }
 
-/** Every article (and every topic being written) in the same four groups as the articles list. */
-function groups(b: Brand, d: ContentAreaData): Record<'ready' | 'coming' | 'writing' | 'live', Item[]> {
+/** States where the article page itself puts a planned-but-disconnected website first (mirrors its `plan.goneSite` rule). */
+const GONE_SHOWN = (kind: string) => !['live', 'publishing', 'checking', 'owner_hold', 'must_fix'].includes(kind);
+
+type Groups = Record<'ready' | 'coming' | 'writing' | 'live', Item[]>;
+
+/** Every article (and every topic being written) in the articles list's four groups; "ready" is everything that needs the owner. */
+function groups(b: Brand, d: ContentAreaData): Groups {
   const websites = d.destinations.filter((x) => x.status === 'connected').length;
   const briefs = new Map(d.briefs.map((x) => [x.id, x]));
-  const out: Record<'ready' | 'coming' | 'writing' | 'live', Item[]> = { ready: [], coming: [], writing: [], live: [] };
+  const unpaused = b.settings.pauseAll ? { ...b, settings: { ...b.settings, pauseAll: false } } : b;
+  const out: Groups = { ready: [], coming: [], writing: [], live: [] };
+  const stalled = (w: { retryJobId: string | null; link: { href: string; label: string } | null }): Problem | null => w.retryJobId || w.link ? 'writing' : null;
   for (const row of d.articles) {
     const a = row.article;
     const brief = briefs.get(a.briefId) ?? null;
-    const base = { row, brief, href: brandHref(b, `articles/${a.id}`), excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', picture: pictureSrc(b, a, row.image), alt: row.image?.alt ?? '' };
+    const base = { row, brief, href: brandHref(b, `articles/${a.id}`), excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', picture: pictureSrc(b, a, row.image), alt: row.image?.alt ?? '', gone: null };
     if (!a.currentVersionId) {
       const w = writingStatus(b, a, a.briefId, d.jobs);
-      out.writing.push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, retryJobId: w.retryJobId, link: w.link });
+      const problem = stalled(w);
+      out[problem ? 'ready' : 'writing'].push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, own: null, retryJobId: w.retryJobId, link: w.link, problem });
       continue;
     }
     const sit = situation(a, b, d.now, websites);
-    out[sit.group].push({ ...base, title: row.title, line: sit.line, sit, retryJobId: null, link: null });
+    const own = b.settings.pauseAll ? situation(a, unpaused, d.now, websites) : sit;
+    const gone = GONE_SHOWN(own.kind) ? plannedSiteGone(a, d.destinations) : null;
+    const problem: Problem | null = gone ? 'site_gone' : own.group !== 'ready' ? null
+      : own.kind === 'no_website' ? 'no_website' : own.kind === 'failed' ? 'failed' : own.kind === 'held' ? 'held' : own.kind === 'owner_hold' ? 'owner_hold' : 'read';
+    const line = gone ? `Planned for ${gone.label}, which is not connected any more` : sit.line;
+    const group = problem ? 'ready' : own.group === 'ready' ? 'coming' : own.group;
+    out[group].push({ ...base, title: row.title, line, sit, own, gone, retryJobId: null, link: null, problem });
   }
   for (const brief of d.briefs) {
     if (brief.status !== 'generating' || d.articles.some((r) => r.article.briefId === brief.id)) continue;
     const w = writingStatus(b, null, brief.id, d.jobs);
-    out.writing.push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, retryJobId: w.retryJobId, link: w.link });
+    const problem = stalled(w);
+    out[problem ? 'ready' : 'writing'].push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, own: null, gone: null, retryJobId: w.retryJobId, link: w.link, problem });
   }
-  out.ready.sort((x, y) => (x.row!.article.createdAt).localeCompare(y.row!.article.createdAt));
+  const order: Record<Problem, number> = { paused: 0, site_gone: 1, no_website: 2, failed: 3, writing: 4, held: 5, owner_hold: 6, read: 7 };
+  out.ready.sort((x, y) => order[x.problem!] - order[y.problem!] || (x.row?.article.createdAt ?? '~').localeCompare(y.row?.article.createdAt ?? '~'));
   out.coming.sort((x, y) => (x.row!.article.schedule?.publishAtUtc ?? '').localeCompare(y.row!.article.schedule?.publishAtUtc ?? ''));
   out.live.sort((x, y) => (y.row!.article.publishedAt ?? '').localeCompare(x.row!.article.publishedAt ?? ''));
   return out;
 }
 
-/** The number on the Articles badge: written articles waiting for the owner (the articles list's "Ready for you"). */
-export function needsYouCount(b: Brand, articles: readonly ArticleListRow[], destinations: readonly PublicDestination[], now: string): number {
-  const websites = destinations.filter((x) => x.status === 'connected').length;
-  return articles.filter((r) => r.article.currentVersionId && situation(r.article, b, now, websites).group === 'ready').length;
+/** The number on the Articles badge: everything that needs the owner (the new list's "Needs you" group). */
+export function needsYouCount(b: Brand, d: ContentAreaData): number {
+  return groups(b, d).ready.length;
+}
+
+/**
+ * Whether the engine will really write for an empty publishing day, from the same conditions its daily job and plan
+ * acceptance use (engine.ts runDaily / topUpWrites / plan commit): ongoing production on and not paused, plans accepted
+ * without the owner, Brand DNA and set-up ready, no research hold, allowance left, below the backlog ceiling and no
+ * suggested plan waiting for the owner. Anything unknown counts as "no".
+ */
+export function fillOutlook(b: Brand, d: ContentAreaData, f: FillFacts): { fills: boolean; line: string } {
+  const s = b.settings;
+  const no = (line: string) => ({ fills: false, line });
+  if (s.pauseAll) return no('Publishing is paused, so nothing new is written and nothing goes out until you switch it back on.');
+  if (!s.ongoingProduction) return no('Empty publishing days stay empty until you choose topics for them.');
+  if (f.dna !== 'confirmed' || f.readiness?.profile !== 'confirmed') return no('Empty publishing days are not filled until your Brand DNA is confirmed.');
+  if (!f.readiness?.canPlan) return no('Empty publishing days are not filled until set-up is finished.');
+  if (!s.autoAcceptPlans) return no('Empty publishing days are not filled until you accept new topics in Topics.');
+  if (s.programme?.researchHold || legacyPlanningHold(d.jobs, s.programme?.researchAcknowledgements)) return no('Empty publishing days are not filled until you look at the research hold in Topics.');
+  if (f.plans.some((p) => p.status === 'proposed')) return no('Empty publishing days are not filled until you accept the topics already suggested in Topics.');
+  if (!f.usage) return no('Empty publishing days are filled only while there is allowance left; we could not check it just now.');
+  const tokensLeft = monthlyCeiling(s, 'model_tokens') - f.usage.model_tokens;
+  const searchesLeft = monthlyCeiling(s, 'search_calls') - f.usage.search_calls;
+  if (tokensLeft < USAGE_ESTIMATES.article || searchesLeft <= 0) return no('Empty publishing days are not filled until there is writing allowance left this month.');
+  const pending = d.jobs.filter((j) => isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length;
+  const backlog = d.articles.filter((r) => r.article.delivery !== 'published').length + pending;
+  if (backlog >= s.backlogCeiling) return no(`Empty publishing days are not filled while ${backlog} unpublished articles are waiting (your limit is ${s.backlogCeiling}).`);
+  return { fills: true, line: `Empty publishing days up to ${s.planningHorizonDays} days ahead fill themselves, so all you do is read and decide.` };
 }
 
 function picture(i: Pick<Item, 'picture' | 'alt'>, cls = '', writing = false): string {
   if (i.picture) return `<span class="ca-pic ${cls}"><img src="${e(i.picture)}" alt="${e(i.alt)}" loading="lazy"></span>`;
-  return `<span class="ca-pic ca-pic-none ${cls}" aria-hidden="true">${writing ? '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>' : ''}</span>`;
+  return `<span class="ca-pic ca-pic-none ${cls}" aria-hidden="true">${writing ? PEN : ''}</span>`;
 }
 
+const PEN = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 const arrow = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
 const chevron = '<svg class="ca-ic ca-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg>';
 const bolt = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>';
 const amber = (href: string, label: string, cls = '') => `<a class="ca-btn ${cls}" href="${e(href)}" data-primary>${e(label)} ${arrow}</a>`;
+const retryButton = (shell: Shell, jobId: string, back: string, primary: boolean) => `<form method="post" action="${e(brandHref(shell.brand!, `jobs/${jobId}/retry`))}" class="${primary ? 'ca-hero-form' : 'ca-row-act'}">${csrfField(shell.csrf)}<input type="hidden" name="back" value="${e(back)}"><button type="submit" class="${primary ? 'ca-btn' : 'ca-btn-quiet'}"${primary ? ' data-primary' : ''}>Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`;
+
+/** The words and the one action for the first thing that needs the owner (the article page's own sentence and action). */
+function needHero(shell: Shell, i: Item, others: number): { tag: string; title: string; text: string; action: string } {
+  const b = shell.brand!;
+  const more = others ? ` ${others === 1 ? 'One more thing needs' : `${others} more need`} you in Articles.` : '';
+  const t = `“${e(i.title)}”`;
+  switch (i.problem) {
+    case 'site_gone': return { tag: 'Needs you today', title: 'Your website is not connected', text: `${t} was planned for ${e(i.gone!.label)}, which is not connected any more. It will not go out until the connection works or you choose another website.${more}`, action: amber(`${brandHref(b, 'setup')}#websites`, `Check the connection to ${i.gone!.label}`) };
+    case 'no_website': return { tag: 'Needs you today', title: 'Connect your website', text: `${t} is ready, but your website is not connected yet, so nothing can go out.${more}`, action: amber(`${brandHref(b, 'setup')}#websites`, 'Connect your website') };
+    case 'failed': return { tag: 'Needs you today', title: 'An article did not reach your website', text: `${t}: ${e(i.own!.bar)} Open it to try again or choose a time.${more}`, action: amber(i.href, 'Open it and try again') };
+    case 'writing': return { tag: 'Needs you today', title: 'Writing has stopped', text: `${t}: ${e(i.line)}.${more}`, action: i.retryJobId ? retryButton(shell, i.retryJobId, 'articles', true) : amber(i.link!.href.replace(/&amp;/g, '&'), i.link!.label) };
+    case 'held': {
+      const reason = i.row!.article.hold?.reason;
+      const action = reason === 'destination' ? amber(`${brandHref(b, 'setup')}#websites`, 'Check the connection') : reason === 'budget' ? amber(brandHref(b, 'publishing'), 'Check the allowance') : amber(i.href, 'Open it');
+      return { tag: 'Needs you today', title: 'An article is on hold', text: `${t}: ${e(i.own!.bar)}${more}`, action };
+    }
+    case 'owner_hold': return { tag: 'Needs you today', title: 'An article is waiting for your go-ahead', text: `${t}: ${e(i.own!.bar)} Open it when you want it to go out.${more}`, action: amber(i.href, 'Open it') };
+    default: return { tag: 'Needs you today', title: '', text: '', action: '' };
+  }
+}
+
+const DNA_DOOR: Record<'proposed' | 'out_of_date', { title: string; text: string; label: string }> = {
+  proposed: { title: 'Check your Brand DNA card', text: 'We have read your website and made your Brand DNA card. Check what we found and confirm it, so the articles sound like you.', label: 'Check your Brand DNA card' },
+  out_of_date: { title: 'Your Brand DNA is out of date', text: 'Something about your business has changed since your Brand DNA card was confirmed. Look at it again so new articles stay right.', label: 'Look at your Brand DNA' },
+};
 
 // ─── Home ────────────────────────────────────────────────────────────────────
 
-export function contentHomePage(shell: Shell, d: ContentAreaData & { readonly dnaConfirmed: boolean }): string {
+export function contentHomePage(shell: Shell, d: ContentAreaData & { readonly fill: FillFacts }): string {
   const b = shell.brand!;
+  const s = b.settings;
   const g = groups(b, d);
   const now = local(d.now, b.timezone);
   const hour = Number(now.time.slice(0, 2));
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  const n = g.ready.length;
-  const allReading = g.ready.every((i) => i.sit?.kind === 'ready');
-  const anything = d.articles.length > 0 || g.writing.length > 0;
+  const needs = g.ready;
+  const reading = needs.filter((i) => i.problem === 'read');
+  const problems = needs.filter((i) => i.problem !== 'read');
+  const anything = d.articles.length > 0 || g.writing.length > 0 || needs.length > 0;
+  const dna = d.fill.dna === 'proposed' || d.fill.dna === 'out_of_date' ? DNA_DOOR[d.fill.dna] : null;
+  const dnaLine = dna ? ` <a class="ca-hero-link" href="${e(brandHref(b, 'dna'))}">${e(dna.title)}</a>` : '';
+  const heroBox = (tag: string, title: string, text: string, action: string, art = '', calm = false) => `<section class="ca-hero${calm ? ' ca-hero-calm' : ''}" aria-labelledby="ca-hero-title"><div class="ca-hero-text"><p class="ca-tag${calm ? ' ca-tag-calm' : ''}">${e(tag)}</p>
+<h2 id="ca-hero-title" class="ca-hero-h">${e(title)}</h2><p class="ca-hero-p">${text}</p>${action}</div>${art}</section>`;
   let lede: string, hero: string;
-  if (n) {
-    const first = g.ready[0]!;
-    const pics = g.ready.filter((i) => i.picture).slice(0, 3);
+  if (s.pauseAll) {
+    lede = needs.length ? `Publishing is paused, and ${plural(needs.length, 'article needs', 'articles need')} you.` : 'Publishing is paused.';
+    hero = heroBox('Paused', 'Publishing is paused', `Nothing goes out and nothing new is written until you switch it back on.${needs.length ? ` ${plural(needs.length, 'article also needs', 'articles also need')} you in Articles.` : ''}${dnaLine}`, amber(`${brandHref(b, 'publishing')}#pause`, 'Switch publishing back on'));
+  } else if (problems.length) {
+    const h = needHero(shell, problems[0]!, needs.length - 1);
+    lede = needs.length === 1 ? 'One thing needs you.' : `${needs.length} things need you.`;
+    hero = heroBox(h.tag, h.title, `${h.text}${dnaLine}`, h.action);
+  } else if (reading.length) {
+    const n = reading.length;
+    const first = reading[0]!;
+    const allReading = reading.every((i) => i.own?.kind === 'ready');
+    const pics = reading.filter((i) => i.picture).slice(0, 3);
     lede = `${n === 1 ? 'One article is' : `${n} articles are`} written and waiting for you.`;
-    hero = `<section class="ca-hero" aria-labelledby="ca-hero-title"><div class="ca-hero-text"><p class="ca-tag">Needs you today</p>
-<h2 id="ca-hero-title" class="ca-hero-h">${n === 1 ? `1 article ${allReading ? 'is ready for you to read' : 'needs you'}` : `${n} articles ${allReading ? 'are ready for you to read' : 'need you'}`}</h2>
-<p class="ca-hero-p">Start with “${e(first.title)}”. Read it, then decide whether it goes out. ${n > 1 ? 'The others wait in Articles.' : ''}</p>${amber(first.href, 'Start reading')}</div>
-${pics.length ? `<div class="ca-hero-art ca-hero-art-${pics.length}" aria-hidden="true">${pics.map((p, i) => picture(p, `ca-hero-pic ca-p${i + 1}`)).join('')}</div>` : ''}</section>`;
+    hero = heroBox('Needs you today', n === 1 ? `1 article ${allReading ? 'is ready for you to read' : 'needs you'}` : `${n} articles ${allReading ? 'are ready for you to read' : 'need you'}`,
+      `Start with “${e(first.title)}”. Read it, then decide whether it goes out.${n > 1 ? ' The others wait in Articles.' : ''}${dnaLine}`, amber(first.href, 'Start reading'),
+      pics.length ? `<div class="ca-hero-art ca-hero-art-${pics.length}" aria-hidden="true">${pics.map((p, i) => picture(p, `ca-hero-pic ca-p${i + 1}`)).join('')}</div>` : '');
+  } else if (dna) {
+    lede = 'Your Brand DNA needs a look.';
+    hero = heroBox('Needs you today', dna.title, e(dna.text), amber(brandHref(b, 'dna'), dna.label));
   } else if (anything) {
-    const next = g.coming[0];
-    const s = next?.row?.article.schedule;
+    const next = g.coming.find((i) => i.own?.kind === 'scheduled' && Date.parse(i.row!.article.schedule!.publishAtUtc) > Date.parse(d.now));
+    const sc = next?.row?.article.schedule;
     lede = 'Everything is running. Nothing needs you today.';
-    hero = `<section class="ca-hero ca-hero-calm" aria-labelledby="ca-hero-title"><div class="ca-hero-text"><p class="ca-tag ca-tag-calm">All clear</p><h2 id="ca-hero-title" class="ca-hero-h">Nothing needs you today</h2>
-<p class="ca-hero-p">${next && s ? `Next out: “${e(next.title)}” on ${e(longWhen(s.localDate, s.localTime, now.date))}.` : 'Nothing is booked to go out yet.'} ${g.writing.length ? `${plural(g.writing.length, 'article is', 'articles are')} being written; we will show it here when it is ready for you.` : ''}</p>
-<a class="ca-btn-2" href="${e(brandHref(b, 'calendar'))}">See the calendar</a></div></section>`;
+    hero = heroBox('All clear', 'Nothing needs you today', `${next && sc ? `Next out: “${e(next.title)}” on ${e(longWhen(sc.localDate, sc.localTime, now.date))}.` : 'Nothing is booked to go out yet.'} ${g.writing.length ? `${plural(g.writing.length, 'article is', 'articles are')} being written; we will show it here when it is ready for you.` : ''}`,
+      `<a class="ca-btn-2" href="${e(brandHref(b, 'calendar'))}">See the calendar</a>`, '', true);
   } else {
+    const confirmed = d.fill.dna === 'confirmed';
     lede = `Let us get the first articles written for ${b.name}.`;
-    hero = `<section class="ca-hero" aria-labelledby="ca-hero-title"><div class="ca-hero-text"><p class="ca-tag">First step</p><h2 id="ca-hero-title" class="ca-hero-h">${d.dnaConfirmed ? 'Choose your first topics' : 'Start with your website'}</h2>
-<p class="ca-hero-p">${d.dnaConfirmed ? 'Your Brand DNA is ready. Pick the topics you want us to write about and the articles appear here as they are written.' : 'Paste your website address. We read it and learn how your business talks, then you check what we found.'}</p>${amber(brandHref(b, d.dnaConfirmed ? 'topics' : 'dna'), d.dnaConfirmed ? 'Choose topics' : 'Start with your website')}</div></section>`;
+    hero = heroBox('First step', confirmed ? 'Choose your first topics' : 'Start with your website', confirmed ? 'Your Brand DNA is ready. Pick the topics you want us to write about and the articles appear here as they are written.' : 'Paste your website address. We read it and learn how your business talks, then you check what we found.',
+      amber(brandHref(b, confirmed ? 'topics' : 'dna'), confirmed ? 'Choose topics' : 'Start with your website'));
   }
   const monday = addDays(now.date, 1 - weekday(now.date));
   const sunday = addDays(monday, 6);
   const inWeek = (date: string | null | undefined) => Boolean(date && date >= monday && date <= sunday);
+  const going = s.pauseAll ? [] : g.coming.filter((i) => ['scheduled', 'due', 'publishing', 'rewriting'].includes(i.own?.kind ?? '') && inWeek(i.row!.article.schedule?.localDate));
   const week = [...g.live.filter((i) => inWeek(i.row!.article.publishedAt ? local(i.row!.article.publishedAt, b.timezone).date : null)).map((i) => ({ i, date: local(i.row!.article.publishedAt!, b.timezone).date, live: true })),
-    ...g.coming.filter((i) => inWeek(i.row!.article.schedule?.localDate)).map((i) => ({ i, date: i.row!.article.schedule!.localDate, live: false }))].sort((x, y) => x.date.localeCompare(y.date));
-  const weekRows = week.map(({ i, date, live }) => `<li><a class="ca-wk" href="${e(i.href)}"><span class="ca-wk-date"><b>${e(dayName(date))}</b><i>${Number(date.slice(8))}</i></span>${picture(i, 'ca-wk-pic')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span></span><span class="ca-chip${live ? ' ca-chip-live' : ''}">${live ? 'Live' : 'Going out'}</span></a></li>`).join('');
-  const days = publishingDays(b.settings.cadence.weekdays, b.settings.cadence.localTime);
-  const weekBlock = anything ? `<section aria-labelledby="ca-week"><h2 id="ca-week" class="ca-h2">Going out this week</h2><p class="ca-sub">You publish on ${e(days)}.${week.length ? ' Nothing here needs you.' : ''}</p>
-${week.length ? `<ul class="ca-panel ca-rows">${weekRows}</ul>` : `<p class="ca-panel ca-empty">Nothing is going out this week. ${g.coming.length ? 'The next article is on the calendar.' : ''} <a href="${e(brandHref(b, 'calendar'))}">Open the calendar</a></p>`}</section>` : '';
+    ...going.map((i) => ({ i, date: i.row!.article.schedule!.localDate, live: false }))].sort((x, y) => x.date.localeCompare(y.date));
+  const weekRows = week.map(({ i, date, live }) => `<li><a class="ca-wk" href="${e(i.href)}"><span class="ca-sr">${e(longDay(date))}: </span><span class="ca-wk-date" aria-hidden="true"><b>${e(dayName(date))}</b><i>${Number(date.slice(8))}</i></span>${picture(i, 'ca-wk-pic')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-sr">. </span><span class="ca-row-line">${e(i.line)}</span></span><span class="ca-chip${live ? ' ca-chip-live' : ''}" aria-hidden="true">${live ? 'Live' : 'Going out'}</span></a></li>`).join('');
+  const days = publishingDays(s.cadence.weekdays, s.cadence.localTime);
+  const weekNeeds = needs.some((i) => inWeek(i.row?.article.schedule?.localDate));
+  const weekBlock = anything ? `<section aria-labelledby="ca-week"><h2 id="ca-week" class="ca-h2">Going out this week</h2><p class="ca-sub">${s.cadence.weekdays.length ? `You publish on ${e(days)}.` : 'No publishing days are set.'}${s.pauseAll ? ' Publishing is paused, so nothing else goes out this week.' : week.length && !weekNeeds ? ' Nothing here needs you.' : ''}</p>
+${week.length ? `<ul class="ca-panel ca-rows">${weekRows}</ul>` : `<p class="ca-panel ca-empty">Nothing is going out this week. <a href="${e(brandHref(b, 'calendar'))}">Open the calendar</a></p>`}</section>` : '';
   const auto = autopilot(shell);
-  const autoBlock = `<section class="ca-autocard" aria-labelledby="ca-auto"><span class="ca-auto-badge" aria-hidden="true">${bolt}</span><div><h2 id="ca-auto" class="ca-h3">${e(auto.title)}</h2><p>${e(auto.line)}</p></div><a href="${e(brandHref(b, 'publishing'))}">Change this</a></section>`;
+  const fill = s.ongoingProduction && !s.pauseAll ? fillOutlook(b, d, d.fill) : null;
+  const autoBlock = `<section class="ca-autocard" aria-labelledby="ca-auto"><span class="ca-auto-badge" aria-hidden="true">${bolt}</span><div><h2 id="ca-auto" class="ca-h3">${e(auto.title)}</h2><p>${e(auto.line)}${fill && !fill.fills ? ` ${e(fill.line)}` : ''}</p></div><a href="${e(brandHref(b, 'publishing'))}">Change this</a></section>`;
   return layout(shell, 'Home', `<div class="ca-col"><header><h1 class="ca-h1">${greeting}</h1><p class="ca-lede">${e(lede)}</p></header>${hero}${weekBlock}${autoBlock}</div>`, `<style>${PAGE_CSS}</style>`);
 }
 
@@ -150,27 +262,33 @@ ${week.length ? `<ul class="ca-panel ca-rows">${weekRows}</ul>` : `<p class="ca-
 
 interface CalItem { readonly kind: 'live' | 'going' | 'needs' | 'writing' | 'topic' | 'free' | 'fill'; readonly label: string; readonly title: string; readonly href: string | null; readonly pic: Pick<Item, 'picture' | 'alt'> | null }
 
-export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonly month: string }): string {
+export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonly month: string; readonly fill: FillFacts }): string {
   const b = shell.brand!;
   const s = b.settings;
   const g = groups(b, d);
   const today = local(d.now, b.timezone).date;
   const items = new Map<string, CalItem[]>();
   const add = (date: string, item: CalItem) => items.set(date, [...(items.get(date) ?? []), item]);
-  const suggested = (i: Item) => i.brief && (i.brief as ArticleBrief & { suggestedAtUtc?: string }).suggestedAtUtc ? local((i.brief as ArticleBrief & { suggestedAtUtc: string }).suggestedAtUtc, b.timezone).date : null;
+  const suggested = (i: Item) => { const at = suggestedAt(i.brief); return at ? local(at, b.timezone).date : null; };
   for (const i of g.live) add(local(i.row!.article.publishedAt ?? i.row!.article.schedule?.publishAtUtc ?? d.now, b.timezone).date, { kind: 'live', label: 'Live', title: i.title, href: i.href, pic: i });
   for (const i of g.coming) {
     const sc = i.row!.article.schedule;
-    if (sc) add(sc.localDate, { kind: 'going', label: i.sit?.kind === 'scheduled' || (i.sit?.kind === 'rewriting' && sc.localDate > today) ? `Goes out ${clock(sc.localTime)}` : 'Going out now', title: i.title, href: i.href, pic: i });
+    if (!sc) continue;
+    // The label is the article page's own state: never "going out" while paused or while it is being checked.
+    const kind = i.own?.kind;
+    const label = s.pauseAll ? 'Paused' : kind === 'checking' ? 'Being checked' : kind === 'due' || kind === 'publishing' ? 'Going out now'
+      : (kind === 'scheduled' || kind === 'rewriting') && Date.parse(sc.publishAtUtc) > Date.parse(d.now) ? `Goes out ${clock(sc.localTime)}` : 'Coming up';
+    add(sc.localDate, { kind: 'going', label, title: i.title, href: i.href, pic: i });
   }
   for (const i of g.ready) {
-    const date = i.row!.article.schedule?.localDate ?? suggested(i);
-    if (date) add(date, { kind: 'needs', label: 'Needs you', title: i.title, href: i.href, pic: i });
+    const date = i.row?.article.schedule?.localDate ?? suggested(i);
+    if (date) add(date, { kind: 'needs', label: 'Needs you', title: i.title, href: i.href, pic: i.row ? i : null });
   }
   for (const i of g.writing) { const date = suggested(i); if (date) add(date, { kind: 'writing', label: 'Being written', title: i.title, href: i.href, pic: null }); }
-  for (const brief of d.briefs as (ArticleBrief & { suggestedAtUtc?: string })[]) {
-    if (!brief.suggestedAtUtc || !['planned', 'accepted'].includes(brief.status) || d.articles.some((r) => r.article.briefId === brief.id)) continue;
-    add(local(brief.suggestedAtUtc, b.timezone).date, { kind: 'topic', label: 'Topic chosen', title: brief.workingTitle, href: brandHref(b, 'topics'), pic: null });
+  for (const brief of d.briefs) {
+    const at = suggestedAt(brief);
+    if (!at || !['planned', 'accepted'].includes(brief.status) || d.articles.some((r) => r.article.briefId === brief.id)) continue;
+    add(local(at, b.timezone).date, { kind: 'topic', label: 'Topic chosen', title: brief.workingTitle, href: brandHref(b, 'topics'), pic: null });
   }
   const first = `${d.month}-01`;
   const lead = weekday(first) - 1;
@@ -178,7 +296,8 @@ export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonl
   const lastDay = addDays(`${new Date(Date.UTC(Number(d.month.slice(0, 4)), Number(d.month.slice(5, 7)), 15)).toISOString().slice(0, 7)}-01`, -1);
   const weeks = Math.ceil((lead + Number(lastDay.slice(8))) / 7);
   const days = Array.from({ length: weeks * 7 }, (_, i) => addDays(start, i));
-  // Empty publishing days ahead: the system fills them only while ongoing production is on (within its planning horizon).
+  // Empty publishing days ahead: "We will fill this" only when the engine really will write for them (fillOutlook).
+  const outlook = fillOutlook(b, d, d.fill);
   const horizon = addDays(today, s.planningHorizonDays);
   const perWeek = new Map<string, number>();
   for (const day of days) { const monday = addDays(day, 1 - weekday(day)); perWeek.set(monday, (perWeek.get(monday) ?? 0) + (items.get(day)?.filter((x) => x.kind !== 'topic').length ?? 0)); }
@@ -187,7 +306,7 @@ export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonl
     const monday = addDays(day, 1 - weekday(day));
     if ((perWeek.get(monday) ?? 0) >= s.cadence.perWeek) continue;
     perWeek.set(monday, (perWeek.get(monday) ?? 0) + 1);
-    const fills = s.ongoingProduction && day <= horizon;
+    const fills = outlook.fills && day <= horizon;
     add(day, { kind: fills ? 'fill' : 'free', label: fills ? 'We will fill this' : 'Free publishing day', title: '', href: null, pic: null });
   }
   const tile = (x: CalItem) => {
@@ -196,7 +315,6 @@ export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonl
     const inner = `${media}<span class="ca-st ca-st-${x.kind}">${e(x.label)}</span>${x.title ? `<span class="ca-cal-title">${e(x.title)}</span>` : ''}`;
     return x.href ? `<a class="ca-cal-item" href="${e(x.href)}">${inner}</a>` : `<div class="ca-cal-item">${inner}</div>`;
   };
-  const longDay = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
   const cell = (day: string) => {
     const out = day.slice(0, 7) !== d.month;
     const list = items.get(day) ?? [];
@@ -207,11 +325,11 @@ export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonl
   const agenda = agendaDays.length ? agendaDays.map((day) => `<li class="ca-ag-day${day === today ? ' ca-today' : ''}"><h3 class="ca-ag-date"><b>${e(dayName(day))}</b><i>${Number(day.slice(8))}</i>${day === today ? '<span class="ca-today-tag">Today</span>' : ''}</h3><div class="ca-ag-items">${(items.get(day) ?? []).map(tile).join('')}</div></li>`).join('')
     : '<li class="ca-empty">Nothing is on the calendar this month.</li>';
   const needs = g.ready.length;
-  const fillLine = s.pauseAll ? 'Publishing is paused, so nothing goes out until you switch it back on.'
-    : s.ongoingProduction ? `Empty publishing days up to ${s.planningHorizonDays} days ahead fill themselves, so all you do is read and decide.`
-      : 'Empty publishing days stay empty until you choose topics for them.';
-  return layout(shell, 'Calendar', `<div class="ca-col ca-wide"><header class="ca-cal-head"><h1 class="ca-h1">${e(monthName(first))}</h1><nav class="ca-month-nav" aria-label="Month"><a class="ca-mn" href="?date=${shift(-1)}"><span class="ca-sr">Previous month</span><span aria-hidden="true">‹</span></a><a class="ca-mn" href="?date=${shift(1)}"><span class="ca-sr">Next month</span><span aria-hidden="true">›</span></a></nav><span class="ca-grow"></span>${needs ? amber(g.ready[0]!.href, needs === 1 ? 'Read the one that needs you' : `Read the ${needs} that need you`) : ''}</header>
-<p class="ca-autoline"><span class="ca-auto-badge" aria-hidden="true">${bolt}</span><span class="ca-grow">You publish on ${e(publishingDays(s.cadence.weekdays, s.cadence.localTime))}. ${e(fillLine)}</span><a href="${e(brandHref(b, 'publishing'))}">Change the days</a></p>
+  const fillLine = outlook.line;
+  const primary = s.pauseAll ? amber(`${brandHref(b, 'publishing')}#pause`, 'Switch publishing back on')
+    : needs ? amber(g.ready[0]!.href, needs === 1 ? 'Open the one that needs you' : `Start with the first of the ${needs} that need you`) : '';
+  return layout(shell, 'Calendar', `<div class="ca-col ca-wide"><header class="ca-cal-head"><h1 class="ca-h1">${e(monthName(first))}</h1><nav class="ca-month-nav" aria-label="Month"><a class="ca-mn" href="?date=${shift(-1)}"><span class="ca-sr">Previous month</span><span aria-hidden="true">‹</span></a><a class="ca-mn" href="?date=${shift(1)}"><span class="ca-sr">Next month</span><span aria-hidden="true">›</span></a></nav><span class="ca-grow"></span>${primary}</header>
+<p class="ca-autoline"><span class="ca-auto-badge" aria-hidden="true">${bolt}</span><span class="ca-grow">${s.cadence.weekdays.length ? `You publish on ${e(publishingDays(s.cadence.weekdays, s.cadence.localTime))}.` : 'No publishing days are set.'} ${e(fillLine)}</span><a href="${e(brandHref(b, 'publishing'))}">Change the days</a></p>
 <section class="ca-cal" aria-label="${e(monthName(first))}"><div class="ca-dow" aria-hidden="true">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => `<span>${x}</span>`).join('')}</div><ol class="ca-days">${days.map(cell).join('')}</ol></section>
 <section class="ca-agenda" aria-label="${e(monthName(first))}, day by day"><ol>${agenda}</ol></section>
 <p class="ca-quiet-links"><a href="${e(brandHref(b, `calendar?view=month&date=${first}`))}">Move dates and schedule drafts by hand</a> · <a href="${e(brandHref(b, 'social/calendar'))}">Social posts calendar</a></p></div>`, `<style>${PAGE_CSS}</style>`);
@@ -222,10 +340,11 @@ export function contentCalendarPage(shell: Shell, d: ContentAreaData & { readonl
 export function contentArticlesPage(shell: Shell, d: ContentAreaData): string {
   const b = shell.brand!;
   const g = groups(b, d);
-  const titles = { ready: 'Ready for you', coming: 'Coming up', writing: 'Being written', live: 'Live' } as const;
+  const titles = { ready: 'Needs you', coming: 'Coming up', writing: 'Being written', live: 'Live' } as const;
   const row = (i: Item, group: keyof typeof g) => {
     const action = i.retryJobId ? `<form method="post" action="${e(brandHref(b, `jobs/${i.retryJobId}/retry`))}" class="ca-row-act">${csrfField(shell.csrf)}<input type="hidden" name="back" value="articles"><button type="submit" class="ca-btn-quiet">Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`
-      : i.link ? `<a class="ca-row-act ca-link" href="${e(i.link.href)}">${e(i.link.label)}</a>` : '';
+      : i.link ? `<a class="ca-row-act ca-link" href="${e(i.link.href)}">${e(i.link.label)}</a>`
+        : i.gone ? `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#websites`)}">Check the connection to ${e(i.gone.label)}</a>` : '';
     return `<li class="ca-row"><a class="ca-row-main" href="${e(i.href)}">${picture(i, 'ca-row-pic', group === 'writing')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span>${i.excerpt && group !== 'writing' ? `<span class="ca-row-ex">${e(i.excerpt)}</span>` : ''}</span>${chevron}</a>${action}</li>`;
   };
   const sections = (['ready', 'coming', 'writing', 'live'] as const).filter((k) => g[k].length).map((k) => `<section class="ca-group" aria-labelledby="ca-g-${k}"><div class="ca-group-head"><h2 id="ca-g-${k}" class="ca-h2">${titles[k]}</h2><span class="ca-gcount${k === 'ready' ? ' ca-gcount-needs' : ''}"><span class="ca-sr">: </span>${g[k].length}</span><span class="ca-grow"></span>${k === 'ready' ? amber(g.ready[0]!.href, g.ready.length === 1 ? 'Read it' : 'Start with the first', 'ca-btn-sm') : ''}</div><ul class="ca-panel ca-rows">${g[k].map((i) => row(i, k)).join('')}</ul></section>`).join('');
@@ -278,7 +397,8 @@ const PAGE_CSS = `
 .ca-tag{margin:0;display:inline-flex;align-items:center;gap:8px;min-height:28px;padding:0 12px;border-radius:var(--ca-radius-pill);border:1px solid rgba(255,255,255,.3);font-weight:600;font-size:13px;color:var(--ca-on-deep-2)}.ca-tag::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ca-amber)}.ca-tag-calm::before{background:var(--ca-on-deep-2)}
 .ca-hero-h{margin:0;font:var(--ca-weight-display) var(--ca-size-hero)/1.1 var(--ca-font-display);letter-spacing:-.02em;color:var(--ca-on-deep)}
 .ca-hero-p{margin:0;font-size:17px;line-height:1.5;color:var(--ca-on-deep-2);max-width:520px}
-.ca-hero .ca-btn{margin-top:8px}
+.ca-hero .ca-btn{margin-top:8px}.ca-hero-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:0}.ca-hero-form .ca-note{color:var(--ca-on-deep-2);font-size:14px}
+.ca-hero-link{color:var(--ca-on-deep)!important;font-weight:700;text-decoration:underline;text-underline-offset:3px}
 .ca-pic{display:block;aspect-ratio:3/2;overflow:hidden;flex:none;border-radius:var(--ca-radius-s);background:var(--ca-glow)}.ca-pic img{display:block;width:100%;height:100%;object-fit:cover}
 .ca-pic-none{display:grid;place-items:center;color:var(--ca-muted);background:linear-gradient(135deg,var(--ca-glow),var(--ca-mist))}
 .ca-hero-art{position:relative;width:300px;height:190px;flex:none}
@@ -293,8 +413,8 @@ const PAGE_CSS = `
 .ca-wk-pic,.ca-row-pic{width:104px}
 .ca-row-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .ca-row-title{font-weight:600;font-size:17px;line-height:1.3;overflow-wrap:anywhere}
-.ca-row-line{font-size:15px;line-height:1.4;color:var(--ca-muted)}
-.ca-row-ex{font-size:14px;line-height:1.4;color:var(--ca-muted);opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ca-row-line{font-size:15px;line-height:1.4;color:var(--ca-muted);overflow-wrap:anywhere}
+.ca-row-ex{font-size:14px;line-height:1.4;color:var(--ca-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ca-chip{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 12px;border-radius:var(--ca-radius-pill);background:var(--ca-glow);font-weight:600;font-size:13px}
 .ca-chip-live::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ca-link)}
 .ca-chev{color:var(--ca-muted)}
@@ -334,7 +454,8 @@ const PAGE_CSS = `
 .ca-hero-text{display:contents}.ca-hero .ca-tag{align-self:flex-start}.ca-hero-h{font-size:28px}.ca-hero-p{font-size:16px}.ca-hero-art{order:3}.ca-hero .ca-btn{order:4;margin:0;width:100%}.ca-hero .ca-btn-2{order:4;justify-content:center}
 .ca-hero-art{width:100%;height:auto;display:flex}.ca-hero-pic{position:relative!important;left:auto!important;top:auto!important;flex:1;width:auto!important;min-width:0;border-width:2px;border-radius:var(--ca-radius-s)}.ca-hero-pic+.ca-hero-pic{margin-left:-22px}
 .ca-panel{padding:4px 14px}.ca-wk,.ca-row-main{gap:12px}.ca-wk-date,.ca-chip{display:none}.ca-wk-pic,.ca-row-pic{width:84px}.ca-row-title{font-size:16px}.ca-row-ex{display:none}.ca-chev{display:none}
-.ca-row-act{margin:-4px 0 14px 96px}
+.ca-row-act{margin:-4px 0 14px 96px;min-width:0;overflow-wrap:anywhere}
+.ca-btn{white-space:normal;text-align:center;line-height:1.25;padding:12px 24px}
 .ca-group-head .ca-btn{width:100%}.ca-cal-head .ca-btn{width:100%}.ca-autoline{display:grid;grid-template-columns:auto 1fr;border-radius:var(--ca-radius-m);padding:14px}.ca-autoline>a{grid-column:2}.ca-autocard{display:grid;grid-template-columns:auto 1fr;border-radius:var(--ca-radius-m)}.ca-autocard>a{grid-column:2}
 .ca-cal{display:none}.ca-agenda{display:block}
 }

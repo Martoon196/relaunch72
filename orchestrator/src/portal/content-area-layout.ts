@@ -82,9 +82,10 @@ function oldLook(shell: Shell, cls: string): string {
 export function autopilot(shell: Shell): { on: boolean; title: string; line: string } {
   const s = shell.brand!.settings;
   if (s.pauseAll) return { on: false, title: 'Publishing is paused', line: 'Nothing goes out until you switch it back on in Settings.' };
-  const days = publishingDays(s.cadence.weekdays, s.cadence.localTime);
-  const yes = s.autoPublish ? 'Articles that pass their checks go out on their own.' : 'Nothing goes out until you say yes.';
-  if (s.ongoingProduction) return { on: true, title: 'Autopilot is on', line: `We write ahead for ${days}. ${yes}` };
+  // Automatic publishing only waives approval: an article still goes out only at a time it has (engine and article page).
+  const yes = s.autoPublish ? 'Articles with a time go out then without waiting for your approval. An article with no time waits for you.' : 'Nothing goes out until you say yes.';
+  // Ongoing production plans for empty days; without automatic plan acceptance, it writes only topics he accepts.
+  if (s.ongoingProduction) return { on: true, title: 'Autopilot is on', line: `${s.autoAcceptPlans ? 'We plan and write for your publishing days.' : 'We suggest topics for your publishing days and write the ones you accept.'} ${yes}` };
   return { on: false, title: 'Autopilot is off', line: `We write the topics you choose. ${yes}` };
 }
 
@@ -114,7 +115,7 @@ export function contentAreaLayout(shell: Shell, title: string, body: string, ext
 <details class="ca-tools"><summary>More tools</summary><ul>${otherTools(shell)}</ul></details>${oldLook(shell, 'ca-oldlook')}</div></aside>
 <main id="ca-main" class="ca-main" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${body}</main></div>
 <nav class="ca-tabbar" aria-label="Content area (phone)">${PLACES.filter(([p]) => PHONE.includes(p)).map(([p, label, tab]) => link(p, label, tab, 'ca-tab')).join('')}<details class="ca-tab-more"><summary class="ca-tab${more.some(([p]) => p === place) ? ' ca-on' : ''}">${icon('more')}<span>More</span></summary><div class="ca-sheet"><ul>${more.map(([p, label, tab]) => `<li><a href="${href(tab)}"${p === place ? ' aria-current="page"' : ''}>${icon(p)}<span>${e(label)}</span></a></li>`).join('')}</ul><ul class="ca-sheet-tools">${otherTools(shell)}</ul>${oldLook(shell, 'ca-oldlook')}</div></details></nav>
-</body></html>`;
+<script src="${BASE}/content-area.js" defer></script></body></html>`;
 }
 
 /** The shell's own styles, and the existing pages' classes re-pointed at the tokens (no page logic changes). */
@@ -135,6 +136,7 @@ body.ca{color-scheme:light dark;--bg:var(--ca-mist);--card:var(--ca-surface);--i
 .ca-biz-name{flex:1;min-width:0;font-weight:600;font-size:14px;line-height:1.25;overflow-wrap:anywhere}
 .ca-biz-panel{margin-top:8px;padding:12px;border-radius:var(--ca-radius-m);background:var(--ca-surface);color:var(--ca-ink);box-shadow:var(--ca-shadow-pop);display:grid;gap:10px;font-size:14px;--ca-focus:var(--ca-link)}
 .ca-biz-panel a{color:var(--ca-link);font-weight:600}.ca-biz-panel form{display:grid;gap:6px}.ca-biz-panel label{margin:0;font-weight:600}
+.ca-biz-panel button{appearance:none;min-height:40px;padding:0 16px;border-radius:var(--ca-radius-pill);border:0;background:var(--ca-deep);color:var(--ca-on-deep);font:600 14px/1 var(--ca-font-body);cursor:pointer;justify-self:start}
 .ca-biz-panel select{width:100%;padding:8px;border:1px solid var(--ca-line);border-radius:var(--ca-radius-xs);background:var(--ca-mist);color:var(--ca-ink);font:inherit}
 .ca-nav{display:flex;flex-direction:column;gap:4px}
 .ca-nav-item{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 14px;border-radius:var(--ca-radius-pill);font-weight:600;font-size:15px;text-decoration:none;color:var(--ca-on-deep-2)}
@@ -164,6 +166,7 @@ body.ca main{max-width:none}
 .ca-main .pill{border-radius:var(--ca-radius-pill)}
 .ca-main .programme-hero{border:0;border-radius:var(--ca-radius-xl);background:var(--ca-surface);box-shadow:var(--ca-shadow)}
 .ca-main .metric,.ca-main .day,.ca-main .view-switch{background:var(--ca-surface);border-color:var(--ca-line)}.ca-main .day.outside-month,.ca-main .empty-state,.ca-main .slot.planned{background:var(--ca-mist)}
+.ca-main .view-switch a{color:var(--ca-link)}.ca-main .view-switch a[aria-current=page]{background:var(--ca-glow);color:var(--ca-ink)}
 .ca-main .slot{background:var(--ca-glow);border-left-color:var(--ca-link)}.ca-main .review-note,.ca-main nav.tabs a[aria-current=page],.ca-main .step-number{background:var(--ca-glow);color:var(--ca-ink)}
 .ca-main .ap-bar{border:0;border-radius:var(--ca-radius-pill);background:var(--ca-deep);color:var(--ca-on-deep);box-shadow:var(--ca-shadow);--ink:var(--ca-on-deep);--muted:var(--ca-on-deep-2);--accent:var(--ca-on-deep);--ca-focus:var(--ca-focus-on-deep)}
 .ca-main .ap-bar .ap-menu,.ca-main .ap-bar .ap-panel{--ink:var(--ca-ink);--muted:var(--ca-muted);--accent:var(--ca-link);--ca-focus:var(--ca-focus);color:var(--ca-ink)}
@@ -174,7 +177,7 @@ body.ca main{max-width:none}
 .ca-main .ap-fix,.ca-main .ap-putback,.ca-main .ap-post,.ca-main .ap-serp{border-radius:var(--ca-radius-m)}
 .ca-main .dna fieldset{border-radius:var(--ca-radius-m)}
 @media (max-width:700px){
-.ca-app{flex-direction:column;min-height:0;background:none}
+.ca-app{display:block;min-height:0;background:none}
 .ca-side{position:static;height:auto;width:auto;padding:12px 16px;gap:0;overflow:visible}
 .ca-side .ca-nav,.ca-side .ca-foot{display:none}
 .ca-main{padding:24px 16px 28px}
@@ -193,4 +196,18 @@ body.ca main{max-width:none}
 .ca-sheet .ca-oldlook{margin-top:8px}.ca-sheet .ca-quiet{color:var(--ca-link)}
 }
 @media (prefers-reduced-motion:no-preference){.ca-nav-item,.ca-tab{transition:background-color .15s}}
+`;
+
+/** Closes the business switcher, "More tools" and the phone "More" sheet on Escape or a tap outside (served same-origin). */
+export const CONTENT_AREA_SCRIPT = `(() => {
+  const sel = 'details.ca-tab-more,details.ca-biz,details.ca-tools';
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    for (const d of document.querySelectorAll(sel)) if (d.open) { d.open = false; const s = d.querySelector('summary'); if (s) s.focus(); }
+  });
+  document.addEventListener('click', (ev) => {
+    const inside = ev.target instanceof Element ? ev.target.closest(sel) : null;
+    for (const d of document.querySelectorAll(sel)) if (d.open && d !== inside) d.open = false;
+  });
+})();
 `;
