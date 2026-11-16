@@ -668,6 +668,7 @@ async function main(): Promise<void> {
         seoBlog: postgresPortal.seoBlog,
         emailConnections: postgresPortal.emailConnections,
         emailSending: postgresPortal.emailSending,
+        ...(postgresPortal.emailAllowlist ? { emailAllowlist: postgresPortal.emailAllowlist } : {}),
         releasedSeoMedia: postgresPortal.releasedSeoMedia,
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
         webinars: postgresPortal.webinars,
@@ -1099,7 +1100,9 @@ async function main(): Promise<void> {
           onSenderRefused: () => console.warn('PP follow-up emails: Postmark refused the sender (check the server token, sender signature and rate limit). Nothing was sent; runs will be tried again.') } } : {}),
         ...(postgresPortal?.emailProtectionStore && ppConnectionLink && ppConnectionOrigin ? { connection: {
           plan: () => resolveSendingPlan(postgresPortal.emailProtectionStore!, postgresPortal.emailSendingVault ?? null, PP_FOLLOWUP_WORKSPACE_ID,
-            { allowed: postgresPortal.storedSendingAllowed === true }),
+            { allowed: postgresPortal.storedSendingAllowed === true,
+              // 0157: a business the founder switched off holds ('not_allowed'); the database's reservation says the same.
+              ...(postgresPortal.emailConnectEligibility ? { eligible: postgresPortal.emailConnectEligibility.allowed(PP_FOLLOWUP_WORKSPACE_ID) } : {}) }),
           store: postgresPortal.emailProtectionStore, link: ppConnectionLink, unsubscribeOrigin: ppConnectionOrigin,
           ...(emailBounces && postgresPortal.emailBounceHandling ? { recipients: { guard: emailBounces.guard, workspaceId: PP_FOLLOWUP_WORKSPACE_ID } } : {}),
           afterSend: (workspaceId: string) => emailProtection?.soon(workspaceId) } } : {}) }, {

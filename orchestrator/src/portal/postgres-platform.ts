@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PgSeoLimitsService } from './seo-blog-limits-service.js';
-import { EmailConnectionBounceSources, EmailConnectionService, EmailConnectionVault, emailConnectWebhookOrigin, loadEmailConnectConfig,
-  PgEmailConnectionStore, emailConnectionLockPoolSize, staticEligibility } from '../email-connections/index.js';
+import { databaseEligibility, EmailConnectAllowlistService, EmailConnectionBounceSources, EmailConnectionService, EmailConnectionVault, emailConnectWebhookOrigin,
+  loadEmailConnectConfig, PgEmailConnectAllowlist, PgEmailConnectionStore, emailConnectionLockPoolSize, type DatabaseEligibility } from '../email-connections/index.js';
 import { bannerFromConfig, EmailProtectionAbsentError, EmailProtectionService, holdBanner, OwnerSendingService, PgEmailProtectionStore, sendingDecision } from '../email-protection/index.js';
 import { PP_DELIVERY_UNCHECKED, type PortalFlowDelivery } from './followup-flow-service.js';
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
@@ -240,6 +240,12 @@ export interface PgPortalPlatform {
   storedSendingAllowed?: boolean;
   /** Release 2 of "Connect email": the owner's sending controls and the founder's page (only while Connect email is on). */
   emailSending?: OwnerSendingService;
+  /** Which businesses may use Connect email (0157's allow-list, or the static list while 0157 is not applied). */
+  emailConnectEligibility?: DatabaseEligibility;
+  /** The founder's allow-list actions (only while Connect email is on). */
+  emailAllowlist?: EmailConnectAllowlistService;
+  /** Stops the allow-list's own refresh timer (only composed while bounce handling is off; otherwise the sources' tick refreshes it). */
+  stopEmailAllowlistRefresh?: () => void;
   /** After-payment work for module kits: replay registration and CRM record (0149). */
   mhpKitJobs?: { replay?: MhpKitReplayRegistrar; crm?: MhpKitCrmRecorder };
   auth: PgPortalAuthService;
@@ -1356,6 +1362,7 @@ export async function buildPgPortalPlatform(
     // connection whose row says test or live HOLDS (never sends unguarded, never falls back to the environment sender).
     const storedSendingAllowed = env.EMAIL_CONNECT === 'enabled' && !emailBounceHandlingDisabled(env);
     let emailProtectionRef: EmailProtectionService | undefined;
+    let emailConnectEligibilityRef: DatabaseEligibility | undefined;
     // The follow-ups page's view of the sender: decided without opening the saved token.
     // PP-only by design until a later stage (generic follow-up engine); not an email-connect eligibility decision.
     const ppDeliveryNow: NonNullable<PortalFlowDelivery['current']> = async () => {
@@ -1366,10 +1373,11 @@ export async function buildPgPortalPlatform(
         if (error instanceof EmailProtectionAbsentError) return null;
         return PP_DELIVERY_UNCHECKED;
       }
-      const decision = sendingDecision(config, { allowed: storedSendingAllowed });
+      const eligible = emailConnectEligibilityRef?.allowed(PP_FOLLOWUP_WORKSPACE_ID);
+      const decision = sendingDecision(config, { allowed: storedSendingAllowed, ...(eligible === undefined ? {} : { eligible }) });
       if (decision.kind === 'env' || !config) return null;
       const mode = config.mode === 'test' ? 'test' as const : 'live' as const;
-      const banner = bannerFromConfig(config, { mailer: emailProtectionRef?.mailerConfigured ?? false, allowed: storedSendingAllowed });
+      const banner = bannerFromConfig(config, { mailer: emailProtectionRef?.mailerConfigured ?? false, allowed: storedSendingAllowed, ...(eligible === undefined ? {} : { eligible }) });
       return { status: Object.freeze({ mode, ready: true, problems: Object.freeze([]) }), testRecipients: mode === 'test' ? config.testRecipients : null,
         held: decision.kind === 'hold', banner: banner ?? (decision.kind === 'hold' ? holdBanner(decision.reason, config) : null) };
     };
@@ -1412,19 +1420,31 @@ export async function buildPgPortalPlatform(
     // Stored connections become bounce sources without a restart (loaded at start, about every minute, and on demand).
     const emailBounceHandling = !emailBounceHandlingDisabled(env);
     const emailConnectConfig = loadEmailConnectConfig(env, { portalBaseUrl: env.PORTAL_BASE_URL?.trim(), bounceHandling: emailBounceHandling });
-    // Which businesses may connect email: the ONE place it is chosen. Stage 2 (migration 0157) swaps in the database
-    // allow-list here; every consumer below (and the portal, through the service) takes it from this value.
-    const emailConnectEligibility = staticEligibility;
-    // The run lock has connections of its own (one per business that may connect, plus one), so a run never holds one
-    // of the shared identity connections and one business's run never queues another's. createDatabasePool gives the
-    // pool its own 'error' listener; each lock client gets one too (store.lock).
-    const emailConnectionLockPool = createDatabasePool({ ...identityConfig, maxConnections: emailConnectionLockPoolSize(emailConnectEligibility) });
+    // Which businesses may connect email: the ONE place it is chosen. The database allow-list (0157), read here BEFORE
+    // anything is composed with it, then on the stored-connections tick (about every 60 s; its own timer when bounce
+    // handling is off). While 0157 is not applied it is exactly the static list (Property Predator only), and a first
+    // read that fails composes with the static list too (never with nothing). Every consumer below takes this value.
+    const emailAllowlistStore = new PgEmailConnectAllowlist(identityPool, { log: emailBounceLog });
+    const emailConnectEligibility = await databaseEligibility(emailAllowlistStore, { log: emailBounceLog });
+    emailConnectEligibilityRef = emailConnectEligibility;
+    // The run lock has connections of its own (a fixed maximum: a business allowed after start-up needs no restart; they
+    // are opened only while a run holds the lock), so a run never holds one of the shared identity connections and one
+    // business's run never queues another's. createDatabasePool gives the pool its own 'error' listener; each lock client
+    // gets one too (store.lock).
+    const emailConnectionLockPool = createDatabasePool({ ...identityConfig, maxConnections: emailConnectionLockPoolSize() });
     pools.push(emailConnectionLockPool);
     const emailConnectionStore = new PgEmailConnectionStore(identityPool, { log: emailBounceLog, lockPool: emailConnectionLockPool, eligibility: emailConnectEligibility });
     // Loaded whenever bounce handling is on, even without a key: a stored connection that cannot be opened then answers
-    // 503 (Postmark retries) instead of 404 (Postmark drops).
+    // 503 (Postmark retries) instead of 404 (Postmark drops). Each source follows its stored row, not the allow-list.
     const emailConnectionSources = emailBounceHandling
-      ? new EmailConnectionBounceSources({ store: emailConnectionStore, vault: emailConnectConfig.vault, service: emailBounces, log: emailBounceLog, eligibility: emailConnectEligibility }) : undefined;
+      ? new EmailConnectionBounceSources({ store: emailConnectionStore, vault: emailConnectConfig.vault, service: emailBounces, log: emailBounceLog,
+        eligibility: emailConnectEligibility, refreshEligibility: () => emailConnectEligibility.refresh() }) : undefined;
+    let stopEmailAllowlistRefresh: (() => void) | undefined;
+    if (!emailConnectionSources) {
+      const timer = setInterval(() => { void emailConnectEligibility.refresh(); }, 60_000);
+      timer.unref?.();
+      stopEmailAllowlistRefresh = () => clearInterval(timer);
+    }
     if (emailConnectionSources) emailBounces.setSourceLoader(emailConnectionSources);
     if (env.EMAIL_CONNECT !== undefined && !emailConnectConfig.enabled) console.warn(`⚠  Connect email is off: ${emailConnectConfig.problems.join(' ')}`);
     let emailConnections: EmailConnectionService | undefined;
@@ -1448,6 +1468,9 @@ export async function buildPgPortalPlatform(
     const emailSending = emailConnections?.enabled ? new OwnerSendingService({ protection: emailProtectionStore, connections: emailConnectionStore,
       vault: emailConnectConfig.vault, evaluator: emailProtection, bounces: emailBounces, log: emailProtectionLog, portalOrigin: emailConnectWebhookOrigin(env.PORTAL_BASE_URL?.trim()),
       mailer: () => emailProtection.mailerConfigured, allowed: storedSendingAllowed, eligibility: emailConnectEligibility,
+      founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false }) : undefined;
+    // The founder's allow-list on the founder's page (the same founder check; the database checks again).
+    const emailAllowlist = emailConnections?.enabled ? new EmailConnectAllowlistService({ store: emailAllowlistStore, eligibility: emailConnectEligibility, log: emailBounceLog,
       founder: async identity => contentCommandPool ? new PgSeoLimitsService(contentCommandPool, identity, randomUUID()).allowed() : false }) : undefined;
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
@@ -1596,6 +1619,9 @@ export async function buildPgPortalPlatform(
       emailSendingVault,
       storedSendingAllowed,
       ...(emailSending ? { emailSending } : {}),
+      emailConnectEligibility,
+      ...(emailAllowlist ? { emailAllowlist } : {}),
+      ...(stopEmailAllowlistRefresh ? { stopEmailAllowlistRefresh } : {}),
       auth,
       abuse,
       crm,

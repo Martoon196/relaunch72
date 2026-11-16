@@ -38,8 +38,8 @@ import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
-import { ARTICLE_FOLDS, longWhen } from './seo-blog-article-view.js';
-import { keepIfUnchanged, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
+import { ARTICLE_FOLDS, approvedOutcome, longWhen, putBackParent } from './seo-blog-article-view.js';
+import { keepIfUnchanged, putBackOffers, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
@@ -1094,37 +1094,45 @@ async function handlePost(
         if (ids.length !== headings.length || ids.length !== bodies.length) throw new SeoBlogError(400, 'Refresh the editor and try again.');
         const questions=form.fields.getAll('faqQuestion'),answers=form.fields.getAll('faqAnswer'),editFaqs=f('faqEditor')==='1';
         if(editFaqs&&(questions.length!==answers.length||questions.length>8||questions.some(q=>!q.trim()||q.length>200)||answers.some(a=>!a.trim()||a.length>1500)))throw new SeoBlogError(400,'Each FAQ needs a question and answer within the shown limits. Refresh the editor and try again.');
-        const current = (await engine.getArticle(actor, brandId, articleId)).version;
+        const editDetail = await engine.getArticle(actor, brandId, articleId), current = editDetail.version;
         // The in-place editor hides citation markers; each one goes back on its own sentence (citation-edit.ts).
         // Only the version being edited supplies markers; a stale form is refused below by the version check.
         const hiddenCitations = f('citationsHidden') === '1' && current && current.id === f('versionId');
         const prior = hiddenCitations ? current!.body : null;
-        let droppedSentences = 0, typedRemoved = 0;
+        // The save before this one: a sentence changed back to exactly how it was there gets its sources back.
+        const before = hiddenCitations ? editDetail.versions.find((x) => x.id === current!.parentVersionId)?.body ?? null : null;
+        let droppedSentences = 0, typedRemoved = 0, restoredFromEarlier = 0;
         const keptOnEdited: string[] = [];
-        const text = (stored: string | undefined, edited: string) => { if (!prior || stored === undefined) return edited; const r = restoreCitationsDetailed(stored, edited); droppedSentences += r.droppedSentences; typedRemoved += r.typedRemoved; for (const ids of r.keptOnEdited) keptOnEdited.push(ids[0]!); return r.text; };
+        const text = (stored: string | undefined, edited: string, previous?: string | null) => { if (!prior || stored === undefined) return edited; const r = restoreCitationsDetailed(stored, edited, previous); droppedSentences += r.droppedSentences; restoredFromEarlier += r.restoredFromEarlier; typedRemoved += r.typedRemoved; for (const ids of r.keptOnEdited) keptOnEdited.push(ids[0]!); return r.text; };
         const plainText = (stored: string | undefined, edited: string) => prior && stored !== undefined ? keepIfUnchanged(stored, edited) : edited;
         const imageUrl = (f('imageUrl') ?? '').trim();
         const imageChanged = current && (imageUrl !== (current.body.image.url ?? '') || (f('imageAlt') ?? '') !== current.body.image.alt);
         const v = await engine.editArticle(actor, brandId, articleId, f('versionId') ?? '', {
           title: plainText(prior?.title, f('title') ?? ''), slug: f('slug') ?? '', seoTitle: f('seoTitle') ?? '', metaDescription: f('metaDescription') ?? '', excerpt: f('excerpt') ?? '',
-          intro: text(prior?.intro, f('intro') ?? ''), conclusion: text(prior?.conclusion, f('conclusion') ?? ''),
-          sections: ids.map((id, i) => { const was = prior?.sections.find((s) => s.id === id); return { id, heading: plainText(was?.heading, headings[i]!), body: text(was?.body, bodies[i]!) }; }),
-          ...(editFaqs?{faqs:questions.map((q,i)=>{const was=prior?.faqs[i];const qq=plainText(was?.q,q),aa=text(was?.a,answers[i]!);return {q:was&&qq===was.q?qq:qq.trim(),a:was&&aa===was.a?aa:aa.trim()};})}:{}),
+          intro: text(prior?.intro, f('intro') ?? '', before?.intro), conclusion: text(prior?.conclusion, f('conclusion') ?? '', before?.conclusion),
+          sections: ids.map((id, i) => { const was = prior?.sections.find((s) => s.id === id); return { id, heading: plainText(was?.heading, headings[i]!), body: text(was?.body, bodies[i]!, before?.sections.find((s) => s.id === id)?.body) }; }),
+          ...(editFaqs?{faqs:questions.map((q,i)=>{const was=prior?.faqs[i];const qq=plainText(was?.q,q),aa=text(was?.a,answers[i]!,before?.faqs[i]?.a);return {q:was&&qq===was.q?qq:qq.trim(),a:was&&aa===was.a?aa:aa.trim()};})}:{}),
           ...(imageChanged ? { image: imageUrl ? { kind: 'brand_asset', url: imageUrl, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } : { kind: 'none', url: null, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } } : {}),
         });
         if (hiddenCitations && v.id === current!.id) return ok(here, typedRemoved ? 'Source links cannot be typed in, so what you typed was removed. Nothing else changed, so nothing was saved.' : 'Nothing changed, so nothing was saved.');
-        const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article. You can put the earlier wording back below.` : '';
+        // "Below" only when the page will really offer to put the wording back (the same rule the page uses).
+        const offered = droppedSentences && prior ? putBackOffers(prior, v.body).length : 0;
+        // Both true: the page offers it below, or changing the sentence back exactly in the next save restores its source.
+        const way = offered ? ' You can put the earlier wording back below.' : ' To get a source back, change that sentence back exactly as it was the next time you edit.';
+        const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article.${way}` : '';
         const typed = typedRemoved ? ` Source links cannot be typed in, so ${typedRemoved === 1 ? 'the one you typed was' : `the ${typedRemoved} you typed were`} removed.` : '';
+        const back = restoredFromEarlier ? ` ${restoredFromEarlier === 1 ? '1 sentence you changed back has its source again' : `${restoredFromEarlier} sentences you changed back have their sources again`}.` : '';
         const kept = keptOnEdited.length ? ` ${keptOnEdited.length === 1 ? '1 sentence you changed still has its source' : `${keptOnEdited.length} sentences you changed still have their sources`}. Check ${keptOnEdited.length === 1 ? 'it still says' : 'they still say'} what the source says.` : '';
         // The page shows a link to each kept sentence's source (ids are checked against the article's own sources there).
         const check = keptOnEdited.length ? `?${keptOnEdited.slice(0, 5).map((id) => `checksource=${encodeURIComponent(id)}`).join('&')}` : '';
-        return ok(`${here}${check}`, hiddenCitations ? `Saved.${sources}${typed}${kept} Have a read, then approve it again.` : `Saved as version ${v.number}. Checks ran again.`);
+        return ok(`${here}${check}`, hiddenCitations ? `Saved.${back}${sources}${typed}${kept} Have a read, then approve it again.` : `Saved as version ${v.number}. Checks ran again.`);
       }
       if (action === 'put-back') {
         // "Put the earlier wording back": one sentence of the previous version, with its sources, as a new version.
         const detail = await engine.getArticle(actor, brandId, articleId);
-        const v = detail.version, earlier = detail.versions.find((x) => x.id === f('fromVersionId'));
-        if (!v || v.id !== f('versionId') || !earlier) throw new SeoBlogError(409, 'The article changed. Have another look before putting wording back.');
+        // Only from the save just before this version (its parent), never an older one.
+        const v = detail.version, earlier = v ? putBackParent(v, detail.versions) : null;
+        if (!v || v.id !== f('versionId') || !earlier || earlier.id !== f('fromVersionId')) throw new SeoBlogError(409, 'The article changed. Have another look before putting wording back.');
         const field = f('field') ?? '', index = Number(f('index'));
         const put = (from: string | undefined, to: string | undefined) => { if (from === undefined || to === undefined) return null; return putBackSentence(from, to, index); };
         let edit: Parameters<SeoBlogEngine['editArticle']>[4] | null = null;
@@ -1160,9 +1168,9 @@ async function handlePost(
       if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); const must = c.issues.filter((i) => i.severity === 'critical').length; return ok(here, must ? `Checked again: ${must === 1 ? '1 thing' : `${must} things`} to fix.` : c.issues.length ? `Checked again: nothing to fix, ${c.issues.length} optional improvement${c.issues.length === 1 ? '' : 's'}.` : 'Checked again: nothing to fix.'); }
       if (action === 'approve') {
         const a = await engine.approve(actor, brandId, articleId, f('versionId') ?? '');
-        // Approving an article that already has a time means it goes out then: say so.
-        const now = (await engine.publishingPlan(actor, brandId, articleId)).now;
-        return ok(here, a.schedule && Date.parse(a.schedule.publishAtUtc) > Date.parse(now) ? `Approved. It goes out on ${longWhen(a.schedule.localDate, a.schedule.localTime)}.` : 'Approved. It will not go out until it has a time.');
+        // Say what will really happen next, as the publishing worker will decide it (see approvedOutcome).
+        const [plan, brand, destinations] = await Promise.all([engine.publishingPlan(actor, brandId, articleId), engine.getBrand(actor, brandId), engine.listDestinations(actor, brandId)]);
+        return ok(here, approvedOutcome(a, brand, destinations, plan.now));
       }
       if (action === 'approval-flag') { await engine.setRequiresApproval(actor, brandId, articleId, rowVersion(), f('required') === '1'); return ok(`${here}?open=where#where`, f('required') === '1' ? 'Saved. This article will always wait for your approval.' : 'Saved. This article follows your business’s publishing setting.'); }
       if (action === 'hold') { await engine.hold(actor, brandId, articleId, rowVersion(), f('held') === '1'); return ok(here, f('held') === '1' ? 'Done. This article will not go out until you allow it.' : 'Done. This article can go out again.'); }

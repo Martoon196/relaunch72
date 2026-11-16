@@ -3,6 +3,7 @@
  * origin and CSRF rules as the follow-ups page; the email rules tick enforced on the server; and the follow-ups page
  * banner turning into a plain "Connect email" link when the feature is on. Postmark and DNS are stand-ins.
  */
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -23,7 +24,7 @@ const portal = { productProfile: { id: 'property_predator_growth' } as never, po
 function setup(env: NodeJS.ProcessEnv = { EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, founder = false,
   resolver = fakeResolver({ ns: { 'propertypredator-test.co.uk': ['ada.ns.cloudflare.com'] } })) {
   const postmark = new FakePostmark(), store = new MemoryEmailConnectionStore(new Set([OWNER_SESSION]), { [OWNER_SESSION]: 'Pat <O\'Brien>' });
-  const service = new EmailConnectionService({ config: loadEmailConnectConfig(env, { portalBaseUrl: ORIGIN }), store,
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config: loadEmailConnectConfig(env, { portalBaseUrl: ORIGIN }), store,
     account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
     resolver, secret: () => SECRET, lockWaitMs: 2000, founder: async () => founder });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>, headers: Record<string, string> = {}) => {

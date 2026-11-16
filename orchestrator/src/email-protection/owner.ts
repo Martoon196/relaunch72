@@ -12,7 +12,7 @@ import type { EmailConnectionStore, EmailConnectionState } from '../email-connec
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { createPostmarkServerApi, type PostmarkServerApi } from '../email-connections/postmark-account-api.js';
 import { confirmBounceWebhook, webhookCheckLine, type WebhookCheck } from '../email-connections/webhook-check.js';
-import { staticEligibility, type EmailConnectEligibility } from '../email-connections/eligibility.js';
+import type { EmailConnectEligibility } from '../email-connections/eligibility.js';
 import { connectionWebhookUrl } from '../email-connections/service.js';
 import { EMAIL_TERMS_VERSION } from '../email-connections/terms.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
@@ -21,7 +21,7 @@ import type { EmailBounceService } from '../email-bounces/service.js';
 import { tripFromNumbers, type Trip } from './rules.js';
 import { sendingDecision } from './sending.js';
 import { ownerBanner, type Banner } from './messages.js';
-import { EmailProtectionAbsentError, EmailProtectionForbiddenError, EmailProtectionInvalidError, type EmailProtectionStore, type FounderAction,
+import { EmailProtectionAbsentError, EmailProtectionForbiddenError, EmailProtectionInvalidError, EmailProtectionNotAllowedError, type EmailProtectionStore, type FounderAction,
   type ProtectionStatus, type ReserveOutcome, type SendingConfig, type SendingState } from './store.js';
 import { founderToday, type EmailProtectionService, type FounderToday } from './service.js';
 
@@ -64,6 +64,9 @@ export const SENDING_MESSAGES = Object.freeze({
   founderDone: 'Done.',
   founderStale: 'This changed since the page was opened. Nothing was changed. Look again, then press once more.',
   founderNotNeeded: 'Nothing needed changing.',
+  /** 0157: the founder switched this business's email off (also the hold's wording, see stillHeld). */
+  notAllowed: 'Email sending for this business has been switched off by the platform owner.',
+  founderNotAllowed: 'Email is switched off for this business, so its go-live can\'t be approved. Allow it again first.',
 });
 
 export const LIFT_MESSAGES = Object.freeze({
@@ -97,7 +100,9 @@ export type SendingResult = {
 const TEST_SUBJECT = (from: string) => `Test email from ${from}`;
 
 /** What the page knows about how the business is told: a working alert sender, and an owner address to send to. */
-export interface BannerChannel { readonly mailer: boolean; readonly allowed?: boolean }
+export interface BannerChannel { readonly mailer: boolean; readonly allowed?: boolean;
+  /** false: the business is not on the active allow-list (0157): its connection in charge is held with 'not_allowed'. */
+  readonly eligible?: boolean }
 
 /** True while the business has never put its own connection in charge (then the environment sender runs and there is nothing to say). */
 const neverInChargeOf = (mode: string, state: string, sending: Pick<SendingState, 'goLiveApprovedAt' | 'ownerPausedAt' | 'sampleState'>) =>
@@ -117,7 +122,7 @@ export function bannerFor(connection: Pick<EmailConnectionState, 'mode' | 'prote
     sampleState: sending.sampleState, sampleTrip, ownerPaused: Boolean(sending.ownerPausedAt), accountHeld: sending.accountHeld, mode: connection.mode,
     waitingApproval: Boolean(sending.goLiveRequestedAt), notConnected: inCharge && connection.status !== 'verified',
     needsApproval: Boolean(sending.goLiveApprovedAt) && !sending.approvedCurrent && !sending.goLiveRequestedAt, needsTest: sending.approvedCurrent && !sending.testCurrent,
-    switchedOffHere: inCharge && channel.allowed === false && connection.mode !== 'off', emailed, willEmail: channel.mailer && sending.ownerEmailCount > 0,
+    switchedOffHere: inCharge && channel.allowed === false && connection.mode !== 'off', notAllowed: inCharge && channel.eligible === false, emailed, willEmail: channel.mailer && sending.ownerEmailCount > 0,
     secondPause: Boolean(step && step.kind === 'paused' && typeof step.previousPauseAt === 'string') });
 }
 
@@ -169,6 +174,7 @@ export function stillHeld(reason: string): string {
     owner_paused: 'You have paused your marketing emails. Press Resume on your email page when you want them to go.',
     needs_footer: 'Add your business\'s real name and postal address first.',
     switched_off_here: 'Sending through your own connection is switched off on our side right now.',
+    not_allowed: SENDING_MESSAGES.notAllowed,
   };
   return words[reason] ?? 'Something else is still holding your marketing emails; see the note at the top of this page.';
 }
@@ -183,8 +189,8 @@ export class OwnerSendingService {
     mailer?: () => boolean;
     /** Whether this deployment lets stored connections send (EMAIL_CONNECT enabled and bounce handling on). */
     allowed?: boolean;
-    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
-    eligibility?: EmailConnectEligibility }) {
+    /** Which businesses may connect: the one the platform composed. */
+    eligibility: EmailConnectEligibility }) {
     this.fetcher = input.fetcher ?? fetch;
   }
   private channel(): BannerChannel { return { mailer: this.input.mailer?.() === true, allowed: this.input.allowed !== false }; }
@@ -227,6 +233,7 @@ export class OwnerSendingService {
 
   private refusal(error: unknown): SendingResult {
     if (error instanceof EmailProtectionAbsentError) return { ok: false, message: SENDING_MESSAGES.notAvailable };
+    if (error instanceof EmailProtectionNotAllowedError) return { ok: false, message: SENDING_MESSAGES.notAllowed };
     if (error instanceof EmailProtectionForbiddenError) return { ok: false, message: 'Only an owner of this business can change its email.' };
     if (error instanceof EmailProtectionInvalidError) return { ok: false, message: SENDING_MESSAGES.needTestList };
     if ((error as { code?: unknown })?.code === '55000') return { ok: false, message: SENDING_MESSAGES.notConnected };
@@ -266,7 +273,7 @@ export class OwnerSendingService {
       if (reserved === 'replayed_refused') return { ok: false, message: SENDING_MESSAGES.testReplayedRefused };
       if (reserved === 'replayed_unknown') return { ok: false, message: SENDING_MESSAGES.testUnknown };
       if (reserved !== 'ok') return { ok: false, message: reserved === 'test_limit' ? SENDING_MESSAGES.testLimit : reserved === 'off' ? SENDING_MESSAGES.testOff
-        : SENDING_MESSAGES.testNotConnected };
+        : reserved === 'not_allowed' ? SENDING_MESSAGES.notAllowed : SENDING_MESSAGES.testNotConnected };
       const outcome = await sendPostmarkTest({ fetcher: this.fetcher, token, stream: connection.stream ?? 'broadcast', fromName: connection.fromName, from: connection.fromAddress,
         replyTo: connection.replyTo ?? connection.fromAddress, to, subject: TEST_SUBJECT(connection.fromName), text });
       if (outcome !== 'unknown') await this.input.protection.testResult(identity.sessionToken, identity.workspaceId, key, outcome === 'accepted').catch(() => undefined);
@@ -284,7 +291,7 @@ export class OwnerSendingService {
    */
   async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<WebhookCheck> {
     // Our bounce address for this business: the same value Connect gave Postmark (portal origin + the business's source key).
-    const business = (this.input.eligibility ?? staticEligibility).business(identity.workspaceId);
+    const business = this.input.eligibility.business(identity.workspaceId);
     const expectedUrl = business && this.input.portalOrigin ? connectionWebhookUrl(this.input.portalOrigin, business) : null;
     const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', expectedUrl, token: () => this.token(identity),
       api: token => this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher }) });
@@ -307,7 +314,8 @@ export class OwnerSendingService {
       case 'resumed': {
         // Only say they can go again when nothing else is holding them.
         const config = await this.input.protection.sendingConfig(identity.workspaceId).catch(() => null);
-        const decision = sendingDecision(config, { allowed: this.input.allowed !== false });
+        const decision = sendingDecision(config, { allowed: this.input.allowed !== false, eligible: this.input.eligibility.allowed(identity.workspaceId),
+          workspaceId: identity.workspaceId });
         return { ok: true, message: decision.kind === 'hold' ? SENDING_MESSAGES.resumedStillHeld(stillHeld(decision.reason)) : SENDING_MESSAGES.resumed };
       }
       case 'unchanged': return { ok: true, message: SENDING_MESSAGES.unchanged };
@@ -361,7 +369,8 @@ export class OwnerSendingService {
     try { outcome = await this.input.protection.founderAct(identity.sessionToken, workspaceId, action, version); }
     catch (error) { if (error instanceof EmailProtectionForbiddenError) return { ok: false, message: SENDING_MESSAGES.notFounder }; return this.refusal(error); }
     if (outcome === 'done' && workspaceId) this.input.evaluator?.soon(workspaceId);
-    return outcome === 'done' ? { ok: true, message: SENDING_MESSAGES.founderDone } : { ok: false, message: outcome === 'stale' ? SENDING_MESSAGES.founderStale : SENDING_MESSAGES.founderNotNeeded };
+    return outcome === 'done' ? { ok: true, message: SENDING_MESSAGES.founderDone } : { ok: false, message: outcome === 'stale' ? SENDING_MESSAGES.founderStale
+      : outcome === 'not_allowed' ? SENDING_MESSAGES.founderNotAllowed : SENDING_MESSAGES.founderNotNeeded };
   }
 }
 

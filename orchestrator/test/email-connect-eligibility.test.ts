@@ -7,9 +7,10 @@
  *    connectionServerName, connectionWebhookUrl and EmailConnectionVault.returnPathLabel there) and pasted here.
  * 2. A second, hypothetical business supplied through a TEST eligibility flows through the page gating, the ?business=
  *    check, bounce-source loading and the lock pool with no other code change; with the static eligibility the same
- *    business is refused everywhere exactly as before (same messages and status codes).
+ *    business is refused on every request path exactly as before (same messages and status codes). Its stored row's
+ *    bounce source is loaded either way (stage 2: the source follows the stored row, not the list).
  * 3. Nothing outside the seam (and the PP follow-up engine, PP-only by design) makes an allow decision from the PP
- *    workspace id or the old list.
+ *    workspace id or the old list; the environment sender is Property Predator's only.
  * Nothing touches the network or a database. Every value is synthetic.
  */
 import test from 'node:test';
@@ -94,10 +95,10 @@ const notConnected: EmailConnectionState = Object.freeze({ status: 'not_connecte
 const openStore = (rows: readonly StoredConnectionSource[] = []) => ({ state: async () => notConnected, present: async () => true, sources: async () => rows,
   sealed: async () => ({ serverToken: null, webhookSecret: null }) }) as never;
 
-function serviceWith(eligibility?: EmailConnectEligibility): EmailConnectionService {
+function serviceWith(eligibility: EmailConnectEligibility): EmailConnectionService {
   const postmark = new FakePostmark();
   return new EmailConnectionService({ config: loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }), store: openStore(),
-    account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }), resolver: fakeResolver(), ...(eligibility ? { eligibility } : {}) });
+    account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }), resolver: fakeResolver(), eligibility });
 }
 
 async function getPage(service: EmailConnectionService, pathAndQuery: string) {
@@ -129,16 +130,16 @@ test('a second business given through a test eligibility passes the page gating,
   assert.equal(sources.handles(connectionSourceKey(SECOND)), true);
   await sources.refresh();
   assert.deepEqual(bounces.dynamicSourceKeys(), [connectionSourceKey(SECOND)]);
-  // The lock pool: one connection per allowed business, plus one.
-  assert.equal(emailConnectionLockPoolSize(withSecond), 3);
-  // otherConnectionHolds: with two allowed businesses it refuses (stage 2 replaces this with a SQL read), exactly as before.
+  // The lock pool: a fixed maximum (stage 2), so a business allowed later needs no restart.
+  assert.equal(emailConnectionLockPoolSize(), 8);
+  // otherConnectionHolds without 0157 (a list not from the database): with two allowed businesses it cannot tell and refuses.
   const store = new PgEmailConnectionStore({ query: async () => { throw new Error('not used'); }, connect: async () => { throw new Error('not used'); } } as never, { eligibility: withSecond });
-  await assert.rejects(store.otherConnectionHolds(PP, { id: null, name: 'example-test.co.uk' }), /Cannot tell whether another business holds this domain/u);
+  await assert.rejects(store.otherConnectionHolds('session', PP, { id: null, name: 'example-test.co.uk' }), /Cannot tell whether another business holds this domain/u);
 });
 
-test('with the static eligibility the same business is refused everywhere, with the same messages and status codes as before', async () => {
-  for (const service of [serviceWith(staticEligibility), serviceWith()]) {
-    assert.equal(service.eligibility, staticEligibility, 'absent means the static list');
+test('with the static eligibility the same business is refused on every request path, with the same messages and status codes as before', async () => {
+  for (const service of [serviceWith(staticEligibility)]) {
+    assert.equal(service.eligibility, staticEligibility);
     assert.equal(emailConnectionBusinessAllowed({ emailConnections: service } as never, SECOND), false);
     assert.equal(emailConnectionBusinessAllowed({ emailConnections: service } as never, PP), true);
     assert.equal(emailConnectionBusinessAllowed({ emailConnections: service } as never, PP.toUpperCase()), true, 'any letter case, as before');
@@ -156,18 +157,18 @@ test('with the static eligibility the same business is refused everywhere, with 
   const vault = loadEmailConnectConfig(ENV, { portalBaseUrl: ORIGIN }).vault!;
   const row: StoredConnectionSource = { workspaceId: SECOND, serverId: '901', stream: 'broadcast',
     sealedServerToken: vault.seal(SECOND, 'server_token', 'srv-second-0123456789abcdef'), sealedWebhookSecret: vault.seal(SECOND, 'webhook_secret', 'whsec-second-0123456789-abcdefghijkl') };
-  for (const eligibility of [staticEligibility, undefined]) {
+  for (const eligibility of [staticEligibility]) {
     const bounces = new EmailBounceService({ config: { sources: [], blockers: [] }, apiFor: () => null });
-    const sources = new EmailConnectionBounceSources({ store: openStore([row]), vault, service: bounces, ...(eligibility ? { eligibility } : {}) });
-    assert.equal(sources.handles(connectionSourceKey(SECOND)), false);
+    const sources = new EmailConnectionBounceSources({ store: openStore([row]), vault, service: bounces, eligibility });
+    // Stage 2: a stored row's bounce source follows the row, not the list (a business switched off keeps its webhook).
+    assert.equal(sources.handles(connectionSourceKey(SECOND)), true);
     assert.equal(sources.handles(connectionSourceKey(PP)), true);
+    assert.equal(sources.handles('pp'), false, 'an environment source is never a stored connection');
     await sources.refresh();
-    assert.deepEqual(bounces.dynamicSourceKeys(), [], 'a row for a business not allowed is never loaded');
-    const store = new PgEmailConnectionStore({ query: async () => { throw new Error('not used'); }, connect: async () => { throw new Error('not used'); } } as never,
-      eligibility ? { eligibility } : {});
-    assert.equal(await store.otherConnectionHolds(PP, { id: null, name: 'example-test.co.uk' }), false, 'one allowed business: certainly false');
+    assert.deepEqual(bounces.dynamicSourceKeys(), [connectionSourceKey(SECOND)], 'the stored row is loaded whatever the list says');
+    const store = new PgEmailConnectionStore({ query: async () => { throw new Error('not used'); }, connect: async () => { throw new Error('not used'); } } as never, { eligibility });
+    assert.equal(await store.otherConnectionHolds('session', PP, { id: null, name: 'example-test.co.uk' }), false, 'one allowed business, no 0157: certainly false');
   }
-  assert.equal(emailConnectionLockPoolSize(staticEligibility), 2, 'as before: EMAIL_CONNECT_BUSINESSES.length + 1');
   assert.deepEqual(staticEligibility.list(), EMAIL_CONNECT_BUSINESSES);
 });
 
@@ -188,18 +189,14 @@ test('no file outside the seam and the PP follow-up engine makes an allow decisi
   const found = new Set<string>();
   for (const file of files) if (pattern.test(await readFile(file, 'utf8'))) found.add(path.relative(root, file));
   assert.deepEqual([...found].sort(), [
-    // The seam itself, and its barrel.
+    // The seam itself.
     'email-connections/eligibility.ts',
-    // The ONE composition point: chooses staticEligibility and passes it to every consumer.
-    'portal/postgres-platform.ts',
-    // Fallbacks for an absent `eligibility` input only (existing callers and tests that predate the seam).
-    'email-connections/bounce-sources.ts', 'email-connections/service.ts', 'email-connections/store.ts', 'email-protection/owner.ts',
+    // The database-backed implementation: the static list while 0157 is absent (or the first read failed).
+    'email-connections/allowlist.ts',
   ].sort());
-  // Those fallbacks use the static list only when nothing was passed in.
+  // Every consumer requires the eligibility: there is no fallback to the static list anywhere else.
   for (const file of ['email-connections/bounce-sources.ts', 'email-connections/service.ts', 'email-connections/store.ts', 'email-protection/owner.ts']) {
-    const text = await readFile(path.join(root, file), 'utf8');
-    const uses = text.split('\n').filter(line => /\bstaticEligibility\b/u.test(line) && !/^import /u.test(line));
-    assert.ok(uses.length >= 1 && uses.every(line => /eligibility \?\? staticEligibility/u.test(line)), `${file}: ${uses.join(' | ')}`);
+    assert.doesNotMatch(await readFile(path.join(root, file), 'utf8'), /eligibility\?: EmailConnectEligibility|\?\? staticEligibility/u, file);
   }
   // The PP workspace id as a literal (TypeScript; migrations aside): only the seam, the PP follow-up engine (PP-only by
   // design until the generic follow-up engine) and the durable bounce ledger's table pin (0153, not a Connect decision).
@@ -207,8 +204,18 @@ test('no file outside the seam and the PP follow-up engine makes an allow decisi
   const literals = new Set<string>();
   for (const file of files) if (literal.test(await readFile(file, 'utf8'))) literals.add(path.relative(root, file));
   assert.deepEqual([...literals].sort(), ['email-bounces/ledger.ts', 'email-connections/eligibility.ts', 'pp-followup/repository.ts']);
-  // The PP follow-up engine constant is not used for a Connect email decision anywhere in Connect email.
+  // The PP follow-up engine constant is not used for a Connect email decision anywhere in Connect email. The one use:
+  // the environment-configured sender is the PP follow-up engine's own, so only Property Predator may fall back to it.
   for (const file of files.filter(f => /\/email-connections\/|\/email-protection\/|\/portal\/email-connection-/u.test(f))) {
-    assert.doesNotMatch(await readFile(file, 'utf8'), /PP_FOLLOWUP_WORKSPACE_ID/u, path.relative(root, file));
+    const text = await readFile(file, 'utf8');
+    if (path.relative(root, file) === 'email-protection/sending.ts') {
+      assert.deepEqual(text.split('\n').filter(line => /PP_FOLLOWUP_WORKSPACE_ID/u.test(line)).map(line => line.trim()), [
+        "import { PP_FOLLOWUP_WORKSPACE_ID } from '../pp-followup/repository.js';",
+        'const envSenderFor = (workspaceId: string): boolean => workspaceId.toLowerCase() === PP_FOLLOWUP_WORKSPACE_ID;',
+        'if (envSenderFor(options.workspaceId ?? config?.workspaceId ?? PP_FOLLOWUP_WORKSPACE_ID)) return { kind: \'env\' };',
+      ]);
+      continue;
+    }
+    assert.doesNotMatch(text, /PP_FOLLOWUP_WORKSPACE_ID/u, path.relative(root, file));
   }
 });

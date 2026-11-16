@@ -22,6 +22,7 @@ import { percent, RAMP, SAMPLE, bounces7 } from '../email-protection/rules.js';
 import type { FounderToday } from '../email-protection/service.js';
 import type { ProtectionStatus } from '../email-protection/store.js';
 import type { SendingState } from '../email-protection/store.js';
+import type { AllowlistBusiness, AllowlistResult, AllowlistView } from '../email-connections/allowlist.js';
 import { EMAIL_STEP_NAMES, emailStepNow, type EmailStep } from './email-connection-progress.js';
 
 export const EMAIL_CONNECTION_ROUTE = '/portal/email';
@@ -464,13 +465,49 @@ export function renderEmailConnectionProblem(message: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect your email</title><style>body{margin:0;background:#f4f3ef;color:#172b30;font:17px/1.65 system-ui,sans-serif}main{max-width:640px;margin:auto;padding:32px 16px}section{background:#fff;border:1px solid #d2dbdb;border-radius:18px;padding:28px}a{display:inline-block;padding:14px 20px;border-radius:9px;background:#f2b440;color:#172b30;font-weight:700;text-decoration:none}</style></head><body><main><section role="alert"><p>${e(message)}</p><a href="${EMAIL_CONNECTION_ROUTE}">Back to email</a></section></main></body></html>`;
 }
 
+const ALLOWLIST_STYLE = 'h2{font:24px/1.3 Georgia,serif;margin:28px 0 12px}h3{margin:0 0 6px;font-size:19px;overflow-wrap:anywhere}label{display:block;font-weight:700;margin:12px 0 6px}select,input{display:block;box-sizing:border-box;width:100%;padding:12px;margin:0 0 12px;border:1px solid #9daeb0;border-radius:8px;font:17px/1.5 system-ui;background:#fff;color:#172b30}.secondary{display:inline-block;padding:10px 16px;border:1px solid #adbdbe;border-radius:9px;background:#eaf0ef;font-weight:600;cursor:pointer}details.confirm>summary{list-style:none}details.confirm>summary::-webkit-details-marker{display:none}details.confirm[open]>summary{margin-bottom:8px}summary:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #83510c;outline-offset:3px}';
 const UNDELIVERED: Readonly<Record<string, string>> = { paused: 'A pause', switched_off: 'A switch-off', slowed: 'A slow-down', sample_held: 'A held list',
   go_live_requested: 'A go-live request', go_live_approved: 'A go-live approval', account_held: 'The account hold', lifted: 'A restart', reinstated: 'A switch back on', sample_released: 'A released list' };
 const founderButton = (page: { csrf: string; commandId: string }, action: string, workspace: string, version: number, label: string) =>
   `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/founder/act">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}${hidden('action', action)}${hidden('workspace', workspace)}${hidden('version', String(version))}<button type="submit">${e(label)}</button></form>`;
 
+const allowlistForm = (page: { csrf: string; commandId: string }, action: 'allow' | 'revoke' | 'reallow', workspace: string, inner: string) =>
+  `<form method="post" action="${EMAIL_CONNECTION_ROUTE}/founder/allowlist">${hidden('csrf', page.csrf)}${hidden('commandId', page.commandId)}${hidden('action', action)}${action === 'allow' ? '' : hidden('workspace', workspace)}${inner}</form>`;
+
+/** One business's email in a few plain words, for the founder's list. */
+function allowlistState(b: AllowlistBusiness): string {
+  const base = !b.hasConnection ? 'Its owner has not connected email yet.'
+    : b.status === 'disconnected' ? 'Its owner disconnected email.'
+      : b.status !== 'verified' ? 'Its owner is setting up email.'
+        : b.mode === 'live' ? 'Connected and sending marketing emails.' : b.mode === 'test' ? 'Connected and testing.' : 'Connected, not sending yet.';
+  const protection = b.protectionState === 'paused' ? ' Paused by our protection.' : b.protectionState === 'off' ? ' Switched off by our protection.' : '';
+  return base + protection;
+}
+const named = (b: AllowlistBusiness) => b.businessName && b.businessName !== b.name ? `${e(b.name)} <span class="small">(${e(b.businessName)})</span>` : e(b.name);
+
+/**
+ * Who may use Connect email (0157): "Invite a business" (the founder's own businesses that are not on the list yet),
+ * every allowed business with its state and "Switch email off for this business" behind a confirm step on the page
+ * (a reason is required; no browser dialog), and every switched-off business with "Allow again". One primary button in
+ * each section.
+ */
+function allowlistSections(page: { csrf: string; commandId: string }, view: AllowlistView): string {
+  const active = view.businesses.filter(b => !b.revokedAt), revoked = view.businesses.filter(b => b.revokedAt);
+  const invite = view.candidates.length
+    ? `<section class="card" aria-labelledby="invite"><h2 id="invite">Invite a business</h2><p>Choose one of your businesses to let its owner connect email.</p>${allowlistForm(page, 'allow', '',
+      `<label for="allow-business">Business</label><select id="allow-business" name="workspace" required>${view.candidates.map(c => `<option value="${e(c.workspaceId)}">${e(c.name)}</option>`).join('')}</select><button type="submit">Allow email for this business</button>`)}</section>`
+    : '<section class="card" aria-labelledby="invite"><h2 id="invite">Invite a business</h2><p>Every one of your businesses can already use email, or has been switched off below.</p></section>';
+  const rows = active.map(b => `<section class="card" aria-label="${e(b.name)}"><h3>${named(b)}</h3><p>${e(allowlistState(b))}</p><p class="small">Allowed ${e(b.allowedByName ? `by ${b.allowedByName} ` : '')}on ${e(when(b.allowedAt))}.</p>
+    <details class="confirm"><summary class="button secondary">Switch email off for this business</summary><p>Nothing more will be sent through its connection from the moment you confirm. Its connection, its numbers and its history are kept, and bounces from emails it already sent are still recorded. You can allow it again later.</p>${allowlistForm(page, 'revoke', b.workspaceId,
+      `<label for="reason-${e(b.workspaceId)}">Why (the owner may see this)</label><input id="reason-${e(b.workspaceId)}" name="reason" maxlength="300" required><button type="submit">Switch email off for this business</button>`)}</details></section>`).join('');
+  const off = revoked.map(b => `<section class="card" aria-label="${e(b.name)}"><h3>${named(b)}</h3><p>Email switched off${b.revokedByName ? ` by ${e(b.revokedByName)}` : ''} on ${e(when(b.revokedAt!))}${b.revokedReason ? `: ${e(b.revokedReason)}` : '.'}</p><p class="small">${e(allowlistState(b))} Nothing is sent through its connection while it is switched off.</p>${allowlistForm(page, 'reallow', b.workspaceId, '<button type="submit">Allow again</button>')}</section>`).join('');
+  return `<h2>Who can use email</h2>${invite}${rows ? `<h2>Businesses that can use email</h2>${rows}` : ''}${off ? `<h2>Switched off</h2>${off}` : ''}`;
+}
+
 /** The founder's page: one line per business that needs a decision, the numbers, and one button each. */
-export function renderFounderProtectionPage(page: { status: ProtectionStatus; today: FounderToday; csrf: string; commandId: string; message?: SendingResult }): string {
+export function renderFounderProtectionPage(page: { status: ProtectionStatus; today: FounderToday; csrf: string; commandId: string; message?: SendingResult | AllowlistResult;
+  /** 0157's allow-list; absent (0157 not applied): the page is exactly as before. */
+  allowlist?: AllowlistView }): string {
   const { status, today } = page;
   const actionFor = (line: FounderLine): { action: string; label: string } | null => ({ paused: { action: 'lift', label: 'Lift the pause' },
     switched_off: { action: 'reinstate', label: 'Switch email back on' }, go_live_requested: { action: 'approve', label: 'Approve' },
@@ -494,5 +531,5 @@ export function renderFounderProtectionPage(page: { status: ProtectionStatus; to
   }).join('');
   const message = page.message ? `<section class="card ${page.message.ok ? 'ok' : 'notice'}" role="${page.message.ok ? 'status' : 'alert'}"><p>${e(page.message.message)}</p></section>` : '';
   const undelivered = status.undelivered?.length ? `<section class="card notice"><p><strong>${status.undelivered.length === 1 ? '1 alert email' : `${status.undelivered.length} alert emails`} could not be sent in the last 30 days</strong>, so ${status.undelivered.length === 1 ? 'it is' : 'they are'} shown here instead:</p><ul>${status.undelivered.map(u => `<li>${e(UNDELIVERED[u.kind] ?? 'An email protection step')} (to ${u.audience === 'owner' ? 'the business owner' : 'you'}), ${e(new Date(u.at).toLocaleDateString('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long' }))}</li>`).join('')}</ul></section>` : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email protection</title><style>body{margin:0;background:#f4f3ef;color:#172b30;font:17px/1.65 system-ui,sans-serif}main{max-width:860px;margin:auto;padding:24px}h1{font:clamp(30px,5vw,42px)/1.15 Georgia,serif}.card{background:#fff;border:1px solid #d2dbdb;border-radius:18px;padding:24px;margin:0 0 18px}.alert{border-left:4px solid #9c2f14;background:#fdf1ec}.notice{border-left:4px solid #bd8a31;background:#faf3e5}.ok{border-left:4px solid #2f7d55;background:#eef7f1}.small{font-size:15px;color:#465b60}.facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:12px 0}.facts dt{font-weight:700}.facts dd{margin:0;overflow-wrap:anywhere}button{padding:14px 20px;border:0;border-radius:9px;background:#f2b440;color:#172b30;font:700 17px/1.4 system-ui;cursor:pointer}button:focus-visible{outline:3px solid #83510c;outline-offset:3px}@media(max-width:520px){main{padding:16px}.facts{grid-template-columns:1fr}button{width:100%}}</style></head><body><main>${message}<h1>Email protection</h1>${undelivered}${items || '<section class="card"><p>Nothing needs you. Every business is sending within our lines.</p></section>'}<p class="small"><a href="${EMAIL_CONNECTION_ROUTE}">Back to email</a></p></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email protection</title><style>body{margin:0;background:#f4f3ef;color:#172b30;font:17px/1.65 system-ui,sans-serif}main{max-width:860px;margin:auto;padding:24px}h1{font:clamp(30px,5vw,42px)/1.15 Georgia,serif}.card{background:#fff;border:1px solid #d2dbdb;border-radius:18px;padding:24px;margin:0 0 18px}.alert{border-left:4px solid #9c2f14;background:#fdf1ec}.notice{border-left:4px solid #bd8a31;background:#faf3e5}.ok{border-left:4px solid #2f7d55;background:#eef7f1}.small{font-size:15px;color:#465b60}.facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:12px 0}.facts dt{font-weight:700}.facts dd{margin:0;overflow-wrap:anywhere}button{padding:14px 20px;border:0;border-radius:9px;background:#f2b440;color:#172b30;font:700 17px/1.4 system-ui;cursor:pointer}button:focus-visible{outline:3px solid #83510c;outline-offset:3px}${page.allowlist ? ALLOWLIST_STYLE : ''}@media(max-width:520px){main{padding:16px}.facts{grid-template-columns:1fr}button{width:100%}}</style></head><body><main>${message}<h1>Email protection</h1>${undelivered}${items || '<section class="card"><p>Nothing needs you. Every business is sending within our lines.</p></section>'}${page.allowlist ? allowlistSections(page, page.allowlist) : ''}<p class="small"><a href="${EMAIL_CONNECTION_ROUTE}">Back to email</a></p></main></body></html>`;
 }

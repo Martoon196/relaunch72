@@ -11,6 +11,7 @@
  *   - a replayed "Send a test to me" says what happened to the first attempt.
  * Postmark is never called: the sender's fetch is a stub. All people and values are synthetic.
  */
+import { staticEligibility } from '../../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -83,7 +84,7 @@ test('S-1, S-5, S-7 and test replays on real roles', { skip, timeout: 300_000 },
   const identity = await loginRole(admin, 'r72_identity_command');
   try {
     const { ownerToken, founderToken } = await people(admin);
-    const connections = new PgEmailConnectionStore(identity), store = new PgEmailProtectionStore(identity);
+    const connections = new PgEmailConnectionStore(identity, { eligibility: staticEligibility }), store = new PgEmailProtectionStore(identity);
     await connect(connections, ownerToken, DOMAIN, true, 911);
     await store.details(ownerToken, PP, { businessName: 'Property Predator Ltd', postalAddress: '1 High Street, Leeds LS1 1AA', testRecipients: [] });
 
@@ -181,7 +182,7 @@ test('B-1 and S-2: test mode longer than the retry window fails nobody, then go-
   const contentAdapter = new pg.Pool({ connectionString: adapterUrl.toString(), max: 4 });
   try {
     const { owner, ownerToken, founderToken } = await people(admin);
-    const connections = new PgEmailConnectionStore(identity), store = new PgEmailProtectionStore(identity), queue = new PgPpFollowupQueue(identity);
+    const connections = new PgEmailConnectionStore(identity, { eligibility: staticEligibility }), store = new PgEmailProtectionStore(identity), queue = new PgPpFollowupQueue(identity);
     const ownerId = { sessionToken: ownerToken, userId: owner, workspaceId: PP, userEmail: 'owner-review2@pp-second-review.co.uk' } as PortalSessionIdentity;
     const flows = createPortalFollowupFlowService({ webPool: web, adapterPool: contentAdapter, commandPool: adapter, workspaceId: PP,
       delivery: { identityPool: identity, status: { mode: 'live', ready: true, problems: [] } } });

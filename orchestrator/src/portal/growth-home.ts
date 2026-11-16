@@ -185,6 +185,7 @@ export function renderGrowthHomeBody(
     ...(options.approvalsAvailable ? ['<a class="button" href="/portal/approvals">Approvals</a>'] : []),
     ...(options.followupFlowsAvailable && profile.id === 'property_predator_growth' ? ['<a class="button" href="/portal/follow-ups">Build follow-up flows</a>'] : []),
     // The status card below replaces this link once the business's state could be read.
+    // Product-profile gate kept as it is: Connect email is served only on the Property Predator growth portal (property_predator_growth) until a later stage opens it to other portal profiles; the allow-list (0157) decides which businesses on this portal may use it.
     ...(options.emailConnectAvailable && !options.emailStatus && profile.id === 'property_predator_growth' ? ['<a class="button secondary" href="/portal/email">Connect email</a>'] : []),
     actionCentreAvailable
       ? '<a class="button" href="/portal/actions">Open Action Centre</a>'
