@@ -267,6 +267,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const resumed = f('action') === 'policy' || !new RegExp(`^${UUID}$`, 'i').test(target) ? 0 : await engine.resumeAllowanceBlockedWrites(actor, target.toLowerCase()).catch(() => 0);
         return ok(`${SEO_BLOG_BASE}/limits`, `Limits saved. Usage history and publishing settings are unchanged.${resumed ? ` ${resumed === 1 ? '1 article that was waiting is' : `${resumed} articles that were waiting are`} being written now.` : ''}`);
       }
+      // Production rules are founder-only: anyone else gets the same answer as an action that does not exist.
+      if (brandId && rest.split('/')[0] === 'methods') {
+        const methodsLimits = input.service.limitsFor?.(identity, input.requestId);
+        if (!methodsLimits || !(await methodsLimits.allowed())) throw new SeoBlogError(404, 'That action was not found.');
+      }
       return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
     }
     if (method !== 'GET' && method !== 'HEAD') throw new SeoBlogError(405, 'Use the controls on the page.');
@@ -390,7 +395,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const jobRoute = new RegExp(`^creative/jobs/(${UUID})$`, 'i').exec(rest);
       if (jobRoute) {
         const status = await studio.jobStatus(actor.userId, brandId, jobRoute[1]!.toLowerCase());
-        return send(res, 200, JSON.stringify(status), 'application/json; charset=utf-8');
+        return send(res, 200, JSON.stringify({ ...status, detail: ownerWords(status.detail) }), 'application/json; charset=utf-8');
       }
       if (rest === 'creative/generate') {
         const view = await studio.generation().view(actor.userId, brandId);

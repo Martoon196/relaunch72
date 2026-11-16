@@ -51,6 +51,12 @@ const WRITING_UNCONFIRMED = 'The last writing step did not confirm its result, s
 const GENERIC_STOP = 'Something stopped this task before it finished. Nothing was published. You can try again from Activity.';
 
 const WHOLE_MESSAGE: readonly (readonly [RegExp, string])[] = [
+  // Image generation failures name the image service, its model and its maker.
+  [/openai|gpt-image|dall-e|image request failed|\/v1\/images\//i, 'Image generation could not finish. Nothing was published or approved. You can try again.'],
+  // The engine's budget refusal (BudgetExceededError) carries the raw units; the owner reads what it means.
+  [/^Writing allowance: .*Used [\d,]+; ceiling/s, 'There is not enough writing allowance left this month for this, so nothing was started. You can raise the allowance in Publishing settings.'],
+  [/^Research allowance: .*Used [\d,]+; ceiling/s, 'There is not enough research allowance left this month for this, so nothing was started. You can raise the allowance in Publishing settings.'],
+  [/^Image allowance: .*Used [\d,]+; ceiling/s, 'There is not enough image allowance left this month for this, so nothing was started. You can raise the allowance in Publishing settings.'],
   [/method generation outcome is uncertain/i, WRITING_UNCONFIRMED],
   [/writing model could not be reached|could not reach the writing model|anthropic|overloaded_error|rate_limit_error|api_error|authentication_error|\bAPIError\b|\bAPIConnection/i, WRITING_UNREACHABLE],
   [/production methods could not produce|bounded method context|did not return a usable result/i, DRAFT_NOT_ACCEPTED],
@@ -73,6 +79,8 @@ const PHRASES: readonly (readonly [RegExp, string])[] = [
   [/\bsupplier attempts\b/gi, 'research attempts'],
   [/\bsupplier charges?\b/gi, 'research costs'],
   [/\bresearch provider\b/gi, 'research service'],
+  [/\bimage provider\b/gi, 'image service'],
+  [/\bthe provider\b(?=.{0,3}s content policy)/gi, 'the image service'],
   [/\bthe provider\b/gi, 'the connected service'],
   [/\bprovider\b/gi, 'connected service'],
   [/\bthe supplier\b/gi, 'the research service'],

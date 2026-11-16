@@ -19,7 +19,9 @@ export const GOLDEN_FILE = 'content-area-shell-golden.json.gz';
  * The commit the recording was made from. Re-recorded since, from the neutral-words release tree with this same
  * function (clock pinned to GOLDEN_NOW, no preview switch), and only where its wording changed a page:
  * every scenario's overview and root, and the real engine's overview, setup, topics, publishing, social and methods
- * (now a founder-only page: a client gets the not-found answer), before and after the form posts.
+ * (now a founder-only page: a client gets the not-found answer), before and after the form posts. Recorded again on top
+ * of foundation 46dedb7 (SEO report lifted out, as the shell test compares), for the same entries only, when the
+ * writing allowance became "about N more articles" for the owner.
  */
 export const GOLDEN_BASE = '744a19d';
 
