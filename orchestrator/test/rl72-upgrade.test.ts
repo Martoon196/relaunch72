@@ -162,10 +162,11 @@ test('owner admin controls persist individual pack choices and all-off without d
  let response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/update',fields:{_csrf:csrf,revision:'1',packId:['email-writing']}});
  assert.equal(response.status,303);assert.doesNotMatch(response.headers.location!,/\?e=/);
  let snapshot=await f.methods.snapshot(f.brand.id);assert.deepEqual(snapshot.assignment!.pins.map(p=>p.packId).sort(),['email-writing','production-core']);
- response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/campaigns'});assert.match(response.body,/Word of Mouth Engine is switched off/);assert.match(response.body,/Create email campaign/);
+ response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/campaigns'});assert.match(response.body,/Request kits are switched off/);assert.match(response.body,/Create email campaign/);
  response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/disable',fields:{_csrf:csrf,revision:'2'}});assert.equal(response.status,303);
  snapshot=await f.methods.snapshot(f.brand.id);assert.equal(snapshot.assignment!.pins.length,0);assert.equal(snapshot.assignment!.revision,3);
- response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods'});assert.match(response.body,/All production packs off/);
+ response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods'});assert.equal(response.status,404,'Production rules is founder-only');
+ response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods',founder:true});assert.match(response.body,/All production packs off/);
  await assert.rejects(f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile)),/Activate/);assert.equal(f.model.requests.length,calls);assert.equal((await f.creator.get(f.actor,f.brand.id,draft.id)).id,draft.id);
  response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/activate',fields:{_csrf:csrf,revision:'2',creators:'1'}});assert.match(response.headers.location!,/\?e=/);assert.equal((await f.methods.snapshot(f.brand.id)).assignment!.pins.length,0);
 });
@@ -189,7 +190,7 @@ test('campaign validation rejects foreign audience/actions, invented commercial 
 });
 test('native creator journey protects CSRF, renders both creators, approves/exports, and parses ordinary edit controls',async()=>{
  const f=await creatorFixture(),who=nativeIdentity(f.actor),csrf=nativeCsrf(who),base='/portal/seo-blog/b/'+f.brand.id+'/campaigns';
- let page=await nativeSeoCall(f.engine,{who,method:'GET',path:base});assert.equal(page.status,200);assert.match(page.body,/Inbox Engine/);assert.match(page.body,/Word of Mouth Engine/);
+ let page=await nativeSeoCall(f.engine,{who,method:'GET',path:base});assert.equal(page.status,200);assert.match(page.body,/Email campaign/);assert.match(page.body,/Requests and referrals/);
  const b=campaignBrief(f.profile),id=randomUUID(),fields={_csrf:csrf,commandId:id,kind:b.kind,name:b.name,goal:b.goal,audience:b.audience,purpose:b.purpose,count:String(b.count),ctaIndex:'0',offerName:'',permissionContext:b.permissionContext,customerMoment:b.customerMoment,consentProcess:b.consentProcess,incentiveTerms:b.incentiveTerms};
  const denied=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/create',fields:{...fields,_csrf:'forged'}});assert.equal(denied.status,303);assert.equal(f.model.requests.length,0);
  page=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/create',fields});assert.equal(page.status,303);assert.doesNotMatch(page.headers.location!,/\?e=/);

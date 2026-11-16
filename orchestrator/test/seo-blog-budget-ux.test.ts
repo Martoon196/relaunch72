@@ -63,7 +63,10 @@ test('saved toggle states have text, colour classes and switch semantics; exampl
   assert.match(paused, /aria-label="Pause all blog publishing: On\. Turn off" class="toggle-control paused"/);
   assert.match(html, /name="name" value="ongoingProduction"><input type="hidden" name="value" value="0"/);
   assert.match(html, /name="name" value="autoPublish"><input type="hidden" name="value" value="1"/);
-  assert.match(html, /input and output usage together/); assert.match(html, /00:00 UTC/); assert.match(html, /not a wallet or purchased Relaunch72 credits/);
-  assert.match(html, /Provider-cost example only/); assert.match(html, /US\$0\.09/); assert.match(html, /platform\.claude\.com\/docs\/en\/about-claude\/pricing/);
-  assert.match(html, /Total tokens alone do not determine the cost/);
+  assert.match(html, /Writing units count all recorded writing/); assert.match(html, /00:00 UTC/); assert.match(html, /not a wallet or purchased Relaunch72 credits/);
+  // The model pricing guide names the model and its maker: founder-only technical detail (neutral words release).
+  assert.doesNotMatch(html, /Provider-cost example only|claude\.com|Total tokens/);
+  const founder = publishingPage({ ...shell(brand), limitsAvailable: true, tab: 'publishing' }, { usage: { model_tokens: 0, search_calls: 0, images: 0 } });
+  assert.match(founder, /Provider-cost example only/); assert.match(founder, /US\$0\.09/); assert.match(founder, /platform\.claude\.com\/docs\/en\/about-claude\/pricing/);
+  assert.match(founder, /Total tokens alone do not determine the cost/);
 });
