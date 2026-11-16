@@ -52,7 +52,7 @@ export type DistributionStage = typeof DISTRIBUTION_STAGES[number];
 export type StageStatus = 'reached' | 'waiting' | 'not_applicable' | 'unknown' | 'failed' | 'stopped';
 export interface StageEvidence { readonly stage: DistributionStage; readonly status: StageStatus; readonly at: string | null; readonly evidence: string; readonly count?: number }
 export const STAGE_LABEL: Readonly<Record<DistributionStage, string>> = Object.freeze({
-  handed_off: 'Handed off', queued: 'Queued', provider_accepted: 'Provider accepted', published: 'Published', delivered: 'Delivered', lead: 'Lead', customer: 'Customer',
+  handed_off: 'Handed off', queued: 'Queued', provider_accepted: 'Accepted for posting', published: 'Published', delivered: 'Delivered', lead: 'Lead', customer: 'Customer',
 });
 
 /** One posting plan as recorded by the existing SQL receipts and connected-calendar job. */
@@ -92,7 +92,7 @@ export function postLadder(handoff: CreativeHandoff, plan: DeliveryRecord | null
   } else if (stopped && !plan.materialized) {
     out.push({ stage: 'queued', status: 'stopped', at: null, evidence: `${stopReason} It never entered the calendar.` });
   } else if (stopped && plan.jobState === 'cancelled' && !plan.events.length) {
-    out.push({ stage: 'queued', status: 'stopped', at: plan.scheduledFor, evidence: `${stopReason} Its calendar entry was removed before any provider call.` });
+    out.push({ stage: 'queued', status: 'stopped', at: plan.scheduledFor, evidence: `${stopReason} Its calendar entry was removed before anything was sent.` });
   } else if (!plan.materialized) {
     out.push({ stage: 'queued', status: 'waiting', at: null, evidence: 'Posting plan saved. It waits until the blog version is confirmed live and current controls allow it.' });
   } else {
@@ -103,11 +103,11 @@ export function postLadder(handoff: CreativeHandoff, plan: DeliveryRecord | null
   const failed = plan?.events.find((e) => e.kind === 'failed') ?? (plan && (plan.jobState === 'failed' || plan.jobState === 'needs_attention') ? { at: null, code: plan.jobState } : undefined);
   const unknown = plan?.events.find((e) => e.kind === 'outcome_unknown');
   const after = (stage: 'provider_accepted' | 'published', hit: { at: string } | undefined, label: string) => {
-    if (hit) return { stage, status: 'reached' as const, at: hit.at, evidence: `${label} recorded by the provider receipt.` };
-    if (failed) return { stage, status: 'failed' as const, at: failed.at ?? null, evidence: `The provider attempt failed (${failed.code}). Nothing is retried from here.` };
-    if (unknown) return { stage, status: 'unknown' as const, at: unknown.at, evidence: 'The provider outcome is unknown and is held for reconciliation by the existing calendar worker.' };
+    if (hit) return { stage, status: 'reached' as const, at: hit.at, evidence: `${label} recorded by the delivery receipt.` };
+    if (failed) return { stage, status: 'failed' as const, at: failed.at ?? null, evidence: `The posting attempt failed (${failed.code}). Nothing is retried from here.` };
+    if (unknown) return { stage, status: 'unknown' as const, at: unknown.at, evidence: 'The posting outcome is unknown and is held for checking by the social calendar.' };
     if (stopped) return { stage, status: 'stopped' as const, at: null, evidence: stopReason };
-    return { stage, status: 'waiting' as const, at: null, evidence: 'No provider receipt yet.' };
+    return { stage, status: 'waiting' as const, at: null, evidence: 'No delivery receipt yet.' };
   };
   out.push(after('provider_accepted', accepted, 'Acceptance'));
   out.push(plan?.jobState === 'succeeded' && !published

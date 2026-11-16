@@ -168,8 +168,11 @@ relaunch72 service:
 | `SEO_BLOG_CREDENTIAL_KEY` | Base64 32-byte key for sealing website credentials. Without it, website connections are disabled with a clear message. |
 | `SEO_BLOG_ANTHROPIC_API_KEY` | Scoped real-generation credential, passed directly to the SDK without changing global build authority. Use this on the Property Predator production web process; its existing guard continues to forbid global `ANTHROPIC_API_KEY`. `RELAUNCH72_MODEL_SEO_BLOG_*` can override the model per stage. |
 | `ANTHROPIC_API_KEY` | Legacy fallback for workers or other profiles that permit the global credential. The scoped key takes precedence. Without either key, or with `SEO_BLOG_GENERATION=off`, generation is unavailable. |
-| `SEO_BLOG_DATAFORSEO_LOGIN` / `_PASSWORD` (or the existing `DATAFORSEO_*`) | Research. Without them, planning is blocked with "connect a research provider". |
-| `SEO_BLOG_KEYWORD_METRICS=dataforseo` | Optional measured demand; otherwise demand is labelled qualitative. |
+| `SEO_BLOG_DATAFORSEO_LOGIN` / `_PASSWORD` (or the existing `DATAFORSEO_*`) | Research and search numbers (one resolution, `engine-stamp.ts` `researchCredentials`: the scoped names first, field by field). Without them, planning is blocked with "connect a research provider". |
+| `SEO_BLOG_KEYWORD_METRICS=dataforseo` | Optional measured demand, using the same credentials as research; otherwise demand is labelled qualitative. Still opt-in. |
+| `SEO_BLOG_REQUIRE_FULL_ENGINE=true` | Strict setting, off by default. Planning holds (before anything is spent where it can) when research is not live, search numbers are not switched on, a numbers request failed or was skipped for allowance, fewer than 3 usable sources were found, or the business's assigned writing method would not run. "The supplier answered with no data" goes on. Writing holds when the writing method is assigned but would not run, or the brief's stamp says it was planned without numbers. Owner messages are neutral (`ENGINE_GAP_MESSAGE`). With it on and `SEO_BLOG_METHOD_PACKS` off, a read-only assignment reader is composed so an expected method is told apart from none. |
+
+Every plan, brief and article version carries an internal `engine` stamp (outside the article body and its hash): strict on or off; research; numbers (`measured`, `no_data`, `unavailable`, `off`, `not_recorded`); the writing method (`active`, `not_assigned`, `inactive`, `off`, `not_used`) and its receipt id. It is never shown to a business owner.
 | `SEO_BLOG_MAX_DOCUMENT_BYTES`, `SEO_BLOG_MAX_IMAGE_BYTES`, `SEO_BLOG_WORKER_INTERVAL_MS`, `SEO_BLOG_WORKER_BATCH` | Optional limits. |
 
 Worker: a separate process `npm run serve:seo-blog-worker` with the same variables.
