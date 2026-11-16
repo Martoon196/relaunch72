@@ -74,6 +74,10 @@ test('with the preview on, the seven places land on real pages, with the right o
     const list = await on('busy', `${B}/articles`);
     assert.match(list.body, /id="ca-g-ready" class="ca-h2">Ready for you<\/h2><span class="ca-gcount ca-gcount-needs"><span class="ca-sr">: <\/span>5<\/span>/);
     for (const scenario of ['calm', 'new'] as const) assert.doesNotMatch((await on(scenario, `${B}/overview`)).body, /class="ca-count"/, scenario);
+    // A tool that is not one of the seven places (Activity) opens in the shell with nothing marked.
+    const activity = await on('busy', `${B}/activity`);
+    assert.match(activity.body, /class="ca-nav"/);
+    assert.doesNotMatch(/<nav class="ca-nav"[\s\S]*?<\/nav>/.exec(activity.body)![0], /aria-current/);
     // The article page and its existing actions, inside the shell.
     const article = await on('busy', `${B}/articles/${articleId(1)}`);
     assert.match(article.body, /class="ca-nav-item" href="[^"]+\/articles" aria-current="page"/);

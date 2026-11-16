@@ -45,11 +45,12 @@ const PLACES: readonly [ContentAreaPlace, string, string][] = [
 ];
 const PHONE: readonly ContentAreaPlace[] = ['home', 'calendar', 'articles', 'results'];
 
-function placeFor(shell: Shell): ContentAreaPlace {
+function placeFor(shell: Shell): ContentAreaPlace | null {
   if (shell.preview?.place) return shell.preview.place;
   if (shell.switchTo === 'dna') return 'dna';
   const byTab: Partial<Record<SeoBlogTab, ContentAreaPlace>> = { overview: 'home', calendar: 'calendar', articles: 'articles', social: 'social', publishing: 'settings', setup: 'settings' };
-  return (shell.tab && byTab[shell.tab]) || 'home';
+  // Topics, Activity, the studio and the other tools are not one of the seven places: nothing is marked.
+  return (shell.tab && byTab[shell.tab]) || null;
 }
 
 function initials(name: string): string {
