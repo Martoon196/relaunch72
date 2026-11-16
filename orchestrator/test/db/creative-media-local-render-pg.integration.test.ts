@@ -281,8 +281,9 @@ test('real native render starts from exact owned, independently probed source an
    const flags={...env,RL72_MEDIA_RETENTION_ENABLED:'true'};
    const owner=new PgMediaErasureOwner(content,a.principal,flags),cross=new PgMediaErasureOwner(content,b.principal,flags);
    await assert.rejects(cross.erase(b.brand.id,'source',upload.id),/unavailable|owner/iu);
+   const erasedOutput=(await a.owner.outputs(a.brand.id)).find(o=>o.jobId===jobId)!;
    await owner.erase(a.brand.id,'source',upload.id);
-   await assert.rejects(a.owner.load(a.brand.id,output.id),/unavailable/iu);
+   await assert.rejects(a.owner.load(a.brand.id,erasedOutput.id),/unavailable/iu);
    await new PgMediaRetentionWorker(admin,'erasure-test',null).sweep(a.brand.id);
    const counts=await admin.query("SELECT octet_length(b.bytes) n FROM app.creative_media_source_videos s JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id WHERE s.workspace_id=$1 AND s.id=$2",[a.brand.id,upload.id]);
    assert.equal(counts.rows[0].n,1);
