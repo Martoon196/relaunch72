@@ -577,9 +577,10 @@ async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand
   const data = loaded ?? await loadContentArea(engine, actor, brand.id);
   if (page === 'keywords') {
     // Read only: the stored list, the briefs and articles already loaded; a view never spends.
-    const [pool, nextUp] = await Promise.all([engine.keywordList(actor, brand.id), engine.keywordNextUp(actor, brand.id)]);
+    // One shape check: a damaged or newer-shaped list shows the honest empty state, never an error.
+    const [read, nextUp] = await Promise.all([engine.keywordListRead(actor, brand.id), engine.keywordNextUp(actor, brand.id)]);
     const choices = ((brand.settings.programme ?? {}) as { keywordChoices?: KeywordChoices }).keywordChoices ?? null;
-    return contentKeywordsPage(shell('overview'), brand, { pool, choices, briefs: data.briefs, articles: data.articles, jobs: data.jobs, nextUp, now: data.now });
+    return contentKeywordsPage(shell('overview'), brand, { pool: read.pool, listStatus: read.status, choices, briefs: data.briefs, articles: data.articles, jobs: data.jobs, nextUp, now: data.now });
   }
   if (page === 'home') return contentHomePage(shell('overview'), data);
   if (page === 'calendar') {

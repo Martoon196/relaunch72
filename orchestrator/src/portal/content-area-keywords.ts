@@ -9,7 +9,7 @@
  * supplier is never named. Shown only when SEO_BLOG_KEYWORD_POOL is on (the engine says so).
  */
 
-import type { InventoryKeywordPool } from '../seo-blog/keyword-fill.js';
+import type { InventoryKeywordPool, KeywordPoolRead } from '../seo-blog/keyword-fill.js';
 import type { KeywordChoices, StoredKeywordRow } from '../seo-blog/keyword-store-shape.js';
 import type { ShortlistRow } from '../seo-blog/keyword-planning.js';
 import { difficultyBand, intentLabel, searchesLabel } from '../seo-blog/keyword-pool.js';
@@ -22,8 +22,10 @@ import { publishingDays } from './content-area-layout.js';
 import { escapeHtml as e } from './ui.js';
 
 export interface KeywordsPageData {
-  /** The stored list, or null when it has never been built. */
+  /** The stored list, or null when it has never been built or cannot be read. */
   readonly pool: InventoryKeywordPool | null;
+  /** What the one shape check found ('ok' when absent from older callers). A damaged or newer-shaped list shows the honest empty state. */
+  readonly listStatus?: KeywordPoolRead['status'];
   readonly choices: KeywordChoices | null;
   readonly briefs: readonly ArticleBrief[];
   readonly articles: readonly ArticleListRow[];
@@ -39,6 +41,12 @@ export const STATE_LABEL: Record<KeywordState, string> = {
 };
 const STATE_ORDER: readonly KeywordState[] = ['live', 'ready', 'being_written', 'chosen', 'suggested', 'already_covered', 'dismissed'];
 
+/** The owner's dismissed phrases, read defensively (a damaged choices record never breaks the page). */
+function dismissedList(choices: KeywordChoices | null | undefined): { phrase: string }[] {
+  const list = (choices as { dismissed?: unknown } | null | undefined)?.dismissed;
+  return Array.isArray(list) ? list.filter((x): x is { phrase: string } => typeof x === 'object' && x !== null && typeof (x as { phrase?: unknown }).phrase === 'string') : [];
+}
+
 /** The brief whose measured primary phrase is this phrase (one article per phrase). */
 function briefFor(phrase: string, briefs: readonly ArticleBrief[]): ArticleBrief | null {
   return briefs.find((b) => b.seo?.primary.phrase === phrase && !['omitted', 'skipped'].includes(b.status)) ?? null;
@@ -46,7 +54,7 @@ function briefFor(phrase: string, briefs: readonly ArticleBrief[]): ArticleBrief
 
 /** A phrase's state, derived (only "Not for us" is stored, as the owner's choice). */
 export function keywordState(row: Pick<StoredKeywordRow, 'phrase' | 'ownPosition'>, d: Pick<KeywordsPageData, 'briefs' | 'articles' | 'choices'>): KeywordState {
-  if (d.choices?.dismissed.some((x) => x.phrase === row.phrase)) return 'dismissed';
+  if (dismissedList(d.choices).some((x) => x.phrase === row.phrase)) return 'dismissed';
   const brief = briefFor(row.phrase, d.briefs);
   if (brief) {
     const article = d.articles.find((a) => a.article.briefId === brief.id || a.article.id === brief.articleId)?.article;
@@ -60,14 +68,16 @@ export function keywordState(row: Pick<StoredKeywordRow, 'phrase' | 'ownPosition
 }
 
 /** The page-level state. */
-export type KeywordsPageState = 'not_built' | 'building' | 'no_data' | 'thin' | 'measured';
-export function keywordsPageState(d: Pick<KeywordsPageData, 'pool' | 'jobs'>): KeywordsPageState {
+export type KeywordsPageState = 'unreadable' | 'not_built' | 'building' | 'no_data' | 'thin' | 'measured';
+export function keywordsPageState(d: Pick<KeywordsPageData, 'pool' | 'jobs' | 'listStatus'>): KeywordsPageState {
+  if (d.listStatus === 'damaged' || d.listStatus === 'newer') return 'unreadable';
   const building = d.jobs.some((j) => j.kind === 'inventory' && j.payload.keywordFill && ['queued', 'running'].includes(j.state));
   if (!d.pool || !d.pool.builtAt) return building ? 'building' : 'not_built';
   if (!d.pool.rows.length || d.pool.state === 'no_data') return 'no_data';
   return d.pool.rows.some((r) => r.basis === 'measured' && r.searches !== null) ? 'measured' : 'thin';
 }
 
+const UNREADABLE = 'We cannot show your keyword list just now. Your plans and articles are not affected.';
 const NO_DATA = 'We could not find search numbers for your niche yet. That is common for specialist and local businesses. We will still write about the questions your customers ask, and we will mark those "no search number yet".';
 
 /** The plain autopilot statement, from the business's own settings. */
@@ -116,9 +126,9 @@ export function contentKeywordsPage(shell: Shell, brand: Brand, d: KeywordsPageD
   const rows = (d.pool?.rows ?? []).map((r) => ({ r, state: keywordState(r, d) }))
     .sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state) || Number(nextIds.has(b.r.phrase)) - Number(nextIds.has(a.r.phrase)) || b.r.opportunity - a.r.opportunity || (a.r.phrase < b.r.phrase ? -1 : 1));
   const shown = rows.filter((x) => x.state !== 'dismissed');
-  const dismissed = d.choices?.dismissed ?? [];
+  const dismissed = dismissedList(d.choices);
   const roll = state === 'measured' || state === 'thin' ? rollupLine(brand, d) : null;
-  const intro = state === 'not_built' ? '<p class="kw-empty">We have not built your keyword list yet. It is built from your website and your Brand DNA.</p>'
+  const intro = state === 'unreadable' ? `<p class="kw-empty">${e(UNREADABLE)}</p>` : state === 'not_built' ? '<p class="kw-empty">We have not built your keyword list yet. It is built from your website and your Brand DNA.</p>'
     : state === 'building' ? '<p class="kw-empty" role="status">We are building your keyword list. This page fills in once it is ready.</p>'
       : state === 'no_data' ? `<p class="kw-empty">${e(NO_DATA)}</p>`
         : state === 'thin' ? `<p class="kw-note">${e(NO_DATA)}</p>` : '';

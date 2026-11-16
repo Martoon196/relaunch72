@@ -89,7 +89,7 @@ import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
 import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, type PlanningCandidates, type ShortlistRow } from './keyword-planning.js';
-import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, poolInMarket, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall } from './keyword-fill.js';
+import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, poolInMarket, readablePool, readKeywordPool, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall, type KeywordPoolRead } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
@@ -1292,7 +1292,7 @@ export class SeoBlogEngine {
     // Keyword-first planning (SEO_BLOG_KEYWORD_POOL): research runs on the shortlisted measured phrases.
     // Read back from the store: a website refresh just above returns the pages without the list it keeps.
     // Read through the one shape check; a list measured for another country is never used for this business.
-    const storedList = this.keywordListsReady ? (await this.store.getInventory(brandId))?.keywordPool ?? null : null;
+    const storedList = this.keywordListsReady ? readablePool(await this.store.getInventory(brandId)) : null;
     const keywordPool = storedList && poolInMarket(storedList, supportedMarketForLocale(brand.locale)) ? storedList : null;
     const candidates: PlanningCandidates = execution ? { primary: execution.shortlist ?? [], secondary: execution.secondary ?? [] } : keywordPool ? await this.currentCandidates(brandId) : { primary: [], secondary: [] };
     const shortlist = candidates.primary;
@@ -2232,29 +2232,43 @@ export class SeoBlogEngine {
     const prior = (await this.store.listJobs(brandId)).find((j) => j.idempotencyKey === `keywords:${input.commandId}`);
     if (prior) return prior;
     if (!brand.website) throw new SeoBlogError(409, FILL_MESSAGE.needsWebsite, 'not_ready');
+    // A list saved by a newer release is never overwritten by this one.
+    if (readKeywordPool((await this.store.getInventory(brandId))?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
     const { profile, stale } = await this.currentFactsKey(brandId);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, FILL_MESSAGE.needsBrandDna, 'not_ready');
     await this.requireBudget(brand, 'search_calls', 1);
     return this.enqueue(brandId, 'inventory', `keywords:${input.commandId}`, { keywordFill: { commandId: input.commandId, attempts: [] }, requestedBy: actor.userId });
   }
 
-  /** The stored keyword list (read only; a view never spends). */
+  /** What is stored, through the one shape check: absent, readable, damaged or newer-shaped (read only; a view never spends). Never throws on a bad list. */
+  async keywordListRead(actor: Actor, brandId: string): Promise<KeywordPoolRead> {
+    await this.brandFor(actor, brandId);
+    return readKeywordPool((await this.store.getInventory(brandId))?.keywordPool);
+  }
+
+  /** The stored keyword list, read through the one shape check (read only; a view never spends). Null when absent or unreadable. */
   async keywordList(actor: Actor, brandId: string): Promise<import('./keyword-fill.js').InventoryKeywordPool | null> {
     await this.brandFor(actor, brandId);
-    return (await this.store.getInventory(brandId))?.keywordPool ?? null;
+    return readablePool(await this.store.getInventory(brandId));
   }
 
   /**
    * The planning candidates from the stored list now: up to seven phrases a brief may target and further measured
    * phrases offered only as secondary phrases. Leaves out phrases existing briefs already target and their near
-   * duplicates. Empty when the list is measured for another country, or the business's country is not supported.
+   * duplicates. Empty when the list is absent, unreadable (damaged or newer-shaped), measured for another country, or
+   * the business's country is not supported. Never throws: a list it cannot read never stops a worker's pass.
    */
   private async currentCandidates(brandId: string): Promise<PlanningCandidates> {
-    const [brand, inventory, briefs] = await Promise.all([this.store.getBrand(brandId), this.store.getInventory(brandId), this.store.listBriefs(brandId)]);
-    const pool = inventory?.keywordPool ?? null;
-    if (!brand || !pool || !poolInMarket(pool, supportedMarketForLocale(brand.locale))) return { primary: [], secondary: [] };
-    const used = briefs.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => b.seo?.primary.phrase).filter((p): p is string => typeof p === 'string');
-    return planningCandidates(pool, used, this.now());
+    try {
+      const [brand, inventory, briefs] = await Promise.all([this.store.getBrand(brandId), this.store.getInventory(brandId), this.store.listBriefs(brandId)]);
+      const pool = readablePool(inventory);
+      if (!brand || !pool || !poolInMarket(pool, supportedMarketForLocale(brand.locale))) return { primary: [], secondary: [] };
+      const used = briefs.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => b.seo?.primary.phrase).filter((p): p is string => typeof p === 'string');
+      return planningCandidates(pool, used, this.now());
+    } catch (error) {
+      await this.log(brandId, 'system', 'keywords.unreadable', `The keyword list could not be read for planning: ${(error as Error).message.slice(0, 120)}`).catch(() => undefined);
+      return { primary: [], secondary: [] };
+    }
   }
 
   /** What autopilot would plan next from the list (read only). */
@@ -2285,6 +2299,7 @@ export class SeoBlogEngine {
     let inventory = await this.store.getInventory(brand.id);
     // Reading the website is free; the list is built against the current pages.
     if (!inventory || Date.parse(this.now()) - Date.parse(inventory.fetchedAt) > 24 * 3600_000) inventory = await this.refreshInventory(brand.id);
+    if (readKeywordPool(inventory.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
     const market = marketForLocale(brand.locale);
     const business = await this.keywordBusiness(brand, profile, inventory);
     const calls = fillCalls(business, market);
@@ -2298,6 +2313,7 @@ export class SeoBlogEngine {
     let phrases = 0;
     await this.store.keywordBoundary({ brandId: brand.id, jobId: claim.id, now: this.now(), decide: (s) => {
       if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, 'The keyword task lease ended.');
+      if (readKeywordPool(s.inventory?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
       const rebuilt = rebuiltPool(storedPool(s.inventory, market), candidates, business, this.keywordChoices(s.brand) ?? { schema: 1, dismissed: [], chosen: [], ownerSeeds: [] }, this.now());
       phrases = rebuilt.pool.rows.length;
       return { job: { ...s.job, progress: FILL_MESSAGE.done, updatedAt: this.now() }, writeJob: true, keywordPool: rebuilt.pool };
@@ -2341,8 +2357,10 @@ export class SeoBlogEngine {
       const now = this.now();
       // A late receipt is kept even if the lease ended, so the charge is never lost or paid twice.
       const attempts = fillAttempts(s.job).map((a) => a.nonce === reserved.nonce ? { ...a, receivedAt: now, status, providerReportedCost: answer.providerReportedCost, rows: answer.rows.length, diagnosticCategory: answer.diagnostic?.category ?? null } : a);
-      const pool = withCachedCall(withCost(storedPool(s.inventory, market), reserved, answer, now), call, answer, now);
-      return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), attempts } }, updatedAt: now }, writeJob: true, keywordPool: pool };
+      // A newer-shaped list is never overwritten; the receipt is still kept on the task.
+      const keep = readKeywordPool(s.inventory?.keywordPool).status === 'newer';
+      const pool = keep ? undefined : withCachedCall(withCost(storedPool(s.inventory, market), reserved, answer, now), call, answer, now);
+      return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), attempts } }, updatedAt: now }, writeJob: true, ...(pool ? { keywordPool: pool } : {}) };
     } });
     try { await save(); } catch { await save(); }
     return status === 'failed' ? null : answer.rows;

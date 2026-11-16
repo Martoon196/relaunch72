@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import type { KeywordCandidate } from '../keyword/types.js';
 import { requestDomain, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import { buildKeywordPool, businessSeeds, phraseKey, type KeywordPool, type PoolBusiness } from './keyword-pool.js';
-import { emptyKeywordStore, freshness, reduceKeywordStore, type KeywordChoices, type StoredKeywordPool } from './keyword-store-shape.js';
+import { emptyKeywordStore, freshness, KEYWORD_POOL_SCHEMA, reduceKeywordStore, type KeywordChoices, type StoredKeywordPool, type StoredKeywordRow } from './keyword-store-shape.js';
 import type { Job, WebsiteInventory } from './types.js';
 
 export const KEYWORD_POOL_FLAG = 'SEO_BLOG_KEYWORD_POOL';
@@ -100,15 +100,76 @@ export function cachedFor(pool: InventoryKeywordPool | null | undefined, call: F
   return hit && freshness(hit.at, now, call.freshness) === 'fresh' ? hit : null;
 }
 
+// ─── One shape check for every reader (planning, the fill and the Keywords page) ─────────────────────────────
+
+/**
+ * What is stored on `inventory.keywordPool`:
+ * - 'absent': no list yet;
+ * - 'ok': a readable list of this schema (rows that are not readable are left out, never guessed at);
+ * - 'damaged': this schema but not readable as a list (a fill may rebuild it, keeping a readable cost ledger);
+ * - 'newer': written by a newer release; read as no list, and never overwritten by this one.
+ * Never throws.
+ */
+export type KeywordPoolRead =
+  | { readonly status: 'absent' | 'damaged' | 'newer'; readonly pool: null; readonly ledger: StoredKeywordPool['ledger'] | null }
+  | { readonly status: 'ok'; readonly pool: InventoryKeywordPool; readonly ledger: StoredKeywordPool['ledger'] };
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === 'string';
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const numOrNull = (v: unknown) => v === null || isNum(v);
+const strOrNull = (v: unknown) => v === null || isStr(v);
+const BASES = new Set(['measured', 'parent_phrase', 'observed', 'none']);
+
+function readableRow(r: unknown): r is StoredKeywordRow {
+  if (!isObj(r)) return false;
+  return isStr(r.id) && r.id.length > 0 && isStr(r.key) && isStr(r.phrase) && r.phrase.trim().length > 0 && isStr(r.basis) && BASES.has(r.basis)
+    && numOrNull(r.searches) && (r.searches === null || (r.searches as number) >= 0) && strOrNull(r.measuredMonth) && strOrNull(r.parent) && numOrNull(r.parentSearches)
+    && numOrNull(r.rankingDifficulty) && strOrNull(r.intent) && isStr(r.clusterId) && (r.role === 'pillar' || r.role === 'supporting')
+    && numOrNull(r.ownPosition) && isNum(r.opportunity) && isStr(r.why) && isStr(r.measuredAt) && Number.isFinite(Date.parse(r.measuredAt))
+    && (r.sources === undefined || Array.isArray(r.sources));
+}
+
+function readableLedger(v: unknown): StoredKeywordPool['ledger'] | null {
+  if (!isObj(v) || !Array.isArray(v.entries) || !isObj(v.months)) return null;
+  if (!v.entries.every((x) => isObj(x) && isStr(x.at) && isStr(x.endpoint))) return null;
+  if (!Object.values(v.months).every((m) => isObj(m) && isNum(m.calls) && isNum(m.cost) && isNum(m.unpriced))) return null;
+  return v as unknown as StoredKeywordPool['ledger'];
+}
+
+function readableCall(c: unknown): c is CachedCall {
+  return isObj(c) && isStr(c.sha) && isStr(c.endpoint) && isStr(c.at) && (c.status === 'ok' || c.status === 'no_data') && Array.isArray(c.rows);
+}
+
+export function readKeywordPool(value: unknown): KeywordPoolRead {
+  if (value === undefined || value === null) return { status: 'absent', pool: null, ledger: null };
+  if (!isObj(value)) return { status: 'damaged', pool: null, ledger: null };
+  if (isNum(value.schema) && value.schema > KEYWORD_POOL_SCHEMA) return { status: 'newer', pool: null, ledger: null };
+  const ledger = readableLedger(value.ledger);
+  if (value.schema !== KEYWORD_POOL_SCHEMA || !Array.isArray(value.rows) || !isNum(value.locationCode) || !isStr(value.languageCode) || !strOrNull(value.builtAt)
+    || !['measured', 'thin', 'no_data', 'empty'].includes(value.state as string) || !ledger) return { status: 'damaged', pool: null, ledger };
+  const pool: InventoryKeywordPool = {
+    schema: KEYWORD_POOL_SCHEMA, locationCode: value.locationCode, languageCode: value.languageCode, builtAt: value.builtAt as string | null,
+    rows: value.rows.filter(readableRow), state: value.state as StoredKeywordPool['state'], ledger,
+    ...(value.calls === undefined ? {} : { calls: Array.isArray(value.calls) ? value.calls.filter(readableCall) : [] }),
+  };
+  return { status: 'ok', pool, ledger };
+}
+
+/** The readable list on an inventory record, or null (absent, damaged or newer). */
+export function readablePool(inventory: { readonly keywordPool?: unknown } | null | undefined): InventoryKeywordPool | null {
+  return readKeywordPool(inventory?.keywordPool).pool;
+}
+
 /** Whether a list was measured for this market (a number measured for one country is never used for another). */
 export function poolInMarket(pool: Pick<StoredKeywordPool, 'locationCode' | 'languageCode'> | null | undefined, market: LabsMarket | null): boolean {
   return !!pool && !!market && pool.locationCode === market.locationCode && pool.languageCode === market.languageCode;
 }
 
-/** The stored pool for a business, or an empty one in its market. */
+/** The stored pool for a business in its market, or an empty one (an unreadable list is rebuilt; the caller refuses a newer-shaped one). */
 export function storedPool(inventory: WebsiteInventory | null | undefined, market: LabsMarket): InventoryKeywordPool {
-  const pool = inventory?.keywordPool;
-  return pool && pool.locationCode === market.locationCode && pool.languageCode === market.languageCode ? pool : emptyKeywordStore(market.locationCode, market.languageCode).pool;
+  const read = readKeywordPool(inventory?.keywordPool);
+  return read.status === 'ok' && poolInMarket(read.pool, market) ? read.pool : emptyKeywordStore(market.locationCode, market.languageCode).pool;
 }
 
 export function emptyChoices(): KeywordChoices { return emptyKeywordStore(0, '').choices; }
@@ -158,4 +219,5 @@ export const FILL_MESSAGE = {
   unknown: 'An earlier keyword search did not save its result, so it is paused rather than paid for twice. Please ask us to check it.',
   allFailed: 'We could not fetch your keyword list just now. Nothing more will be tried automatically; please try again later.',
   done: 'Your keyword list is up to date.',
+  newer: 'Your keyword list was saved by a newer version of this service, so it was left as it is. Nothing was spent.',
 } as const;
