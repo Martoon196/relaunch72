@@ -214,8 +214,9 @@ export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'edit
     return { sentence: was, retryJobId: job.id, retryCosts: true, link: null, retryLabel: 'Write it now' };
   }
   // A write waiting for the allowance starts again by itself (a worker pass once there is room, or the new month), as
-  // long as a whole article can fit in the month's allowance at all.
-  const restarts = plain.cause === 'allowance' && !b.settings.pauseAll && monthlyCeiling(b.settings, 'model_tokens') >= USAGE_ESTIMATES.article;
+  // long as a whole article can fit in the month's allowance at all and nothing else (a pause, unconfirmed details,
+  // the writing service) would stop it: the automatic restart skips a business in any of those states.
+  const restarts = plain.cause === 'allowance' && holds.paused && holds.profile && holds.service && monthlyCeiling(b.settings, 'model_tokens') >= USAGE_ESTIMATES.article;
   return { sentence: `Paused: ${plain.reason}${restarts ? ' It starts again by itself when next month’s allowance begins, if not before.' : ''}`, retryJobId: plain.retry ? job.id : null, retryCosts: plain.retry, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
 }
 
