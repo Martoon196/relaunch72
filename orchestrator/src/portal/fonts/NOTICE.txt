@@ -1,0 +1,17 @@
+Fonts used by the content area preview (served from the portal itself).
+
+urbanist-latin-800-normal.woff2
+  Urbanist, weight 800, Latin subset.
+  From the npm package @fontsource/urbanist 5.3.0 (files/urbanist-latin-800-normal.woff2).
+  Copyright 2021 The Urbanist Project Authors (https://github.com/coreyhu/Urbanist).
+  SIL Open Font License 1.1: see LICENSE-urbanist.txt.
+  sha256 830d1f9909ee9ac4af0e93d1da0ec170f05627aa9ae8186147aad4c8354eee4e
+
+hanken-grotesk-latin-wght-normal.woff2
+  Hanken Grotesk, variable weight 100 to 900, Latin subset.
+  From the npm package @fontsource-variable/hanken-grotesk 5.3.0 (files/hanken-grotesk-latin-wght-normal.woff2).
+  Copyright 2021 The Hanken Grotesk Project Authors (https://github.com/marcologous/hanken-grotesk).
+  SIL Open Font License 1.1: see LICENSE-hanken-grotesk.txt.
+  sha256 e9201eddf1d41d0b62253295d869ce3cf65768f7102b797f02c7f8c876b4a9d5
+
+The files are unmodified. They are not sold on their own and keep their original names inside the files.

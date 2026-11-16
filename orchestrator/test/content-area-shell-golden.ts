@@ -16,7 +16,7 @@ export const GOLDEN_NOW = '2026-11-16T12:00:00.000Z';
 /** Where the recording lives, beside this file. */
 export const GOLDEN_FILE = 'content-area-shell-golden.json.gz';
 /** The commit the recording was made from. */
-export const GOLDEN_BASE = 'ed75731';
+export const GOLDEN_BASE = '744a19d';
 
 const B = `/portal/seo-blog/b/${BRAND_ID}`;
 
@@ -53,13 +53,14 @@ export async function goldenPages(opts: GoldenOptions = {}): Promise<GoldenRecor
       ['businesses', '/portal/seo-blog'], ['overview', `${B}/overview`], ['root', B], ['articles', `${B}/articles`],
       ['calendar-month', `${B}/calendar?date=2026-11-16`], ['calendar-week', `${B}/calendar?view=week&date=2026-11-16`], ['calendar-list', `${B}/calendar?view=list&date=2026-11-16`],
       ['calendar-default', `${B}/calendar`], ['calendar-message', `${B}/calendar?n=bm90ZQ&s=x`], ['activity', `${B}/activity`], ['results-unknown', `${B}/results`], ['look-unknown', '/portal/seo-blog/look'],
-      ['look-back', '/portal/seo-blog/look?back=https://evil.example'], ['home-unknown', `${B}/home`], ['script-unknown', '/portal/seo-blog/content-area.js'], ['foreign-brand', '/portal/seo-blog/b/e0000000-0000-4000-8000-000000000009/overview'],
+      ['look-back', '/portal/seo-blog/look?back=https://evil.example'], ['home-unknown', `${B}/home`], ['script-unknown', '/portal/seo-blog/content-area.js'], ['font-unknown', '/portal/seo-blog/fonts/urbanist-800-5.3.0.woff2'], ['font-other', '/portal/seo-blog/fonts/nothing.woff2'], ['foreign-brand', '/portal/seo-blog/b/e0000000-0000-4000-8000-000000000009/overview'],
     ];
     if (scenario !== 'new') for (const n of [1, 2, 4, 6, 8, 13]) pages.push([`article-${n}`, `${B}/articles/${articleId(n)}`]);
     for (const [page, path] of pages) await req(`${name}:${page}`, s.service, 'GET', path);
     await req(`${name}:post-look`, s.service, 'POST', '/portal/seo-blog/look', { _csrf: csrf, look: 'new', back: B });
     await req(`${name}:post-look-no-token`, s.service, 'POST', '/portal/seo-blog/look', { look: 'new' });
     await req(`${name}:anonymous-script`, s.service, 'GET', '/portal/seo-blog/content-area.js', undefined, null as never);
+    await req(`${name}:anonymous-font`, s.service, 'GET', '/portal/seo-blog/fonts/hanken-grotesk-wght-5.3.0.woff2', undefined, null as never);
   }
   pinIds();
   const f = await websiteFixture();

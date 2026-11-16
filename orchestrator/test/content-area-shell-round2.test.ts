@@ -23,6 +23,9 @@ const row = (s: Showcase, n: number) => s.rows.find((r) => r.article.id === arti
 const patch = (s: Showcase, n: number, p: object) => { const r = row(s, n); r.article = { ...r.article, ...p }; };
 
 /** The reviewer's states (shell-review/scripts/states.mts), as showcase mutations. */
+// The tests decide the switch themselves (a build machine may have CONTENT_AREA_PREVIEW=enabled in its environment).
+delete process.env.CONTENT_AREA_PREVIEW;
+
 const STATES: Record<string, { scenario: Scenario; settings?: object; mut?: (s: Showcase) => void }> = {
   busy: { scenario: 'busy' },
   calm: { scenario: 'calm' },
@@ -66,7 +69,7 @@ test('1. never "all clear" while a website is disconnected or writing has stoppe
   assert.doesNotMatch(visible(calm), /All clear|Nothing needs you today|Everything is running/);
   assert.match(hero(calm), /Your website is not connected/);
   assert.match(hero(calm), /“What a lender’s valuer looks for” was planned for martinhowardproperty\.example, which is not connected any more/);
-  assert.match(primary(calm), /href="[^"]+\/setup#websites" data-primary>Check the connection to martinhowardproperty\.example/);
+  assert.match(primary(calm), /href="[^"]+\/setup#website-connection" data-primary>Check the connection to martinhowardproperty\.example/);
   assert.equal(badge(calm), 2, 'both scheduled articles need him');
   // The article page agrees: its main action is the same connection check.
   const article = await page('website-disconnected-calm', `articles/${articleId(6)}`);
@@ -76,7 +79,7 @@ test('1. never "all clear" while a website is disconnected or writing has stoppe
   assert.match(hero(busy), /Your website is not connected[\s\S]*6 more need you in Articles/);
   const list = await page('website-disconnected-calm', 'articles');
   assert.match(visible(list), /Needs you : 2/);
-  assert.match(list, /href="[^"]+\/setup#websites">Check the connection to martinhowardproperty\.example/);
+  assert.match(list, /href="[^"]+\/setup#website-connection">Check the connection to martinhowardproperty\.example/);
   const cal = await page('website-disconnected-calm', 'calendar');
   assert.doesNotMatch(cal, /Goes out 9:00/, 'not "going out" on a website that is not connected');
 

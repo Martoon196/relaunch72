@@ -23,6 +23,9 @@ const row = (s: Showcase, n: number) => s.rows.find((r) => r.article.id === arti
 const patch = (s: Showcase, n: number, p: object) => { const r = row(s, n); r.article = { ...r.article, ...p }; };
 const job = (s: Showcase, p: object) => { s.jobs[0] = { ...s.jobs[0]!, ...p }; };
 
+// The tests decide the switch themselves (a build machine may have CONTENT_AREA_PREVIEW=enabled in its environment).
+delete process.env.CONTENT_AREA_PREVIEW;
+
 const STATES: Record<string, { scenario: Scenario; settings?: object; mut?: (s: Showcase) => void }> = {
   busy: { scenario: 'busy' },
   calm: { scenario: 'calm' },
@@ -77,7 +80,8 @@ test('1. every hero\'s primary action renders amber in Chromium, light and dark,
   if (!chromium) return t.skip('Playwright is not installed on this machine');
   const pages = await during(async () => {
     const out: [string, string][] = [];
-    for (const name of ['busy', 'writing-failed-job', 'writing-blocked-allowance', 'writing-cancelled', 'writing-service-not-connected', 'website-disconnected', 'website-removed', 'paused', 'held-missed', 'held-owner', 'delivery-failed', 'dna-proposed', 'brand-new', 'fill-zero-allowance', 'fill-plan-proposed']) {
+    // (Stopped writing with no button of its own has no amber action since round 4: see content-area-shell-round4.test.ts.)
+    for (const name of ['busy', 'writing-failed-job', 'writing-blocked-allowance', 'website-disconnected', 'website-removed', 'paused', 'held-missed', 'held-owner', 'delivery-failed', 'dna-proposed', 'brand-new', 'fill-zero-allowance', 'fill-plan-proposed']) {
       out.push([`${name} home`, await page(name, 'overview')]);
     }
     out.push(['busy calendar', await page('busy', 'calendar')], ['busy articles', await page('busy', 'articles')], ['brand-new articles', await page('brand-new', 'articles')]);
@@ -105,12 +109,10 @@ test('1. every hero\'s primary action renders amber in Chromium, light and dark,
   } finally { await browser.close(); }
 });
 
-test('2. stopped writing of every kind needs the owner: the row\'s own words and a true next step, never "all clear"', () => during(async () => {
+test('2. stopped writing with a button of its own needs the owner: the row\'s own words and that button, never "all clear"', () => during(async () => {
+  // Stopped writing with no button of its own (cancelled, stopped, service not connected) is covered by round 4:
+  // it is listed under "Stopped", ranks below reading and stays off the badge.
   const cases: [string, RegExp, RegExp, RegExp][] = [
-    ['writing-cancelled', /Writing was cancelled/, /Writing was cancelled\. It will not carry on by itself\. Activity shows what happened to it\./, /\/activity" data-primary>See what happened/],
-    ['writing-service-not-connected', /Writing has stopped/, /Paused: the writing service is not connected\. Ask whoever set up your account to connect it\./, /\/activity" data-primary>See what happened/],
-    ['writing-stopped-no-job', /Writing has stopped/, /Writing stopped: something stopped it before it finished\. It will not carry on by itself\./, /\/activity" data-primary>See what happened/],
-    ['writing-done-but-failed', /Writing has stopped/, /Writing stopped\. It will not carry on by itself\./, /\/activity" data-primary>See what happened/],
     ['writing-failed-job', /Writing has stopped/, /Paused: something stopped it before it finished/, /<button type="submit" class="ca-btn" data-primary>Try again<\/button>/],
     ['writing-blocked-allowance', /Writing has stopped/, /Paused: waiting for more writing allowance this month/, /publishing#writing-budget" data-primary>Check the allowance/],
   ];
@@ -208,14 +210,14 @@ test('6. small words: plurals, the Articles button, a removed website, and artic
   for (const r of s1.rows) if (r.article.id === articleId(6) || r.article.id === articleId(7)) r.article = { ...r.article, delivery: 'published', publishedVersionId: r.article.currentVersionId, publishedAt: '2026-11-10T09:00:00.000Z' };
   assert.match(visible(await page(s1, 'calendar')), /while 1 unpublished article is waiting \(your limit is 1\)/);
   // The Articles header button opens a stopped article; it does not say "Read it" for something not written yet.
-  const list = await page('writing-cancelled', 'articles');
+  const list = await page('writing-failed-job', 'articles');
   assert.match(list, /data-primary>Open it /);
   assert.doesNotMatch(list, /data-primary>Read it/);
-  // A website that was removed has no name: say so and offer choosing another.
+  // A website that was removed has no name: say so. With no other website connected, the step is connecting one (round 4).
   const removed = await page('website-removed', 'overview');
   assert.doesNotMatch(visible(removed), /a website that was removed/);
-  assert.match(hero(removed), /was planned for a website that has been removed\. Choose another website for it/);
-  assert.match(mainOf(removed), /articles\/a0000000-0000-4000-8000-000000000006" data-primary>Choose another website/);
+  assert.match(hero(removed), /was planned for a website that has been removed, and no other website is connected/);
+  assert.match(mainOf(removed), /setup#website-connection" data-primary>Connect your website/);
   assert.match(visible(await page('website-removed', 'articles')), /Planned for a website that has been removed/);
   // Only articles due right now: Home says they are going out now.
   const due = await page('time-passed-both', 'overview');

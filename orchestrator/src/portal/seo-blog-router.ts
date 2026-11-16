@@ -13,7 +13,7 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
-  activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, EXISTING_WORKSPACE_ANCHOR, overviewPage, publishingPage,
+  activityPage, APPROVALS_HREF, articlesPage, brandsPage, CALENDAR_SCRIPT, CAMPAIGN_RESULTS_HREF, calendarPage, editorPage, EXISTING_WORKSPACE_ANCHOR, overviewPage, publishingPage,
   SEO_BLOG_BASE, SEO_BLOG_SWITCH_TARGETS, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
@@ -48,8 +48,9 @@ import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
-import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, type ContentAreaData, type FillFacts } from './content-area-pages.js';
+import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, contentBusinessesPage, businessLine, writtenNeedsCount, contentErrorPage, needsQueue, type ContentAreaData, type FillFacts } from './content-area-pages.js';
 import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
+import { CONTENT_AREA_FONT_PATH, contentAreaFont } from './content-area-fonts.js';
 import type { TopicPlan } from '../seo-blog/types.js';
 
 export interface SeoBlogRouteInput {
@@ -74,10 +75,16 @@ const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
+/** Responses of requests with the new look on (allowed and chosen). Only these can carry the shell's font policy. */
+const previewResponses = new WeakSet<ServerResponse>();
+/** A page that renders the shell may also load the shell's own self-hosted fonts; every other response keeps PAGE_CSP exactly. */
+const SHELL_CSP = `${PAGE_CSP}; font-src 'self'`;
+const rendersShell = (res: ServerResponse, type: string, body: string) => previewResponses.has(res) && type.startsWith('text/html') && /<body class="ca[ "]/.test(body);
+
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
   res.writeHead(status, {
     'content-type': type, 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store', 'referrer-policy': 'same-origin',
-    'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'content-security-policy': PAGE_CSP, ...extra,
+    'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'content-security-policy': rendersShell(res, type, body) ? SHELL_CSP : PAGE_CSP, ...extra,
   });
   res.end(body);
 }
@@ -188,6 +195,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   }
   // The preview shell's small script (closes its menus on Escape or a tap outside); absent while the preview is not allowed.
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/content-area.js` && contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW)) return send(res, 200, CONTENT_AREA_SCRIPT, 'text/javascript; charset=utf-8');
+  // The shell's two self-hosted fonts: same origin, cached for good (the names carry the version); absent while not allowed.
+  if ((method === 'GET' || method === 'HEAD') && path.startsWith(CONTENT_AREA_FONT_PATH) && contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW)) {
+    const font = contentAreaFont(path.slice(CONTENT_AREA_FONT_PATH.length));
+    if (font) {
+      res.writeHead(200, { 'content-type': 'font/woff2', 'content-length': String(font.byteLength), 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'cross-origin-resource-policy': 'same-origin' });
+      res.end(method === 'HEAD' ? undefined : font); return;
+    }
+  }
   if (path === `${SEO_BLOG_BASE}/calendar.js`) {
     send(res, 200, CALENDAR_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -200,6 +215,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   // The new look: only when the server allows it AND this browser chose it. Otherwise nothing below changes.
   const previewAllowed = contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW);
   const previewOn = previewAllowed && contentAreaCookieOn(req);
+  if (previewOn) previewResponses.add(res);
   const brandMatch = BRAND_PATH.exec(path);
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
@@ -268,7 +284,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (previewAllowed && path === CONTENT_AREA_LOOK_PATH && brands.length > 0) return send(res, 200, lookPage(csrf, previewOn, contentAreaBack(url.searchParams.get('back')), brands));
     if (path === `${SEO_BLOG_BASE}/limits`) {
       if (!limits || !limitsAvailable) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
-      return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
+      return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName, ...(previewOn ? { preview: { needsYou: 0, path } } : {}) }, await limits.list()));
     }
     if (path === SEO_BLOG_BASE) {
       // Which door each brand shows ("Start with your website" until it has a card). A brand that cannot be read keeps the default door.
@@ -276,6 +292,16 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         .flatMap(([id, status]) => status ? [[id, status] as const] : []));
       // "Use Martin Howard Property here": only for its eligible owner, only once, never when the database cannot do it.
       const existing = !brands.some((b) => b.id.toLowerCase() === EXISTING_WORKSPACE.id) && await engine.existingWorkspaceOffer(actor).catch(() => false);
+      if (previewOn) {
+        // One card per business. The status line costs two reads (articles, websites) for each of the first 12 only.
+        const now = new Date().toISOString();
+        const cards = await Promise.all(brands.map(async (b, i) => {
+          const written = i < 12 ? await Promise.all([engine.listArticles(actor, b.id), engine.listDestinations(actor, b.id)]).then(([rows, sites]) => writtenNeedsCount(b, rows, sites, now)).catch(() => null) : null;
+          return { brand: b, line: businessLine(b, dna.get(b.id), written) };
+        }));
+        return send(res, 200, contentBusinessesPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName, preview: { needsYou: 0, path } },
+          { cards, commandId: randomUUID(), existing: existing ? { commandId: randomUUID(), name: EXISTING_WORKSPACE.name, anchor: EXISTING_WORKSPACE_ANCHOR } : null, approvalsHref: APPROVALS_HREF, resultsHref: CAMPAIGN_RESULTS_HREF }));
+      }
       return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID(), dna,
         existing ? randomUUID() : null));
     }
@@ -300,8 +326,13 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const previewData = previewOn ? await loadContentArea(engine, actor, brandId).catch(() => null) : null;
     const previewNeeds = previewData ? needsYouCount(brand, previewData) : 0;
     const previewAutopilot = previewData ? contentAreaAutopilot(brand, previewData, previewData.fill) : undefined;
+    // On an article that needs him: "2 of 5 that need you", and the next one (the badge's own order).
+    const previewQueue = previewData && /^articles\/[^/]+$/.test(rest) ? (() => {
+      const ids = needsQueue(brand, previewData), at = ids.indexOf(rest.split('/')[1]!.toLowerCase());
+      return at < 0 ? undefined : { index: at + 1, total: ids.length, next: ids[at + 1] ? `${SEO_BLOG_BASE}/b/${brandId}/articles/${ids[at + 1]}` : null };
+    })() : undefined;
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
-      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}) } } : {}) });
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}), ...(previewQueue ? { queue: previewQueue } : {}) } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -510,6 +541,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
+    if (previewOn) {
+      // The same answer in the new look (a page of its own, no business sidebar).
+      const shellOnly: Shell = { brands: [], brand: null, tab: null, csrf, applicationName: input.applicationName, preview: { needsYou: 0, path } };
+      return send(res, status, contentErrorPage(shellOnly, status, message));
+    }
     return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to your businesses</a></p></main></body></html>`);
   }
 }

@@ -24,7 +24,7 @@ import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls } from '../seo-blog/profile-jobs.js';
 import { editorialRecommendations, legacyPlanningHold, programmeRun, programmeSummary, suggestedKnowledgeCategory } from '../seo-blog/programme.js';
 import type { CampaignCalendarEntry } from '../seo-blog/campaign-calendar.js';
-import { contentAreaLayout, type ContentAreaPreview } from './content-area-layout.js';
+import { contentAreaLayout, contentAreaTopLayout, type ContentAreaPreview } from './content-area-layout.js';
 
 export const SEO_BLOG_BASE = '/portal/seo-blog';
 export function friendlyTaskState(state:string):string {
@@ -99,7 +99,7 @@ export function csrfField(csrf: string): string {
 
 export function layout(shell: Shell, title: string, body: string, extraHead = ''): string {
   const feedback = shell.applicationName === 'Relaunch72 Content';
-  if (shell.preview && shell.brand) return contentAreaLayout(shell, title, body, extraHead, CSS, centralActionFeedbackHead(feedback), centralActionFeedbackStatus(feedback));
+  if (shell.preview) return (shell.brand ? contentAreaLayout : contentAreaTopLayout)(shell, title, body, extraHead, CSS, centralActionFeedbackHead(feedback), centralActionFeedbackStatus(feedback));
   // One "Business" picker on every page. It keeps the same kind of page open (the server checks the target and the membership).
   const stay = shell.switchTo ?? (shell.tab && (SEO_BLOG_SWITCH_TARGETS as readonly string[]).includes(shell.tab) ? shell.tab as SeoBlogSwitchTarget : 'overview');
   const switcher = shell.brands.length
