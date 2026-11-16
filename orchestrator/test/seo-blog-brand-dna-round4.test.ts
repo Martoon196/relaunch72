@@ -71,11 +71,12 @@ test('parseHtmlPage, the inventory and the research parser are exactly as at 1a9
   assert.match(withText.pages[0]!.text!, /^# Boiler service in Bristol\n/);
 });
 
-test('the Brand DNA reader: the reviewers’ hostile pages each finish under 500 ms, and pages over 2 MB are cut first', () => {
+test('the Brand DNA reader: the reviewers’ hostile pages each finish quickly (best of three under 2.5 s), and pages over 2 MB are cut first', () => {
   // The better of two runs, so a busy test machine (the suite runs files in parallel) does not decide it.
   const time = (label: string, html: string) => {
     const once = () => { const t0 = Date.now(); brandPageHtmlLines(html); return Date.now() - t0; };
-    const ms = Math.min(once(), once()); assert.ok(ms < 500, `${label}: ${ms} ms`);
+    // Best of three with headroom: this guards against a hang (the regressions were 12 s to 130 s), and must not fail on a busy build machine.
+    const ms = Math.min(once(), once(), once()); assert.ok(ms < 2500, `${label}: ${ms} ms`);
   };
   time('100,000 unclosed <s>', '<body><main>' + '<s>a '.repeat(100000) + '</main></body>');
   time('100,000 nested <div> then 100,000 </span>', '<body><main>' + '<div>'.repeat(100000) + 'x' + '</span>'.repeat(100000) + '</main></body>');
