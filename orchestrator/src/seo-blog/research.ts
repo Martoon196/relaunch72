@@ -203,7 +203,12 @@ export interface ResearchBundle {
   readonly searchCalls: number;
   readonly notes: string[];
   readonly keywordMetrics: KeywordMetric[];
-  /** How the search numbers went (absent on bundles saved before it was recorded). */
+  /**
+   * How the search numbers went for this run (absent on bundles saved before it was recorded). Saved on a planning
+   * task as `payload.programme.research.numbers`. Internal bookkeeping for the engine stamp and the strict setting:
+   * it is never put in a prompt and never part of any hash (the planning request, the method receipt's prompt hash,
+   * the run's input hash and content hashes are the same whatever it says).
+   */
   readonly numbers?: EngineNumbersState;
 }
 
