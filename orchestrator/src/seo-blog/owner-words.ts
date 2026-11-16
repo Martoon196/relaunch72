@@ -117,7 +117,7 @@ const WEBSITE: readonly Rule[] = [
   [/GitHub refused the saved token\. Reconnect the website\./g, 'GitHub refused your website connection. Reconnect the website.'],
   [/GitHub refused the token\./g, 'GitHub refused your website connection. Reconnect it with a new access key.'],
   [/The repository or branch was not found, or the token cannot see it\./g, 'The repository or branch was not found, or your website connection cannot see it. Check the names, or reconnect with access to that repository.'],
-  [/GitHub fine-grained token with Contents read\/write on this repository only/g, 'GitHub access key with read and write access to this repository only'],
+  [/GitHub fine-grained token with Contents read\/write on this repository only/gi, 'GitHub access key with read and write access to this repository only'],
 ];
 
 /** Exact engine phrases that are fine apart from one internal word. Applied to errors and success lines alike. */
@@ -136,7 +136,7 @@ const PHRASES: readonly Rule[] = [
   [/\babout [\d,]+ tokens of [\d,]+ remaining this month\./g, 'within this month’s writing allowance.'],
   [/\bsupplier attempts\b/g, 'research attempts'],
   [/\bresearch provider\b/g, 'research service'],
-  [/\bNo provider call was made\b/g, 'No image request was made'],
+  [/\bNo provider call was made\b/g, 'Nothing was sent'],
   [/\bno image provider was called\b/g, 'no image service was used'],
   [/\bfor the provider\b/g, 'for the image service'],
   [/\bimage provider\b/g, 'image service'],
