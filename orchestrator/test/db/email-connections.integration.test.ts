@@ -5,6 +5,7 @@
  * returns a sealed value; both event tables are append-only; the email rules gate begin; the protection groundwork
  * columns have their defaults and CHECKs. Postmark is not involved. All people and values are synthetic.
  */
+import { staticEligibility } from '../../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -62,7 +63,7 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     const lockPool = new pg.Pool({ connectionString, max: 2, connectionTimeoutMillis: 300 });
     extraPools.push(lockPool);
     lockPool.on('error', () => undefined);
-    const store = new PgEmailConnectionStore(identity, { lockPool });
+    const store = new PgEmailConnectionStore(identity, { eligibility: staticEligibility, lockPool });
 
     // Only the eligible owner: an org admin who is not an org owner, an org owner who cannot manage the workspace, another
     // business's owner, the owner with another workspace selected and a made-up session are all refused.
@@ -186,7 +187,7 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     const otherPool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 300 });
     extraPools.push(otherPool);
     otherPool.on('error', () => undefined);
-    const otherInstance = new PgEmailConnectionStore(identity, { lockPool: otherPool });
+    const otherInstance = new PgEmailConnectionStore(identity, { eligibility: staticEligibility, lockPool: otherPool });
     const held = await store.lock(PP, 100);
     assert.ok(held && !held.lost());
     assert.equal(await otherInstance.lock(PP, 400), null, 'held elsewhere');
@@ -204,7 +205,7 @@ test('0155 on real roles: the eligible owner only, pinned to Property Predator, 
     const shortPool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 300, options: '-c idle_in_transaction_session_timeout=800' });
     shortPool.on('error', () => undefined);
     extraPools.push(shortPool);
-    const shortStore = new PgEmailConnectionStore(identity, { lockPool: shortPool });
+    const shortStore = new PgEmailConnectionStore(identity, { eligibility: staticEligibility, lockPool: shortPool });
     const doomed = await shortStore.lock(PP, 300);
     assert.ok(doomed);
     for (let i = 0; i < 60 && !doomed!.lost(); i++) await new Promise(resolve => setTimeout(resolve, 100));

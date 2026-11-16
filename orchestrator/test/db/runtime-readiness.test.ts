@@ -18,6 +18,7 @@ import { EMAIL_BLOCK_CHECKSUM, EMAIL_BLOCK_MIGRATION } from '../../src/db/email-
 import { SEO_BLOG_ATTACH_CHECKSUM, SEO_BLOG_ATTACH_MIGRATION } from '../../src/db/seo-blog-attach-schema.js';
 import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src/db/email-connection-schema.js';
 import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src/db/email-protection-schema.js';
+import { EMAIL_ALLOWLIST_CHECKSUM, EMAIL_ALLOWLIST_MIGRATION } from '../../src/db/email-allowlist-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -598,12 +599,14 @@ test('Group HQ 147 cutover requires the exact applied native146 ledger and nothi
 });
 
 test('"Connect email" release 2 (156) cutover requires the exact applied "Connect email" 155 and nothing beyond it', async()=>{
-  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  // The exact 156-file release 2, reconstructed from today's source (157 is a separate release).
+  const all=(await discoverMigrations()).slice(0,156).map(({filename,checksum})=>({filename,checksum}));
+  const releaseDir=await prefixDirectory(156,'protect156-cutover');
   assert.equal(all.length,156);
   assert.deepEqual(all[155],{filename:EMAIL_PROTECTION_MIGRATION,checksum:EMAIL_PROTECTION_CHECKSUM});
   assert.deepEqual(all[154],{filename:EMAIL_CONNECTION_MIGRATION,checksum:EMAIL_CONNECTION_CHECKSUM});
   const through155=all.slice(0,155), protection=all[155]!;
-  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),releaseDir,{});
   await capable(through155); await capable(all);
   await assert.rejects(capable(all.slice(0,154)),/schema is behind by 2/);
   await assert.rejects(capable([...through155,{...protection,checksum:'0'.repeat(64)}]),/checksum changed/);
@@ -611,6 +614,34 @@ test('"Connect email" release 2 (156) cutover requires the exact applied "Connec
   await assert.rejects(capable([...through155.slice(0,154),{...through155[154]!,checksum:'0'.repeat(64)}]),/checksum changed/);
   await assert.rejects(capable([...through155.slice(0,153),{...through155[153]!,checksum:'0'.repeat(64)},through155[154]!]),/checksum changed/);
   await assert.rejects(capable([...all,{filename:'0157_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('"Connect email" allow-list (157) cutover requires the exact applied release 2 (156) and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,157);
+  assert.deepEqual(all[156],{filename:EMAIL_ALLOWLIST_MIGRATION,checksum:EMAIL_ALLOWLIST_CHECKSUM});
+  assert.deepEqual(all[155],{filename:EMAIL_PROTECTION_MIGRATION,checksum:EMAIL_PROTECTION_CHECKSUM});
+  const through156=all.slice(0,156), allowlist=all[156]!;
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await capable(through156); await capable(all);
+  await assert.rejects(capable(all.slice(0,155)),/schema is behind by 2/);
+  await assert.rejects(capable([...through156,{...allowlist,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,155),allowlist]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...through156.slice(0,155),{...through156[155]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...through156.slice(0,154),{...through156[154]!,checksum:'0'.repeat(64)},through156[155]!]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0158_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+});
+
+test('"Connect email" release 2 (156) binary stays ready after the exact allow-list (157) and nothing else', async()=>{
+  const directory=await prefixDirectory(156,'protect156-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,156);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[156]!]);
+  await assert.rejects(check([...rows,{...all[156]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0158_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(check([...rows,all[156]!,{filename:'0158_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });
 
 test('"Connect email" 155 binary stays ready after the exact additive release 2 (156) and nothing else', async()=>{

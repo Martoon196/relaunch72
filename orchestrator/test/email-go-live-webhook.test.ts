@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createPostmarkAccountApi, createPostmarkServerApi, EmailConnectionService, EmailConnectionVault, EMAIL_CONNECTION_MESSAGES, loadEmailConnectConfig,
   PostmarkAccountError, type EmailConnectionState, type PostmarkServerApi, type PostmarkWebhook, type WebhookVerification } from '../src/email-connections/index.js';
@@ -92,7 +93,7 @@ function unit(options: { webhookId?: number | null; listed?: Listed[] | Error; l
   // As 0156: needs_webhook unless the application's own check said the webhook is verified.
   protection.command = async (_token, _ws, action, terms, webhookOk) => { protection.commands.push({ action, terms, webhookOk }); return webhookOk ? 'requested' : 'needs_webhook'; };
   const tokens: string[] = [];
-  const service = new OwnerSendingService({ protection, vault,
+  const service = new OwnerSendingService({ eligibility: staticEligibility, protection, vault,
     connections: { sealed: async () => ({ serverToken: sealed === 'ok' ? vault.seal(PP_WS, 'server_token', SERVER_TOKEN) : sealed === 'garbage' ? 'not-a-sealed-value' : null, webhookSecret: null }) } as never,
     serverApi: token => { tokens.push(token); return api; }, log: line => logs.push(line), mailer: () => true,
     portalOrigin: options.portalOrigin === undefined ? ORIGIN : options.portalOrigin });
@@ -184,11 +185,11 @@ async function page() {
   const config = loadEmailConnectConfig({ EMAIL_CONNECT: 'enabled', POSTMARK_ACCOUNT_TOKEN: ACCOUNT_TOKEN, EMAIL_CONNECTION_KEY: KEY }, { portalBaseUrl: ORIGIN });
   const logs: string[] = [];
   let secret = SECRET;
-  const service = new EmailConnectionService({ config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
+  const service = new EmailConnectionService({ eligibility: staticEligibility, config, store, account: createPostmarkAccountApi({ accountToken: ACCOUNT_TOKEN, fetch: postmark.fetch }),
     resolver: fakeResolver({}), secret: () => secret, lockWaitMs: 2000, log: line => logs.push(line) });
   const protection = new MemoryProtectionStore(counts({ mode: 'off', goLiveApprovedAt: null }));
   protection.command = async (_token, _ws, action, terms, webhookOk) => { protection.commands.push({ action, terms, webhookOk }); return webhookOk ? 'requested' : 'needs_webhook'; };
-  const sending = new OwnerSendingService({ protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher: postmark.fetch,
+  const sending = new OwnerSendingService({ eligibility: staticEligibility, protection, connections: store, vault: new EmailConnectionVault(Buffer.from(KEY, 'base64')), fetcher: postmark.fetch,
     log: line => logs.push(line), mailer: () => true, portalOrigin: ORIGIN });
   const call = async (method: 'GET' | 'POST', path: string, fields?: Record<string, string>) => {
     const body = fields ? new URLSearchParams(fields).toString() : '';

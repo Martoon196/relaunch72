@@ -13,9 +13,16 @@
  *                 not connected right now ('not_connected'), paused, switched off, waiting for approval or a test, at its
  *                 cap, or switched off on this deployment holds. Nothing is claimed; held people wait (their retry
  *                 window is restarted while held: pp_followup_hold_wait) and go when the hold lifts.
+ *
+ * The environment-configured sender is Property Predator's own (the PP follow-up engine's PP_POSTMARK_* settings): no
+ * other business ever falls back to it. Any other business without a connection in charge holds ('not_connected' or
+ * 'not_live'). A business the founder switched off (0157: not on the active allow-list, options.eligible false) holds
+ * with 'not_allowed' once its own connection is in charge; the database's reservation answers the same.
  */
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
+// The environment sender belongs to the PP follow-up engine (PP-only by design until the generic follow-up engine).
+import { PP_FOLLOWUP_WORKSPACE_ID } from '../pp-followup/repository.js';
 import type { EmailProtectionStore, ReserveOutcome, SendingConfig } from './store.js';
 
 export type HoldReason = Exclude<ReserveOutcome, 'ok' | 'replayed' | 'daily_cap' | 'hourly_cap' | 'test_limit'> | 'cap' | 'needs_footer' | 'unreadable' | 'unavailable'
@@ -46,14 +53,26 @@ export function neverInCharge(config: SendingConfig): boolean {
   return config.mode === 'off' && !config.goLiveApprovedAt && config.protectionState === 'ok' && !config.ownerPaused && config.sampleState === 'none';
 }
 
-/**
- * The decision without opening the token (for pages): 'env', 'hold' with its reason, or 'connection' with the mode.
- * allowed=false: the deployment's switches (EMAIL_CONNECT not enabled, or bounce handling off) do not let a stored
- * connection send here: it holds.
- */
-export function sendingDecision(config: SendingConfig | null, options: { allowed?: boolean } = {}):
+export interface SendingOptions {
+  /** false: the deployment's switches (EMAIL_CONNECT not enabled, or bounce handling off) do not let a stored connection send here: it holds. */
+  readonly allowed?: boolean;
+  /** false: the business is not on the active allow-list (the eligibility the platform composed): it holds with 'not_allowed'. */
+  readonly eligible?: boolean;
+  /** The business asked about, when there may be no config (null). Absent: the config's own, else Property Predator's. */
+  readonly workspaceId?: string;
+}
+
+/** Whether this business may fall back to the environment sender: Property Predator only. */
+const envSenderFor = (workspaceId: string): boolean => workspaceId.toLowerCase() === PP_FOLLOWUP_WORKSPACE_ID;
+
+/** The decision without opening the token (for pages): 'env', 'hold' with its reason, or 'connection' with the mode. */
+export function sendingDecision(config: SendingConfig | null, options: SendingOptions = {}):
   { readonly kind: 'env' } | { readonly kind: 'hold'; readonly reason: HoldReason } | { readonly kind: 'connection'; readonly mode: 'test' | 'live'; readonly remaining: number } {
-  if (!config || neverInCharge(config)) return { kind: 'env' };
+  if (!config || neverInCharge(config)) {
+    if (envSenderFor(options.workspaceId ?? config?.workspaceId ?? PP_FOLLOWUP_WORKSPACE_ID)) return { kind: 'env' };
+    return { kind: 'hold', reason: config ? 'not_live' : 'not_connected' };
+  }
+  if (options.eligible === false) return { kind: 'hold', reason: 'not_allowed' };
   if (config.protectionState === 'off') return { kind: 'hold', reason: 'off' };
   if (config.status !== 'verified') return { kind: 'hold', reason: 'not_connected' };
   if (options.allowed === false) return { kind: 'hold', reason: 'switched_off_here' };
@@ -73,10 +92,10 @@ export function sendingDecision(config: SendingConfig | null, options: { allowed
   return { kind: 'connection', mode: config.mode, remaining };
 }
 
-export function sendingPlan(config: SendingConfig | null, vault: EmailConnectionVault | null, options: { allowed?: boolean } = {}): SendingPlan {
+export function sendingPlan(config: SendingConfig | null, vault: EmailConnectionVault | null, options: SendingOptions = {}): SendingPlan {
   const decision = sendingDecision(config, options);
   if (decision.kind === 'env') return decision;
-  const ws = config!.workspaceId;
+  const ws = config?.workspaceId ?? options.workspaceId!.toLowerCase();
   if (decision.kind === 'hold') return { kind: 'hold', reason: decision.reason, workspaceId: ws };
   const c = config!;
   const from = normalizePpEmail(c.fromAddress ?? ''), replyTo = normalizePpEmail(c.replyTo ?? c.fromAddress ?? '');
@@ -91,11 +110,11 @@ export function sendingPlan(config: SendingConfig | null, vault: EmailConnection
 
 /** The plan for one workspace, read now. A database that cannot be read holds this sweep (never falls back to env). */
 export async function resolveSendingPlan(store: Pick<EmailProtectionStore, 'sendingConfig'>, vault: EmailConnectionVault | null, workspaceId: string,
-  options: { allowed?: boolean } = {}): Promise<SendingPlan> {
+  options: Omit<SendingOptions, 'workspaceId'> = {}): Promise<SendingPlan> {
   let config: SendingConfig | null;
   try { config = await store.sendingConfig(workspaceId); }
   catch { return { kind: 'hold', reason: 'unavailable', workspaceId }; }
-  return sendingPlan(config, vault, options);
+  return sendingPlan(config, vault, { ...options, workspaceId });
 }
 
 /** One reservation per lease, under a key that carries no address. */

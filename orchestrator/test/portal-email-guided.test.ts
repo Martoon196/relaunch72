@@ -4,6 +4,7 @@
  * and none of the words DNS, TXT, CNAME, DKIM or Return-Path appears in running text (only in a record's own Type
  * field, a host's own menu names quoted from their site, and the message written for whoever looks after the website).
  */
+import { staticEligibility } from '../src/email-connections/eligibility.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMAIL_CONNECT_BUSINESSES, EMAIL_CONNECTION_MESSAGES, EMAIL_TERMS_VERSION } from '../src/email-connections/index.js';
@@ -282,7 +283,7 @@ test('the status card\'s light read: one query, a 300 ms limit, a plain link on 
   const spy = <T extends object>(target: T, label: string): T => new Proxy(target, { get(t, key, r) { const v = Reflect.get(t, key, r);
     return typeof v === 'function' ? (...args: unknown[]) => { calls.push(`${label}.${String(key)}`); return v.apply(t, args); } : v; } });
   const connections = spy(new MemoryEmailConnectionStore(), 'connections');
-  const owner = new OwnerSendingService({ protection: spy(protection, 'protection'), connections, vault: null });
+  const owner = new OwnerSendingService({ eligibility: staticEligibility, protection: spy(protection, 'protection'), connections, vault: null });
   const status = await readEmailEntry({ config: () => owner.entryConfig(PP_WS), state: async () => { calls.push('state'); return null; } });
   assert.deepEqual(status, { kind: 'live', note: 'paused' });
   assert.deepEqual(calls, ['protection.present', 'protection.sendingConfig'], 'one query (the readiness check is cached in production)');
