@@ -25,10 +25,11 @@ import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
 import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, CheckIssue, Destination, Job, Publication, SocialDispatch, UsageKind } from '../seo-blog/types.js';
 import { csrfField, layout, savedCampaignCopyStatus, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 import { escapeHtml as e } from './ui.js';
+import { seoPanel, seoSummaryLine } from './seo-blog-seo-panel.js';
 
 type PublicDestination = Omit<Destination, 'sealedCredential'>;
 export type ArticlePageMode = 'read' | 'edit';
-export const ARTICLE_FOLDS = ['google', 'where', 'sources', 'history', 'download', 'rewrite', 'improve'] as const;
+export const ARTICLE_FOLDS = ['seo', 'google', 'where', 'sources', 'history', 'download', 'rewrite', 'improve'] as const;
 export type ArticleFold = typeof ARTICLE_FOLDS[number];
 
 /** Ids in addresses are escaped wherever they come from (they are placed straight into attributes). */
@@ -425,6 +426,8 @@ export interface ArticlePageData {
   readonly workingTitle?: string | null;
   /** The current instant (tests and screenshots pin it). */
   readonly now?: string;
+  /** The article's plan (search phrase, intent, demand) for the SEO report; null for articles planned before it was kept. */
+  readonly articleBrief?: ArticleBrief | null;
 }
 
 /** The reading column: the article as it will be published (same renderer, same order, same citations). */
@@ -726,11 +729,12 @@ ${editingColumn(v.body)}
   const state = screenState(shell, d, v, critical);
   const head = bar(`<p class="ap-state">${e(state.sentence)}${state.detail ? ` <span class="ap-note">${e(state.detail)}</span>` : ''}</p><div class="ap-actions">${state.secondary.map((s) => s.html).join('')}${moreMenu(shell, d, v, base)}${state.primary?.html ?? ''}</div>`);
   return layout(shell, v.body.title, `<div class="ap">${head}
-<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}</div>
+<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}${seoSummaryLine(shell, d, v)}</div>
 <article class="ap-read">${pictureArea(shell, a, v, base)}
 ${readingColumn(b, a, v.body)}</article>
 <div class="ap-column">${postsSection(shell, d, v, base)}</div>
 <div class="ap-folds">
+${seoPanel(shell, d, v, open.has('seo'))}
 ${googleFold(d, v, base, false, open.has('google'))}
 ${whereFold(shell, d, v, base, open.has('where'))}
 ${sourcesFold(v, open.has('sources'))}

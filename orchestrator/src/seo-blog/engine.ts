@@ -1923,13 +1923,13 @@ export class SeoBlogEngine {
 
   // ─── Editing ─────────────────────────────────────────────────────────────
 
-  async getArticle(actor: Actor, brandId: string, articleId: string): Promise<{ article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string; proposedAt?: string | null }> {
+  async getArticle(actor: Actor, brandId: string, articleId: string): Promise<{ article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string; proposedAt?: string | null; articleBrief?: ArticleBrief | null }> {
     const brand = await this.brandFor(actor, brandId);
     const article = await this.store.getArticle(brandId, articleId);
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
     const [versions, brief] = await Promise.all([this.store.listVersions(brandId, articleId), this.store.getBrief(brandId, article.briefId)]);
     return {
-      article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions, proposedAt: brief?.suggestedAtUtc ?? null,
+      article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions, proposedAt: brief?.suggestedAtUtc ?? null, articleBrief: brief ?? null,
       publications: (await this.store.listPublications(brandId, articleId)).map(({websiteSnapshot:_private,...publicRecord})=>publicRecord), status: articleStatusLabel(article, brand.settings),
     };
   }
@@ -2163,6 +2163,10 @@ export class SeoBlogEngine {
   creators():CampaignCreator {
     if(!this.deps.creatorStore||!this.deps.methods)throw new SeoBlogError(409,'Campaign creators are not enabled yet.');
     return new CampaignCreator(this.deps.creatorStore,this.store,this.deps.methods,this.deps.llm);
+  }
+  /** What this engine was built with (its research provider, keyword-numbers provider and method controller): on/off only, no secrets. */
+  runtimeCapabilities(): { readonly search: 'live' | 'unconfigured'; readonly keywords: 'live' | 'mock' | 'off'; readonly methods: boolean } {
+    return { search: this.deps.search.mode, keywords: this.deps.keywords ? this.deps.keywords.mode : 'off', methods: Boolean(this.deps.methods?.enabled) };
   }
   async methodOverview(actor:Actor,brandId:string){
     await this.brandFor(actor,brandId);
