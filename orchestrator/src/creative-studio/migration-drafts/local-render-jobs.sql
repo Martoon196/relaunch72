@@ -204,6 +204,7 @@ BEGIN
  IF app_private.current_actor_kind()<>'worker'
     OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN
    RAISE EXCEPTION 'Scoped local renderer worker required' USING ERRCODE='42501'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
  SELECT * INTO j FROM app.creative_media_local_render_jobs
   WHERE workspace_id=p_workspace AND id=p_job FOR UPDATE;
  IF EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=j.source_id) OR j.id IS NULL OR j.state<>'queued' OR j.claim_token IS NOT NULL OR j.retry_at>clock_timestamp() OR j.attempts>=3 THEN
@@ -254,6 +255,7 @@ BEGIN
  IF app_private.current_actor_kind()<>'worker'
     OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN
   RAISE EXCEPTION 'Scoped worker required to settle local render' USING ERRCODE='42501'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
  SELECT * INTO j FROM app.creative_media_local_render_jobs
   WHERE workspace_id=p_workspace AND id=p_job FOR UPDATE;
  IF j.id IS NULL OR j.claim_token IS NULL OR j.claim_token IS DISTINCT FROM p_claim THEN

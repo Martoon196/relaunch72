@@ -25,6 +25,8 @@ DECLARE actor uuid;
 BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'user' THEN RAISE EXCEPTION 'Owner required' USING ERRCODE='42501'; END IF;
  actor:=app_private.seo_media_owner(p_workspace,p_session);
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
+
  IF NOT ((p_kind='source' AND EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=p_id)) OR (p_kind='local_output' AND EXISTS(SELECT 1 FROM app.creative_media_local_render_outputs WHERE workspace_id=p_workspace AND id=p_id)) OR (p_kind='provider_output' AND EXISTS(SELECT 1 FROM app.creative_media_video_outputs WHERE workspace_id=p_workspace AND id=p_id))) THEN RAISE EXCEPTION 'Private asset unavailable' USING ERRCODE='42501'; END IF;
  INSERT INTO app.creative_media_erasures(workspace_id,id,kind,requested_by,reason) VALUES(p_workspace,p_id,p_kind,actor,'owner') ON CONFLICT DO NOTHING;
  -- Source erasure immediately takes down its derived local outputs as well.
@@ -43,6 +45,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_cata
 DECLARE erasure_rec app.creative_media_erasures;blob uuid;s app.creative_media_source_videos;result jsonb:='[]'::jsonb;
 BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped worker required' USING ERRCODE='42501'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
  IF p_ack_id IS NOT NULL THEN UPDATE app.creative_media_erasures SET erased_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_ack_id AND kind=p_ack_kind;RETURN '[]'::jsonb;END IF;
  INSERT INTO app.creative_media_erasures(workspace_id,id,kind,reason) SELECT p_workspace,id,'source','retention' FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND created_at<clock_timestamp()-interval '30 days' ORDER BY created_at LIMIT 10 ON CONFLICT DO NOTHING;
  INSERT INTO app.creative_media_erasures(workspace_id,id,kind,reason) SELECT p_workspace,id,'local_output','retention' FROM app.creative_media_local_render_outputs WHERE workspace_id=p_workspace AND created_at<clock_timestamp()-interval '30 days' ORDER BY created_at LIMIT 10 ON CONFLICT DO NOTHING;

@@ -40,6 +40,7 @@ RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_ca
 DECLARE v app.company_content_versions; o app.creative_media_local_render_outputs;r app.creative_media_local_output_reviews; manifest jsonb; grant_rec app.creative_media_video_releases;job_copy text;
 BEGIN
  IF app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RETURN false; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
  SELECT version.* INTO v FROM app.company_content_versions version JOIN app.property_predator_owned_social_job_media media
   ON media.workspace_id=version.workspace_id AND media.content_version_id=version.id AND media.content_sha256=version.content_sha256 AND media.blob_sha256=version.blob_sha256
   JOIN app.property_predator_owned_social_jobs job ON job.workspace_id=media.workspace_id AND job.id=media.job_id
@@ -102,6 +103,8 @@ DECLARE actor uuid;j uuid;v uuid;cmd uuid;manifest jsonb;previous app.creative_m
 BEGIN
  IF p_session IS NULL OR app_private.current_actor_kind() IS DISTINCT FROM 'user' THEN RAISE EXCEPTION 'Owner session required' USING ERRCODE='42501'; END IF;
  actor:=app_private.seo_media_owner(p_workspace,p_session);
+ PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
+
  IF p_input IS NULL OR jsonb_typeof(p_input) IS DISTINCT FROM 'object' OR octet_length(p_input::text)>1200 OR p_input->>'consent' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'Exact public distribution consent required' USING ERRCODE='22023'; END IF;
  j:=(p_input->>'jobId')::uuid;v:=(p_input->>'contentVersionId')::uuid;cmd:=(p_input->>'commandId')::uuid;
  IF j IS NULL OR v IS NULL OR cmd IS NULL OR coalesce(p_input->>'action','') NOT IN('withdraw') THEN RAISE EXCEPTION 'Exact release IDs required' USING ERRCODE='22023'; END IF;
