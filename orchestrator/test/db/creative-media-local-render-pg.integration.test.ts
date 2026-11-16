@@ -259,14 +259,15 @@ test('real native render starts from exact owned, independently probed source an
    const publisher=new PgAffiliatePublicationOwner(content,a.principal,flags),publication=randomUUID(),command=randomUUID();
    await publisher.publish({workspaceId:a.brand.id,productId:saved.productId,productRevision:1,evidenceCommandId:evidenceCommand,publicationId:publication,commandId:command,consent:true});
    await admin.query("ALTER ROLE r72_public PASSWORD 'local-methods-test-only'");const publicUri=new URL(uri);publicUri.username='r72_public';publicUri.password='local-methods-test-only';const publicPool=new pg.Pool({connectionString:publicUri.toString(),max:2});
+   await admin.query("ALTER ROLE r72_media_click_command LOGIN PASSWORD 'local-methods-test-only'");const clickUri=new URL(uri);clickUri.username='r72_media_click_command';clickUri.password='local-methods-test-only';const clickPool=new pg.Pool({connectionString:clickUri.toString(),max:2});
    try{
-    const publicPages=new PgAffiliatePublicPages(publicPool,key,flags,admin),page=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.ok(page);assert.equal(page.page.affiliateUrl,product.affiliateUrl);
+    const publicPages=new PgAffiliatePublicPages(publicPool,key,flags,clickPool),page=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.ok(page);assert.equal(page.page.affiliateUrl,product.affiliateUrl);
     assert.equal(await publicPages.click(page.clickToken),true);const reload=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.equal(await publicPages.click(reload!.clickToken),false);await assert.rejects(publicPool.query('SELECT app_private.creative_media_affiliate_click($1)',[page.clickToken]),/permission denied/iu);assert.equal(await publicPages.click(page.clickToken),false);assert.equal(await publicPages.click(page.clickToken.slice(0,-1)+'x'),false);
     const analytics=(await publisher.list(a.brand.id)).find(x=>x.publicationId===publication)!;assert.equal(analytics.observedClicks,1);assert.equal(analytics.orders,null);assert.equal(analytics.commission,null);
     await assert.rejects(publicPool.query('SELECT * FROM app.creative_media_products'),/permission denied/iu);
     await publisher.withdraw(a.brand.id,publication,randomUUID());assert.equal(await publicPages.page(publication),null);
     assert.equal(await publicPages.click(page.clickToken),false);
-   }finally{await publicPool.end();}
+   }finally{await publicPool.end();await clickPool.end();}
   });
   await t.test('newer edit makes an older timeline unqueueable',async()=>{
    const newer:VideoEditPlan={...plan,clips:[...plan.clips].reverse()};
@@ -276,6 +277,23 @@ test('real native render starts from exact owned, independently probed source an
    assert.equal(updated.revision,2);
    await assert.rejects(a.owner.enqueue({...enqueue,commandId:randomUUID(),jobId:randomUUID()}),
     /latest|timeline|changed|required/iu);
+  });
+  await t.test('offline leases heartbeat, fence expired attempts and stop retrying after three claims',async()=>{
+   const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!;
+   const retryJob=randomUUID();await a.owner.enqueue({...enqueue,jobId:retryJob,commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
+   const ledger=new PgLocalRenderWorker(admin,'heartbeat-proof',env),discovery=new PgOfflineMediaDiscovery(admin,'retry-proof');
+   let first:string|undefined;
+   for(let attempt=1;attempt<=3;attempt++){
+    const claim=await ledger.claim(a.brand.id,retryJob);first??=claim.claimToken;
+    assert.equal(await ledger.heartbeat(a.brand.id,retryJob,claim.claimToken),true);
+    if(attempt>1)assert.notEqual(claim.claimToken,first);
+    await admin.query("UPDATE app.creative_media_local_render_jobs SET claim_until=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,retryJob]);
+    assert.equal(await ledger.heartbeat(a.brand.id,retryJob,claim.claimToken),false);
+    await discovery.pending(a.brand.id,10);
+    await assert.rejects(ledger.fail(a.brand.id,retryJob,claim.claimToken,'render_failed'),/token|lease/iu);
+    if(attempt<3)await admin.query("UPDATE app.creative_media_local_render_jobs SET retry_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,retryJob]);
+   }
+   const final=(await admin.query('SELECT state,attempts FROM app.creative_media_local_render_jobs WHERE workspace_id=$1 AND id=$2',[a.brand.id,retryJob])).rows[0];assert.deepEqual(final,{state:'failed',attempts:3});
   });
   await t.test('owner erasure blocks reads immediately, removes stored bytes and isolates tenants',async()=>{
    const flags={...env,RL72_MEDIA_RETENTION_ENABLED:'true'};

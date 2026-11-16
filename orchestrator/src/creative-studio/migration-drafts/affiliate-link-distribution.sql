@@ -1,3 +1,4 @@
+DO $role$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='r72_media_click_command') THEN CREATE ROLE r72_media_click_command NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $role$;
 -- PRIVATE DRAFT: owner-authorized product pages and signed observed-click receipts.
 -- Amazon links remain direct. No redirect, invented purchase or per-person tracking.
 DO $role$ BEGIN
@@ -125,9 +126,10 @@ GRANT EXECUTE ON FUNCTION app_private.creative_media_affiliate_page(uuid) TO r72
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_public_definer;
 
 SET LOCAL ROLE r72_owner;
-DO $role$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='r72_media_click_command') THEN CREATE ROLE r72_media_click_command NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $role$;
 GRANT USAGE ON SCHEMA app_private TO r72_media_click_command;
+SET LOCAL ROLE r72_media_public_definer;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_affiliate_click(text) TO r72_media_click_command;
+RESET ROLE;SET LOCAL ROLE r72_owner;
 GRANT DELETE ON app.creative_media_affiliate_clicks TO r72_media_public_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_media_public_definer;
 SET LOCAL ROLE r72_media_public_definer;
