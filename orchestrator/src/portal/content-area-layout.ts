@@ -79,7 +79,7 @@ function otherTools(shell: Shell): string {
   if (shell.applicationName === 'Relaunch72 Content') items.push([href('authority'), 'Authority']);
   if (shell.creativeAvailable) items.push([href('creative'), 'Creative studio']);
   if (shell.creatorsAvailable) items.push([href('campaigns'), 'Campaign creators']);
-  if (shell.methodsAvailable) items.push([href('methods'), 'Production rules']);
+  if (shell.methodsAvailable && shell.limitsAvailable) items.push([href('methods'), 'Production rules']);
   if (shell.limitsAvailable) items.push([`${BASE}/limits`, 'Usage and limits']);
   if (shell.applicationName === 'Relaunch72 Content') items.push(['/portal/webinars', 'Webinars']);
   items.push([BASE, 'All your businesses'], ['/portal', shell.applicationName ? 'Content home' : 'Back to the portal']);

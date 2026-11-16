@@ -15,7 +15,12 @@ import { articleId, BRAND_ID, call, identity, SECRET, showcase, type Rendered } 
 export const GOLDEN_NOW = '2026-11-16T12:00:00.000Z';
 /** Where the recording lives, beside this file. */
 export const GOLDEN_FILE = 'content-area-shell-golden.json.gz';
-/** The commit the recording was made from. */
+/**
+ * The commit the recording was made from. Re-recorded since, from the neutral-words release tree with this same
+ * function (clock pinned to GOLDEN_NOW, no preview switch), and only where its wording changed a page:
+ * every scenario's overview and root, and the real engine's overview, setup, topics, publishing, social and methods
+ * (now a founder-only page: a client gets the not-found answer), before and after the form posts.
+ */
 export const GOLDEN_BASE = '744a19d';
 
 const B = `/portal/seo-blog/b/${BRAND_ID}`;

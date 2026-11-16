@@ -20,6 +20,7 @@ import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/eng
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
+import { ownerWords } from '../seo-blog/owner-words.js';
 import { EXISTING_WORKSPACE, namesExistingWorkspace } from '../seo-blog/existing-workspace.js';
 
 /** The founder's own account cannot manage the MHP workspace until it has opened Marketing in the MHP portal (0124). */
@@ -316,7 +317,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const jobId = url.searchParams.get('job');
       const job = (await engine.listJobs(actor, brandId)).find((j) => j.id === jobId && isProfileJob(j));
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
-      return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
+      return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: ownerWords(job.error ?? job.progress), resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
     // Read once per page for the badge and reused by the preview's own screens.
     const previewData = previewOn ? await loadContentArea(engine, actor, brandId).catch(() => null) : null;
@@ -422,6 +423,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       }
       throw new SeoBlogError(404, 'That page was not found.');
     }
+    // Production rules name the method packs: founder only. Anyone else gets the same answer as a page that does not exist.
+    if(rest==='methods'&&!limitsAvailable)throw new SeoBlogError(404, 'That page was not found.');
     if(rest==='methods')return send(res,200,productionRulesPage(shell('methods'),await engine.methodOverview(actor,brandId),engine.campaignCreatorsReady));
     if(rest==='campaigns'||rest.startsWith('campaigns/')){
       const creator=engine.creators(),parts=rest.split('/');
