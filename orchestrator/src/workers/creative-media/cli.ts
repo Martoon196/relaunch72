@@ -20,17 +20,26 @@ import { submitApprovedMediaJob } from '../../creative-studio/media-work-executo
 import { VizardVideoProvider, ShotstackVideoProvider } from '../../creative-studio/media-providers.js';
 import { PgMediaVideoOutputWorker,downloadProviderVideo } from '../../creative-studio/media-video-output-pg-store.js';
 import { reconcileMediaJob } from '../../creative-studio/media-reconciler.js';
+import {PgOfflineMediaDiscovery,runOfflineMediaTick} from '../../creative-studio/media-worker-dispatch.js';
 import { workerCommandGate } from './worker-gate.js';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 async function main():Promise<void>{
   const [action,workspaceId,id]=process.argv.slice(2);
   workerCommandGate(process.env,action??'');
-  if(!UUID.test(workspaceId??'')||!UUID.test(id??''))
+  if(!UUID.test(workspaceId??'')||(action!=='tick'&&!UUID.test(id??'')))
     throw new Error('Exactly one workspace UUID and source/job UUID required.');
   const pool=createWorkerDatabasePool(process.env);
   try{
     const requestId='rl72-media-worker-'+randomUUID();
+    if(action==='tick'){
+      const receipts=await runOfflineMediaTick(workspaceId!,{
+        pending:(ws,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(ws,n),
+        probe:(ws,record)=>new PgVideoSourceProbeWorker(pool,requestId).run(ws,record),
+        probeOutput:(ws,record)=>new PgMediaOutputProbeWorker(pool,requestId).probe(ws,record),
+        render:(ws,record)=>runQueuedLocalRender(ws,record,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo}),
+      });console.log('offline media batch:',receipts);return;
+    }
     if(action==='probe'){
       const result=await new PgVideoSourceProbeWorker(pool,requestId).run(workspaceId!,id!);
       console.log('private video technical probe:',result.status,result.replayed?'already recorded':'new receipt');

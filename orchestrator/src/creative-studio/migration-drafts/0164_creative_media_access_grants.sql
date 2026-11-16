@@ -43,17 +43,21 @@ GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
 SET LOCAL ROLE r72_media_job_definer;
 CREATE FUNCTION app_private.creative_media_require_grant()
 RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE grant_rec app.creative_media_access_grants;now_at timestamptz:=clock_timestamp();
+DECLARE grant_rec app.creative_media_access_grants;now_at timestamptz:=clock_timestamp(); used bigint;
 BEGIN
  IF app_private.current_workspace_id() IS DISTINCT FROM NEW.workspace_id THEN
   RAISE EXCEPTION 'Cross-workspace video charge denied' USING ERRCODE='42501'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('media-entitlement:'||NEW.workspace_id::text,0));
  SELECT * INTO grant_rec FROM app.creative_media_access_grants g
  WHERE g.workspace_id=NEW.workspace_id AND g.valid_from<=now_at AND g.valid_until>now_at
  ORDER BY g.created_at DESC,g.id DESC LIMIT 1;
  IF grant_rec.id IS NULL OR grant_rec.max_job_microusd=0
    OR NEW.reserved_microusd>grant_rec.max_job_microusd THEN
   RAISE EXCEPTION 'Video entitlement unavailable or over assigned limit' USING ERRCODE='55000'; END IF;
- IF NEW.reserved_microusd>grant_rec.monthly_video_microusd THEN
+ SELECT coalesce(sum(CASE WHEN j.state='failed' THEN 0 WHEN j.state='completed' THEN coalesce(j.actual_microusd,j.reserved_microusd) ELSE j.reserved_microusd END),0) INTO used
+ FROM app.creative_media_video_jobs j WHERE j.workspace_id=NEW.workspace_id
+  AND j.created_at>=date_trunc('month',now_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+ IF used>grant_rec.monthly_video_microusd-NEW.reserved_microusd THEN
   RAISE EXCEPTION 'Media subscription monthly entitlement exceeded' USING ERRCODE='55000'; END IF;
  RETURN NEW;
 END $f$;
@@ -81,7 +85,7 @@ BEGIN
   RETURN jsonb_build_object('active',false,'tier',NULL,'source',NULL,
     'monthlyVideoMicrousd',0,'maxJobMicrousd',0,'validUntil',NULL);
  END IF;
- RETURN jsonb_build_object('active',true,'tier',grant_rec.tier,'source',grant_rec.source,
+ RETURN jsonb_build_object('active',grant_rec.max_job_microusd>0 AND grant_rec.monthly_video_microusd>0,'tier',grant_rec.tier,'source',grant_rec.source,
   'monthlyVideoMicrousd',grant_rec.monthly_video_microusd,
   'maxJobMicrousd',grant_rec.max_job_microusd,
   'validUntil',grant_rec.valid_until);

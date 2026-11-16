@@ -41,8 +41,21 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
   field.addEventListener('input',()=>onChange(field.value));
   label.append(field);host.append(label);return field;
  };
- const sync=()=>{textarea.value=JSON.stringify(edit);};
- const status=node('output');status.setAttribute('aria-live','polite');root.append(status);
+ const history=[];const future=[];let last=JSON.stringify(edit);let restoring=false;
+ const sync=()=>{
+  const next=JSON.stringify(edit);
+  if(next!==last&&!restoring){history.push(last);if(history.length>100)history.shift();future.length=0;}
+  textarea.value=next;last=next;
+ };
+ const restore=(from,to)=>{
+  if(!from.length)return;to.push(last);edit=JSON.parse(from.pop());restoring=true;
+  format.value=edit.canvas;disclose.value=edit.disclosure;redraw();restoring=false;
+ };
+ let previewEnd=null;
+ preview.addEventListener('timeupdate',()=>{
+  if(previewEnd!==null&&preview.currentTime>=previewEnd){preview.pause();previewEnd=null;}
+ });
+ const status=node('output');status.setAttribute('aria-live','polite');status.setAttribute('tabindex','-1');root.append(status);
  const format=makeControl(details,'Output format','select',edit.canvas,
   value=>{edit.canvas=value;sync();summarise();},
   [['portrait','Portrait 9:16'],['square','Square 1:1'],['landscape','Landscape 16:9']]);
@@ -76,9 +89,31 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
    makeControl(box,'Transition','select',clip.transition,value=>{
     clip.transition=value;sync();},[['cut','Direct cut'],['fade','Fade in/out']]);
    const actions=node('div');actions.className='rl72-cut-actions';box.append(actions);
+   makeControl(box,'Audio volume','select',clip.volume??1,value=>{
+    clip.volume=Number(value);sync();},[['0','Muted'],['0.25','25%'],['0.5','50%'],['1','100%']]);
+   button(actions,'Split at playhead',()=>{
+    const at=Math.round(Number(preview.currentTime)*1000);
+    if(edit.clips.length>=12||!Number.isSafeInteger(at)
+      ||(at-clip.startMs)/clip.speed<500||(clip.endMs-at)/clip.speed<500){
+     status.textContent='Place the playhead inside this clip with at least half a second on each side.';return;
+    }
+    edit.clips.splice(i,1,{...clip,endMs:at},{...clip,startMs:at});redraw();
+   });
+   button(actions,'Duplicate clip',()=>{
+    if(edit.clips.length>=12)return;edit.clips.splice(i+1,0,{...clip});redraw();
+   });
+   button(actions,'Use playhead as start',()=>{
+    const at=Math.round(Number(preview.currentTime)*1000);
+    if(Number.isSafeInteger(at)&&at>=0&&(clip.endMs-at)/clip.speed>=500){clip.startMs=at;redraw();}
+   });
+   button(actions,'Use playhead as end',()=>{
+    const at=Math.round(Number(preview.currentTime)*1000);
+    if(Number.isSafeInteger(at)&&(at-clip.startMs)/clip.speed>=500){clip.endMs=at;redraw();}
+   });
    button(actions,'Preview clip',()=>{
     const sec=Math.max(0,Number(clip.startMs)||0)/1000;
-    preview.currentTime=sec;
+    preview.currentTime=sec;previewEnd=Number(clip.endMs)/1000;
+    preview.playbackRate=Number(clip.speed)||1;preview.volume=Number(clip.volume??1);
     const started=preview.play();if(started&&started.catch)started.catch(()=>{});
    });
    button(actions,'Move earlier',()=>{
@@ -94,6 +129,14 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
    timeline.append(box);
   });summarise();
  }
+ button(toolbar,'Undo',()=>restore(history,future));
+ button(toolbar,'Redo',()=>restore(future,history));
+ root.addEventListener('keydown',event=>{
+  if(!(event.ctrlKey||event.metaKey)||String(event.key).toLowerCase()!=='z')return;
+  const tag=String(event.target?.tagName||'').toLowerCase();
+  if(tag==='input'||tag==='textarea')return;
+  event.preventDefault();if(event.shiftKey)restore(future,history);else restore(history,future);
+ });
  button(toolbar,'Add clip',()=>{
   if(edit.clips.length>=12)return;
   const last=edit.clips[edit.clips.length-1];
@@ -105,6 +148,8 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
   const invalid=edit.clips.length<1||edit.clips.length>12||!Number.isFinite(seconds)||seconds>300
    ||edit.clips.some(c=>!Number.isSafeInteger(c.startMs)||!Number.isSafeInteger(c.endMs)
     ||c.startMs<0||c.endMs<=c.startMs||c.endMs>36000000||c.caption.length>240
+    ||!Number.isFinite((c.endMs-c.startMs)/c.speed)||(c.endMs-c.startMs)/c.speed<500
+    ||(c.endMs-c.startMs)/c.speed>120000||![0,0.25,0.5,1].includes(c.volume??1)
     ||![0.5,1,2].includes(c.speed)||!['cut','fade'].includes(c.transition));
   if(invalid){
    event.preventDefault();

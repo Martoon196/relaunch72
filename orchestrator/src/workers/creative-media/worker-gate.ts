@@ -2,8 +2,9 @@
 export function workerCommandGate(env:NodeJS.ProcessEnv,action:string):void {
  if(env.RL72_MEDIA_WORKER_ENABLED!=='true')
    throw new Error('Media worker disabled by operator. No provider request made.');
- if(!['probe','probe-output','render-local','submit','reconcile'].includes(action))
+ if(!['tick','probe','probe-output','render-local','submit','reconcile'].includes(action))
    throw new Error('Usage: media:worker <probe|probe-output|render-local|submit|reconcile> <workspace-uuid> <record-uuid>');
+ if(action==='tick'&&(env.CREATIVE_MEDIA!=='enabled'||env.RL72_MEDIA_LOCAL_RENDER_ENABLED!=='true'||env.RL72_MEDIA_DISPATCH_ENABLED!=='true'))throw new Error('Offline dispatch disabled');
  if(action==='render-local' &&
    (env.CREATIVE_MEDIA!=='enabled'||env.RL72_MEDIA_LOCAL_RENDER_ENABLED!=='true'))
    throw new Error('Local render is disabled and requires explicit operator approval.');

@@ -12,6 +12,13 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
+import {PgResumableMediaUploads} from '../../src/creative-studio/media-upload-pg-store.js';
+import {PgOfflineMediaDiscovery} from '../../src/creative-studio/media-worker-dispatch.js';
+import {PgMediaBillingOwner,PgMediaBillingWebhook} from '../../src/creative-studio/media-billing.js';
+import {PgMediaAccessOwner} from '../../src/creative-studio/media-access-pg-store.js';
+import {PgCreativeMediaProductStore} from '../../src/creative-studio/media-product-pg-store.js';
+import {PgMediaLinkEvidenceOwner} from '../../src/creative-studio/media-link-evidence.js';
+import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-canonical-handoff.js';
 import {withTransaction} from '../../src/db/transaction.js';
 import {fixtureBrand} from '../rl72-method-fixtures.js';
 import {PgSeoBlogStore} from '../../src/seo-blog/pg-store.js';
@@ -180,6 +187,75 @@ test('real native render starts from exact owned, independently probed source an
    assert.deepEqual(history.rows.map(x=>x.decision),['reviewed_private','withdrawn_private','reviewed_private']);
    // Review never copies the local render to provider capture or publication records.
    assert.equal((await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_outputs WHERE workspace_id=$1',[a.brand.id])).rows[0].n,0);
+  });
+  await t.test('resumable upload persists exact parts, refuses substitution and completes into canonical source store',async()=>{
+   const flags={...env,RL72_MEDIA_RESUMABLE_UPLOADS_ENABLED:'true'};
+   const uploader=new PgResumableMediaUploads(content,a.principal,flags),other=new PgResumableMediaUploads(content,b.principal,flags);
+   const uploadId=randomUUID(),payload={byteLength:bytes.length,sha256:sha(bytes),metadata:{fileName:'resume.mp4',mime:'video/mp4' as const,rights:'owned' as const,evidenceSha256:null,rightsConfirmed:true}};
+   const begun=await uploader.begin(a.brand.id,uploadId,payload);assert.deepEqual(begun.parts,[]);
+   await assert.rejects(uploader.complete(a.brand.id,uploadId),/incomplete/iu);
+   for(let index=0;index<Math.ceil(bytes.length/1000000);index++)await uploader.part(a.brand.id,uploadId,index,bytes.subarray(index*1000000,(index+1)*1000000));
+   assert.equal((await uploader.status(a.brand.id,uploadId)).parts.length,Math.ceil(bytes.length/1000000));
+   await assert.rejects(other.status(b.brand.id,uploadId),/owner|workspace/iu);
+   const changed=Buffer.from(bytes.subarray(0,1000000));changed[changed.length-1]=(changed[changed.length-1]??0)^1;
+   await assert.rejects(uploader.part(a.brand.id,uploadId,0,changed),/changed/iu);
+   const stored=await uploader.complete(a.brand.id,uploadId);assert.equal(stored.sha256,sha(bytes));
+   assert.equal((await uploader.complete(a.brand.id,uploadId)).replayed,true);
+   assert.deepEqual((await uploader.status(a.brand.id,uploadId)).parts,[]);
+   const cancelId=randomUUID();await uploader.begin(a.brand.id,cancelId,payload);await uploader.cancel(a.brand.id,cancelId);
+   await assert.rejects(uploader.part(a.brand.id,cancelId,0,bytes.subarray(0,1000000)),/expired/iu);
+   await assert.rejects(content.query('SELECT * FROM app.creative_media_upload_parts'),/permission denied/iu);
+   const discovery=new PgOfflineMediaDiscovery(admin,'discovery-proof');
+   const pending=await discovery.pending(a.brand.id,10);assert.ok(pending.some(x=>x.kind==='probe'&&x.id===stored.id));
+   assert.deepEqual(await discovery.pending(b.brand.id,10),[]);
+  });
+  await t.test('native video handoff creates a genuine pending canonical approval and withdrawal blocks a fresh handoff',async()=>{
+   await admin.query("ALTER ROLE r72_content_adapter PASSWORD 'local-methods-test-only'");
+   const adapterUri=new URL(uri);adapterUri.username='r72_content_adapter';adapterUri.password='local-methods-test-only';
+   const adapter=new pg.Pool({connectionString:adapterUri.toString(),max:2});
+   try{
+    const output=(await a.owner.outputs(a.brand.id))[0]!,review=new PgLocalOutputReviewOwner(content,a.principal,env);
+    const current=(await review.list(a.brand.id))[0]!;
+    const handoff=new PgLocalVideoCanonicalHandoff(adapter,content,a.principal,{...env,RL72_MEDIA_CANONICAL_HANDOFF_ENABLED:'true'});
+    const input={workspaceId:a.brand.id,outputId:output.id,outputSha256:output.sha256,reviewRevision:current.revision,commandId:randomUUID(),title:'Private native video',caption:'#ad Review this exact owned video',platform:'instagram' as const};
+    const saved=await handoff.request(input);assert.equal(saved.state,'pending_canonical_review');assert.equal(saved.providerEffects,false);
+    assert.equal((await handoff.request(input)).draft.disposition,'replayed');
+    const canonical=await admin.query('SELECT content_kind FROM app.company_content_versions WHERE workspace_id=$1 AND id=$2',[a.brand.id,saved.draft.contentVersionId]);
+    assert.equal(canonical.rows[0].content_kind,'video');
+    await review.review({workspaceId:a.brand.id,outputId:output.id,outputSha256:output.sha256,expectedRevision:current.revision,commandId:randomUUID(),decision:'withdrawn_private',rightsConfirmed:false,claimsConfirmed:false,disclosureConfirmed:false});
+    await assert.rejects(handoff.request({...input,commandId:randomUUID()}),/review required/iu);
+   }finally{await adapter.end();}
+  });
+  await t.test('merchant evidence is private, exact-product-version bound and superseded by product edits',async()=>{
+   const store=new PgCreativeMediaProductStore(content,a.principal),links=new PgMediaLinkEvidenceOwner(content,a.principal,{...env,RL72_MEDIA_LINK_EVIDENCE_ENABLED:'true'});
+   const product={network:'amazon_associates' as const,merchantName:'Amazon UK',productName:'Owner supplied item',productUrl:'https://www.amazon.co.uk/dp/B000000001',affiliateUrl:'https://www.amazon.co.uk/dp/B000000001?tag=owner-21',sourceRights:'owned' as const,productReviewed:true,channelEligible:true,mediaRightsConfirmed:true,disclosureVersion:'uk-v1'};
+   const saved=await store.save({workspaceId:a.brand.id,expectedRevision:0,product});
+   const input={workspaceId:a.brand.id,commandId:randomUUID(),productId:saved.productId,productRevision:1,evidenceSha256:'a'.repeat(64),registeredSite:'https://owner.example/',programmeConfirmed:true,siteConfirmed:true,tagOwnershipConfirmed:true};
+   assert.equal((await links.save(input)).status,'owner_asserted_private');assert.equal((await links.list(a.brand.id))[0]?.current,true);
+   await store.save({workspaceId:a.brand.id,productId:saved.productId,expectedRevision:1,product:{...product,productName:'Revised owner item'}});
+   assert.equal((await links.list(a.brand.id))[0]?.current,false);
+   await assert.rejects(links.save({...input,commandId:randomUUID()}),/Current product/iu);
+  });
+  await t.test('operator price policy, bound checkout and webhook role produce replay-safe grants and revocations',async()=>{
+   await admin.query("INSERT INTO app.creative_media_price_policy(tier,price_id,livemode,enabled,max_job_microusd,monthly_video_microusd) VALUES('affiliate_creator','price_privateproof',false,true,1000000,10000000)");
+   const flags={...env,RL72_MEDIA_BILLING_ENABLED:'true'},billing=new PgMediaBillingOwner(content,a.principal,flags),command=randomUUID();
+   const intent=await billing.intent(a.brand.id,command,'affiliate_creator');assert.equal(intent.priceId,'price_privateproof');
+   await billing.bind(a.brand.id,command,'cs_test_privateproof');
+   await assert.rejects(billing.bind(a.brand.id,command,'cs_test_changed'),/changed/iu);
+   await admin.query("ALTER ROLE r72_webhook PASSWORD 'local-methods-test-only'");
+   const webhookUri=new URL(uri);webhookUri.username='r72_webhook';webhookUri.password='local-methods-test-only';
+   const webhook=new pg.Pool({connectionString:webhookUri.toString(),max:2});
+   try{
+    const ledger=new PgMediaBillingWebhook(webhook,'media-billing-proof'),access=new PgMediaAccessOwner(content,a.principal);
+    const created=Math.floor(Date.now()/1000),receipt={eventId:'evt_privategrant',eventSha256:'a'.repeat(64),eventCreated:created,subscriptionId:'sub_privateproof',customerId:'cus_privateproof',priceId:'price_privateproof',livemode:false,activePaid:true,periodEnd:new Date(Date.now()+86400000).toISOString(),intentId:command,checkoutSessionId:'cs_test_privateproof',checkoutVerified:true};
+    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,1000000);
+    assert.deepEqual(await ledger.record(receipt),{disposition:'granted',replayed:true});
+    const revoked={...receipt,eventId:'evt_privaterevoke',eventSha256:'b'.repeat(64),eventCreated:created+1,activePaid:false,intentId:null,checkoutSessionId:null,checkoutVerified:false};
+    assert.deepEqual(await ledger.record(revoked),{disposition:'revoked',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
+    const stale={...receipt,eventId:'evt_privatestale',eventSha256:'c'.repeat(64),intentId:null};
+    assert.deepEqual(await ledger.record(stale),{disposition:'stale',replayed:false});assert.equal((await access.current(a.brand.id)).maxJobMicrousd,0);
+    await assert.rejects(webhook.query('SELECT * FROM app.creative_media_access_grants'),/permission denied/iu);
+   }finally{await webhook.end();}
   });
   await t.test('newer edit makes an older timeline unqueueable',async()=>{
    const newer:VideoEditPlan={...plan,clips:[...plan.clips].reverse()};

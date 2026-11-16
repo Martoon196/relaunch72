@@ -75,7 +75,7 @@ export function localRenderFilterGraph(
       const path = captionPaths[i];
       if (!path || !/^[a-zA-Z0-9_/.-]+$/u.test(path))
         throw new SeoBlogError(400, 'Caption file path is not trusted');
-      graph += `,drawtext=textfile=${filterPath(path)}:fontcolor=white:fontsize=36:x=(w-text_w)/2:y=h-text_h-64:box=1:boxcolor=black@0.55:boxborderw=12`;
+      graph += `,drawtext=textfile=${filterPath(path)}:expansion=none:fontcolor=white:fontsize=36:x=(w-text_w)/2:y=h-text_h-64:box=1:boxcolor=black@0.55:boxborderw=12`;
     }
     if (clip.transition === 'fade' && segment >= 0.5) {
       const fade = Math.min(0.25, segment / 4);
@@ -83,7 +83,7 @@ export function localRenderFilterGraph(
     }
     fragments.push(graph+`[v${i}]`);
     const audio = audioPresent
-      ? `[0:a:0]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,atempo=${clip.speed}[a${i}]`
+      ? `[0:a:0]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,atempo=${clip.speed},volume=${clip.volume??1}[a${i}]`
       : `anullsrc=r=44100:cl=stereo,atrim=duration=${segment},asetpts=PTS-STARTPTS[a${i}]`;
     fragments.push(audio);
     endpoints.push(`[v${i}][a${i}]`);

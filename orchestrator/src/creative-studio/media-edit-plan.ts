@@ -13,6 +13,8 @@ export interface VideoEditClip {
  readonly caption:string;
  readonly transition:'cut'|'fade';
  readonly speed:0.5|1|2;
+ /** Optional for compatibility with immutable v1 edits; absent means full volume. */
+ readonly volume?:0|0.25|0.5|1;
 }
 export interface VideoEditPlan {
  readonly canvas:VideoCanvas;
@@ -43,11 +45,13 @@ export function checkVideoEditPlan(value:unknown):VideoEditPlan {
     return bad('Caption must be plain, bounded text');
   if(x.transition!=='cut'&&x.transition!=='fade')return bad('Unsupported video transition');
   if(x.speed!==0.5&&x.speed!==1&&x.speed!==2)return bad('Unsupported clip speed');
+  if(x.volume!==undefined&&![0,0.25,0.5,1].includes(x.volume as number))return bad('Unsupported audio volume');
   const duration=(Number(x.endMs)-Number(x.startMs))/Number(x.speed);
   if(duration<500||duration>120000)return bad('Trim each video clip to 0.5–120 seconds');
   total+=duration;
   return {startMs:Number(x.startMs),endMs:Number(x.endMs),caption:x.caption,
-    transition:x.transition,speed:x.speed};
+    transition:x.transition,speed:x.speed,
+    ...(x.volume===undefined?{}:{volume:x.volume as 0|0.25|0.5|1})};
  });
  if(total>300000)return bad('A draft must fit a maximum five-minute output');
  return Object.freeze({canvas:v.canvas as VideoCanvas,clips:Object.freeze(clips),disclosure:v.disclosure});
@@ -74,7 +78,7 @@ export function videoPlanToShotstack(plan:VideoEditPlan,source:{url:string;durat
  let cursor=0;
  for(const clip of p.clips){
   const duration=Number(((clip.endMs-clip.startMs)/clip.speed/1000).toFixed(3));
-  clips.push({asset:{type:'video',src:url.href,trim:clip.startMs/1000,volume:1},
+  clips.push({asset:{type:'video',src:url.href,trim:clip.startMs/1000,volume:clip.volume??1},
     start:cursor,length:duration, ...(clip.transition==='fade'?{transition:{in:'fade',out:'fade'}}:{}),
     ...(clip.speed!==1?{effect:'none',speed:clip.speed}:{})});
   if(clip.caption.trim())captions.push({asset:{type:'title',text:clip.caption,style:'minimal',position:'bottom'},
