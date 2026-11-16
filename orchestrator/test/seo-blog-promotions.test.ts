@@ -180,10 +180,10 @@ test('scheduling goes through the registered account with truthful holds: unpubl
   const shell = { brands: [brand], brand, tab: 'articles' as const, csrf: 'fixture', notice: null, error: null };
   const detail = await engine.getArticle(OWNER, brand.id, f.article.id);
   const html = editorPage(shell, { ...detail, article: { ...detail.article, requiresApproval: true }, destinations: [], social: await dup.registry.overview(brand.id) });
-  assert.match(html, /aria-label="Needs my approval: On\. Turn off" class="toggle-control on"/);
+  assert.match(html, /aria-label="Always ask me before this article goes out: yes\. Switch off"/);
   const approvalOff = editorPage(shell, { ...detail, article: { ...detail.article, requiresApproval: false }, destinations: [], social: await dup.registry.overview(brand.id) });
-  assert.match(approvalOff, /aria-label="Needs my approval: Off\. Turn on" class="toggle-control off"/);
-  assert.match(html, /held: The daily cap/); assert.match(html, /Queue linkedin post/); assert.match(html, /Instagram requires a real approved image/);
+  assert.match(approvalOff, /aria-label="Always ask me before this article goes out: no\. Switch on"/);
+  assert.match(html, /not sent\. The daily cap/); assert.match(html, /Send this LinkedIn post then/); assert.match(html, /Instagram needs a picture before this can go out/);
   const social = socialPage({ ...shell, tab: 'social' }, { overview: await dup.registry.overview(brand.id), connectHere: false, connectHost: 'https://hq.propertypredator.com', intentId: randomUUID() });
   assert.match(social, /Harbour social profile/); assert.doesNotMatch(social, /brand-profile/); assert.match(social, /Open this page there to continue\./); assert.match(social, /Stop using this account/);
   const revokeForm = social.match(/<form method="post" action="[^"]*\/social\/revoke"[^>]*>([\s\S]*?)<\/form>/)![0]!;
