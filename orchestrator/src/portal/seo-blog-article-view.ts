@@ -20,6 +20,7 @@ import { approvalIsCurrent, approvalRequired } from '../seo-blog/policy.js';
 import { nextPublishingSlot, plannedSiteGone, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
 import type { PublishingPlan } from '../seo-blog/engine.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
+import { unlimited } from '../seo-blog/limits.js';
 import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
 import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, CheckIssue, Destination, Job, Publication, SocialDispatch } from '../seo-blog/types.js';
 import { csrfField, layout, savedCampaignCopyStatus, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -430,7 +431,7 @@ function pictureArea(shell: Shell, a: Article, v: ArticleVersion, base: string):
 <details class="ap-choice"><summary class="ap-textbutton">Use a picture from your website</summary><form method="post" action="${base}/picture">${csrfField(shell.csrf)}${hidden({ versionId: v.id })}<label for="pic-url">The picture’s web address</label><input id="pic-url" type="url" name="imageUrl" placeholder="https://…" required><label for="pic-alt">Describe what it shows</label><input id="pic-alt" type="text" name="imageAlt" minlength="5" maxlength="200" required><button type="submit" class="secondary">Use this picture</button><p class="ap-note">Free. Saving makes a new version; you’ll approve it again.</p></form></details>
 <p class="ap-choice"><a class="ap-textbutton" href="${base}/campaign">Choose one you have already prepared</a></p>
 ${perMonth > 0
-    ? `<details class="ap-choice"><summary class="ap-textbutton">Make one for me</summary><form method="post" action="${base}/image-request">${csrfField(shell.csrf)}${hidden({ versionId: v.id, commandId: randomUUID() })}<p class="ap-note">This asks our picture service to make one illustration for this article. It uses 1 of your ${perMonth} pictures this month. You check it before it is used.</p><button type="submit" class="secondary">Make a picture</button></form></details>`
+    ? `<details class="ap-choice"><summary class="ap-textbutton">Make one for me</summary><form method="post" action="${base}/image-request">${csrfField(shell.csrf)}${hidden({ versionId: v.id, commandId: randomUUID() })}<p class="ap-note">This asks our picture service to make one illustration for this article. It uses ${unlimited(b.settings, 'images') ? '1 picture from your allowance (Unlimited)' : `1 of your ${perMonth} pictures`} this month. You check it before it is used.</p><button type="submit" class="secondary">Make a picture</button></form></details>`
     : `<p class="ap-choice ap-note">Making pictures is switched off for your business. You can switch it on in <a href="${brandUrl(b, 'publishing')}">Publishing</a>.</p>`}
 </div>`;
   const remove = v.body.image.kind !== 'none' || v.body.image.url ? `<details class="ap-change ap-remove"><summary class="ap-textbutton">Remove the picture</summary><div class="ap-panel ap-choices"><p class="ap-note">The article will have no picture. This makes a new version, so you’ll approve it again.</p>${postButton(shell, `${base}/picture-remove`, { versionId: v.id }, 'Remove the picture')}</div></details>` : '';
