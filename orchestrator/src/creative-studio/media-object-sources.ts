@@ -51,9 +51,9 @@ export class PgPrivateObjectCleanupWorker {
  async sweep(workspace:string,limit=3){
   if(this.env.CREATIVE_MEDIA!=='enabled'||this.env.RL72_MEDIA_WORKER_ENABLED!=='true'||this.env.RL72_MEDIA_PRIVATE_FILES_ENABLED!=='true')throw new SeoBlogError(503,'Private object cleanup disabled');
   const ws=checkedEditId(workspace);if(!Number.isInteger(limit)||limit<1||limit>10)throw new SeoBlogError(400,'Bounded cleanup required');
-  const due=await withTransaction(this.pool,{actorKind:'worker',workspaceId:ws,requestId:this.requestId},async t=>(await t.query<{v:PrivateMediaObject[]}>('SELECT app_private.creative_media_object_cleanup($1,$2) AS v',[ws,limit])).rows[0]!.v);
+  const due=await withTransaction(this.pool,{actorKind:'worker',workspaceId:ws,requestId:this.requestId},async t=>(await t.query<{v:Array<PrivateMediaObject&{stagingOnly?:boolean}>}>('SELECT app_private.creative_media_object_cleanup($1,$2) AS v',[ws,limit])).rows[0]!.v);
   const results:Array<{sourceId:string;state:'cleaned'|'held'}>=[];
-  for(const source of due){try{await this.files.clearParts(ws,source.sourceId);await this.files.discardUncommitted(source);results.push({sourceId:source.sourceId,state:'cleaned'});}catch{results.push({sourceId:source.sourceId,state:'held'});}}
+  for(const source of due){try{await this.files.clearParts(ws,source.sourceId);if(!source.stagingOnly)await this.files.discardUncommitted(source);results.push({sourceId:source.sourceId,state:'cleaned'});}catch{results.push({sourceId:source.sourceId,state:'held'});}}
   return results;
  }
 }

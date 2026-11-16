@@ -212,9 +212,12 @@ test('real native render starts from exact owned, independently probed source an
    const queuedId=randomUUID();await a.owner.enqueue({workspaceId:a.brand.id,projectId:project,revision:1,jobId:queuedId,commandId:randomUUID(),sourceSha256:sha(large),planSha256:videoEditDigest(objectPlan),rightsConfirmed:true});
    const result=await runQueuedLocalRender(a.brand.id,queuedId,{ledger:new PgLocalRenderWorker(admin,'large-render-proof',flags),renderer:renderLocalVideo,objectRenderer:(object,probe,edit)=>renderLocalVideoFile(files,object,probe,edit)});
    assert.equal(result.state,'completed');assert.ok(result.outputId);assert.equal((await a.owner.load(a.brand.id,result.outputId!)).mime,'video/mp4');
+   // Simulate a crash after catalogue commit but before staging unlink.
+   await files.putPart(a.brand.id,sourceId,0,large.length,large.subarray(0,LARGE_MEDIA_PART_BYTES));
    const expired=randomUUID();await sources.begin(a.brand.id,expired,metadata);await sources.part(a.brand.id,expired,0,large.subarray(0,LARGE_MEDIA_PART_BYTES));
    await admin.query("UPDATE app.creative_media_object_uploads SET expires_at=now()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,expired]);
    const cleaned=await new PgPrivateObjectCleanupWorker(admin,'object-cleanup-proof',files,flags).sweep(a.brand.id);assert.ok(cleaned.some(x=>x.sourceId===expired&&x.state==='cleaned'));
+   assert.deepEqual(await files.parts(a.brand.id,sourceId,large.length),[]);await files.verify(finished);
    assert.equal((await sources.source(a.brand.id,sourceId)).sha256,sha(large),'housekeeping must preserve completed canonical objects');
   });
   await t.test('native video handoff creates a genuine pending canonical approval and withdrawal blocks a fresh handoff',async()=>{

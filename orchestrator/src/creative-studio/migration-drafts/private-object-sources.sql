@@ -94,9 +94,15 @@ DECLARE u app.creative_media_object_uploads;result jsonb:='[]'::jsonb;
 BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped cleanup worker required' USING ERRCODE='42501'; END IF;
  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 10 THEN RAISE EXCEPTION 'Bounded cleanup required' USING ERRCODE='22023'; END IF;
- FOR u IN SELECT * FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND (state='cancelled' OR (state='uploading' AND expires_at<=clock_timestamp()))
+ FOR u IN SELECT * FROM app.creative_media_object_uploads WHERE workspace_id=p_workspace AND (state IN('cancelled','completed') OR (state='uploading' AND expires_at<=clock_timestamp()))
   AND (last_cleanup_at IS NULL OR last_cleanup_at<clock_timestamp()-interval '1 hour')
   ORDER BY last_cleanup_at NULLS FIRST,created_at,id LIMIT p_limit FOR UPDATE SKIP LOCKED LOOP
+  IF u.state='completed' AND EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=u.id) THEN
+   UPDATE app.creative_media_object_uploads SET last_cleanup_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=u.id;
+   result:=result||jsonb_build_array(jsonb_build_object('workspaceId',p_workspace,'sourceId',u.id,'sha256',u.sha256,'byteLength',u.byte_length,'mime',u.metadata->>'mime','stagingOnly',true,
+    'objectKey',p_workspace::text||'/'||u.id::text||'/'||u.sha256||CASE WHEN u.metadata->>'mime'='video/mp4' THEN '.mp4' ELSE '.webm' END));
+   CONTINUE;
+  END IF;
   IF NOT EXISTS(SELECT 1 FROM app.creative_media_source_videos WHERE workspace_id=p_workspace AND id=u.id) THEN
    UPDATE app.creative_media_object_uploads SET state='cancelled',last_cleanup_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=u.id;
    result:=result||jsonb_build_array(jsonb_build_object('workspaceId',p_workspace,'sourceId',u.id,'sha256',u.sha256,'byteLength',u.byte_length,'mime',u.metadata->>'mime',
