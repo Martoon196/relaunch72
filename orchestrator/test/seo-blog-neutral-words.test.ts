@@ -23,7 +23,8 @@ import type { PublishInput, WebsitePublisher } from '../src/seo-blog/publishers/
 import type { PublisherRegistry } from '../src/seo-blog/publishers/registry.js';
 import { researchDiagnostic } from '../src/seo-blog/programme.js';
 import { isProfileJob } from '../src/seo-blog/profile-jobs.js';
-import { ownerWords, ownerActivityWords, revealsInternals } from '../src/seo-blog/owner-words.js';
+import { noticeWords, ownerWords, ownerActivityWords, researchWords, revealsInternals } from '../src/seo-blog/owner-words.js';
+import { SeoBlogError } from '../src/seo-blog/types.js';
 import type { ActivityEvent, Article, ArticleBrief, ArticleVersion, Brand, Job, TopicPlan, DestinationType } from '../src/seo-blog/types.js';
 import { campaignCreatorsPage, productionRulesPage } from '../src/portal/campaign-creator-view.js';
 import { overviewPage, type Shell } from '../src/portal/seo-blog-view.js';
@@ -270,7 +271,8 @@ async function creativeScene(founder: boolean) {
   const briefId = randomUUID(), jobId = randomUUID(), now = h.clock.now();
   const state: GenerationState = {
     briefs: [{ id: briefId, version: 1, data: { title: 'Calm kitchen morning', text: 'A bright modern kitchen in morning light', size: '1536x1024', references: [], useVisualGuidance: true }, createdBy: OWNER.userId, createdAt: now }],
-    generations: [], attempts: [],
+    // An image generated earlier whose usage the image service did not report.
+    generations: [{ id: randomUUID(), briefId, briefVersion: 1, jobId: randomUUID(), intentId: randomUUID(), attemptId: randomUUID(), assetId: randomUUID(), sha256: 'a'.repeat(64), width: 1536, height: 1024, data: {}, createdAt: now }], attempts: [],
     jobs: [{ id: jobId, state: 'failed', briefId, briefVersion: 1, intentId: randomUUID(), progress: 'Stopped.', error: IMAGE_ERROR, paidAttemptStarted: true, createdAt: now, updatedAt: now }],
     usage: { brandImagesThisMonth: 0, brandUnresolvedEarlier: 0, studioImagesCounted: 0, studioUnresolved: 0, period: '2026-11' },
   };
@@ -500,4 +502,160 @@ test('the founder sees the same neutral sentences plus the technical detail, and
     has(page(`${look} · publishing`), /Sonnet 4\.6[\s\S]*Check current Anthropic API pricing/, `${look}: the founder keeps the pricing guide`);
   }
   assert.equal(all.get('old look · methods')!.status, 200, 'the founder keeps Production rules');
+});
+
+// ─── The reviewer's states: owner words that look internal, social, image tasks, errors, redirects ───
+
+/** Business names and titles an owner may really have: each contains a word the dictionary treats as internal. */
+const OWNER_NAMES = ['Northside Care Provider', 'Opus Kitchens', 'Token Coffee Roasters', 'Gemini Lettings', 'Prompt Plumbing', 'Claude Builders'];
+const OWNER_TITLES = ['How to choose a building supplier', 'A provider’s guide to care homes', 'Token gestures: gifts for tenants', 'Opus One wine guide for landlords'];
+const OWNER_URL = 'https://bay.example/blog/claude-monet-prints-for-rentals';
+/** Every owner string, so the scan reads past the owner's own words (they are theirs, not ours). */
+const OWNER_STRINGS = [...OWNER_NAMES, ...OWNER_TITLES, OWNER_URL, 'claude-monet-prints-for-rentals'];
+const withoutOwnerWords = (body: string) => OWNER_STRINGS.reduce((t, s) => t.split(s).join('OWNER-TEXT').split(s.replace(/’/g, '&#8217;')).join('OWNER-TEXT').split(s.replace(/&/g, '&amp;')).join('OWNER-TEXT'), body);
+
+/** Raw engine and supplier text, as the reviewer stored it on tasks and history. */
+const REVIEW_RAW = [
+  'The writing model could not be reached (529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CWf9Qm"} (anthropic-sdk claude-sonnet-4-6)). Nothing was changed.',
+  'Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}} at Anthropic.makeRequest',
+  'DataForSEO task 11071234-1535-0216-0000-a1b2c3d4e5f6 failed: 40501 Invalid Field (api.dataforseo.com/v3/serp/google/organic/live/advanced)',
+  'fetch failed: connect ECONNREFUSED api.dataforseo.com:443',
+  'Request failed with status 429 from https://api.anthropic.com/v1/messages',
+  'max_tokens reached before the JSON closed (stop_reason=max_tokens)',
+  'Image generation is not configured. No provider call was made.',
+  'The image provider did not return an accepted candidate. Review the intent before requesting a new generation.',
+  IMAGE_ERROR,
+  'Zernio returned 502 for /v1/posts',
+  'Prompt seo-blog-article.md@7 produced invalid JSON',
+  'Sonnet 4.6 context window exceeded',
+  'The search engine could not process this research request. The bounded retry allowance or search ceiling is exhausted. Explicit owner resume is required.',
+  'Website: The token can read the repository but cannot write to it.',
+  'Register the brand’s Zernio profile first.',
+  'Enter the 24-character account id from Zernio.',
+];
+
+async function reviewScene(founder: boolean) {
+  const f = await websiteFixture('content_api', '/blog');
+  const { h, brand } = f;
+  const store = h.store as unknown as { briefs: Map<string, ArticleBrief>; jobs: Map<string, Job> };
+  const now = h.clock.now();
+  const job = (over: Partial<Job>): Job => ({ id: randomUUID(), brandId: brand.id, kind: 'write', idempotencyKey: randomUUID(), payload: {}, state: 'blocked', attempts: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Paused until the issue is fixed.', error: null, createdAt: now, updatedAt: now, rowVersion: 1, ...over });
+  for (const raw of REVIEW_RAW) { const j = job({ error: raw }); store.jobs.set(j.id, j); }
+  // Image tasks on the article with the worker's own stored strings and a raw one.
+  const image = (state: Job['state'], error: string | null, progress: string) => job({ state, error, progress, payload: { stage: 'image', image: { articleId: f.articleId, paidAttemptStarted: true, result: { state: 'failed' } } } });
+  const imageJobs = [image('failed', 'The image provider did not return an accepted candidate. Review the intent before requesting a new generation.', 'Stopped.'), image('blocked', null, 'Image generation is not configured. No provider call was made.'), image('failed', IMAGE_ERROR, 'Stopped.')];
+  for (const j of imageJobs) store.jobs.set(j.id, j);
+  // Owner names and titles on success lines and on failure lines.
+  for (const name of OWNER_NAMES) await h.store.recordActivity({ brandId: brand.id, at: now, actor: OWNER.userId, kind: 'brand.created', message: `Brand “${name}” created.`, subjectId: null } as ActivityEvent);
+  for (const title of OWNER_TITLES) {
+    await h.store.recordActivity({ brandId: brand.id, at: now, actor: 'system', kind: 'article.generated', message: `“${title}” written (version 2).`, subjectId: null } as ActivityEvent);
+    await h.store.recordActivity({ brandId: brand.id, at: now, actor: OWNER.userId, kind: 'brief.status', message: `“${title}” marked omitted.`, subjectId: null } as ActivityEvent);
+    await h.store.recordActivity({ brandId: brand.id, at: now, actor: 'system', kind: 'publish.held', message: `Not published: “${title}” needs a picture before it can go live.`, subjectId: null } as ActivityEvent);
+  }
+  await h.store.recordActivity({ brandId: brand.id, at: now, actor: 'system', kind: 'publish.verified', message: `Published and verified at ${OWNER_URL} (version 2).`, subjectId: null } as ActivityEvent);
+  for (const raw of REVIEW_RAW) await h.store.recordActivity({ brandId: brand.id, at: now, actor: 'system', kind: 'job.blocked', message: `write: ${raw}`, subjectId: null } as ActivityEvent);
+  // A brief titled with an owner word, for notices.
+  const brief = [...store.briefs.values()].find((b) => !b.articleId && ['planned', 'accepted'].includes(b.status))!;
+  store.briefs.set(brief.id, { ...brief, workingTitle: OWNER_TITLES[0]! } as ArticleBrief);
+  // Social: live, with discovery failing, and available with no linked profile.
+  const { createSocialProviderInventory } = await import('../src/seo-blog/social-discovery.js');
+  const down = await createSocialProviderInventory({ apiKey: 'k', fetch: (async () => { throw new Error('down'); }) as never }).discover({ brandId: brand.id, registeredProfileId: null, reservedProfileIds: [], registeredBrandFor: async () => null });
+  const empty = await createSocialProviderInventory({ apiKey: 'k', fetch: (async (u: unknown) => new Response(JSON.stringify(String(u).includes('account') ? { accounts: [] } : { profiles: [] }), { status: 200, headers: { 'content-type': 'application/json' } })) as never })
+    .discover({ brandId: brand.id, registeredProfileId: null, reservedProfileIds: [], registeredBrandFor: async () => null });
+  const svc = (over: Record<string, unknown> = {}) => ({ generation: 'live', research: 'live', social: 'live', socialCallback: async () => null,
+    engineFor: () => new Proxy(h.engine, { get: (t, k) => k in over ? over[k as string] : (t as unknown as Record<string | symbol, unknown>)[k] }),
+    limitsFor: () => ({ allowed: async () => founder, list: async () => [] }) }) as unknown as PortalSeoBlogService;
+  const { portalCsrfToken } = await import('../src/portal/session.js');
+  const csrf = portalCsrfToken('s'.repeat(48), identity(OWNER.userId).sessionToken);
+  const R = `/portal/seo-blog/b/${brand.id}`, A = `${R}/articles/${f.articleId}`;
+  const out: [string, Rendered][] = [];
+  const get = async (name: string, s: PortalSeoBlogService, path: string, opts: object) => { const r = await call(s, identity(OWNER.userId), 'GET', path, opts); out.push([name, r]); return r; };
+  for (const [look, opts] of [['old look', {}], ['new look', NEW]] as const) {
+    for (const [name, path] of [['activity', `${R}/activity`], ['topics', `${R}/topics`], ['overview', `${R}/overview`], ['article campaign', `${A}/campaign`]] as const) await get(`${look} · ${name}`, svc(), path, opts);
+    for (const j of imageJobs) await get(`${look} · image status (JSON)`, svc(), `${R}/image/status?article=${f.articleId}&job=${j.id}`, opts);
+    await get(`${look} · social (discovery failing)`, svc({ socialDiscovery: async () => down }), `${R}/social`, opts);
+    await get(`${look} · social (no linked profile)`, svc({ socialDiscovery: async () => empty }), `${R}/social`, opts);
+    await get(`${look} · refused GET (5xx)`, svc({ socialOverview: async () => { throw new SeoBlogError(503, 'The provider is temporarily unavailable. DataForSEO HTTP 503'); } }), `${R}/social`, opts);
+    await get(`${look} · refused GET (409)`, svc({ socialOverview: async () => { throw new SeoBlogError(409, 'Register the brand’s Zernio profile first.'); } }), `${R}/social`, opts);
+    // Refused and successful posts: the address and the page after it.
+    const posts: [string, string, Record<string, string>, Record<string, unknown>][] = [
+      ['refused POST (budget)', `${R}/generate`, { brief: brief.id }, { estimate: async () => { throw new SeoBlogError(409, 'Writing allowance: monthly ceiling reached. Used 7,200; ceiling 1; remaining 0 model tokens. Action estimate 32,000; shortfall 32,000. Minimum estimated monthly ceiling 39,200. Review Publishing settings before retrying.'); } }],
+      ['refused POST (5xx)', `${R}/plan`, { commandId: randomUUID() }, { requestPlan: async () => { throw new SeoBlogError(503, 'DataForSEO HTTP 503'); } }],
+      ['refused POST (social)', `${R}/social/profile`, { displayName: 'x', providerProfileId: 'p' }, { registerSocialProfile: async () => { throw new SeoBlogError(409, 'That Zernio profile is registered to another brand.'); } }],
+      ['refused POST (social host)', `${R}/social/connect`, { network: 'instagram', intentId: randomUUID(), confirm: 'CONNECT' }, {}],
+      ['brief omitted (owner title)', `${R}/briefs/${brief.id}/omitted`, {}, {}],
+      ['business added (owner name)', '/portal/seo-blog/brands', { commandId: randomUUID(), name: `${OWNER_NAMES[0]} ${look === 'old look' ? 'North' : 'South'}`, website: '' }, {}],
+    ];
+    for (const [name, path, form, over] of posts) {
+      const r = await call(svc(over), identity(OWNER.userId), 'POST', path, { ...opts, form: { _csrf: csrf, ...form } });
+      const location = r.headers.location ?? '';
+      const decoded = [...location.matchAll(/[?&]([ne])=([A-Za-z0-9_-]+)/g)].map((m) => Buffer.from(m[2]!, 'base64url').toString('utf8')).join(' | ');
+      out.push([`${look} · ${name} (address, decoded)`, { status: r.status, headers: { 'content-type': 'text/plain' }, body: decoded }]);
+      if (location) await get(`${look} · ${name} (page)`, svc(over), location.replace(/^https:\/\/portal\.example/, ''), opts);
+      else out.push([`${look} · ${name} (page)`, r]);
+    }
+  }
+  return { out, brief };
+}
+
+test('the owner\'s own names, titles and addresses pass untouched on success and failure lines; nothing internal reaches a client in the reviewer\'s states', async () => {
+  const failures: string[] = [];
+  const { out: all } = await reviewScene(false);
+  for (const [name, r] of all) assertClean(failures, name, withoutOwnerWords(r.body), r.headers['content-type'] ?? 'text/html');
+  if (failures.length) assert.fail(`Client-visible leaks (${failures.length}):\n${failures.join('\n')}`);
+  const pick = (n: string) => all.find(([k]) => k === n)![1].body;
+  for (const look of ['old look', 'new look']) {
+    const activity = readable(pick(`${look} · activity`), 'text/html');
+    for (const name of OWNER_NAMES) has(activity, new RegExp(`Brand “${name}” created\\.`), `${look}: "${name}" is shown as written`);
+    for (const title of OWNER_TITLES) {
+      has(activity, new RegExp(`“${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}” written \\(version 2\\)\\.`), `${look}: "${title}" on a success line`);
+      has(activity, new RegExp(`Not published: “${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}” needs a picture`), `${look}: "${title}" on a failure line`);
+    }
+    has(activity, new RegExp(`Published and verified at ${OWNER_URL.replace(/[./]/g, '\\$&')}`), `${look}: the owner's address is shown as written`);
+    hasNot(activity, /Something stopped this task before it finished[\s\S]{0,40}(created|written|verified)/, `${look}: no success line became a failure`);
+    has(activity, /Your website connection can read but cannot write\. Reconnect it with write access\./, `${look}: the website check stays an instruction`);
+    has(activity, /It will not try again by itself/, `${look}: an exhausted retry does not promise another`);
+    hasNot(activity, /We try again automatically/, `${look}: no automatic retry is promised for an exhausted one`);
+    has(pick(`${look} · social (no linked profile)`), /Your social accounts are not linked yet\. Ask whoever set up your account to link them\./);
+    has(pick(`${look} · business added (owner name) (address, decoded)`), new RegExp(`^${OWNER_NAMES[0]} ${look === 'old look' ? 'North' : 'South'} is added\\.`), `${look}: the notice keeps the owner's business name`);
+    has(pick(`${look} · refused POST (budget) (address, decoded)`), /^There is not enough writing allowance left this month/, `${look}: the address carries the owner's words, not the engine's`);
+  }
+  // The founder: the same sentences, with the raw text as Technical detail, on notices too.
+  const { out: founderAll } = await reviewScene(true);
+  const fp = (n: string) => founderAll.find(([k]) => k === n)![1].body;
+  has(fp('old look · refused POST (budget) (page)'), /<summary>Technical detail<\/summary><p class="muted">Writing allowance: monthly ceiling reached\. Used 7,200; ceiling 1;[^<]*shortfall 32,000/, 'the founder reads used, ceiling and shortfall');
+  has(fp('old look · social (no linked profile)'), /<summary>Technical detail<\/summary>[\s\S]*externalId/, 'the founder reads the social setup steps');
+  has(fp('old look · article campaign'), /<summary>Technical detail<\/summary><p class="muted">OpenAI image request failed/, 'the founder reads the raw image task text');
+});
+
+test('the dictionary never rewrites the owner\'s words and only says true things', () => {
+  for (const name of OWNER_NAMES) {
+    assert.equal(ownerActivityWords(`Brand “${name}” created.`, 'brand.created'), `Brand “${name}” created.`);
+    assert.equal(noticeWords(`${name} is added. Start with its website.`), `${name} is added. Start with its website.`);
+  }
+  for (const title of OWNER_TITLES) {
+    for (const line of [`“${title}” written (version 1).`, `“${title}” marked omitted.`, `Plan “${title}” accepted.`]) { assert.equal(noticeWords(line), line); assert.equal(ownerActivityWords(line, 'brief.status'), line); }
+    assert.equal(ownerActivityWords(`Not published: “${title}” needs a picture.`, 'publish.held'), `Not published: “${title}” needs a picture.`);
+  }
+  assert.equal(ownerActivityWords(`Published and verified at ${OWNER_URL} (version 2).`, 'publish.verified'), `Published and verified at ${OWNER_URL} (version 2).`);
+  assert.equal(ownerWords('The bounded retry allowance or search ceiling is exhausted.').includes('We try again automatically'), false);
+  assert.equal(ownerWords('The search engine could not process this research request. The bounded retry allowance or search ceiling is exhausted. Explicit owner resume is required.').includes('We try again automatically'), false);
+  assert.equal(researchWords({ category: 'transient' }, { reason: 'retries_exhausted' }).next.includes('We try again'), false);
+  assert.equal(researchWords({ category: 'transient' }, { retrying: true }).next.includes('We try again'), true);
+  assert.equal(ownerWords('Website: The token can read the repository but cannot write to it.'), 'Website: Your website connection can read but cannot write. Reconnect it with write access.');
+  assert.equal(noticeWords('Production pack choices saved for this brand.').startsWith('Something'), false);
+});
+
+test('a handed-off creative set: every state label and evidence line the set page prints stays neutral', async () => {
+  const { postLadder, trackedLinkLadder, exportLadder, STAGE_LABEL } = await import('../src/creative-studio/distribution.js');
+  const failures: string[] = [];
+  const handoff = { createdAt: '2026-11-01T10:00:00.000Z', trackedLink: { utmCampaign: 'spring', utmContent: 'c1-x', channel: 'email' } } as never;
+  const at = '2026-11-03T09:00:01.000Z', when = '2026-11-03T09:00:00.000Z';
+  const plans = [null, { materialized: false, events: [], jobState: null, scheduledFor: when }, { materialized: true, events: [], jobState: 'queued', scheduledFor: when },
+    { materialized: true, events: [{ kind: 'failed', at, code: 'rejected' }], jobState: 'failed', scheduledFor: when }, { materialized: true, events: [{ kind: 'accepted', at }], jobState: 'done', scheduledFor: when },
+    { materialized: true, events: [{ kind: 'published', at }], jobState: 'succeeded', scheduledFor: when }, { materialized: true, events: [{ kind: 'outcome_unknown', at }], jobState: 'running', scheduledFor: when },
+    { materialized: false, events: [], jobState: 'cancelled', scheduledFor: when, cancelled: true }, { materialized: true, events: [], jobState: 'cancelled', scheduledFor: when, superseded: true }] as never[];
+  const ladders = [...plans.map((p) => postLadder(handoff, p, true)), postLadder(handoff, null, false), trackedLinkLadder(handoff, null), exportLadder(handoff)];
+  for (const ladder of ladders) for (const st of ladder) assertClean(failures, `ladder ${st.stage} (${st.status})`, `${STAGE_LABEL[st.stage]} · ${st.evidence}`, 'text/plain');
+  if (failures.length) assert.fail(`Client-visible leaks (${failures.length}):\n${[...new Set(failures)].join('\n')}`);
 });
