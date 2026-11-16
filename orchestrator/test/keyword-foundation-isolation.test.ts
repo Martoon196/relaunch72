@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 // Keyword-first planning is wired behind SEO_BLOG_KEYWORD_POOL (off by default). Only these files may import the
 // foundation modules; with the switch off none of them constructs or calls a keyword research provider.
 const NEW_MODULES = ['keyword/dataforseo-labs', 'seo-blog/keyword-pool', 'seo-blog/traffic-estimate', 'seo-blog/keyword-store-shape'];
-const WIRING = ['seo-blog/keyword-fill', 'seo-blog/engine', 'seo-blog/types', 'seo-blog/store', 'portal/seo-blog-service'];
+const WIRING = ['seo-blog/keyword-fill', 'seo-blog/keyword-planning', 'seo-blog/engine', 'seo-blog/types', 'seo-blog/store', 'portal/seo-blog-service'];
 const src = fileURLToPath(new URL('../src/', import.meta.url));
 
 function files(dir: string): string[] {

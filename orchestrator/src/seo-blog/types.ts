@@ -435,6 +435,8 @@ export interface ArticleBrief {
   readonly articleId: string | null;
   /** Which parts of the engine ran when this brief was planned (internal). */
   readonly engine?: EngineStamp;
+  /** The measured search target this brief answers, its secondary phrases and real searched questions (keyword-first planning). */
+  readonly seo?: import('./keyword-planning.js').BriefSeo;
 }
 
 export interface TopicPlan {

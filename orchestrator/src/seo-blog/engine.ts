@@ -69,6 +69,8 @@ interface PlanExecution {
   readonly metrics?: KeywordProvider;
   /** True once a search-numbers request in this run was skipped or failed (the wrapper still answers with no rows). */
   readonly numbersUnavailable?: () => boolean;
+  /** The keyword shortlist saved on the planning task when it started (so a resumed run searches the same phrases). */
+  readonly shortlist?: readonly ShortlistRow[];
   readonly research?: ResearchBundle;
   readonly modelResult?: JsonCallResult<PlannedCluster>;
   readonly planId: string;
@@ -84,6 +86,7 @@ import { marketForLocale, type KeywordResearchProvider, type LabsCallResult, typ
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
+import { bindBriefs, briefSeo, planningGuidance, planningShortlist, type ShortlistRow } from './keyword-planning.js';
 import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
@@ -1138,6 +1141,8 @@ export class SeoBlogEngine {
   private async runProgrammePlanJob(claim: Job): Promise<Job> {
     const brand=await this.store.getBrand(claim.brandId); if(!brand) throw new SeoBlogError(404,'Brand not found.');
     const profile=await this.store.latestProfile(claim.brandId); const authority=programmeAuthorityFor(claim,brand,profile);
+    // Keyword-first planning: the shortlist is fixed when the task starts, so a resumed run searches the same phrases.
+    const shortlistNow=this.keywordListsReady&&claim.payload.keywordShortlist===undefined?await this.currentShortlist(claim.brandId):null;
     let ready=await this.programmeTransaction(claim,authority,(s)=>{
       const current=s.job;if(!current) throw new SeoBlogError(404,'Planning task not found.');
       if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
@@ -1145,7 +1150,7 @@ export class SeoBlogEngine {
       const unreceiptedLegacyClaim=!run&&current.attempts>1;
       const source=programmeInputSnapshot(s,authority);
       if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
-      const withRun={...current,payload:{...current.payload,programme:run}};
+      const withRun={...current,payload:{...current.payload,programme:run,...(shortlistNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:shortlistNow}:{})}};
       if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
@@ -1177,6 +1182,7 @@ export class SeoBlogEngine {
           return [...answer.keywordMetrics??[]];
         }},numbersUnavailable:()=>numbersUnavailable}:{}),
         research:run.research,modelResult:run.modelReceipt,
+        ...(Array.isArray(ready.payload.keywordShortlist)?{shortlist:ready.payload.keywordShortlist as ShortlistRow[]}:{}),
         beforeModel:async(research)=>{
           let permitted=false;
           ready=await this.programmeTransaction(claim,authority,(s)=>{
@@ -1280,7 +1286,11 @@ export class SeoBlogEngine {
       inventory = await this.refreshInventory(brandId);
     }
     const pages = inventory?.pages ?? [];
-    const seeds = researchQuerySeeds({
+    // Keyword-first planning (SEO_BLOG_KEYWORD_POOL): research runs on the shortlisted measured phrases.
+    // Read back from the store: a website refresh just above returns the pages without the list it keeps.
+    const keywordPool = this.keywordListsReady ? (await this.store.getInventory(brandId))?.keywordPool ?? null : null;
+    const shortlist = execution ? execution.shortlist ?? [] : keywordPool ? await this.currentShortlist(brandId) : [];
+    const seeds = shortlist.length ? shortlist.slice(0, USAGE_ESTIMATES.searchPerPlan).map((r) => r.phrase) : researchQuerySeeds({
       focus: payload.focus, audiences: profile.audiences, positioning: profile.positioning,
       categories: (brand.settings.programme?.structure?.categories ?? []).map((c) => c.label),
       limit: USAGE_ESTIMATES.searchPerPlan,
@@ -1305,7 +1315,7 @@ export class SeoBlogEngine {
     const planId = execution?.planId??randomUUID();
     const result = execution?.modelResult ?? await proposeCluster(await this.methodLlm(brand,profile,'planning','plan:'+planId,research.sources), {
       brandName: brand.name, profile, inventory: pages, sources: research.sources,
-      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
+      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null,planningGuidance(shortlist)].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
     });
     if(execution) { if(!execution.modelResult) await execution.recordModel(result); }
     else await this.recordGeneration(brandId, result.record, 'plan');
@@ -1323,12 +1333,15 @@ export class SeoBlogEngine {
     ];
     const usedSlugs = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
     const briefs: ArticleBrief[] = [];
+    const bound = keywordPool || shortlist.length ? bindBriefs(cluster.map((item) => ({ key: item.slug, targetQuery: item.target_query, workingTitle: item.working_title })), shortlist) : null;
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
       let slug = item.slug;
       for (let n = 2; usedSlugs.has(slug); n++) slug = `${item.slug}-${n}`.slice(0, 80);
       usedSlugs.add(slug);
       const metric = research.keywordMetrics.find((m) => m.keyword.toLowerCase() === item.target_query.toLowerCase() && m.volume !== null);
+      const seo = bound && keywordPool ? briefSeo({ targetQuery: item.target_query, workingTitle: item.working_title, bound: bound.get(item.slug) ?? null, pool: keywordPool!, now: this.now() }) : null;
+      const seoMeasured = seo?.primary.basis === 'measured' && seo.primary.searches !== null;
       const brief: ArticleBrief = {
         ...(execution ? {programme:execution.provenance} : {}),
         id: slugToId.get(item.slug)!, planId, brandId, role: item.role, slug,
@@ -1339,12 +1352,16 @@ export class SeoBlogEngine {
         whyFit: item.why_fit,
         demand: metric
           ? { kind: 'measured', volume: metric.volume, competition: metric.difficulty, provider: metric.source, retrievedAt: this.now() }
-          : { kind: 'qualitative', rationale: 'No measured search data was available; chosen from the brand’s audiences, offers, content gaps and research.' },
+          : seoMeasured
+            // Kept filled for the older screens, from the stored list, with a neutral label.
+            ? { kind: 'measured', volume: seo!.primary.searches, competition: null, provider: 'keyword list', retrievedAt: seo!.primary.measuredAt ?? this.now() }
+            : { kind: 'qualitative', rationale: 'No measured search data was available; chosen from the brand’s audiences, offers, content gaps and research.' },
         sourceIds: item.source_ids.map((id) => short.get(id)?.id).filter((id): id is string => Boolean(id)),
         duplicate,
         status: duplicate.verdict === 'skip' || duplicate.verdict === 'update_existing' ? 'postponed' : 'planned',
         suggestedAtUtc: null, articleId: null,
-        engine: { ...planStamp, numbers: briefNumbers(planNumbers, Boolean(metric)) },
+        engine: { ...planStamp, numbers: briefNumbers(planNumbers, Boolean(metric) || seoMeasured) },
+        ...(seo ? { seo } : {}),
       };
       comparable.push({ id: brief.id, title: brief.workingTitle, targetQuery: brief.targetQuery, slug: brief.slug, sibling: true });
       briefs.push(brief);
@@ -2212,6 +2229,13 @@ export class SeoBlogEngine {
   async keywordList(actor: Actor, brandId: string): Promise<import('./keyword-fill.js').InventoryKeywordPool | null> {
     await this.brandFor(actor, brandId);
     return (await this.store.getInventory(brandId))?.keywordPool ?? null;
+  }
+
+  /** The planning shortlist from the stored list now, leaving out phrases existing briefs already target. */
+  private async currentShortlist(brandId: string): Promise<ShortlistRow[]> {
+    const [inventory, briefs] = await Promise.all([this.store.getInventory(brandId), this.store.listBriefs(brandId)]);
+    const used = briefs.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => b.seo?.primary.phrase).filter((p): p is string => Boolean(p));
+    return planningShortlist(inventory?.keywordPool ?? null, used, this.now());
   }
 
   private keywordChoices(brand: Brand): KeywordChoices | null {
@@ -3291,7 +3315,8 @@ export class SeoBlogEngine {
     if(job.kind==='plan'&&!programmeRun(job)?.modelReceipt) {
       const run=programmeRun(job);const profile=await this.store.latestProfile(brandId);
       const hold=brand.settings.programme?.researchHold;
-      const seeds=profile?researchQuerySeeds({focus:typeof job.payload.focus==='string'?job.payload.focus:null,audiences:profile.audiences,positioning:profile.positioning,categories:run?.snapshot.categoryLabels??[],limit:USAGE_ESTIMATES.searchPerPlan}):[];
+      const saved=Array.isArray(job.payload.keywordShortlist)?(job.payload.keywordShortlist as ShortlistRow[]):[];
+      const seeds=saved.length?saved.slice(0,USAGE_ESTIMATES.searchPerPlan).map((r)=>r.phrase):profile?researchQuerySeeds({focus:typeof job.payload.focus==='string'?job.payload.focus:null,audiences:profile.audiences,positioning:profile.positioning,categories:run?.snapshot.categoryLabels??[],limit:USAGE_ESTIMATES.searchPerPlan}):[];
       const complete=!!run&&!run.modelStart&&!run.attempts.some(a=>a.kind!=='metrics'&&!a.receivedAt)&&seeds.length>0&&seeds.every(query=>run.attempts.some(a=>a.receipt&&a.querySha===programmeSha({input:run.snapshot.sha,query,locale:brand.locale,limit:6,provider:this.deps.search.id,kind:'serp'})));
       if(!complete||hold&&hold.jobId!==job.id)throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
       return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId},state:'queued',runAfter:this.now(),error:null,progress:'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
