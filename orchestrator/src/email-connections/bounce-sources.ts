@@ -12,16 +12,17 @@
  * names the setting, never a value. Pressing Repair (or Continue) on the email page makes a new secret and webhook.
  */
 import type { EmailBounceService, EmailBounceSource, EmailBounceSourceLoader } from '../email-bounces/index.js';
-import { EMAIL_CONNECT_BUSINESSES, emailConnectBusiness } from './config.js';
+import { staticEligibility, type EmailConnectEligibility } from './eligibility.js';
 import type { EmailConnectionStore, StoredConnectionSource } from './store.js';
 import type { EmailConnectionVault } from './vault.js';
 
 const SECRET = /^[\x21-\x7e]{24,200}$/u;
 const FORCED_MIN_INTERVAL_MS = 5_000;
 
-/** One stored connection as a bounce source: its Broadcast stream is a marketing stream. */
-export function connectionBounceSource(input: { workspaceId: string; serverId: string; stream: string; serverToken: string; webhookSecret: string }): EmailBounceSource {
-  const business = emailConnectBusiness(input.workspaceId);
+/** One stored connection as a bounce source: its Broadcast stream is a marketing stream. Only an allowed business has one. */
+export function connectionBounceSource(input: { workspaceId: string; serverId: string; stream: string; serverToken: string; webhookSecret: string },
+  eligibility: EmailConnectEligibility): EmailBounceSource {
+  const business = eligibility.business(input.workspaceId);
   if (!business || !SECRET.test(input.webhookSecret) || !/^[0-9]{1,20}$/u.test(input.serverId) || !/^[a-z0-9-]{1,60}$/u.test(input.stream)) throw new Error('Invalid stored email connection');
   return Object.freeze({ key: business.sourceKey, workspaceId: business.workspaceId, token: input.serverToken, webhookSecret: input.webhookSecret,
     serverId: input.serverId, streams: new Map([[input.stream, 'marketing' as const]]), connection: true });
@@ -38,19 +39,23 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
   private sequence = 0;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
+  private readonly eligibility: EmailConnectEligibility;
 
   constructor(private readonly input: { store: Pick<EmailConnectionStore, 'sources'>; vault: EmailConnectionVault | null; service: EmailBounceService;
-    now?: () => number; log?: (line: string) => void }) {
+    now?: () => number; log?: (line: string) => void;
+    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
+    eligibility?: EmailConnectEligibility }) {
     this.now = input.now ?? Date.now;
     this.log = input.log ?? (() => undefined);
+    this.eligibility = input.eligibility ?? staticEligibility;
   }
 
-  handles(key: string): boolean { return EMAIL_CONNECT_BUSINESSES.some(business => business.sourceKey === key); }
+  handles(key: string): boolean { return this.eligibility.list().some(business => business.sourceKey === key); }
   unavailable(key: string): boolean { return this.unopenable.has(key); }
 
   private put(source: EmailBounceSource): void {
     const fresh = !this.input.service.dynamicSourceKeys().includes(source.key);
-    this.input.service.upsertSource(source, { replaces: emailConnectBusiness(source.workspaceId)?.replacesSourceKey ?? null });
+    this.input.service.upsertSource(source, { replaces: this.eligibility.business(source.workspaceId)?.replacesSourceKey ?? null });
     this.unopenable.delete(source.key);
     // A newly added source is read at once, so bounces from before the webhook existed are known straight away.
     if (fresh) void this.input.service.sweepSource(source).catch(() => undefined);
@@ -62,7 +67,7 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
     this.put(source);
   }
   remove(workspaceId: string): void {
-    const business = emailConnectBusiness(workspaceId);
+    const business = this.eligibility.business(workspaceId);
     if (!business) return;
     this.appliedAt.set(business.sourceKey, ++this.sequence);
     this.input.service.removeSource(business.sourceKey);
@@ -74,7 +79,7 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
       if (!this.input.vault) throw new Error('no key');
       return connectionBounceSource({ workspaceId: row.workspaceId, serverId: row.serverId, stream: row.stream,
         serverToken: this.input.vault.open(row.workspaceId, 'server_token', row.sealedServerToken),
-        webhookSecret: this.input.vault.open(row.workspaceId, 'webhook_secret', row.sealedWebhookSecret) });
+        webhookSecret: this.input.vault.open(row.workspaceId, 'webhook_secret', row.sealedWebhookSecret) }, this.eligibility);
     } catch {
       if (!this.warned) {
         this.warned = true;
@@ -93,7 +98,7 @@ export class EmailConnectionBounceSources implements EmailBounceSourceLoader {
       const rows = await this.input.store.sources();
       const wanted = new Map<string, EmailBounceSource>(), unreadable = new Set<string>();
       for (const row of rows ?? []) {
-        const business = emailConnectBusiness(row.workspaceId);
+        const business = this.eligibility.business(row.workspaceId);
         if (!business) continue;
         const source = this.open(row);
         if (source) wanted.set(source.key, source); else unreadable.add(business.sourceKey);

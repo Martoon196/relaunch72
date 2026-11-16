@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { EmailConnectionSecretField } from './vault.js';
-import { EMAIL_CONNECT_BUSINESSES } from './config.js';
+import { staticEligibility, type EmailConnectEligibility } from './eligibility.js';
 
 export type EmailConnectionStatus = 'not_connected' | 'creating' | 'dns_pending' | 'verified' | 'needs_attention' | 'disconnected';
 export type EmailConnectionStep = 'server' | 'stream' | 'secret' | 'webhook' | 'domain';
@@ -147,7 +147,9 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
   private answered = false;
   constructor(private readonly pool: Pick<Pool, 'query' | 'connect'>, private readonly options: { now?: () => number; log?: (line: string) => void;
     /** A dedicated small pool for the run lock (the platform gives it one connection of its own). */
-    lockPool?: Pick<Pool, 'connect'> } = {}) {}
+    lockPool?: Pick<Pool, 'connect'>;
+    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
+    eligibility?: EmailConnectEligibility } = {}) {}
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
 
@@ -303,9 +305,12 @@ export class PgEmailConnectionStore implements EmailConnectionStore {
    * 0155 pins app_private.email_connections to the Property Predator workspace, so while only that business is allowed
    * no other row can exist: the answer is certainly false. Once a second business is allowed (a later migration lifts
    * the pin and adds a definer read for this), this refuses until that read is wired here.
+   *
+   * STAGE 2 (database allow-list, migration 0157) replaces this count with a SQL read of whether another business's
+   * row holds the domain. Until then only the "how many are allowed" question goes through the eligibility seam.
    */
   async otherConnectionHolds(workspaceId: string, _domain: { id: number | null; name: string }): Promise<boolean> {
-    const others = EMAIL_CONNECT_BUSINESSES.filter(business => business.workspaceId !== workspaceId.toLowerCase());
+    const others = (this.options.eligibility ?? staticEligibility).list().filter(business => business.workspaceId !== workspaceId.toLowerCase());
     if (others.length === 0) return false;
     throw new Error('Cannot tell whether another business holds this domain');
   }

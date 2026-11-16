@@ -12,7 +12,7 @@ import type { EmailConnectionStore, EmailConnectionState } from '../email-connec
 import type { EmailConnectionVault } from '../email-connections/vault.js';
 import { createPostmarkServerApi, type PostmarkServerApi } from '../email-connections/postmark-account-api.js';
 import { confirmBounceWebhook, webhookCheckLine, type WebhookCheck } from '../email-connections/webhook-check.js';
-import { emailConnectBusiness } from '../email-connections/config.js';
+import { staticEligibility, type EmailConnectEligibility } from '../email-connections/eligibility.js';
 import { connectionWebhookUrl } from '../email-connections/service.js';
 import { EMAIL_TERMS_VERSION } from '../email-connections/terms.js';
 import { normalizePpEmail } from '../pp-followup/config.js';
@@ -182,7 +182,9 @@ export class OwnerSendingService {
     /** Whether alert emails can be sent (a platform sender is configured). */
     mailer?: () => boolean;
     /** Whether this deployment lets stored connections send (EMAIL_CONNECT enabled and bounce handling on). */
-    allowed?: boolean }) {
+    allowed?: boolean;
+    /** Which businesses may connect (the platform passes its one; absent: today's static list). */
+    eligibility?: EmailConnectEligibility }) {
     this.fetcher = input.fetcher ?? fetch;
   }
   private channel(): BannerChannel { return { mailer: this.input.mailer?.() === true, allowed: this.input.allowed !== false }; }
@@ -282,7 +284,7 @@ export class OwnerSendingService {
    */
   async webhookVerified(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<WebhookCheck> {
     // Our bounce address for this business: the same value Connect gave Postmark (portal origin + the business's source key).
-    const business = emailConnectBusiness(identity.workspaceId);
+    const business = (this.input.eligibility ?? staticEligibility).business(identity.workspaceId);
     const expectedUrl = business && this.input.portalOrigin ? connectionWebhookUrl(this.input.portalOrigin, business) : null;
     const check = await confirmBounceWebhook({ webhookId: connection.webhookId, stream: connection.stream ?? 'broadcast', expectedUrl, token: () => this.token(identity),
       api: token => this.input.serverApi?.(token) ?? createPostmarkServerApi({ serverToken: token, fetch: this.fetcher }) });

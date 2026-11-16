@@ -11,6 +11,7 @@ import { PP_FOLLOWUP_WORKSPACE_ID, type PpFollowupUnsubscriber } from './reposit
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 /** Webhook: POST /api/provider-webhooks/postmark/pp, Basic user "pp", password PP_POSTMARK_WEBHOOK_SECRET. */
+// PP-only by design until a later stage (generic follow-up engine); not an email-connect eligibility decision.
 export function ppEmailBounceSourceDefault(config: PpMarketingConfig | null | undefined): EmailBounceSourceDefault | null {
   return config ? { key: 'pp', workspaceId: PP_FOLLOWUP_WORKSPACE_ID, tokenEnv: 'PP_POSTMARK_SERVER_TOKEN', webhookSecretEnv: 'PP_POSTMARK_WEBHOOK_SECRET',
     marketingStreams: [config.stream], serviceStreams: [] } : null;
