@@ -23,6 +23,7 @@ GRANT SELECT,UPDATE ON app_private.creative_media_signup_policy TO r72_security_
 GRANT SELECT,INSERT ON app_private.creative_media_signups TO r72_security_definer;
 GRANT INSERT ON app.seo_blog_brands TO r72_security_definer;
 CREATE POLICY seo_blog_brands_media_signup_insert ON app.seo_blog_brands FOR INSERT TO r72_security_definer WITH CHECK(true);
+GRANT EXECUTE ON FUNCTION app_private.provision_customer_workspace_with_setup_delivery(text,text,text,text,text,text,text,bytea,bytea,text,text,text,uuid,smallint,text,bytea,bytea,bytea) TO r72_security_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_security_definer;
 SET LOCAL ROLE r72_security_definer;
 CREATE FUNCTION app_private.creative_media_signup(p_command uuid,p_input jsonb,p_source bytea,p_setup_hash bytea,p_email_hash bytea,
