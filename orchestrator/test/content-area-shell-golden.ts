@@ -16,7 +16,7 @@ export const GOLDEN_NOW = '2026-11-16T12:00:00.000Z';
 /** Where the recording lives, beside this file. */
 export const GOLDEN_FILE = 'content-area-shell-golden.json.gz';
 /** The commit the recording was made from. */
-export const GOLDEN_BASE = '37eda58';
+export const GOLDEN_BASE = 'ed75731';
 
 const B = `/portal/seo-blog/b/${BRAND_ID}`;
 
