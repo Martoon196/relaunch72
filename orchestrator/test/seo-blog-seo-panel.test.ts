@@ -1,0 +1,168 @@
+/**
+ * The SEO report on the article page: what it shows (measured and unmeasured searches, no invented numbers, no brief),
+ * that it escapes everything, adds no main action and no form, names no supplier, method or model, opens on ?open=seo,
+ * appears in both looks, and that it is the ONLY change to the pages (preview off).
+ */
+import test, { mock } from 'node:test';
+import assert from 'node:assert/strict';
+import { editorPage, ARTICLE_FOLDS } from '../src/portal/seo-blog-article-view.js';
+import { SEO_PANEL_END, SEO_PANEL_START } from '../src/portal/seo-blog-seo-panel.js';
+import { OWNER } from './seo-blog-fixtures.js';
+import { websiteFixture } from './seo-blog-website-fixtures.js';
+import * as fx from './seo-blog-article-page-fixtures.js';
+import * as sp from './seo-panel-fixtures.js';
+import { seoPanelPieces, withoutSeoPanel } from './seo-panel-strip.js';
+import { articleId, BRAND_ID, call, identity, showcase } from './content-area-shell-fixtures.js';
+import { goldenPages, GOLDEN_NOW } from './content-area-shell-golden.js';
+
+// The tests choose the look themselves; the build machine's own setting must not leak in.
+delete process.env.CONTENT_AREA_PREVIEW;
+
+const newLook = () => ({ ...fx.shell(), preview: { needsYou: 1, path: '/x' } }) as ReturnType<typeof fx.shell>;
+/** The panel's two pieces, joined. */
+const panelOf = (html: string) => [...html.matchAll(new RegExp(`${SEO_PANEL_START}([\\s\\S]*?)${SEO_PANEL_END}`, 'g'))].map((m) => m[1]).join('\n');
+/** What a person reads in the panel: no style, no tags. */
+const visible = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+const HOSTILE = '<script>alert("x")</script><img src=x onerror=alert(1)> & "quotes" \'apos\'';
+const SECRET_WORDS = /dataforseo|data for seo|anthropic|claude|openai|\bgpt\b|\bmodel\b|method pack|writing method|production.core|blog.writing|editorial.planning|keyword provider|supplier/i;
+
+const briefs = { measured: sp.measured(), unmeasured: sp.brief(), none: null, zeroless: sp.brief({ demand: { kind: 'measured', volume: null, competition: null, provider: 'dataforseo', retrievedAt: 'not a date' } }) } as const;
+
+test('in reading mode the panel is two marked pieces: a quiet score line near the top and a fold just above "How it appears in Google"', () => {
+  for (const shell of [fx.shell(), newLook()]) {
+    const html = editorPage(shell, { ...fx.pageData('ready'), articleBrief: sp.brief() });
+    assert.equal(seoPanelPieces(html), 2);
+    assert.match(html, /<!--r72-seo-panel--><p class="ap-quiet-line sp-line"><span class="sp-pill sp-(?:hi|mid|lo)">SEO score \d+ out of 100<\/span> <a href="\/portal\/seo-blog\/b\/[^"]+\/articles\/[^"]+\?open=seo#seo">/);
+    assert.match(html, /<div class="ap-folds">\n<!--r72-seo-panel--><details class="ap-fold sp" id="seo"><summary><h2>SEO report: \d+ out of 100<\/h2><\/summary>[\s\S]*?<!--\/r72-seo-panel-->\n<details class="ap-fold" id="google">/);
+    // Opens on ?open=seo, which the router accepts because it is a known fold.
+    assert.ok((ARTICLE_FOLDS as readonly string[]).includes('seo'));
+    assert.match(editorPage(shell, { ...fx.pageData('ready'), articleBrief: sp.brief(), open: ['seo'] }), /<details class="ap-fold sp" id="seo" open>/);
+  }
+  // Not while editing, and not before the article is written.
+  assert.equal(seoPanelPieces(editorPage(fx.shell(), { ...fx.pageData('ready'), mode: 'edit', articleBrief: sp.brief() })), 0);
+  assert.equal(seoPanelPieces(editorPage(fx.shell(), { ...fx.pageData('writing'), articleBrief: sp.brief() })), 0);
+});
+
+test('measured searches show the number and when it was measured, never who measured it; otherwise one plain sentence and no number anywhere', () => {
+  const page = (b: typeof briefs[keyof typeof briefs]) => panelOf(editorPage(newLook(), { ...fx.pageData('ready'), articleBrief: b }));
+  const m = visible(page(briefs.measured));
+  assert.match(m, /1,300 searches a month in Google/);
+  assert.match(m, /Measured on 3 November 2026\./);
+  assert.match(m, /depends on where the page ranks in Google, so we do not guess a number/);
+  assert.doesNotMatch(m, /42|competition/i, 'competition is not shown');
+  for (const b of [briefs.unmeasured, briefs.none, briefs.zeroless]) {
+    const demand = /How many people search for this(.*?)How many visits/.exec(visible(page(b)))![1]!;
+    assert.equal(demand.trim(), 'We do not have search numbers for this phrase yet.');
+    assert.doesNotMatch(visible(page(b)), /searches a month|traffic|visits a month|\d[\d,]* (?:visits|visitors|clicks)/i, 'no invented numbers');
+  }
+  // The engine's own reasoning text is not shown either.
+  assert.doesNotMatch(visible(page(briefs.unmeasured)), /No measured search data/);
+});
+
+test('what the article aims for, tags and data for search engines: truthful rows, including no tags and no topics', () => {
+  const v = visible(panelOf(editorPage(fx.shell(), { ...fx.pageData('ready'), articleBrief: sp.brief() })));
+  assert.match(v, /The search phrase appraise a property deal/);
+  assert.match(v, /What the searcher wants Learning: they want to understand how something works\./);
+  assert.match(v, /Why we picked it Investors who come to Martin Howard Property/);
+  assert.match(v, /Questions people ask about it How long should a property appraisal take\?/);
+  assert.match(v, /Tags None\. Articles do not have tags, so we do not send any\./);
+  assert.match(v, /Topics on your website None\. Your website connection does not offer topics\./);
+  assert.match(v, /Author None set, so your business name is shown as the author\./);
+  assert.match(v, /Main picture None yet\./);
+  assert.match(v, /Data for search engines We send the title, the Google title/, 'a content API site renders its own tags');
+  assert.match(v, /questions and answers are not marked as a questions block/);
+  assert.match(v, /SEO score \d+ out of 100\. These are the same kind of checks SEO plugins such as Rank Math and Yoast run, plus checks they cannot run\. It is our score; their number can differ a little\./);
+  const none = visible(panelOf(editorPage(fx.shell(), { ...fx.pageData('ready'), articleBrief: null })));
+  assert.match(none, /The search phrase is not on record for this article/);
+  assert.match(none, /Left out because they cannot be checked for this article: the search phrase checks/);
+});
+
+test('the checks: failures first, each with what to do, linked to the existing control; no picture is a clear fail', () => {
+  const html = panelOf(editorPage(fx.shell(), { ...fx.pageData('ready'), articleBrief: sp.brief() }));
+  const v = visible(html);
+  assert.ok(v.indexOf('Not yet (') < v.indexOf('Nearly there ('));
+  assert.match(html, /A main picture with a picture description <\/strong> <span class="sp-tag">Not yet<\/span>|A main picture with a picture description<\/strong> <span class="sp-tag">Not yet<\/span>/);
+  assert.match(html, /The article has no main picture yet\.<\/p><p class="sp-todo"><span class="sp-label">What to do:<\/span> Add a picture: upload a photo, use one from your website or ask us to make one\. <a class="sp-fix" href="#picture">Add a picture<\/a>/);
+  assert.match(html, /<a class="sp-fix" href="\/portal\/seo-blog\/b\/[^"]+\/articles\/[^"]+\?edit=1#google">Edit the Google title<\/a>/);
+  assert.match(html, /<a class="sp-fix" href="\/portal\/seo-blog\/b\/[^"]+\/articles\/[^"]+\?edit=1#opening">Edit the opening paragraph<\/a>/);
+  // Every fix link points at a control the page already has.
+  for (const m of html.matchAll(/class="sp-fix" href="([^"]+)"/g)) assert.match(m[1]!, /^(#picture|#fix|\/portal\/seo-blog\/b\/[^/]+\/articles\/[^?#]+\?(edit=1(#(google|opening|part-[^"]+))?|open=rewrite#rewrite))$/, m[1]);
+  // While it is going onto the website, nothing offers editing.
+  const busy = panelOf(editorPage(fx.shell(), { ...fx.pageData('ready'), article: fx.article({ delivery: 'publishing' }), articleBrief: sp.brief() }));
+  assert.doesNotMatch(busy, /edit=1/);
+  // A live article's address cannot change, so no link offers it.
+  const live = panelOf(editorPage(fx.shell(), { ...fx.pageData('published'), articleBrief: sp.brief({ targetQuery: 'zebra crossing' }) }));
+  assert.doesNotMatch(live, /Edit the page address/);
+});
+
+test('every state, both looks, every kind of brief: no main action, no form or field, no dashes, no supplier, method or model name', () => {
+  for (const state of fx.PAGE_STATES) for (const shell of [fx.shell(), newLook()]) for (const b of Object.values(briefs)) {
+    const html = editorPage(shell, { ...fx.pageData(state), articleBrief: b, open: ['seo'] });
+    const panel = panelOf(html);
+    if (!fx.pageData(state).version) { assert.equal(panel, ''); continue; }
+    assert.doesNotMatch(panel, /data-primary|ap-primary|ca-btn|<form|<input|<button|<select|<textarea/, `${state}: the panel adds no action`);
+    assert.doesNotMatch(visible(panel), /[–—]/, `${state}: no em or en dash`);
+    assert.doesNotMatch(panel, SECRET_WORDS, `${state}: no supplier, method or model name`);
+    // At most one main action on the whole page, as before.
+    assert.ok((html.replace(/<style>[\s\S]*?<\/style>/g, '').match(/data-primary/g)?.length ?? 0) <= 1);
+  }
+});
+
+test('hostile text in every field is escaped in the panel', () => {
+  const hostileBrief = sp.brief({ targetQuery: HOSTILE, whyFit: HOSTILE, relatedQuestions: [HOSTILE, HOSTILE], searchIntent: HOSTILE as never,
+    demand: { kind: 'measured', volume: 5 as never, competition: null, provider: HOSTILE, retrievedAt: HOSTILE } });
+  const body = fx.body({ title: HOSTILE, seoTitle: HOSTILE, metaDescription: HOSTILE, excerpt: HOSTILE, slug: HOSTILE, author: { name: HOSTILE },
+    image: { kind: 'brand_asset', url: 'https://x.example/a.jpg', alt: HOSTILE, provenance: '', width: null, height: null }, cta: { label: HOSTILE, url: HOSTILE } });
+  const v = fx.version(3, body);
+  const html = editorPage(newLook(), { ...fx.pageData('ready'), version: v, article: fx.article({ currentVersionId: v.id }), versions: [v], articleBrief: hostileBrief, open: ['seo'] });
+  const panel = panelOf(html);
+  assert.doesNotMatch(panel, /<script|<img src=x|"quotes"|'apos'/, 'no raw tag or quote from the data');
+  assert.match(panel, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+  assert.doesNotMatch(panel, SECRET_WORDS);
+});
+
+test('the existing page is untouched: lifting the panel out leaves every form, field and token as it was', () => {
+  for (const state of fx.PAGE_STATES) {
+    const html = editorPage(newLook(), { ...fx.pageData(state), articleBrief: sp.brief() });
+    const without = withoutSeoPanel(html);
+    const count = (s: string, re: RegExp) => s.match(re)?.length ?? 0;
+    for (const re of [/<form\b/g, /<input\b/g, /<button\b/g, /name="_csrf"/g, /data-primary/g, /<details class="ap-fold"/g]) assert.equal(count(html, re), count(without, re), `${state} ${re}`);
+  }
+});
+
+test('preview off: through the real router, the only change to any page or form post is the SEO report on written article pages', async () => {
+  const saved = process.env.CONTENT_AREA_PREVIEW;
+  delete process.env.CONTENT_AREA_PREVIEW;
+  mock.timers.enable({ apis: ['Date'], now: Date.parse(GOLDEN_NOW) });
+  try {
+    const pages = await goldenPages({});
+    let articles = 0;
+    for (const [key, r] of Object.entries(pages)) {
+      const pieces = seoPanelPieces(r.body);
+      if (/:article(?:-\d+|-folds)?$/.test(key) && /<div class="ap-folds">/.test(r.body)) { assert.equal(pieces, 2, key); articles++; }
+      else assert.equal(pieces, 0, `${key} has no SEO report`);
+    }
+    assert.ok(articles >= 10, `${articles} written article pages carry the report`);
+  } finally { mock.timers.reset(); if (saved === undefined) delete process.env.CONTENT_AREA_PREVIEW; else process.env.CONTENT_AREA_PREVIEW = saved; }
+});
+
+test('through the real engine and router: the article\'s own brief reaches the report (getArticle returns it), in both looks', async () => {
+  const f = await websiteFixture();
+  const service = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => f.h.engine, socialCallback: async () => null } as unknown as Parameters<typeof call>[0];
+  const detail = await f.h.engine.getArticle(OWNER, f.brand.id, f.articleId);
+  assert.ok(detail.articleBrief, 'getArticle returns the article\'s brief');
+  assert.equal(detail.articleBrief!.id, detail.article.briefId);
+  const path = `/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}?open=seo`;
+  for (const opts of [{}, { headers: { cookie: 'r72_content_look=new' }, input: { contentAreaPreview: 'enabled' } }]) {
+    const r = await call(service, identity(OWNER.userId), 'GET', path, opts);
+    assert.equal(r.status, 200);
+    const v = visible(panelOf(r.body));
+    assert.ok(v.includes(detail.articleBrief!.targetQuery.replace(/&/g, '&')), 'the search phrase is shown');
+    assert.match(r.body, /<details class="ap-fold sp" id="seo" open>/);
+    assert.doesNotMatch(panelOf(r.body), SECRET_WORDS);
+  }
+  // A test double engine without the brief (older articles) still renders.
+  const s = showcase('busy');
+  const r = await call(s.service, identity(), 'GET', `/portal/seo-blog/b/${BRAND_ID}/articles/${articleId(1)}`, {});
+  assert.equal(r.status, 200);
+});

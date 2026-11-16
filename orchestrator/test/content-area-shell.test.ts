@@ -13,6 +13,7 @@ import { websiteFixture } from './seo-blog-website-fixtures.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
 import { articleId, BRAND_ID, call, HOSTILE_NAME, HOSTILE_TITLE, identity, NOW, SECRET, showcase, type Scenario } from './content-area-shell-fixtures.js';
 import { goldenPages, GOLDEN_BASE, GOLDEN_FILE, GOLDEN_NOW, type GoldenRecord } from './content-area-shell-golden.js';
+import { withoutSeoPanelResponse } from './seo-panel-strip.js';
 
 // The tests decide the switch themselves. A build machine may have the real setting in its environment (the live
 // service does once the preview is switched on), and it must not leak into the "server does not allow it" cases.
@@ -58,7 +59,7 @@ test(`with the preview off, every page and form post is byte-identical to the fo
       let compared = 0;
       for (const key of Object.keys(GOLDEN)) {
         if (allowed && newWhenAllowed(key)) continue;
-        const was = JSON.stringify(GOLDEN[key]), is = JSON.stringify(now[key]);
+        const was = JSON.stringify(GOLDEN[key]), is = JSON.stringify(withoutSeoPanelResponse(now[key]!));
         if (was !== is) assert.fail(`${name}: ${key} changed ${firstDifference(was, is)}`);
         compared++;
       }
