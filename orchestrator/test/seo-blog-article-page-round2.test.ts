@@ -129,7 +129,7 @@ test('B3: a citation never moves onto another claim', () => {
   assert.equal(restoreCitations(`Prices rose 5% in 2024.\n${A}\nThe end is near.`, 'Prices rose 5% in 2024.\n\nThe end is nigh.'), `Prices rose 5% in 2024.\n${A}\nThe end is nigh.`);
   // CR in what an older editor stored: a no-change save is still byte-identical.
   assert.equal(restoreCitations(`Prices rose ${A}.\r\nNext.`, 'Prices rose.\nNext.'), `Prices rose ${A}.\r\nNext.`);
-  assert.deepEqual(restoreCitationsDetailed(`Rates rose ${A}. Rents rose ${A}. End.`, 'Rates fell. Rents fell. End.'), { text: 'Rates fell. Rents fell. End.', droppedMarkers: 2, droppedSentences: 2, typedRemoved: 0, keptOnEdited: [], restoredFromEarlier: 0 });
+  assert.deepEqual(restoreCitationsDetailed(`Rates rose ${A}. Rents rose ${A}. End.`, 'Rates fell. Rents fell. End.'), { text: 'Rates fell. Rents fell. End.', droppedMarkers: 2, droppedSentences: 2, typedRemoved: 0, keptOnEdited: [], restoredFromEarlier: 0, notRestored: 0 });
 });
 
 test('B3: fuzz — deleted, one-word, 40% and 70% edits never leave a citation on a different claim', () => {

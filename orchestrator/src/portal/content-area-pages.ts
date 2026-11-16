@@ -15,7 +15,7 @@ import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
 import { USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
 import type { Article, ArticleBody, ArticleBrief, Brand, Destination, Job, TopicPlan, UsageKind } from '../seo-blog/types.js';
 import { csrfField, layout, SEO_BLOG_BASE, type BrandDnaDoorStatus, type Shell } from './seo-blog-view.js';
-import { longWhen, safeHttps, situation, writingStatus, type ArticleListRow, type Situation, type WritingStatus } from './seo-blog-article-view.js';
+import { longWhen, safeHttps, situation, writingStatus, type ArticleListRow, type ResumeFacts, type Situation, type WritingStatus } from './seo-blog-article-view.js';
 import { autopilot, publishingDays, type ContentAreaAutopilot } from './content-area-layout.js';
 import { CONTENT_AREA_TOKENS } from './content-area-theme.js';
 import { escapeHtml as e } from './ui.js';
@@ -28,6 +28,8 @@ export interface ContentAreaData {
   readonly jobs: readonly Job[];
   readonly briefs: readonly ArticleBrief[];
   readonly now: string;
+  /** Current facts a stopped write is judged against (the article page's ResumeFacts). */
+  readonly resume?: ResumeFacts | null;
 }
 
 /** What the engine needs before it writes for an empty publishing day (all read-only). */
@@ -56,6 +58,8 @@ interface Item {
   readonly own: Situation | null;
   readonly gone: { readonly id: string; readonly label: string; readonly removed: boolean; readonly other: boolean } | null;
   readonly retryJobId: string | null;
+  /** The retry button's words ("Write it now" once the cause was cleared). */
+  readonly retryLabel?: string | undefined;
   readonly link: { href: string; label: string } | null;
   /** Set when this needs the owner, with the kind of problem. */
   readonly problem: Problem | null;
@@ -105,9 +109,9 @@ function groups(b: Brand, d: ContentAreaData): Groups {
     const brief = briefs.get(a.briefId) ?? null;
     const base = { row, brief, href: brandHref(b, `articles/${a.id}`), excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', picture: pictureSrc(b, a, row.image), alt: row.image?.alt ?? '', gone: null };
     if (!a.currentVersionId) {
-      const w = writingStatus(b, a, a.briefId, d.jobs);
+      const w = writingStatus(b, a, a.briefId, d.jobs, d.resume);
       const problem = stalled(w);
-      out[place(problem)].push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, own: null, retryJobId: w.retryJobId, link: nextStep(w, problem), problem });
+      out[place(problem)].push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, own: null, retryJobId: w.retryJobId, retryLabel: w.retryLabel, link: nextStep(w, problem), problem });
       continue;
     }
     const sit = situation(a, b, d.now, websites);
@@ -123,9 +127,9 @@ function groups(b: Brand, d: ContentAreaData): Groups {
   }
   for (const brief of d.briefs) {
     if (brief.status !== 'generating' || d.articles.some((r) => r.article.briefId === brief.id)) continue;
-    const w = writingStatus(b, null, brief.id, d.jobs);
+    const w = writingStatus(b, null, brief.id, d.jobs, d.resume);
     const problem = stalled(w);
-    out[place(problem)].push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, own: null, gone: null, retryJobId: w.retryJobId, link: nextStep(w, problem), problem });
+    out[place(problem)].push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, own: null, gone: null, retryJobId: w.retryJobId, retryLabel: w.retryLabel, link: nextStep(w, problem), problem });
   }
   const order: Record<Problem, number> = { paused: 0, site_gone: 1, no_website: 2, failed: 3, writing: 4, held: 5, owner_hold: 6, read: 7, stuck: 8 };
   out.stopped.sort((x, y) => (x.row?.article.createdAt ?? '~').localeCompare(y.row?.article.createdAt ?? '~'));
@@ -219,7 +223,7 @@ const arrow = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fil
 const chevron = '<svg class="ca-ic ca-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg>';
 const bolt = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>';
 const amber = (href: string, label: string, cls = '') => `<a class="ca-btn ${cls}" href="${e(href)}" data-primary>${e(label)} ${arrow}</a>`;
-const retryButton = (shell: Shell, jobId: string, back: string, primary: boolean) => `<form method="post" action="${e(brandHref(shell.brand!, `jobs/${jobId}/retry`))}" class="${primary ? 'ca-hero-form' : 'ca-row-act'}">${csrfField(shell.csrf)}<input type="hidden" name="back" value="${e(back)}"><button type="submit" class="${primary ? 'ca-btn' : 'ca-btn-quiet'}"${primary ? ' data-primary' : ''}>Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`;
+const retryButton = (shell: Shell, jobId: string, back: string, primary: boolean, label = 'Try again') => `<form method="post" action="${e(brandHref(shell.brand!, `jobs/${jobId}/retry`))}" class="${primary ? 'ca-hero-form' : 'ca-row-act'}">${csrfField(shell.csrf)}<input type="hidden" name="back" value="${e(back)}"><button type="submit" class="${primary ? 'ca-btn' : 'ca-btn-quiet'}"${primary ? ' data-primary' : ''}>${e(label)}</button><span class="ca-note">Uses some of your writing allowance.</span></form>`;
 
 /** The words and the one action for the first thing that needs the owner (the article page's own sentence and action). */
 function needHero(shell: Shell, i: Item, others: number): { tag: string; title: string; text: string; action: string } {
@@ -239,7 +243,7 @@ function needHero(shell: Shell, i: Item, others: number): { tag: string; title: 
       const step = /writing service is not connected/.test(i.line) ? ' Ask whoever set up your account to connect it. Nothing written so far is lost.'
         : /^Writing was cancelled|^Writing stopped/.test(i.line) ? ' It will not carry on by itself. Activity shows what happened to it.' : '';
       return { tag: 'Needs you today', title: /^Writing was cancelled/.test(i.line) ? 'Writing was cancelled' : 'Writing has stopped', text: `${t}: ${e(i.line)}.${step}${more}`,
-        action: i.retryJobId ? retryButton(shell, i.retryJobId, 'articles', true) : amber(i.link!.href.replace(/&amp;/g, '&'), i.link!.label) };
+        action: i.retryJobId ? retryButton(shell, i.retryJobId, 'articles', true, i.retryLabel) : amber(i.link!.href.replace(/&amp;/g, '&'), i.link!.label) };
     }
     case 'held': {
       const reason = i.row!.article.hold?.reason;
@@ -429,7 +433,7 @@ export function contentArticlesPage(shell: Shell, d: ContentAreaData): string {
   const g = groups(b, d);
   const titles = { ready: 'Needs you', coming: 'Coming up', writing: 'Being written', stopped: 'Stopped', live: 'Live' } as const;
   const row = (i: Item, group: keyof typeof g) => {
-    const action = i.retryJobId ? `<form method="post" action="${e(brandHref(b, `jobs/${i.retryJobId}/retry`))}" class="ca-row-act">${csrfField(shell.csrf)}<input type="hidden" name="back" value="articles"><button type="submit" class="ca-btn-quiet">Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`
+    const action = i.retryJobId ? `<form method="post" action="${e(brandHref(b, `jobs/${i.retryJobId}/retry`))}" class="ca-row-act">${csrfField(shell.csrf)}<input type="hidden" name="back" value="articles"><button type="submit" class="ca-btn-quiet">${e(i.retryLabel ?? 'Try again')}</button><span class="ca-note">Uses some of your writing allowance.</span></form>`
       : i.link ? `<a class="ca-row-act ca-link" href="${e(i.link.href)}">${e(i.link.label)}</a>`
         : i.gone ? (i.gone.removed ? (i.gone.other ? `<a class="ca-row-act ca-link" href="${e(i.href)}">Choose another website</a>` : `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#website-connection`)}">Connect your website</a>`)
           : `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#website-connection`)}">Check the connection to ${e(i.gone.label)}</a>`) : '';
