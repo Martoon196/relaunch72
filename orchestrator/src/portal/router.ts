@@ -23,6 +23,7 @@ import type { EmailConnectionService } from '../email-connections/service.js';
 import type { OwnerSendingService } from '../email-protection/owner.js';
 import { emailConnectBusiness } from '../email-connections/config.js';
 const emailConnectionBusinessAllowed = (workspaceId: string): boolean => Boolean(emailConnectBusiness(workspaceId));
+import { emailEntryStatus, type EmailEntryStatus } from './email-connection-progress.js';
 import { handleApprovalQueue } from './approval-queue-router.js';
 import { layout as seoBlogLayout } from './seo-blog-view.js';
 import { APPROVAL_QUEUE_ROUTE, ApprovalQueueService } from './approval-queue-service.js';
@@ -2001,7 +2002,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres' && (p === '/portal/follow-ups' || p.startsWith('/portal/follow-ups/'))) {
     if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }
     if (!resolvedRequestContext || !deps.abuse || !deps.abuseHashSecret) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Native flow access is temporarily unavailable.'); return; }
-    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId }); return;
+    const entryIdentity = portalIdentity, entryDeps = deps;
+    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId,
+      emailEntry: () => emailEntry(entryDeps, entryIdentity, entryIdentity?.workspaceId ?? '') }); return;
   }
   if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
     if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }
@@ -2803,6 +2806,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           approvalsAvailable: Boolean(deps.seoBlog || deps.followupFlows || deps.companyContent),
           emailConnectAvailable: profile.id === 'property_predator_growth' && emailConnectionBusinessAllowed(snapshot.workspace.id)
             && await (deps.emailConnections?.available() ?? Promise.resolve(false)),
+          emailStatus: await emailEntry(deps, portalIdentity, snapshot.workspace.id),
         }),
       }));
     } catch {
@@ -7578,4 +7582,19 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         deps.abuse!.complete(leaseHash, outcome)));
     }
   }
+}
+
+/**
+ * The "Connect email" status card for a page that offers sending email, under exactly the home page's gating (Property
+ * Predator's portal, a business allowed to connect, the feature on and the database at 0155). null: no card. Never throws.
+ */
+async function emailEntry(deps: PostgresPortalDeps, identity: PortalSessionIdentity | null, workspaceId: string): Promise<EmailEntryStatus | null> {
+  const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+  if (!identity || profile.id !== 'property_predator_growth' || !emailConnectionBusinessAllowed(workspaceId) || !deps.emailConnections) return null;
+  try {
+    if (!(await deps.emailConnections.available())) return null;
+    const view = await deps.emailConnections.view(identity);
+    const sending = view.offered && deps.emailSending ? await deps.emailSending.view(identity, view.state).catch(() => null) : null;
+    return emailEntryStatus(view, sending);
+  } catch { return null; }
 }

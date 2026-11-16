@@ -210,7 +210,8 @@ async function page() {
   return { postmark, store, protection, call, form, hooks, writes, logs, repairLines, setSecret: (value: string) => { secret = value; } };
 }
 
-const repairButton = /action="\/portal\/email\/repair-bounces"[^>]*>[^]*?<button type="submit" class="secondary">Repair bounce reporting<\/button>/u;
+// The one primary (filled) button in this state: the next thing to do.
+const repairButton = /action="\/portal\/email\/repair-bounces"[^>]*>[^]*?<button type="submit">Repair bounce reporting<\/button>/u;
 const buttons = (html: string) => [...html.matchAll(/<button type="submit"[^>]*>([^<]+)<\/button>/gu)].map(m => m[1]);
 
 test('the Repair bounce reporting button appears only after Go live could not confirm the webhook, and the message names buttons that are on the page', async () => {
@@ -272,12 +273,12 @@ test('Repair bounce reporting: a webhook gone at Postmark is made again by the e
   h.setSecret('whsec-after-repair-0123456789-abcdefghijkl');
   response = await h.call('POST', '/portal/email/repair-bounces', h.form);
   assert.equal(response.status, 200);
-  assert.ok(response.body.includes('Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself and press Go live.'));
+  assert.ok(response.body.includes('Bounce reporting was set up again. Press Check below to confirm your records; then follow the steps to send yourself a test and go live.'));
   assert.deepEqual(h.hooks().map(hook => [hook.url, hook.password]), [[HOOK_URL, 'whsec-after-repair-0123456789-abcdefghijkl']], 'one webhook at our address, with the new secret');
   assert.equal(h.store.row!.webhookId, h.hooks()[0]!.id, 'its id is saved');
   assert.equal(h.store.row!.status, 'dns_pending');
   // The domain was adopted with both records found: the page says so and names the Check button it shows.
-  assert.match(response.body, /Your 2 records are already in place/u);
+  assert.match(response.body, /Your two records are already in place/u);
   assert.ok(buttons(response.body).includes('Check'));
   assert.deepEqual(h.repairLines().map(l => [l.outcome, l.reason]), [['remade', 'not_listed']]);
   // A second press while waiting for Check: the webhook is listed now, so nothing is made again.
@@ -441,8 +442,8 @@ test('a repair that fails keeps the Repair bounce reporting button on the page (
     assert.equal(response.status, 503, which);
     assert.ok(response.body.includes(EMAIL_CONNECTION_MESSAGES.busy), `${which}: the busy message`);
     assert.match(response.body, repairButton, `${which}: and the button`);
-    assert.ok(response.body.includes('If the email service can&#39;t reach our bounce address, this sets bounce reporting up again. You may be asked to press Check and send yourself a test again.')
-      || response.body.includes('If the email service can\'t reach our bounce address, this sets bounce reporting up again. You may be asked to press Check and send yourself a test again.'));
+    assert.ok(response.body.includes('If the email service can&#39;t reach our bounce address, this sets bounce reporting up again. Afterwards you may need to check your records and send yourself a test again; the page will show you.')
+      || response.body.includes('If the email service can\'t reach our bounce address, this sets bounce reporting up again. Afterwards you may need to check your records and send yourself a test again; the page will show you.'));
     assert.equal(h.hooks().length, 1, `${which}: nothing removed`);
   }
 });

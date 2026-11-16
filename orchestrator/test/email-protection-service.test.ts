@@ -151,8 +151,8 @@ test('every sentence a business owner reads, for each state, is plain and exact'
   assert.equal(banner({ state: 'slowed', sampleState: 'held', sampleTrip })!.title, 'We have held the rest of your list');
   assert.equal(banner({ accountHeld: true })!.text, `Marketing emails are on hold for every business that sends through our shared email account while we look into it. ${STILL_GOES} Yours are waiting and will go when the hold is lifted. You don't need to do anything.`);
   assert.equal(banner({ ownerPaused: true })!.text, 'Nothing marketing goes until you press Resume; everything is waiting. Send a test to me still works.');
-  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: true })!.text, 'Waiting for approval. We will email you.');
-  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: false })!.text, 'Waiting for approval. Check this page for the answer.');
+  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: true })!.text, 'Waiting for approval from the platform owner, which is usually quick. We will email you when it is done; nothing else is needed from you.');
+  assert.equal(banner({ mode: 'test', waitingApproval: true, willEmail: false })!.text, 'Waiting for approval from the platform owner, which is usually quick. Check back on your email page for the answer; nothing else is needed from you.');
   assert.equal(banner({ notConnected: true, sampleState: 'held' })!.text, 'Email is not connected right now, so nothing is being sent. Reconnect it to carry on. People you have started are waiting and will go when it is connected again.');
   assert.equal(banner({ needsApproval: true })!.title, 'Your new sending address needs approval');
   assert.equal(banner({ needsTest: true })!.title, 'Send a test first');

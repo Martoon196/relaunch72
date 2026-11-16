@@ -59,7 +59,7 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   reservedDomain: 'That address can\'t receive email. Use an address on your own domain.',
   publicSuffix: 'That isn\'t a full domain. Use an address on your own domain, like hello@yourbusiness.co.uk.',
   domainTaken: 'That domain is already connected to another business.',
-  domainInUse: 'That domain is already in use. If it is yours, contact support.',
+  domainInUse: 'That domain is already used in our email account, so it can\'t be connected from here. Use an address on a different domain, or tell the platform owner if it is yours.',
   founderTakeOver: 'This domain is already in our email account. If it belongs to this business, press Use this domain.',
   busy: 'The email service is busy. Try again in a minute.',
   locked: 'This is already being set up in another window. Give it a moment, then refresh.',
@@ -73,30 +73,34 @@ export const EMAIL_CONNECTION_MESSAGES = Object.freeze({
   /** Added to a permanent failure only when its event really was written to the events table the platform owner reads. */
   logged: ' We have logged this and will sort it out.',
   tryLater: ' Please try again later.',
-  wrongDomain: 'Something doesn\'t look right with this domain at the email service. Please contact support.',
+  wrongDomain: 'Something doesn\'t look right with this domain at the email service. Nothing was changed. Please tell the platform owner.',
   repaired: 'Your email connection was repaired. Press Check to confirm your records.',
   termsFirst: 'Tick the email rules first.',
   needName: 'Enter the sender name: up to 100 characters, without < > " or \\.',
   needFrom: 'Enter the address to send from, on your own domain, like hello@yourbusiness.co.uk.',
   needReplyTo: 'Enter a valid address for replies, or leave it empty.',
-  alreadyConnected: 'Email is already connected for this business. Disconnect it first to use another address.',
+  alreadyConnected: 'Email is already connected for this business. To use another address, press Start again (or Disconnect, once connected) under More options first.',
   notOwner: 'Only an owner of this business can connect its email.',
   notAllowed: 'Email can only be connected for Property Predator for now.',
-  nothingToContinue: 'There is nothing to continue yet. Fill in your sending address and press Connect.',
+  nothingToContinue: 'There is nothing to continue yet. Start with step 1 below.',
   checkBoth: 'Both found. Your email is connected.',
-  checkOne: (kind: 'TXT' | 'CNAME') => `Found 1 of 2: the ${kind} record is missing.`,
-  checkNone: 'Not found yet. This can take up to 48 hours; press Check again later.',
-  checkMismatch: (kind: 'TXT' | 'CNAME') => `The ${kind} record's value doesn't match. Copy it again from this page.`,
-  started: 'Nearly there. Add the 2 records below where your domain is managed, then press Check.',
+  checkOne: (kind: 'TXT' | 'CNAME') => `Found 1 of 2. Record ${kind === 'TXT' ? 1 : 2} is not found yet. Records can take from a few minutes to a few hours to show up; press Check again later.`,
+  checkNone: 'Not found yet. Records can take from a few minutes to a few hours to show up after they are added (very rarely up to 2 days). You can close this page and come back; press Check again later.',
+  checkMismatch: (kind: 'TXT' | 'CNAME') => `Record ${kind === 'TXT' ? 1 : 2} is there, but its Value doesn't match. Copy the Value again from this page and replace the old one.`,
+  started: 'Nearly there. Add the two records below at the company that manages your domain (or send them to whoever looks after your website), then press Check.',
   startedFound: 'Nearly there. Both records are already in place for your domain, so press Check below to finish.',
   webhookUnreachable: 'The email service couldn\'t reach our bounce address while setting up. Press Continue in a minute.',
   bounceWorking: 'Bounce reporting is working. Press Go live again.',
   bounceRepaired: 'Bounce reporting is working again. Press Go live again.',
   bounceWorkingCheck: 'Bounce reporting is working. Press Check below to finish connecting.',
-  bounceRemade: 'Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself and press Go live.',
+  bounceRemade: 'Bounce reporting was set up again. Press Check below to confirm your records; then follow the steps to send yourself a test and go live.',
   bounceRemadeLive: 'Bounce reporting was set up again. Press Check below to confirm your records, then send a test to yourself. Your marketing emails go out again once that test arrives.',
   bounceUnclear: 'We couldn\'t tell whether bounce reporting works now. Press Repair bounce reporting again in a minute.',
-  bounceStillFailing: 'The email service still can\'t reach our bounce address. Press Repair bounce reporting again in a few minutes; if it keeps failing, contact support.',
+  bounceStillFailing: 'The email service still can\'t reach our bounce address. Press Repair bounce reporting again in a few minutes; if it keeps failing, tell the platform owner.',
+  /** A repair whose new bounce webhook was not saved: the repair button stays (never "Continue", which is not on that screen). */
+  bounceNotSaved: 'We couldn\'t finish setting up bounce reporting. Press Repair bounce reporting again in a minute.',
+  /** The page's own once-a-minute check found secrets it cannot open: it never repairs by itself. */
+  autoCheckNeedsRepair: 'Your email connection needs a repair before we can check. Press Repair.',
   connectedNext: 'Connected. Sending is switched on in the next step.',
   disconnected: 'Email is disconnected. You can connect again at any time.',
   nothingToCheck: 'There is nothing to check yet.',
@@ -564,7 +568,7 @@ export class EmailConnectionService {
         const after = await this.read(identity, business).catch(() => null);
         if (!after?.webhookId || (first && after.webhookId === first.webhookId)) {
           line({ outcome: 'not_repaired', reason, failure: 'not_saved' });
-          return { ok: false, message: EMAIL_CONNECTION_MESSAGES.unfinished, bounceRepair: true };
+          return { ok: false, message: EMAIL_CONNECTION_MESSAGES.bounceNotSaved, bounceRepair: true };
         }
         line({ outcome: 'remade', reason });
         return { ok: true, message: remadeMessage };
@@ -600,14 +604,21 @@ export class EmailConnectionService {
   }
 
   /** "Check": Postmark verifies both records; its answer is stored; our look-ups only choose the message. */
-  async check(identity: PortalSessionIdentity): Promise<EmailConnectionResult> {
+  /**
+   * options.repair false (the page's own once-a-minute check): secrets that no longer open are reported, never repaired,
+   * so an automatic check never creates a webhook.
+   */
+  async check(identity: PortalSessionIdentity, options: { readonly repair?: boolean } = {}): Promise<EmailConnectionResult> {
     return this.locked(identity, async (business, lock) => {
       const account = this.account!;
       const state = await this.read(identity, business);
       if ((state.status !== 'dns_pending' && state.status !== 'verified') || !state.domainId || !state.domain) return { ok: false, message: EMAIL_CONNECTION_MESSAGES.nothingToCheck };
       if (state.terms?.version !== EMAIL_TERMS_VERSION) throw new EmailConnectionError(409, EMAIL_CONNECTION_MESSAGES.termsFirst, 'terms');
       // Secrets that no longer open (the key changed): the webhook is remade first, so the check answers truly.
-      if (await this.repairNeeded(identity, business, state)) await this.repair(identity, business, state, lock);
+      if (await this.repairNeeded(identity, business, state)) {
+        if (options.repair === false) return { ok: false, message: EMAIL_CONNECTION_MESSAGES.autoCheckNeedsRepair };
+        await this.repair(identity, business, state, lock);
+      }
       let dkim: PostmarkDomain, returnPath: PostmarkDomain;
       try {
         dkim = await account.verifyDkim(state.domainId);
