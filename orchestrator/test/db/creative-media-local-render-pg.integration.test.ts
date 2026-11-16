@@ -325,9 +325,9 @@ test('real native render starts from exact owned, independently probed source an
    const ids:string[]=[];
    for(let n=0;n<14;n++){
     const id=randomUUID();ids.push(id);
-    await admin.query(`WITH blob AS (INSERT INTO app.seo_blog_blobs(workspace_id,mime,bytes,sha256) VALUES($1,'video/mp4',$2,public.digest($2,'sha256')) RETURNING id)
+    await admin.query(`WITH blob AS (INSERT INTO app.seo_blog_blobs(workspace_id,mime,bytes,sha256) VALUES($1,'video/mp4',$2::bytea,public.digest($2::bytea,'sha256')) RETURNING id)
      INSERT INTO app.creative_media_source_videos(workspace_id,id,command_id,blob_id,file_name,sha256,byte_length,mime,rights,owner_user_id,created_at)
-     SELECT $1,$3,$3,blob.id,'retention.mp4',encode(public.digest($2,'sha256'),'hex'),octet_length($2),'video/mp4','owned',$4,clock_timestamp()-interval '31 days' FROM blob`,[a.brand.id,bytes,id,a.principal.userId]);
+     SELECT $1,$3,$3,blob.id,'retention.mp4',encode(public.digest($2::bytea,'sha256'),'hex'),octet_length($2::bytea),'video/mp4','owned',$4,clock_timestamp()-interval '31 days' FROM blob`,[a.brand.id,bytes,id,a.principal.userId]);
    }
    const janitor=new PgMediaRetentionWorker(admin,'automatic-retention-proof',null);
    for(let n=0;n<6;n++)await janitor.sweep(a.brand.id);
