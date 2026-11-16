@@ -16,8 +16,8 @@ import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
 import type { PortalSeoBlogService } from '../src/portal/seo-blog-service.js';
 import type { PortalSessionIdentity } from '../src/portal/auth-service.js';
 import type { SeoBlogEngine, PublishingPlan } from '../src/seo-blog/engine.js';
-import { nextPublishingSlot, publishingSite } from '../src/seo-blog/publishing-plan.js';
-import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, Job } from '../src/seo-blog/types.js';
+import { nextPublishingSlot, plannedSiteGone, publishingSite } from '../src/seo-blog/publishing-plan.js';
+import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, Destination, Job } from '../src/seo-blog/types.js';
 import { SeoBlogError } from '../src/seo-blog/types.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
 
@@ -88,12 +88,17 @@ export interface Showcase {
   readonly versions: Map<string, ArticleVersion>;
   readonly briefs: ArticleBrief[];
   readonly jobs: Job[];
+  /** Mutable: tests change these to reach other states (a disconnected website, Brand DNA to confirm, no allowance, a plan to accept). */
+  destinations: Omit<Destination, 'sealedCredential'>[];
+  dna: 'none' | 'proposed' | 'confirmed' | 'out_of_date';
+  planStatus: 'proposed' | 'accepted';
+  usage: { model_tokens: number; search_calls: number; images: number };
   readonly service: PortalSeoBlogService;
 }
 
 export function showcase(scenario: Scenario = 'busy', settings: Partial<Brand['settings']> = {}): Showcase {
   const brand = { ...fx.brand, name: scenario === 'hostile' ? HOSTILE_NAME : fx.brand.name,
-    settings: { ...fx.brand.settings, ongoingProduction: true, cadence: { weekdays: [1, 3, 5], localTime: '09:00', perWeek: 3 }, ...settings } } as Brand;
+    settings: { ...fx.brand.settings, ongoingProduction: true, autoAcceptPlans: true, backlogCeiling: 12, cadence: { weekdays: [1, 3, 5], localTime: '09:00', perWeek: 3 }, ...settings } } as Brand;
   const other = { ...brand, id: 'e0000000-0000-4000-8000-000000000001', slug: 'key-lettings', name: 'Key Lettings' } as Brand;
   const versions = new Map<string, ArticleVersion>();
   const rows: Showcase['rows'] = [];
@@ -112,20 +117,21 @@ export function showcase(scenario: Scenario = 'busy', settings: Partial<Brand['s
   if (scenario !== 'new') briefs.push({ id: bid(40), planId: 'p1', brandId: BRAND_ID, workingTitle: 'Planning permission for loft conversions', slug: 'loft-conversions', status: 'accepted', articleId: null, suggestedAtUtc: '2026-12-04T09:00:00.000Z' } as unknown as ArticleBrief);
   const jobs: Job[] = scenario === 'new' ? [] : [{ id: 'cccccccc-1111-4222-8333-444455556666', brandId: BRAND_ID, kind: 'write', idempotencyKey: 'write:13', payload: { briefId: bid(13) }, state: 'running', attempts: 1, maxAttempts: 3, leaseOwner: null, leaseExpiresAt: null,
     runAfter: '2026-11-16T10:00:00.000Z', progress: 'Working', error: null, createdAt: '2026-11-16T10:00:00.000Z', updatedAt: '2026-11-16T10:00:00.000Z', rowVersion: 2 } as Job];
-  const destinations = [fx.destination];
   const check = (b: string) => { if (b !== BRAND_ID) throw new SeoBlogError(404, 'That business was not found.'); };
+  const state = { destinations: [fx.destination] as Omit<Destination, 'sealedCredential'>[], dna: (scenario === 'new' ? 'none' : 'confirmed') as Showcase['dna'], planStatus: 'accepted' as Showcase['planStatus'], usage: { model_tokens: 412_000, search_calls: 37, images: 4 } };
   const engine = {
     campaignCreatorsReady: false, productionMethodsReady: false,
     listBrands: async () => [brand, other],
     getBrand: async (_: unknown, b: string) => { if (b === other.id) return other; check(b); return brand; },
-    brandDnaStatus: async () => scenario === 'new' ? 'none' : 'confirmed',
+    brandDnaStatus: async () => out.dna,
     existingWorkspaceOffer: async () => false,
-    readiness: async () => ({ website: true, knowledge: 3, unreadableKnowledge: 0, profile: 'confirmed', inventory: true, research: true, generation: 'live', budgets: true, destination: 'connected', canPlan: true, missing: [] }),
+    readiness: async () => { const profile = out.dna === 'confirmed' ? 'confirmed' : out.dna === 'out_of_date' ? 'stale' : out.dna === 'proposed' ? 'unconfirmed' : 'missing';
+      return { website: true, knowledge: 3, unreadableKnowledge: 0, profile, inventory: true, research: true, generation: 'live', budgets: true, destination: out.destinations.some((d) => d.status === 'connected') ? 'connected' : 'none', canPlan: profile === 'confirmed', missing: [] }; },
     listArticles: async (_: unknown, b: string) => (b === other.id ? [] : rows),
-    usage: async () => ({ model_tokens: 412_000, search_calls: 37, images: 4 }),
+    usage: async () => out.usage,
     listJobs: async (_: unknown, b: string) => (b === other.id ? [] : jobs),
-    listPlans: async (_: unknown, b: string) => (b === other.id ? [] : [{ plan: { id: 'p1' }, briefs }]),
-    listDestinations: async () => destinations,
+    listPlans: async (_: unknown, b: string) => (b === other.id ? [] : [{ plan: { id: 'p1', status: out.planStatus, createdAt: '2026-11-10T09:00:00.000Z' }, briefs }]),
+    listDestinations: async () => out.destinations,
     campaignCalendar: async () => [],
     activity: async () => [],
     getArticle: async (_: unknown, b: string, articleId: string) => {
@@ -136,13 +142,22 @@ export function showcase(scenario: Scenario = 'busy', settings: Partial<Brand['s
       return { article: row.article, version, versions: version ? [version] : [], publications: [], status: row.status };
     },
     publishingPlan: async (_: unknown, _b: string, articleId: string): Promise<PublishingPlan> => {
+      // The engine's own steps (engine.ts publishingPlan), over this fixture's records.
       const a = rows.find((r) => r.article.id === articleId)!.article;
-      const site = publishingSite(a, brand, destinations, NOW);
-      return { site: site ? { id: site.id, label: site.label } : null, websites: 1, websitesOnRecord: 1, slot: site ? nextPublishingSlot(a, brand, rows.map((r) => r.article), site.id, NOW) : null, paused: brand.settings.pauseAll, now: NOW, rowVersion: a.rowVersion };
+      const ds = out.destinations, others = rows.map((r) => r.article), websites = ds.filter((d) => d.status === 'connected').length;
+      const gone = plannedSiteGone(a, ds);
+      if (gone) {
+        const alt = publishingSite({ schedule: null }, brand, ds, NOW);
+        return { site: null, goneSite: gone, alternative: alt ? { site: { id: alt.id, label: alt.label }, slot: nextPublishingSlot({ id: a.id, schedule: null }, brand, others, alt.id, NOW) } : null,
+          websites, websitesOnRecord: ds.length, slot: null, paused: brand.settings.pauseAll, now: NOW, rowVersion: a.rowVersion };
+      }
+      const site = publishingSite(a, brand, ds, NOW);
+      return { site: site ? { id: site.id, label: site.label } : null, websites, websitesOnRecord: ds.length, slot: site ? nextPublishingSlot(a, brand, others, site.id, NOW) : null, paused: brand.settings.pauseAll, now: NOW, rowVersion: a.rowVersion };
     },
   } as unknown as SeoBlogEngine;
   const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => engine, socialCallback: async () => null } as PortalSeoBlogService;
-  return { brand, brands: [brand, other], rows, versions, briefs, jobs, service };
+  const out: Showcase = { brand, brands: [brand, other], rows, versions, briefs, jobs, ...state, service };
+  return out;
 }
 
 export const articleId = id;
