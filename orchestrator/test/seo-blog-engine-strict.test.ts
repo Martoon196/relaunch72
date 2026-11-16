@@ -149,7 +149,7 @@ test('setting on, search numbers not switched on: planning is refused before any
   await e.tick('worker-1');
   const job = await planJob(h, brand.id);
   assert.equal(job.state, 'blocked');
-  assert.equal(job.error, ENGINE_GAP_MESSAGE.numbers);
+  assert.equal(job.error, ENGINE_GAP_MESSAGE.numbers_off, 'not switched on is said as such, not as a passing fault');
   assert.deepEqual({ search: h.search.calls, model: h.llm.calls.length }, before, 'no search and no writing allowance spent');
   assert.equal((await plans(e, brand.id)).length, 0);
 });
@@ -253,7 +253,7 @@ test('setting on, the writing method expected but switched off: planning and wri
   assert.deepEqual({ ...v2!.engine!, at: 'x' }, { schema: 1, strict: true, research: 'live', numbers: 'no_data', method: 'not_assigned', methodReceiptId: null, at: 'x' } satisfies EngineStamp);
 });
 
-test('setting on: a brief planned without search numbers is not written; an older unstamped brief still is', async () => {
+test('setting on: a brief planned before the setting was on is written ("planned before", review 5-B); one planned under it without numbers is not', async () => {
   const h = harness();
   const brand = await readyBrand(h);
   const plain = engine(h);
@@ -262,11 +262,13 @@ test('setting on: a brief planned without search numbers is not written; an olde
   const { plan, briefs } = (await plans(plain, brand.id))[0]!;
   await plain.acceptPlan(OWNER, brand.id, plan.id);
   assert.equal(briefs[0]!.engine?.numbers, 'off');
+  assert.equal(briefs[0]!.engine?.strict, false);
   const strict = engine(h, { requireFullEngine: true, keywords: numbers('none') });
   await strict.requestArticles(OWNER, brand.id, [briefs[0]!.id]);
   await strict.tick('worker-1');
-  assert.equal((await writeJob(h, brand.id)).error, ENGINE_GAP_MESSAGE.planned_without_numbers);
-  // An older brief (planned before stamps existed) is written: there is nothing on record to say it was weaker.
+  const first = (await strict.listArticles(OWNER, brand.id)).map((x) => x.article).find((a) => a.briefId === briefs[0]!.id)!;
+  assert.ok(first.currentVersionId, 'planned before: written, there is no way to plan an accepted brief again');
+  // An older brief (planned before stamps existed) is written too.
   const older = (await h.store.getBrief(brand.id, briefs[1]!.id))!;
   const { engine: _none, ...unstamped } = older;
   await h.store.saveBrief(unstamped as ArticleBrief);
@@ -275,6 +277,14 @@ test('setting on: a brief planned without search numbers is not written; an olde
   const written = (await strict.listArticles(OWNER, brand.id)).map((x) => x.article).find((a) => a.briefId === older.id)!;
   assert.ok(written.currentVersionId);
   assert.equal((await h.store.getVersion(brand.id, written.currentVersionId!))!.engine?.numbers, 'not_recorded');
+  // A brief stamped as planned under the strict setting without numbers (which strict planning never makes) is held.
+  const third = (await h.store.getBrief(brand.id, briefs[2]!.id))!;
+  await h.store.saveBrief({ ...third, engine: { ...third.engine!, strict: true, numbers: 'unavailable' } });
+  await strict.requestArticles(OWNER, brand.id, [third.id]);
+  await strict.tick('worker-1');
+  const held = (await h.store.listJobs(brand.id)).find((j) => j.kind === 'write' && j.payload.briefId === third.id)!;
+  assert.equal(held.error, ENGINE_GAP_MESSAGE.planned_without_numbers);
+  assert.doesNotMatch(held.error!, /planning it again/i, 'no promise of an action that does not exist');
 });
 
 test('every owner message is plain English: no supplier, method, model or mechanism, and no long dashes', () => {

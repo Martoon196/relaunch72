@@ -69,6 +69,8 @@ interface PlanExecution {
   readonly metrics?: KeywordProvider;
   /** True once a search-numbers request in this run was skipped or failed (the wrapper still answers with no rows). */
   readonly numbersUnavailable?: () => boolean;
+  /** True when that request was skipped because the research allowance was too small (not a failure). */
+  readonly numbersSkippedForAllowance?: () => boolean;
   /** The keyword shortlist saved on the planning task when it started (so a resumed run searches the same phrases). */
   readonly shortlist?: readonly ShortlistRow[];
   /** The secondary-only candidates saved with it (so a resumed run binds against exactly the ids the planner saw). */
@@ -94,6 +96,9 @@ import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllo
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
 const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
+/** Of those, the answers that stand in for a request skipped because the research allowance was too small. */
+const NUMBERS_ALLOWANCE = new WeakSet<object>();
+const allowanceSkippedNumbers = <T extends object>(receipt: T): T => { NUMBERS_ALLOWANCE.add(receipt); return unavailableNumbers(receipt); };
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
 import { confirmedVisualInputs, type EditorialFormat } from './method-evidence.js';
 
@@ -1063,7 +1068,7 @@ export class SeoBlogEngine {
     return result;
   }
   private async programmeSearch(claim: Job, authority: ProgrammeAuthority, query: string, options: {locale:string;limit:number}, kind:'serp'|'metrics'='serp', effect?:()=>Promise<ResearchSearchReceipt>): Promise<ResearchSearchReceipt> {
-    let cached:ResearchSearchReceipt|null=null; let nonce:string|null=null; let metricsSkipped=false;
+    let cached:ResearchSearchReceipt|null=null; let nonce:string|null=null; let metricsSkipped=false; let metricsAllowance=false;
     let supplierTask: {id:string;submittedAt:string;providerReportedCost:number|null}|undefined;
     const reserved=await this.programmeTransaction(claim,authority,(s)=>{
       const current=s.job; const run=current&&programmeRun(current);
@@ -1089,7 +1094,7 @@ export class SeoBlogEngine {
       }
       const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
       if(kind==='metrics' && (ceiling<=0||s.usage.search_calls+1>ceiling)) {
-        metricsSkipped=true;return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:{...researchDiagnostic(null),summary:'Optional keyword metrics were not requested because the remaining search-attempt allowance is insufficient.',remedy:'Source research remains valid; demand is labelled qualitative.'}}}},writeJob:true};
+        metricsSkipped=true;metricsAllowance=true;return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:{...researchDiagnostic(null),summary:'Optional keyword metrics were not requested because the remaining search-attempt allowance is insufficient.',remedy:'Source research remains valid; demand is labelled qualitative.'}}}},writeJob:true};
       }
       if(ceiling<=0||s.usage.search_calls+1>ceiling) return this.programmeHeld(s,current,run,'budget',new BudgetExceededError('search_calls',s.usage.search_calls,ceiling,1).message);
       nonce=randomUUID(); const now=this.now();
@@ -1097,7 +1102,7 @@ export class SeoBlogEngine {
         usage:{brandId:claim.brandId,kind:'search_calls',amount:1,at:now,reference:`research:${run.logicalRunId}:${nonce}`}};
     });
     if(cached) return cached;
-    if(metricsSkipped) return unavailableNumbers({hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null});
+    if(metricsSkipped) return (metricsAllowance?allowanceSkippedNumbers:unavailableNumbers)({hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null});
     if(!nonce || reserved.state!=='running') throw new ResearchUnavailableError('Research is held. See the programme status for the next action.');
     let receipt:ResearchSearchReceipt|null=null; let diagnostic:ResearchDiagnostic|null=null; let cost:number|null=supplierTask?.providerReportedCost??null; let waiting=false;
     try {
@@ -1158,7 +1163,7 @@ export class SeoBlogEngine {
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
       if(!run.modelReceipt&&!this.deps.llm) return this.programmeHeld(s,withRun,run,'configuration','The writing model is not configured. No new supplier or model call was started.');
       if(!run.research&&this.deps.search.mode!=='live') return this.programmeHeld(s,withRun,run,'configuration','Source research is not configured. Connect the research provider before a new planning intent.');
-      if(this.deps.requireFullEngine&&!run.research&&!run.modelReceipt&&this.deps.keywords?.mode!=='live') return this.programmeHeld(s,withRun,run,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers);
+      if(this.deps.requireFullEngine&&!run.research&&!run.modelReceipt&&this.deps.keywords?.mode!=='live') return this.programmeHeld(s,withRun,run,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers_off);
       const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
       const hold=s.brand.settings.programme?.researchHold??legacy;
       const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
@@ -1173,7 +1178,7 @@ export class SeoBlogEngine {
     if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
     const run=programmeRun(ready)!;
     const p=ready.payload;
-    let numbersUnavailable=false;
+    let numbersUnavailable=false; let numbersAllowance=false;
     try {
       await this.runPlan(claim.brandId,{focus:(p.focus as string|null)??null,excluded:(p.excluded as string[])??[],sourceArticleUrl:(p.sourceArticleUrl as string|null)??null,requestedBy:typeof p.requestedBy==='string'?p.requestedBy:undefined},{
         planId:run.logicalRunId,provenance:{logicalRunId:run.logicalRunId,inputSha:run.snapshot.sha,structureSha:run.snapshot.structureSha,structureVersion:run.snapshot.structureVersion,root:run.snapshot.root,categoryLabels:run.snapshot.categoryLabels,authority},
@@ -1181,8 +1186,9 @@ export class SeoBlogEngine {
         ...(this.deps.keywords?.mode==='live'?{metrics:{mode:'live' as const,metrics:async(queries: string[])=>{
           const answer=await this.programmeSearch(claim,authority,queries.join('\n'),{locale:brand.locale,limit:queries.length},'metrics',async()=>({hits:[],keywordMetrics:(await this.deps.keywords!.metrics(queries)).filter((m)=>m.source!=='mock'),taskId:null,providerReportedCost:null}));
           if(NUMBERS_UNAVAILABLE.has(answer)) numbersUnavailable=true;
+          if(NUMBERS_ALLOWANCE.has(answer)) numbersAllowance=true;
           return [...answer.keywordMetrics??[]];
-        }},numbersUnavailable:()=>numbersUnavailable}:{}),
+        }},numbersUnavailable:()=>numbersUnavailable,numbersSkippedForAllowance:()=>numbersAllowance}:{}),
         research:run.research,modelResult:run.modelReceipt,
         ...(Array.isArray(ready.payload.keywordShortlist)?{shortlist:ready.payload.keywordShortlist as ShortlistRow[]}:{}),
         ...(Array.isArray(ready.payload.keywordSecondary)?{secondary:ready.payload.keywordSecondary as ShortlistRow[]}:{}),
@@ -1281,7 +1287,7 @@ export class SeoBlogEngine {
     // The strict setting checks everything it can before anything is spent.
     if (strict && !execution?.modelResult && !execution?.research) {
       if (this.deps.search.mode !== 'live') throw new EngineIncompleteError('research');
-      if (this.deps.keywords?.mode !== 'live') throw new EngineIncompleteError('numbers');
+      if (this.deps.keywords?.mode !== 'live') throw new EngineIncompleteError('numbers_off');
     }
     if (strict && !execution?.modelResult && (await this.methodState(brandId, 'planning')) === 'inactive') throw new EngineIncompleteError('method');
     let inventory = await this.store.getInventory(brandId);
@@ -1312,7 +1318,8 @@ export class SeoBlogEngine {
     const planNumbers = research.numbers ?? (research.keywordMetrics.some((m) => typeof m.volume === 'number') ? 'measured' : this.deps.keywords?.mode === 'live' ? 'no_data' : 'off');
     if (strict && !execution?.modelResult) {
       // "The supplier answered and has no data" goes on; a request that failed or was skipped does not.
-      if (planNumbers === 'unavailable' || planNumbers === 'off') throw new EngineIncompleteError('numbers');
+      if (planNumbers === 'off') throw new EngineIncompleteError('numbers_off');
+      if (planNumbers === 'unavailable') throw new EngineIncompleteError(execution?.numbersSkippedForAllowance?.() ? 'numbers_allowance' : 'numbers');
       if (research.sources.length < MIN_PLAN_SOURCES) throw new EngineIncompleteError('thin_research');
     }
     const planned = await this.store.listBriefs(brandId);
@@ -1551,8 +1558,10 @@ export class SeoBlogEngine {
       return completed;
     }
     if (this.deps.requireFullEngine) {
-      // Strict: a brief planned without search numbers, or a business whose writing method is expected but not active, stops here.
-      const gap = brief.engine && (brief.engine.numbers === 'off' || brief.engine.numbers === 'unavailable') ? 'planned_without_numbers' as const
+      // Strict: a brief planned under the strict setting without search numbers, or a business whose writing method is
+      // expected but not active, stops here. Briefs planned before the strict setting was on are exempt ("planned
+      // before"): they were planned under the rules of their time and there is no way to plan an accepted brief again.
+      const gap = brief.engine?.strict === true && (brief.engine.numbers === 'off' || brief.engine.numbers === 'unavailable') ? 'planned_without_numbers' as const
         : (await this.methodState(brandId, 'blog')) === 'inactive' ? 'method' as const : null;
       if (gap) {
         await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: ENGINE_GAP_MESSAGE[gap].slice(0, 300) }).catch(() => undefined);
@@ -2428,7 +2437,8 @@ export class SeoBlogEngine {
     const snapshot = await reader.snapshot(brandId);
     if (!snapshot.assignment) return 'not_assigned';
     if (!this.deps.methods) return 'inactive';
-    try { return resolveMethods(snapshot, [stage]).packs.length ? 'active' : 'inactive'; } catch { return 'inactive'; }
+    // The same stages the writer resolves (methodLlm): an article is written with its visual brief.
+    try { return resolveMethods(snapshot, stage === 'blog' ? ['blog', 'visual-brief'] : [stage]).packs.length ? 'active' : 'inactive'; } catch { return 'inactive'; }
   }
 
   private async methodLlm(brand:Brand,profile:BrandProfile,stage:'planning'|'blog'|'revision'|'social',assetRef:string,sources:readonly ResearchSource[],preserveReceiptId?:string|null,copyRequested=false,editorialFormat?:EditorialFormat):Promise<LlmClient>{
@@ -3412,7 +3422,11 @@ export class SeoBlogEngine {
       const seeds=saved.length?saved.slice(0,USAGE_ESTIMATES.searchPerPlan).map((r)=>r.phrase):profile?researchQuerySeeds({focus:typeof job.payload.focus==='string'?job.payload.focus:null,audiences:profile.audiences,positioning:profile.positioning,categories:run?.snapshot.categoryLabels??[],limit:USAGE_ESTIMATES.searchPerPlan}):[];
       const complete=!!run&&!run.modelStart&&!run.attempts.some(a=>a.kind!=='metrics'&&!a.receivedAt)&&seeds.length>0&&seeds.every(query=>run.attempts.some(a=>a.receipt&&a.querySha===programmeSha({input:run.snapshot.sha,query,locale:brand.locale,limit:6,provider:this.deps.search.id,kind:'serp'})));
       if(!complete||hold&&hold.jobId!==job.id)throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
-      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId},state:'queued',runAfter:this.now(),error:null,progress:'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
+      // Held only because the search-numbers lookup failed or was skipped for allowance (strict setting): Retry repeats
+      // that one lookup, within the allowance, and reuses every saved search.
+      const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
+      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined}}:{})},state:'queued',runAfter:this.now(),error:null,
+        progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');
     if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
