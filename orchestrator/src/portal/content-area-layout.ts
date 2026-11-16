@@ -22,6 +22,15 @@ export interface ContentAreaPreview {
   readonly path: string;
   /** Overrides the place worked out from the page's tab. */
   readonly place?: ContentAreaPlace;
+  /** Set when ongoing production is held by something the owner can fix (the Calendar's own reason). */
+  readonly autopilot?: ContentAreaAutopilot;
+}
+
+export interface ContentAreaAutopilot {
+  readonly on: boolean;
+  readonly title: string;
+  readonly line: string;
+  readonly fix?: { readonly href: string; readonly label: string } | null;
 }
 
 const ICON: Record<ContentAreaPlace | 'more' | 'down', string> = {
@@ -79,9 +88,11 @@ function oldLook(shell: Shell, cls: string): string {
 }
 
 /** The autopilot line: only what the business's own settings say. */
-export function autopilot(shell: Shell): { on: boolean; title: string; line: string } {
+export function autopilot(shell: Shell): ContentAreaAutopilot {
   const s = shell.brand!.settings;
   if (s.pauseAll) return { on: false, title: 'Publishing is paused', line: 'Nothing goes out until you switch it back on in Settings.' };
+  // Ongoing production held by something he can fix (allowance, Brand DNA, set-up, research, topics to accept): say that.
+  if (shell.preview?.autopilot) return shell.preview.autopilot;
   // Automatic publishing only waives approval: an article still goes out only at a time it has (engine and article page).
   const yes = s.autoPublish ? 'Articles with a time go out then without waiting for your approval. An article with no time waits for you.' : 'Nothing goes out until you say yes.';
   // Ongoing production plans for empty days; without automatic plan acceptance, it writes only topics he accepts.
@@ -111,7 +122,7 @@ export function contentAreaLayout(shell: Shell, title: string, body: string, ext
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · ${e(b.name)}</title><style>${legacyCss}</style><style>${CONTENT_AREA_TOKENS}${CONTENT_AREA_CSS}</style>${extraHead}${feedbackHead}</head><body class="ca">${feedbackStatus}<a class="ca-skip" href="#ca-main">Skip to the page</a>
 <div class="ca-app"><aside class="ca-side" aria-label="${e(b.name)}">${switcher}
 <nav class="ca-nav" aria-label="Content area">${PLACES.map(([p, label, tab]) => link(p, label, tab, 'ca-nav-item')).join('')}</nav>
-<div class="ca-foot"><p class="ca-auto"><span class="ca-dot${auto.on ? ' on' : ''}" aria-hidden="true"></span><strong>${e(auto.title)}</strong><span>${e(auto.line)}</span></p>
+<div class="ca-foot"><p class="ca-auto"><span class="ca-dot${auto.on ? ' on' : ''}" aria-hidden="true"></span><strong>${e(auto.title)}</strong><span>${e(auto.line)}${auto.fix ? ` <a href="${e(auto.fix.href)}">${e(auto.fix.label)}</a>` : ''}</span></p>
 <details class="ca-tools"><summary>More tools</summary><ul>${otherTools(shell)}</ul></details>${oldLook(shell, 'ca-oldlook')}</div></aside>
 <main id="ca-main" class="ca-main" tabindex="-1">${shell.notice ? `<p class="notice ca-notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad ca-notice" role="alert">${e(shell.error)}</p>` : ''}${body}</main></div>
 <nav class="ca-tabbar" aria-label="Content area (phone)">${PLACES.filter(([p]) => PHONE.includes(p)).map(([p, label, tab]) => link(p, label, tab, 'ca-tab')).join('')}<details class="ca-tab-more"><summary class="ca-tab${more.some(([p]) => p === place) ? ' ca-on' : ''}">${icon('more')}<span>More</span></summary><div class="ca-sheet"><ul>${more.map(([p, label, tab]) => `<li><a href="${href(tab)}"${p === place ? ' aria-current="page"' : ''}>${icon(p)}<span>${e(label)}</span></a></li>`).join('')}</ul><ul class="ca-sheet-tools">${otherTools(shell)}</ul>${oldLook(shell, 'ca-oldlook')}</div></details></nav>
@@ -144,7 +155,7 @@ body.ca{color-scheme:light dark;--bg:var(--ca-mist);--card:var(--ca-surface);--i
 .ca-nav-item[aria-current=page]{background:var(--ca-surface);color:var(--ca-ink);font-weight:700;--ca-focus:var(--ca-focus-on-deep)}
 .ca-count{min-width:22px;height:22px;padding:0 7px;display:inline-grid;place-items:center;border-radius:var(--ca-radius-pill);background:var(--ca-amber);color:var(--ca-on-amber);font:700 12px/1 var(--ca-font-body)}
 .ca-foot{margin-top:auto;display:grid;gap:14px;font-size:13px;line-height:1.45}
-.ca-auto{margin:0;padding:0 6px;display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:4px;align-items:center}.ca-auto strong{font-size:14px;color:var(--ca-on-deep)}.ca-auto span:last-child{grid-column:1/-1}
+.ca-auto{margin:0;padding:0 6px;display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:4px;align-items:center}.ca-auto strong{font-size:14px;color:var(--ca-on-deep)}.ca-auto span:last-child{grid-column:1/-1}.ca-auto a{color:var(--ca-on-deep);font-weight:600;text-decoration:underline;text-underline-offset:3px}
 .ca-dot{width:9px;height:9px;border-radius:50%;background:var(--ca-on-deep-2)}.ca-dot.on{background:var(--ca-amber);box-shadow:0 0 0 4px var(--ca-amber-ring)}
 .ca-tools>summary{cursor:pointer;padding:6px;font-weight:600;color:var(--ca-on-deep)}.ca-tools ul{list-style:none;margin:4px 0 0;padding:0 6px;display:grid;gap:2px}.ca-tools a{display:block;padding:6px 0;text-decoration:underline;text-underline-offset:3px}
 .ca-quiet{appearance:none;background:none;border:0;padding:6px;min-height:auto;color:inherit;font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:3px;cursor:pointer;border-radius:var(--ca-radius-xs)}
@@ -159,6 +170,7 @@ body.ca main{max-width:none}
 .ca-main h2{font-family:var(--ca-font-display);font-weight:var(--ca-weight-display)}
 .ca-main .card{border:0;border-radius:var(--ca-radius-l);box-shadow:var(--ca-shadow);background:var(--ca-surface)}
 .ca-main button,.ca-main .button{border-radius:var(--ca-radius-pill);background:var(--ca-deep);border-color:var(--ca-deep);color:var(--ca-on-deep)}
+.ca-main button.ca-btn{background:var(--ca-amber);border-color:var(--ca-amber);color:var(--ca-on-amber)}
 .ca-main button.secondary,.ca-main .button.secondary{background:transparent;color:var(--ca-link);border-color:var(--ca-link)}
 .ca-main button.danger{background:var(--ca-bad);border-color:var(--ca-bad)}
 .ca-main input[type=text],.ca-main input[type=url],.ca-main input[type=date],.ca-main input[type=time],.ca-main input[type=number],.ca-main input[type=password],.ca-main select,.ca-main textarea{border-radius:var(--ca-radius-s);background:var(--ca-surface);border-color:var(--ca-line)}

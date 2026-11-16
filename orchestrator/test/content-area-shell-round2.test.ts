@@ -101,8 +101,8 @@ test('2. "We will fill this" only when the engine really will write for that day
   const cases: [string, Showcase, RegExp][] = [
     ['production off', make('busy', { ongoingProduction: false }), /stay empty until you choose topics/],
     ['plans need the owner to accept them', make('busy', { autoAcceptPlans: false }), /not filled until you accept new topics in Topics/],
-    ['no allowance left', (() => { const s = make('busy'); s.usage = { model_tokens: 2_000_000, search_calls: 37, images: 4 }; return s; })(), /not filled until there is writing allowance left/],
-    ['no research allowance left', (() => { const s = make('busy'); s.usage = { model_tokens: 0, search_calls: 200, images: 0 }; return s; })(), /not filled until there is writing allowance left/],
+    ['no allowance left', (() => { const s = make('busy'); s.usage = { model_tokens: 2_000_000, search_calls: 37, images: 4 }; return s; })(), /not filled until there is enough writing and research allowance left/],
+    ['no research allowance left', (() => { const s = make('busy'); s.usage = { model_tokens: 0, search_calls: 200, images: 0 }; return s; })(), /not filled until there is enough writing and research allowance left/],
     ['backlog ceiling reached', make('busy', { backlogCeiling: 8 }), /not filled while 9 unpublished articles are waiting \(your limit is 8\)/],
     ['a suggested plan waits for the owner', (() => { const s = make('busy'); s.planStatus = 'proposed'; return s; })(), /until you accept the topics already suggested/],
     ['research hold', make('busy', { programme: { researchHold: { jobId: 'x', reason: 'r', at: NOW } } }), /look at the research hold/],

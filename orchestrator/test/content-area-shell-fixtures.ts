@@ -126,7 +126,9 @@ export function showcase(scenario: Scenario = 'busy', settings: Partial<Brand['s
     brandDnaStatus: async () => out.dna,
     existingWorkspaceOffer: async () => false,
     readiness: async () => { const profile = out.dna === 'confirmed' ? 'confirmed' : out.dna === 'out_of_date' ? 'stale' : out.dna === 'proposed' ? 'unconfirmed' : 'missing';
-      return { website: true, knowledge: 3, unreadableKnowledge: 0, profile, inventory: true, research: true, generation: 'live', budgets: true, destination: out.destinations.some((d) => d.status === 'connected') ? 'connected' : 'none', canPlan: profile === 'confirmed', missing: [] }; },
+      // The engine's own readiness rule (budgets: both monthly ceilings above zero; planning needs them and a confirmed profile).
+      const budgets = brand.settings.budgets.modelTokensPerMonth > 0 && brand.settings.budgets.searchCallsPerMonth > 0;
+      return { website: true, knowledge: 3, unreadableKnowledge: 0, profile, inventory: true, research: true, generation: 'live', budgets, destination: out.destinations.some((d) => d.status === 'connected') ? 'connected' : 'none', canPlan: profile === 'confirmed' && budgets, missing: [] }; },
     listArticles: async (_: unknown, b: string) => (b === other.id ? [] : rows),
     usage: async () => out.usage,
     listJobs: async (_: unknown, b: string) => (b === other.id ? [] : jobs),

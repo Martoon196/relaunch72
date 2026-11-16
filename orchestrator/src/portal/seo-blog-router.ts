@@ -48,7 +48,7 @@ import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
-import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, type ContentAreaData } from './content-area-pages.js';
+import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, type ContentAreaData, type FillFacts } from './content-area-pages.js';
 import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
 import type { TopicPlan } from '../seo-blog/types.js';
 
@@ -295,8 +295,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     // Read once per page for the badge and reused by the preview's own screens.
     const previewData = previewOn ? await loadContentArea(engine, actor, brandId).catch(() => null) : null;
     const previewNeeds = previewData ? needsYouCount(brand, previewData) : 0;
+    const previewAutopilot = previewData ? contentAreaAutopilot(brand, previewData, previewData.fill) : undefined;
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
-      ...(previewOn ? { preview: { needsYou: previewNeeds, path } } : {}) });
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}) } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -509,10 +510,13 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
 }
 
 /** The preview's own screens (Home, Calendar month, Articles list, Results); null means the existing page renders, in the shell. */
-type ContentAreaLoaded = ContentAreaData & { readonly plans: readonly TopicPlan[] };
+type ContentAreaLoaded = ContentAreaData & { readonly plans: readonly TopicPlan[]; readonly fill: FillFacts };
+/** Everything the shell and its screens read, once per page (all read-only); what the engine checks before it writes for an empty day counts as "no" when it cannot be read. */
 async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: string): Promise<ContentAreaLoaded> {
-  const [articles, destinations, jobs, plans] = await Promise.all([engine.listArticles(actor, brandId), engine.listDestinations(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId)]);
-  return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: plans.map((p) => p.plan), now: new Date().toISOString() };
+  const [articles, destinations, jobs, plans, readiness, usage, dna] = await Promise.all([engine.listArticles(actor, brandId), engine.listDestinations(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId),
+    engine.readiness(actor, brandId).catch(() => null), engine.usage(actor, brandId).catch(() => null), engine.brandDnaStatus(actor, brandId).catch(() => undefined)]);
+  const planList = plans.map((p) => p.plan);
+  return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList } };
 }
 
 async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null): Promise<string | null> {
@@ -521,17 +525,12 @@ async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand
   const page = rest === '' || rest === 'overview' ? 'home' : rest === 'calendar' && !diary ? 'calendar' : rest === 'articles' ? 'articles' : rest === 'results' ? 'results' : null;
   if (!page) return null;
   const data = loaded ?? await loadContentArea(engine, actor, brand.id);
-  // What the engine checks before it writes for an empty day (read-only); anything that cannot be read counts as "no".
-  const facts = async () => {
-    const [readiness, usage, dna] = await Promise.all([engine.readiness(actor, brand.id).catch(() => null), engine.usage(actor, brand.id).catch(() => null), engine.brandDnaStatus(actor, brand.id).catch(() => undefined)]);
-    return { readiness, usage, dna, plans: data.plans };
-  };
-  if (page === 'home') return contentHomePage(shell('overview'), { ...data, fill: await facts() });
+  if (page === 'home') return contentHomePage(shell('overview'), data);
   if (page === 'calendar') {
     const requested = url.searchParams.get('date') ?? '';
     const today = (() => { try { return utcToLocal(data.now, brand.timezone).date; } catch { return data.now.slice(0, 10); } })();
     const month = (/^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : today).slice(0, 7);
-    return contentCalendarPage(shell('calendar'), { ...data, month, fill: await facts() });
+    return contentCalendarPage(shell('calendar'), { ...data, month });
   }
   if (page === 'articles') return contentArticlesPage(shell('articles'), data);
   const s = shell('overview');
