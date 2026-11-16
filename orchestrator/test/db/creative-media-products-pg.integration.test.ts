@@ -244,7 +244,7 @@ test('Affiliate catalogue: real PostgreSQL owner authority, immutable revisions,
       const first=await owner.save(input);
       assert.equal(first.revision,1);assert.equal(first.replayed,false);
       assert.equal((await owner.save(input)).replayed,true);
-      await assert.rejects(owner.save({...input,plan:{...plan,disclosure:'new'}}),/reused|changed/iu);
+      await assert.rejects(owner.save({...input,plan:{...plan,disclosure:'#ad new'}}),/reused|changed/iu);
       const version=await owner.get(a.brand.id,projectId);
       assert.equal(version?.plan.clips[0]?.caption,'Private review only');
       assert.equal(version?.planSha256.length,64);

@@ -18,6 +18,6 @@ export class PgMediaRetentionWorker{
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly requestId:string,private readonly files:PrivateMediaFiles|null){}
  async sweep(workspaceId:string){checkedEditId(workspaceId);const context={actorKind:'worker' as const,workspaceId,requestId:this.requestId};
   const due=await withTransaction(this.pool,context,async t=>(await t.query<{v:Array<{kind:string;id:string;object:PrivateMediaObject}>}>('SELECT app_private.creative_media_retention($1) AS v',[workspaceId])).rows[0]!.v);
-  for(const item of due){if(!this.files)continue;await this.files.discardUncommitted(item.object);await this.files.clearParts(workspaceId,item.id);await withTransaction(this.pool,context,t=>t.query('SELECT app_private.creative_media_retention($1,$2,$3)',[workspaceId,item.kind,item.id]));}
+  for(const item of due){if(!this.files)throw new SeoBlogError(503,'Private disk required to finish pending erasure');await this.files.discardUncommitted(item.object);await this.files.clearParts(workspaceId,item.id);await withTransaction(this.pool,context,t=>t.query('SELECT app_private.creative_media_retention($1,$2,$3)',[workspaceId,item.kind,item.id]));}
  }
 }

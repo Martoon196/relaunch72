@@ -70,7 +70,7 @@ RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72
 -- Narrow global discovery, only UUIDs; worker still enters each workspace scope.
 CREATE FUNCTION app_private.creative_media_worker_workspaces(p_after uuid)
 RETURNS TABLE(workspace_id uuid) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
- SELECT x.workspace_id FROM (SELECT workspace_id FROM app.creative_media_source_videos UNION SELECT workspace_id FROM app.creative_media_object_uploads UNION SELECT workspace_id FROM app.creative_media_local_render_jobs) x WHERE p_after IS NULL OR x.workspace_id>p_after ORDER BY x.workspace_id LIMIT 10
+ SELECT x.workspace_id FROM (SELECT workspace_id FROM app.creative_media_source_videos UNION SELECT workspace_id FROM app.creative_media_object_uploads UNION SELECT workspace_id FROM app.creative_media_local_render_jobs UNION SELECT workspace_id FROM app.creative_media_video_outputs) x WHERE p_after IS NULL OR x.workspace_id>p_after ORDER BY x.workspace_id LIMIT 10
 $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_worker_workspaces(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_worker_workspaces(uuid) TO r72_worker;

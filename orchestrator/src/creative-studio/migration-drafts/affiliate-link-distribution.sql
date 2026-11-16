@@ -29,6 +29,7 @@ CREATE TABLE app.creative_media_affiliate_clicks (
  workspace_id uuid NOT NULL,publication_id uuid NOT NULL,nonce uuid NOT NULL,occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(workspace_id,publication_id,nonce),FOREIGN KEY(workspace_id,publication_id) REFERENCES app.creative_media_affiliate_publications(workspace_id,id)
 );
+CREATE INDEX creative_media_click_retention ON app.creative_media_affiliate_clicks(occurred_at);
 CREATE INDEX creative_media_click_cap ON app.creative_media_affiliate_clicks(publication_id,occurred_at);
 DO $t$ DECLARE t text;BEGIN
  FOREACH t IN ARRAY ARRAY['creative_media_affiliate_publications','creative_media_affiliate_withdrawals','creative_media_affiliate_clicks'] LOOP
