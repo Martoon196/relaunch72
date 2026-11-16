@@ -38,8 +38,8 @@ import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
-import { ARTICLE_FOLDS, longWhen } from './seo-blog-article-view.js';
-import { keepIfUnchanged, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
+import { ARTICLE_FOLDS, approvedOutcome, longWhen, putBackParent } from './seo-blog-article-view.js';
+import { keepIfUnchanged, putBackOffers, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
 import { limitsPage } from './seo-blog-limits-view.js';
@@ -1110,7 +1110,10 @@ async function handlePost(
           ...(imageChanged ? { image: imageUrl ? { kind: 'brand_asset', url: imageUrl, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } : { kind: 'none', url: null, alt: f('imageAlt') ?? '', provenance: '', width: null, height: null } } : {}),
         });
         if (hiddenCitations && v.id === current!.id) return ok(here, typedRemoved ? 'Source links cannot be typed in, so what you typed was removed. Nothing else changed, so nothing was saved.' : 'Nothing changed, so nothing was saved.');
-        const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article. You can put the earlier wording back below.` : '';
+        // "Below" only when the page will really offer to put the wording back (the same rule the page uses).
+        const offered = droppedSentences && prior ? putBackOffers(prior, v.body).length : 0;
+        const way = offered ? ' You can put the earlier wording back below.' : ' To keep a source, change the sentence back as it was in Edit, or see Earlier versions.';
+        const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article.${way}` : '';
         const typed = typedRemoved ? ` Source links cannot be typed in, so ${typedRemoved === 1 ? 'the one you typed was' : `the ${typedRemoved} you typed were`} removed.` : '';
         const kept = keptOnEdited.length ? ` ${keptOnEdited.length === 1 ? '1 sentence you changed still has its source' : `${keptOnEdited.length} sentences you changed still have their sources`}. Check ${keptOnEdited.length === 1 ? 'it still says' : 'they still say'} what the source says.` : '';
         // The page shows a link to each kept sentence's source (ids are checked against the article's own sources there).
@@ -1120,8 +1123,9 @@ async function handlePost(
       if (action === 'put-back') {
         // "Put the earlier wording back": one sentence of the previous version, with its sources, as a new version.
         const detail = await engine.getArticle(actor, brandId, articleId);
-        const v = detail.version, earlier = detail.versions.find((x) => x.id === f('fromVersionId'));
-        if (!v || v.id !== f('versionId') || !earlier) throw new SeoBlogError(409, 'The article changed. Have another look before putting wording back.');
+        // Only from the save just before this version (its parent), never an older one.
+        const v = detail.version, earlier = v ? putBackParent(v, detail.versions) : null;
+        if (!v || v.id !== f('versionId') || !earlier || earlier.id !== f('fromVersionId')) throw new SeoBlogError(409, 'The article changed. Have another look before putting wording back.');
         const field = f('field') ?? '', index = Number(f('index'));
         const put = (from: string | undefined, to: string | undefined) => { if (from === undefined || to === undefined) return null; return putBackSentence(from, to, index); };
         let edit: Parameters<SeoBlogEngine['editArticle']>[4] | null = null;
@@ -1157,9 +1161,9 @@ async function handlePost(
       if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); const must = c.issues.filter((i) => i.severity === 'critical').length; return ok(here, must ? `Checked again: ${must === 1 ? '1 thing' : `${must} things`} to fix.` : c.issues.length ? `Checked again: nothing to fix, ${c.issues.length} optional improvement${c.issues.length === 1 ? '' : 's'}.` : 'Checked again: nothing to fix.'); }
       if (action === 'approve') {
         const a = await engine.approve(actor, brandId, articleId, f('versionId') ?? '');
-        // Approving an article that already has a time means it goes out then: say so.
-        const now = (await engine.publishingPlan(actor, brandId, articleId)).now;
-        return ok(here, a.schedule && Date.parse(a.schedule.publishAtUtc) > Date.parse(now) ? `Approved. It goes out on ${longWhen(a.schedule.localDate, a.schedule.localTime)}.` : 'Approved. It will not go out until it has a time.');
+        // Say what will really happen next, as the publishing worker will decide it (see approvedOutcome).
+        const [plan, brand, destinations] = await Promise.all([engine.publishingPlan(actor, brandId, articleId), engine.getBrand(actor, brandId), engine.listDestinations(actor, brandId)]);
+        return ok(here, approvedOutcome(a, brand, destinations, plan.now));
       }
       if (action === 'approval-flag') { await engine.setRequiresApproval(actor, brandId, articleId, rowVersion(), f('required') === '1'); return ok(`${here}?open=where#where`, f('required') === '1' ? 'Saved. This article will always wait for your approval.' : 'Saved. This article follows your business’s publishing setting.'); }
       if (action === 'hold') { await engine.hold(actor, brandId, articleId, rowVersion(), f('held') === '1'); return ok(here, f('held') === '1' ? 'Done. This article will not go out until you allow it.' : 'Done. This article can go out again.'); }

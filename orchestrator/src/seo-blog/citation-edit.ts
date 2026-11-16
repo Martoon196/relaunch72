@@ -46,7 +46,8 @@ function strip(text: string): { plain: string; anchors: Anchor[] } {
  */
 export function sentenceUnits(text: string): Unit[] {
   const out: Unit[] = [];
-  const re = /(?:[^\n.!?]|[.!?](?![.!?]*[*”"')’\]]*(?:[ \t\n]|$)))+(?:[.!?]+[*”"')’\]]*(?=[ \t\n]|$))?|[.!?]+[*”"')’\]]*(?=[ \t\n]|$)/g;
+  // A numbered list item's own number ("2. ") belongs to its line; it does not end a sentence.
+  const re = /(?:(?<=^|\n)[ \t]*\d{1,3}[.)][ \t]+)?(?:(?:[^\n.!?]|[.!?](?![.!?]*[*”"')’\]]*(?:[ \t\n]|$)))+(?:[.!?]+[*”"')’\]]*(?=[ \t\n]|$))?|[.!?]+[*”"')’\]]*(?=[ \t\n]|$))/g;
   for (const m of text.matchAll(re)) {
     const lead = m[0].length - m[0].trimStart().length;
     const body = m[0].trim();
@@ -235,7 +236,8 @@ export function keepIfUnchanged(stored: string, edited: string): string {
 
 // ─── "Put the earlier wording back" ──────────────────────────────────────────
 
-interface Restorable { readonly index: number; readonly earlier: string; readonly raw: string; readonly at: { start: number; end: number } | { insertAfter: number } }
+/** Where it goes back: in place of one changed sentence, or (deleted) before the sentence that followed it / after the one before it, with the same line breaks or spaces as before. */
+interface Restorable { readonly index: number; readonly earlier: string; readonly raw: string; readonly at: { start: number; end: number } | { before: number; sep: string } | { after: number; sep: string } | { alone: true } }
 
 function rawSpan(stored: string, unit: Unit): string {
   const { anchors } = strip(stored);
@@ -263,7 +265,12 @@ function restorables(earlierStored: string, currentStored: string): Restorable[]
     const lo = prev >= 0 ? matched.get(prev)! : -1, hi = next < before.length ? matched.get(next)! : after.length;
     const gap = after.map((x, k) => ({ x, k })).filter(({ k }) => k > lo && k < hi && !usedAfter.has(k));
     if (storedGap.length !== 1 || gap.length > 1) return;
-    out.push({ index: i, earlier: u.text, raw: rawSpan(earlier, u), at: gap.length ? { start: gap[0]!.x.start, end: gap[0]!.x.end } : { insertAfter: lo } });
+    // A deleted one is attached to the neighbour it sat closest to (a list item to its list, not across a blank line).
+    const sepBefore = prev >= 0 ? ep.slice(before[prev]!.end, u.start) : null, sepAfter = next < before.length ? ep.slice(u.end, before[next]!.start) : null;
+    const at: Restorable['at'] = gap.length ? { start: gap[0]!.x.start, end: gap[0]!.x.end }
+      : sepBefore !== null && (sepAfter === null || sepBefore.length <= sepAfter.length) ? { after: lo, sep: sepBefore }
+      : sepAfter !== null ? { before: hi, sep: sepAfter } : { alone: true };
+    out.push({ index: i, earlier: u.text, raw: rawSpan(earlier, u), at });
   });
   return out;
 }
@@ -286,7 +293,17 @@ export function putBackSentence(earlierStored: string, currentStored: string, in
     return current.slice(0, startRaw) + r.raw + current.slice(toRaw(at0.end));
   }
   const units = sentenceUnits(cp);
-  if (at0.insertAfter < 0) return `${r.raw}${current ? ' ' : ''}${current}`;
-  const at = toRaw(units[at0.insertAfter]!.end);
-  return `${current.slice(0, at)} ${r.raw}${current.slice(at)}`;
+  // A deleted sentence, list item or paragraph comes back on its own line (or after its own space), exactly as stored.
+  if ('before' in at0) { const at = units[at0.before]!.start + anchors.filter((a) => a.offset < units[at0.before]!.start).reduce((n, a) => n + a.raw.length, 0); return `${current.slice(0, at)}${r.raw}${at0.sep}${current.slice(at)}`; }
+  if ('after' in at0) { const at = toRaw(units[at0.after]!.end); return `${current.slice(0, at)}${at0.sep}${r.raw}${current.slice(at)}`; }
+  return current.trim() ? `${r.raw}\n\n${current}` : r.raw;
 }
+
+/** Every sentence the page will offer to put back, comparing an earlier version's text fields with the current ones. */
+export function putBackOffers(earlier: ArticleTextFields, current: ArticleTextFields): { field: string; index: number; earlier: string }[] {
+  const fields: [string, string | undefined, string | undefined][] = [['intro', earlier.intro, current.intro], ['conclusion', earlier.conclusion, current.conclusion],
+    ...current.sections.map((s) => [`section:${s.id}`, earlier.sections.find((x) => x.id === s.id)?.body, s.body] as [string, string | undefined, string | undefined]),
+    ...current.faqs.map((f, i) => [`faq:${i}`, earlier.faqs[i]?.a, f.a] as [string, string | undefined, string | undefined])];
+  return fields.flatMap(([field, from, to]) => (from === undefined || to === undefined ? [] : sentencesToPutBack(from, to).map((x) => ({ field, ...x }))));
+}
+export interface ArticleTextFields { readonly intro: string; readonly conclusion: string; readonly sections: readonly { readonly id: string; readonly body: string }[]; readonly faqs: readonly { readonly a: string }[] }
