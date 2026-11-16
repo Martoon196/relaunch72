@@ -819,7 +819,8 @@ const PLAN_NEXT = /^\s*(?:$|[.,;:!?)(\]|]|in total\b|total\b|payments?\b|instalm
 const STRONG_WORDS = ['webinar', 'founder', 'founders', 'founding', 'early bird', 'early-bird', 'launch price', 'introductory', 'intro price', 'sale', 'sale price', 'special offer', 'offer price',
   'black friday', 'cyber monday', 'reduced', 'discount', 'discounted', 'new customers', 'existing customers', 'trial', 'taster', 'set-up', 'setup', 'joining fee', 'booking fee', 'admin fee',
   'registration', 'enrolment', 'enrollment', 'assessment', 'call-out', 'callout', 'day pass', 'deposit', 'attendees'];
-const WEAK_WORDS = ['first', 'then', 'until', 'ends', 'normally', 'usual', 'usually', 'limited', 'offer', 'only'];
+// ("only" and "offer" are not cues: "Only £85 or £8 a month", "Our offer: £85 a year or £8 a month" are ordinary prices.)
+const WEAK_WORDS = ['first', 'then', 'until', 'ends', 'normally', 'usual', 'usually', 'limited'];
 const WORD = /[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu;
 const hyWords = (t: string) => [...basisText(t).toLowerCase().matchAll(WORD)].map((m) => m[0].replace(/’/g, "'"));
 const STRONG_SEQ = STRONG_WORDS.map((w) => hyWords(w)), WEAK_SEQ = WEAK_WORDS.map((w) => hyWords(w));
@@ -838,6 +839,11 @@ const priceKey = (t: string) => keyOf(t.replace(ONCE_TAIL, ''));
 const periodWord = (x: PriceExpression) => { for (const w of x.key.split(' ')) { if (PERIODS.has(w)) return w.replace(/s$/, ''); if (w === 'pcm' || w === 'pm') return 'month'; if (w === 'pa') return 'year'; } return ''; };
 const amountNumber = (t: string) => { const m = /([£$€¥])\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?(?:%|per\s?cent)/iu.exec(t); return m ? { cur: m[1] ?? '%', n: Number((m[2] ?? m[3]!).replace(/,/g, '')) } : null; };
 const amountKey = (t: string) => { const a = amountNumber(t); return a ? `${a.cur}${a.n}` : ''; };
+/** `a` states a larger amount than `b` (same currency, or both percentages; a range by its lower end). */
+const dearer = (a: string, b: string) => { const x = amountNumber(a), y = amountNumber(b); return Boolean(x && y && x.cur === y.cur && x.n > y.n); };
+/** Words a one-off price's own clause may hold beside its amount. */
+const ONE_OFF_WORDS = new Set(['once', 'one-off', 'one', 'off', 'in', 'full', 'from', 'only', 'just', 'or', 'vat', 'inc', 'incl', 'including', 'exc', 'excl', 'excluding', 'ex', 'plus']);
+const PRICE_HEADING = /^(?:our\s+)?(?:price|prices|pricing|cost|costs)$/iu;
 
 /** The clause around an amount: between ; ( ) | spaced dashes, " or ", and commas not inside a number. */
 const CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b/giu;
@@ -909,6 +915,32 @@ function labelledForOther(st: Structure, x: PriceExpression, otherNameWords: rea
 }
 const otherNameWordsOf = (names: readonly string[], self: number) => names.map((n, i) => (i !== self && usableName(n) ? hyWords(n) : [])).filter((w) => w.length);
 
+const cardKeyCache = new WeakMap<Structure, Map<string, { line: number; s: number; heading: boolean }[]>>();
+/** Each heading's and table cell's key, once per page (for the "The" alias of an offer's own card). */
+function cardKeys(st: Structure): Map<string, { line: number; s: number; heading: boolean }[]> {
+  let m = cardKeyCache.get(st);
+  if (m) return m;
+  m = new Map();
+  const add = (k: string, v: { line: number; s: number; heading: boolean }) => { if (!k) return; const list = m!.get(k); if (list) list.push(v); else m!.set(k, [v]); };
+  st.lines.forEach((l, i) => {
+    if (l.kind === 'heading') add(keyOf(st.basis.slice(l.contentStart, l.e)), { line: i, s: l.s, heading: true });
+    else if (l.kind === 'row') for (const [cs, ce] of rowCells(st, l)) if (ce - cs <= 200) add(keyOf(st.basis.slice(cs, ce)), { line: i, s: cs, heading: false });
+  });
+  cardKeyCache.set(st, m);
+  return m;
+}
+const headingAboveCache = new WeakMap<Structure, Int32Array>();
+/** For each line, the nearest heading line above it (-1 for none), once per page. */
+function headingAbove(st: Structure): Int32Array {
+  let a = headingAboveCache.get(st);
+  if (a) return a;
+  a = new Int32Array(st.lines.length);
+  let h = -1;
+  for (let i = 0; i < st.lines.length; i++) { a[i] = h; if (st.lines[i]!.kind === 'heading') h = i; }
+  headingAboveCache.set(st, a);
+  return a;
+}
+
 /** Own sections: at most this many lines and characters from the anchor. */
 const SECTION_LINES = 30, SECTION_CHARS = 1500;
 /**
@@ -918,7 +950,7 @@ const SECTION_LINES = 30, SECTION_CHARS = 1500;
  * that begins another offer's name (the whole row when it names one offer). Paragraph anchors have no own section.
  * Returns the character spans and every candidate amount in them, in page order.
  */
-function ownSection(st: Structure, names: readonly string[], self: number): { spans: { s: number; e: number }[]; occs: PriceExpression[] } {
+function ownSection(st: Structure, names: readonly string[], self: number, cited = false): { spans: { s: number; e: number }[]; occs: PriceExpression[]; card: boolean; aliasSpans: { s: number; e: number }[] } {
   const anchors = anchorsFor(st, names), view = priceView(st, names);
   const selfKey = anchors.nameKeys[self] ?? keyOf(names[self] ?? '');
   const otherAt = new Set<number>();
@@ -927,10 +959,29 @@ function ownSection(st: Structure, names: readonly string[], self: number): { sp
   const occs: PriceExpression[] = [];
   const seen = new Set<PriceExpression>();
   const take = (i: number, s: number, e: number) => { for (const x of view.byLine.get(i) ?? []) if (x.s >= s && x.s < e && !seen.has(x) && candidateFor(x, selfKey)) { seen.add(x); occs.push(x); } };
-  for (const a of anchors.anchors) {
-    if (a.offer !== self) continue;
+  // The offer's own anchors, plus (here only, and on its cited page only) a heading or table-row cell that is exactly its name
+  // with or without a leading "The" ("Members' Room" for "The Members' Room"); never a list item or paragraph, never in the
+  // plain rule. (On other pages the check reads what it read before.)
+  const mine = anchors.anchors.filter((a) => a.offer === self), aliased = new Set<string>(), aliasSpans: { s: number; e: number }[] = [];
+  const alias = selfKey.startsWith('the ') ? selfKey.slice(4) : selfKey ? `the ${selfKey}` : '';
+  if (cited && alias && usableName(alias)) {
+    const at = new Set(mine.map((a) => `${a.line}:${a.s}`));
+    for (const c of cardKeys(st).get(alias) ?? []) {
+      if (c.heading) { if (!at.has(`${c.line}:${c.s}`)) { mine.push({ offer: self, line: c.line, s: c.s, end: -1 }); aliased.add(`${c.line}:${c.s}`); } continue; }
+      const next = anchors.anchors.filter((a) => a.line === c.line && a.s > c.s).map((a) => a.s).sort((p, q) => p - q)[0];
+      mine.push({ offer: self, line: c.line, s: c.s, end: next ?? st.lines[c.line]!.e }); aliased.add(`${c.line}:${c.s}`);
+    }
+    mine.sort((p, q) => p.line - q.line || p.s - q.s);
+  }
+  // With a heading or row of its own on the page (its own card), a list-item anchor of the offer that sits inside ANOTHER
+  // listed offer's heading section ("• The Members' Room founders' price…" inside the course card) is not its own section.
+  const card = mine.some((a) => st.lines[a.line]!.kind === 'heading' || st.lines[a.line]!.kind === 'row');
+  const otherHeading = new Set(anchors.anchors.filter((a) => a.offer !== self && anchors.nameKeys[a.offer] !== selfKey && st.lines[a.line]!.kind === 'heading').map((a) => a.line));
+  const insideOther = (line: number) => { const h = headingAbove(st)[line]!; return h >= 0 && otherHeading.has(h); };
+  for (const a of mine) {
     const start = st.lines[a.line]!;
-    if (start.kind === 'row') { spans.push({ s: a.s, e: a.end }); take(a.line, a.s, a.end); continue; }
+    if (card && start.kind === 'item' && insideOther(a.line)) continue;
+    if (start.kind === 'row') { spans.push({ s: a.s, e: a.end }); if (aliased.has(`${a.line}:${a.s}`)) aliasSpans.push({ s: a.s, e: a.end }); take(a.line, a.s, a.end); continue; }
     if (start.kind !== 'heading' && start.kind !== 'item') continue;
     let end = start.e;
     take(a.line, start.s, start.e + 1);
@@ -940,22 +991,31 @@ function ownSection(st: Structure, names: readonly string[], self: number): { sp
       take(i, l.s, l.e + 1); end = l.e;
     }
     spans.push({ s: start.s, e: end });
+    if (aliased.has(`${a.line}:${a.s}`)) aliasSpans.push({ s: start.s, e: end });
     if (occs.length > OCCURRENCE_CAP) break;
   }
   occs.sort((p, q) => p.s - q.s);
-  return { spans, occs };
+  return { spans, occs, card, aliasSpans };
 }
 
 /**
  * Check one offer's proposed structure against its own run(s) in every document (the plain rule's reading, unchanged).
  * Returns the accepted structure, or null when it is refused (then the plain rule applies to the offer). Refuses when:
  *   - `price` is not a candidate of the run in its cited document, is not the first amount there, or is directly followed
- *     by "in total";
+ *     by "in total". When the offer has its own card on the cited page (a heading or table-row anchor; on that page also a
+ *     heading or row that is its name with or without a leading "The"), the first amount is read from its own section only,
+ *     and a list item naming it inside another listed offer's heading section is not its own section (its amounts must
+ *     still be accounted for);
+ *   - the ordinary price is the cheaper one: a special line, or a labelled other line of the same period, states a larger
+ *     amount than `price` (same currency, or both percentages; a range by its lower end);
+ *   - a one-off `price` stands beside a non-plan line with a period and has a label of its own (words before its colon, a
+ *     short label cell before it, a short label line or heading above it that is not the offer's name or just "Price"), or
+ *     any word in its own clause besides the amount and once / one-off / in full / from / only / just / VAT words / or;
  *   - the price's own words say it is not the ordinary price. STRONG words (an explicit offer or another kind of charge:
  *     webinar, founder(s)/founding, early bird, launch price, introductory, intro price, sale, special offer, offer price,
  *     Black Friday, Cyber Monday, reduced, discount(ed), new/existing customers, trial, taster, set-up, joining/booking/admin
  *     fee, registration, enrolment, assessment, call-out, day pass, deposit, attendees; "was" with an amount after it; "now"
- *     after "was" on the line) and WEAK words (first, then, until, ends, normally, usual(ly), limited, offer, only) both
+ *     after "was" on the line) and WEAK words (first, then, until, ends, normally, usual(ly), limited) both
  *     count in the price's OWN clause (cut at its sentence) and OWN label (the words before its colon, a short label cell
  *     before it, a short label line or heading directly above it). STRONG words also count anywhere else on its line (its
  *     cell, in a table row), in the cell after it, in a longer cell before it and on a short label line directly below it,
@@ -982,12 +1042,18 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
   type Occ = { x: PriceExpression; st: Structure; doc: string; action: boolean; i: number; inRun: boolean; mine: boolean };
   const occs: Occ[] = [];
   const byLine = new Map<string, Occ[]>();
+  /** Documents where the offer has a card of its own (a heading or table-row anchor). */
+  const cardIn = new Set<string>();
+  /** Spans of the offer's own card found by its name with or without "The" (item 5): there the price may stand outside the plain run. */
+  const aliasAt: { doc: string; s: number; e: number }[] = [];
   const selfKey = keyOf(names[self] ?? '');
   for (const d of documents) {
     const r = priceReading(d, names, self);
     if (r.capped) return null;
     const st = structureOfDoc(d), actions = new Set(d.actionLines ?? []);
-    const sec = ownSection(st, names, self), inSection = (x: PriceExpression) => sec.spans.some((p) => x.s >= p.s && x.s < p.e);
+    const sec = ownSection(st, names, self, d.id === citedId); if (sec.card) cardIn.add(d.id);
+    for (const p of sec.aliasSpans) aliasAt.push({ doc: d.id, ...p });
+    const inSection = (x: PriceExpression) => sec.spans.some((p) => x.s >= p.s && x.s < p.e);
     const run = new Set((r.all ?? []).map((o) => o.x));
     // The union of the run and the own section, in page order.
     const xs = [...run, ...sec.occs.filter((x) => !run.has(x))].sort((p, q) => p.s - q.s);
@@ -1017,9 +1083,10 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
   const excused = (o: Occ) => { let v = excuses.get(o.i); if (v === undefined) { v = (o.action && !namesSelf(o)) || CREDIT_WORDS.test(clauseText(o)) || besideOther(o) || othersClaim.has(`${o.doc}:${o.x.s}`); excuses.set(o.i, v); } return v; };
   // The price: the first accounted amount of the run and own section in its cited document, itself in the run.
   const pk = priceKey(price);
-  const cited = occs.filter((o) => o.doc === citedId && !excused(o)).sort((a, b) => a.x.s - b.x.s);
+  // With its own card (heading or row) on the cited page, the first amount is read from its own section only.
+  const cited = occs.filter((o) => o.doc === citedId && !excused(o) && (!cardIn.has(o.doc) || o.mine)).sort((a, b) => a.x.s - b.x.s);
   const first = cited[0];
-  if (!first || !first.inRun || priceKey(first.x.text) !== pk) return null;
+  if (!first || !(first.inRun || aliasAt.some((p) => p.doc === first.doc && first.x.s >= p.s && first.x.s < p.e)) || priceKey(first.x.text) !== pk) return null;
   if (/^\s*in total\b/iu.test(first.st.basis.slice(first.x.e, first.x.e + 12))) return null;
   const priceOcc = occs.filter((o) => priceKey(o.x.text) === pk);
   const pricePeriod = periodWord(first.x);
@@ -1044,6 +1111,8 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
     return [clauseText(o), pl.colon, pl.cellBefore, pl.aboveLabel].some((t) => t !== null && hasRun(hyWords(t), w));
   };
   const covered = new Set<number>(priceOcc.map((o) => o.i));
+  /** A non-plan line with a period (per month, a year, per visit …) is proposed. */
+  let periodic = false;
   /** A plan's instalment and total occurrences that matched its written form. */
   const planMatched = new Set<number>();
   const out: CheckedPriceLine[] = [];
@@ -1057,6 +1126,10 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
       const hit = cands.find((o) => (label ? labelOk(o, label) : true));
       if (!hit) return null;
       if (p.kind === 'special' && !label) return null;
+      // The ordinary price is never the cheaper one: a special, or a labelled other line of the same period, that is dearer
+      // than `price` means a concession, sale, trial or intro price was given as the price.
+      if ((p.kind === 'special' || (p.kind === 'other' && label && periodWord(hit.x) === pricePeriod)) && dearer(hit.x.text, first.x.text)) return null;
+      if (periodWord(hit.x)) periodic = true;
       if (p.kind === 'other' && !label) {
         const pp = periodWord(hit.x); if (!pp || !pricePeriod || pp === pricePeriod) return null;
         // An amount with a label of its own (a short line above it, a label cell before it) belongs to that label.
@@ -1122,6 +1195,14 @@ export function checkPricing(documents: readonly CheckDocument[], names: readonl
   const colonLabel = pl.colon === null ? null : pl.colon.split(LABEL_BREAK).pop()!;
   const cellLabel = pl.cellBefore !== null && shortLabel(pl.cellBefore) ? pl.cellBefore : null;
   if ([st0.basis.slice(own.s, own.e), colonLabel, cellLabel, pl.above].some((t) => t !== null && (strongIn(t, line0) || weakIn(t)))) return null;
+  // A one-off price beside a line with a period is a fee beside a subscription when it has a label of its own (not the offer's
+  // name) or any other word in its own clause ("Sign-up fee: £30" / "Monthly membership: £45 a month").
+  if (periodic && !pricePeriod) {
+    const labelled = [colonLabel, cellLabel, pl.above].some((t) => t !== null && t.trim() !== '' && keyOf(t.replace(/:\s*$/u, '')) !== selfKey && !PRICE_HEADING.test(t.replace(/:\s*$/u, '').trim()));
+    const words = hyWords(st0.basis.slice(own.s, own.e)), amount = hyWords(first.x.text);
+    for (const w of amount) { const k = words.indexOf(w); if (k >= 0) words.splice(k, 1); }
+    if (labelled || words.some((w) => !ONE_OFF_WORDS.has(w))) return null;
+  }
   const explainedKeys = new Set(out.filter((l) => l.role === 'special' || (l.role === 'other' && l.label)).map((l) => keyOf(l.text)));
   const onLine = occs.filter((o) => o.doc === first.doc && o.x.line === first.x.line && explainedKeys.has(o.x.key));
   const cut = [own, ...onLine.map((o) => sentenceClause(o.st, o.x, clauseAt(o)))];

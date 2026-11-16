@@ -22,9 +22,12 @@
  *   - pages read from the website are only held with the card task until a card built from them is saved.
  *
  * A card checked under rules version 3 whose offers carry no proposed price structure (`pricing`) is exactly what 8eca59d
- * made, with ONE difference on the card view: the "What we could not find" list hides the model's price notes while that
- * offer has an open price question, and shows at most 6 notes (`gapNotes`). The stored words of every page are 8eca59d's
- * byte for byte: which lines were action text is recorded beside them (`origin.actionLines`), never in them.
+ * made, with TWO differences on the card view, and no others:
+ *   - the "What we could not find" list hides the model's price notes while that offer has an open price question, and
+ *     shows at most 6 notes (`gapNotes`);
+ *   - a price question whose field is a bare "Price" (or "Prices", "The price") is titled "<Offer>: price".
+ * The stored words of every page are 8eca59d's byte for byte: which lines were action text is recorded beside them
+ * (`origin.actionLines`), never in them.
  */
 
 import { createHash } from 'node:crypto';
@@ -812,7 +815,8 @@ function pageOptions(doc: SourceText, names: readonly string[], self: number): P
  *     two, it goes and the price stays empty.
  *   - An offer whose cited document gives more than one price is asked about: "We found more than one price for X.
  *     Which is right?", each full expression with its sentence.
- *   - The cross-source backstop is unchanged: two sources disagreeing are always asked.
+ *   - The cross-source backstop is unchanged: two sources disagreeing are always asked. For an offer whose structure was
+ *     accepted, the question asked is 8eca59d's same-page one (its cited page's prices) when that page has two or more.
  * Only the offer a price question is about is held; its description loses any sentence that states a price.
  */
 export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): T {
@@ -858,9 +862,17 @@ export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents
     checked.forEach((c, j) => { if (c && j !== i && value.offers[j]!.name !== offer.name) for (const a of c.claimedAmounts ?? []) set.add(a); });
     return set;
   };
+  // An offer whose structure the check accepted but the backstop still asks about is asked 8eca59d's same-page question
+  // (its cited page's prices) when that page has two or more: never a wider list than 8eca59d would show for it.
   const backstop = priceConflicts({ offers: value.offers, conflicts: before }, documents, claimedByOthers).filter((c) => {
     const i = value.offers.findIndex((o) => o.name === c.offer);
     return !(i >= 0 && answered(c, i));
+  }).map((c): ProfileConflict => {
+    const i = value.offers.findIndex((o) => o.name === c.offer), offer = value.offers[i];
+    const doc = offer?.sourceDocumentId ? byId.get(offer.sourceDocumentId) : undefined;
+    if (!offer || !checked[i] || !doc) return c;
+    const page = pageOptions(doc, names, i);
+    return page.length >= 2 ? { field: `${offer.name}: price`, detail: `We found more than one price for ${offer.name}. Which is right?`, documentIds: [doc.id], kind: 'price', offer: offer.name, options: page } : c;
   });
   const conflicts = [...before.slice(0, Math.max(0, 30 - backstop.length)), ...backstop];
   const held = new Set([...heldOffers, ...conflicts.map((c) => priceConflictOffer(c, value.offers)).filter((o): o is ProfileOffer => Boolean(o))]);

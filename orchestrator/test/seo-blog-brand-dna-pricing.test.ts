@@ -22,6 +22,7 @@ import { resolveCreativeContext } from '../src/creative-studio/brand-context.js'
 import type { LlmClient } from '../src/llm/client.js';
 import type { BrandProfile, KnowledgeDocument, ProfileOffer } from '../src/seo-blog/types.js';
 import { MHP_PAGES, MHP_SITE, mhpModelAnswer, mhpStructuredAnswer } from './fixtures/brand-dna-mhp-pages.js';
+import { MHP_REAL_PAGES, MHP_REAL_SITE, mhpRealHomeAnswer, mhpRealJoinAnswer } from './fixtures/brand-dna-mhp-real-pages.js';
 import { makeCase } from './fixtures/brand-dna-random-cards.js';
 import { sites } from './fixtures/brand-dna-honest-sites.js';
 import * as inputs from './fixtures/brand-dna-1a9e5160-inputs.js';
@@ -237,11 +238,14 @@ test('the backstop still asks: a different price in an upload, an equal amount c
     { name: 'Team', description: '', price: '£99 per month', url: null, sourceDocumentId: 'd1', pricing: { lines: [] } }] });
   assert.deepEqual(c.profile.conflicts.map((x) => x.offer), ['Pro']);
   // A Mentoring page whose positions cannot be mapped with certainty (a combining accent the normalisation joins): nothing on
-  // it is ignored, and the questions are exactly those the backstop asked before this change (recorded at fba388a).
+  // it is ignored, so the backstop still asks about The Members' Room and One Lane Private. Round 7 (item 6): both structures
+  // were accepted, so each is asked 8eca59d's same-page question on its cited page (the Join page) instead of the
+  // cross-source one; the offers are held either way.
   const d = await mhp(mhpStructuredAnswer, { ...MHP_PAGES, '/mentoring/': MHP_PAGES['/mentoring/']!.replace('Ninety days', 'Cafe\u0301 talks. Ninety days') });
-  assert.deepEqual(d.profile.conflicts.map((x) => [x.offer, x.options?.map((o) => `${o.value}@${o.documentId}`)]), [
-    ["The Members' Room", ['£67 a month@doc1', '£47@doc1', '£47@doc2', '£67 a month@doc2', '£670 a year@doc2', '£997@doc2']],
-    ['One Lane Private', ['£997@doc2', '£25,000@doc2', '£2,250@doc2', '£27,000@doc2', '£47@doc2', '£699@doc3']]]);
+  assert.deepEqual(d.profile.conflicts.map((x) => [x.offer, x.detail, x.options?.map((o) => `${o.value}@${o.documentId}`)]), [
+    ["The Members' Room", "We found more than one price for The Members' Room. Which is right?", ['£67 a month@doc2', '£670 a year@doc2', '£47 a month@doc2', '£67@doc2', '£997@doc2', '£1,497@doc2']],
+    ['One Lane Private', 'We found more than one price for One Lane Private. Which is right?', ['£25,000@doc2', '£2,250@doc2', '£27,000@doc2']]]);
+  assert.ok(d.profile.offers.filter((o) => ["The Members' Room", 'One Lane Private'].includes(o.name)).every((o) => o.price === null && !o.pricing));
 });
 
 test('the backstop\'s position map: collapsed text to document text to the rules\' basis, exact, or nothing', () => {
@@ -378,7 +382,8 @@ const PR_CASES: PrCase[] = [
   ['R22', 'ii: £290 per year as an other line (differs by period only)', [['Pro', '£29 per month', [{ kind: 'other', text: '£290 per year' }]]], null],
   ['R22', 'ii: £290 per year labelled "pay yearly"', [['Pro', '£29 per month', [{ kind: 'other', text: '£290 per year', label: 'pay yearly' }]]], 'Pro: price="£29 per month" {other:[pay yearly] £290 per year}'],
   ['R23', 'ii: £35 per month as an other line, no label (same period)', [['Pro', '£29 per month', [{ kind: 'other', text: '£35 per month' }]]], null],
-  ['R23', 'ii: £35 per month as a special labelled "from January"', [['Pro', '£29 per month', [{ kind: 'special', text: '£35 per month', label: 'from January' }]]], 'Pro: price="£29 per month" {special:[from January] £35 per month}'],
+  // Round 7 (rule 1): a special dearer than the price ("Pro is £35 per month from January", a coming rise) is refused.
+  ['R23', 'ii: £35 per month as a special labelled "from January"', [['Pro', '£29 per month', [{ kind: 'special', text: '£35 per month', label: 'from January' }]]], null],
 ];
 test('the review\'s P1, P1d, P2, P2e, P3, R22, R23: a structure ignoring the second amount is refused (8eca59d); an honest labelled one is accepted', async () => {
   for (const [k, what, offers, accepted] of PR_CASES) {
@@ -509,6 +514,82 @@ test('MHP, honest structured answer cited to the Home table: no price questions;
   assert.deepEqual(profile.conflicts, []);
   assert.deepEqual(profile.offers.map((o) => [o.name, o.price, linesOf(o).length]), [['Free cheat sheets', 'Free', 0], ['The Deal Desk', null, 0], ['Property Done Properly', '£1,497', 3], ["The Members' Room", '£67 a month', 3], ['One Lane Mentoring', '£3,997', 1], ['One Lane Private', '£25,000', 1]]);
   assert.equal(brandDnaCard(profile, documents).offers.find((o) => o.name === 'One Lane Mentoring')!.priceSource!.quote, 'One Lane Mentoring | 90 days, twelve people, one lane of property investing | £3,997, or 6 x £699 | Full refund before the first call; then none');
+});
+
+// ─── Round 7: structural refusals, own cards, the owner's real pages ────────
+
+test('round 7, rules 1 to 3: the ordinary price is never the cheaper one; a fee beside a subscription; "only" and "offer" are not cues', () => {
+  const ck = (text: string, price: string, lines: Lines = [], names = ['Pro Plan']) => checkPricing([{ id: 'd', text }], names, 0, price, lines as never, 'd');
+  // Rule 1: a dearer labelled other of the same period, or a dearer special, means a concession or intro price was given as the price.
+  for (const [text, price, lines] of [
+    ['### Pro Plan\n£47 a month (first three months)\nStandard price: £67 a month', '£47 a month', [{ kind: 'other', text: '£67 a month', label: 'Standard price' }]],
+    ['### Pro Plan\n£47 a month. First 100 members only.\nStandard price: £67 a month', '£47 a month', [{ kind: 'other', text: '£67 a month', label: 'Standard price' }]],
+    ["### Pro Plan\nFounders' price for the first hundred members who join us\n£47 a month\nUsual price: £67 a month", '£47 a month', [{ kind: 'other', text: '£67 a month', label: 'Usual price' }]],
+    ['### Pro Plan\n£997. Webinar price until Friday then £1,497.', '£997', [{ kind: 'other', text: '£1,497', label: 'then' }]],
+    ['### Pro Plan\n£997 or £1,497 after the webinar price ends', '£997', [{ kind: 'special', text: '£1,497', label: 'after the webinar price ends' }]],
+    ['### Pro Plan\nClearance price: £49\nRRP: £99', '£49', [{ kind: 'other', text: '£99', label: 'RRP' }]],
+    ['### Pro Plan\nHalf price: £49\nNormal price: £99', '£49', [{ kind: 'other', text: '£99', label: 'Normal price' }]],
+    ['### Pro Plan\nStudent price £8\nAdults: £12', '£8', [{ kind: 'other', text: '£12', label: 'Adults' }]],
+  ] as const) assert.equal(ck(text, price, lines as unknown as Lines), null, text);
+  // Rule 2: a one-off price with a label of its own beside a line with a period.
+  assert.equal(ck('### Pro Plan\nSign-up fee: £30\nMonthly membership: £45 a month', '£30', [{ kind: 'other', text: '£45 a month', label: 'Monthly membership' }]), null);
+  assert.equal(ck('### Pro Plan\nActivation fee £30\n£45 a month', '£30', [{ kind: 'other', text: '£45 a month' }]), null);
+  // Still accepted: a cheaper special, a dearer line of another period, "only", "offer", a plan, the offer's own heading.
+  assert.ok(ck('### Pro Plan\nOnly £85 or £8 a month on our plan', 'Only £85', [{ kind: 'other', text: '£8 a month', label: 'on our plan' }]));
+  assert.ok(ck('### Pro Plan\n£85 a year only, or £8 a month', '£85 a year', [{ kind: 'other', text: '£8 a month' }]));
+  assert.ok(ck('### Pro Plan\nOur offer: £85 a year or £8 a month', '£85 a year', [{ kind: 'other', text: '£8 a month' }]));
+  assert.ok(ck('### Pro Plan\n£85 or £8 a month on our plan', '£85', [{ kind: 'other', text: '£8 a month', label: 'on our plan' }]), 'a one-off price with no label of its own beside a monthly one');
+  assert.ok(ck('### Pro Plan\n£67 a month or £670 a year', '£67 a month', [{ kind: 'other', text: '£670 a year' }]));
+  assert.ok(ck('### Pro Plan\n£1,497 or 3 x £525. Webinar price: £997', '£1,497', [{ kind: 'plan', text: '3 x £525', for: '£1,497' }, { kind: 'special', text: '£997', label: 'Webinar price' }]));
+});
+
+test('round 7, items 4 and 5: an offer with its own card reads its first amount there; a list item naming it inside another card does not; "The" aliases on the cited page', () => {
+  const page = "## The Course\n£1,497\n• The Members' Room founders' price, £47 a month instead of £67, if you join within 30 days.\n## The Members' Room\n£67 a month, or £670 a year\nFounders' price: £47 a month, locked for as long as you stay.";
+  const names = ['The Course', "The Members' Room"], room = [{ kind: 'other', text: '£670 a year' }, { kind: 'special', text: '£47 a month', label: "Founders' price" }];
+  assert.ok(checkPricing([{ id: 'd', text: page }], names, 1, '£67 a month', room as never, 'd'), 'the own card sets the first amount');
+  // Without a card of its own on the page, the list item is still where the first amount is read (as before).
+  assert.equal(checkPricing([{ id: 'd', text: page.split('\n## The Members')[0]! + "\nThe Members' Room is £67 a month, or £670 a year." }], names, 1, '£67 a month', room as never, 'd'), null);
+  // Item 5: a heading that is the name without its "The" is the offer's own card on its cited page, so a list item naming it
+  // inside another listed offer's card no longer sets its first amount.
+  const aliased = "## The Course\n£1,497\n• Members' Room founders' price, £47 a month instead of £67.\n## The Members' Room\n£67 a month, or £670 a year\nFounders' price: £47 a month.";
+  assert.ok(checkPricing([{ id: 'd', text: aliased }], ['The Course', "Members' Room"], 1, '£67 a month', room as never, 'd'));
+});
+
+/** The owner's real pages, stored as the reader keeps them (with their action lines). */
+async function mhpReal(given: (id: Record<string, string>) => Record<string, unknown>) {
+  const ids = Object.fromEntries(MHP_REAL_PAGES.map((p, i) => [p.path, `doc${i + 1}`]));
+  const documents = MHP_REAL_PAGES.map((p, i) => kdoc(`doc${i + 1}`, p.text, MHP_REAL_SITE + p.path, { title: p.title }, p.actionLines));
+  return { ...(await make(documents, given(ids), MHP_REAL_SITE)), documents };
+}
+
+test('the owner\'s REAL pages, honest answer cited to the Join page: every price and line with its source; the one question left (The Members\' Room)', async () => {
+  const { profile, documents } = await mhpReal(mhpRealJoinAnswer);
+  const by = (n: string) => profile.offers.find((o) => o.name === n)!;
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', '£1,497'], ["The Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['The Deal Partnership', '£7,500']]);
+  assert.deepEqual(linesOf(by('Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'Webinar price', '£997'], ['plan', '3 x £349', 'for £997']]);
+  assert.deepEqual(linesOf(by('One Lane Mentoring')), [['plan', '6 x £699', '£4,194 in total', 'for £3,997']]);
+  assert.deepEqual(linesOf(by('One Lane Private')), [['plan', '12 x £2,250', '£27,000 in total', 'for £25,000']]);
+  const card = brandDnaCard(profile, documents);
+  assert.deepEqual(card.offers.map((o) => o.priceSource?.quote ?? null), ['FREE CHEAT SHEETS', 'The Deal Desk … £47 once', '£1,497 once, or 3 x £525', null, '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)', 'The Deal Partnership, £7,500']);
+  // The Members' Room: its structure (£67 a month, other £670 a year, founders' price £47 a month) is ACCEPTED by the check
+  // (round 7, item 4: its own "## The Members' Room" card sets the first amount, not the course card's bullet). The
+  // cross-source backstop still reads, beside the Room's name, the course card's "• The £997 credits in full against One Lane
+  // Mentoring for 90 days." and, on the Mentoring page, "### Standard / £3,997 / or 6 monthly payments of £699 …" after "…the
+  // course and the Members' Room included.", which no accepted structure claims. Item 6: it is asked 8eca59d's same-page
+  // question on the Join page instead of the cross-source one. Clearing it needs a looser backstop (not done: see round 7 report).
+  const checked = checkAllPricing(documents.map((d) => ({ id: d.id, text: d.text, actionLines: d.origin?.actionLines })), (mhpRealJoinAnswer({ '/': 'doc1', '/join/': 'doc2', '/mentoring/': 'doc3' }).offers as { name: string }[]).map((o) => o.name),
+    (mhpRealJoinAnswer({ '/': 'doc1', '/join/': 'doc2', '/mentoring/': 'doc3' }).offers as { price: string; pricing?: unknown; sourceDocumentId: string }[]).map((o, i) => ({ self: i, price: o.price, proposed: o.pricing ? proposedLines(o.pricing) : null, citedId: o.sourceDocumentId })));
+  assert.deepEqual(checked[3]!.lines.map((l) => [l.role, l.label, l.text]), [['other', null, '£670 a year'], ['special', "Founders' price", '£47 a month']]);
+  assert.deepEqual(profile.conflicts.map((c) => [c.field, c.options?.map((o) => o.value)]), [["The Members' Room: price", ['£47 a month', '£67', '£997', '£1,497', '£349', '£1,047']]]);
+});
+
+test('the owner\'s REAL pages, honest answer cited to the Home table: two questions, each 8eca59d\'s same-page question', async () => {
+  const { profile } = await mhpReal(mhpRealHomeAnswer);
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', null], ["Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['Deal Partnership', '£7,500']]);
+  // Property Done Properly: refused, as the model names the Room "Members' Room", the Join course card's bullet
+  // "• The Members' Room founders' price, £47 a month instead of £67, …" is no Room anchor, so its £47 a month is unaccounted
+  // in the course's own Join section. Members' Room: accepted, but the backstop reads the Join page's Room prices.
+  assert.deepEqual(profile.conflicts.map((c) => [c.field, c.options?.map((o) => o.value)]), [['Property Done Properly: price', ['£1,497', '£997']], ["Members' Room: price", ['£67 a month', '£47']]]);
 });
 
 // ─── Performance (the review's B2 inputs) ────────────────────────────────────
