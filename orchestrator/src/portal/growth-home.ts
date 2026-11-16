@@ -4,6 +4,7 @@ import { emptyGrowthIntelligence } from './growth-intelligence.js';
 import type { PortalProductProfile } from './product-profile.js';
 import { DAILY_OUTREACH_ROUTE } from './daily-outreach-presenter.js';
 import { escapeHtml, icon } from './ui.js';
+import { renderEmailEntryCard, type EmailEntryStatus } from './email-connection-progress.js';
 
 const GROWTH_HOME_STYLE = `
   .pp-home{display:grid;gap:16px}.pp-hero{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:clamp(26px,4vw,52px);min-height:280px}.pp-hero::before{content:"";position:absolute;inset:0 0 auto;height:2px;background:var(--accent)}.pp-hero::after{content:"";position:absolute;right:clamp(20px,7vw,96px);top:50%;width:190px;height:190px;transform:translateY(-50%);opacity:.07;background:linear-gradient(30deg,transparent 48%,var(--accent) 49% 51%,transparent 52%),linear-gradient(150deg,transparent 48%,var(--accent) 49% 51%,transparent 52%);clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%);pointer-events:none}.pp-hero-copy{position:relative;z-index:1;max-width:820px}.pp-live-line{display:flex;align-items:center;gap:9px;color:var(--accent);font:700 .62rem var(--mono);letter-spacing:.15em;text-transform:uppercase}.pp-live-dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}.pp-live-line.preview{color:#f59e0b}.pp-live-line.preview .pp-live-dot{background:#f59e0b}.pp-live-line.empty{color:var(--faint)}.pp-live-line.empty .pp-live-dot{background:var(--faint)}.pp-hero h1{font-family:var(--display);font-size:clamp(2.55rem,5.4vw,5.3rem);font-weight:600;line-height:.92;letter-spacing:-.035em;max-width:760px;margin:23px 0 20px}.pp-hero h1 em{font-style:normal;color:var(--accent)}.pp-hero p{max-width:670px;color:var(--muted);font-size:clamp(.84rem,1.3vw,1rem);line-height:1.72;margin:0}.pp-hero-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:28px}.pp-hero-proof{display:flex;flex-wrap:wrap;gap:14px 24px;margin-top:28px;padding-top:20px;border-top:1px solid var(--line);color:var(--faint);font:650 .6rem var(--mono);letter-spacing:.04em;text-transform:uppercase}.pp-hero-proof span{display:flex;align-items:center;gap:7px}.pp-hero-proof i{width:5px;height:5px;background:var(--accent);border-radius:50%}
@@ -17,6 +18,7 @@ const GROWTH_HOME_STYLE = `
   @media(max-width:480px){.pp-metrics{grid-template-columns:1fr}.pp-metric,.pp-metric:nth-child(3),.pp-metric:nth-child(even){border-right:0}.pp-metric:nth-child(n+2){border-top:1px solid var(--line)}.pp-funnel-rail{grid-template-columns:1fr}.pp-funnel-stage::after{display:none}.pp-hero-actions .button{width:100%}.pp-evidence-grid{grid-template-columns:1fr 1fr}}
   .pp-hero{padding:clamp(20px,3vw,34px);min-height:0}.pp-hero h1{font-size:clamp(2rem,4vw,3.8rem);line-height:1;margin:15px 0 12px}.pp-hero-actions{margin-top:20px}.pp-hero-proof{margin-top:20px;padding-top:15px}.pp-today-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);gap:16px;align-items:start}.pp-reporting{border:1px solid var(--line);border-radius:14px;background:var(--panel)}.pp-reporting>summary{cursor:pointer;list-style:none;padding:15px 18px;color:var(--muted);font-size:.72rem;font-weight:750}.pp-reporting>summary::-webkit-details-marker{display:none}.pp-reporting>summary::after{content:"Show";float:right;color:var(--accent-deep)}.pp-reporting[open]>summary::after{content:"Hide"}.pp-reporting .pp-metrics{margin:0 16px 16px}.pp-reporting .pp-grid{padding:0 16px 16px}.pp-reporting .pp-grid .pp-stack{grid-column:1/-1}
   @media(max-width:900px){.pp-today-grid{grid-template-columns:1fr}}
+  .pp-email-entry{padding:16px 19px}.pp-email-entry h2{font-family:var(--display);font-size:1.2rem;font-weight:600;margin:0 0 4px}.pp-email-entry p{color:var(--muted);margin:4px 0 0}.pp-email-entry p strong{color:var(--ink)}.pp-email-entry .button{margin-top:8px}
 `;
 
 function dateTime(value: string, timezone: string): string {
@@ -149,6 +151,8 @@ export function renderGrowthHomeBody(
     approvalsAvailable?: boolean;
     /** "Connect email" is switched on and the database has 0155 (never offered at 0154). */
     emailConnectAvailable?: boolean;
+    /** Where this business is on Connect email (read under the same gating); shown as a small status card. */
+    emailStatus?: EmailEntryStatus | null;
   }> = {},
 ): string {
   const growth = suppliedGrowth ?? emptyGrowthIntelligence(snapshot.workspace.snapshotAt);
@@ -180,7 +184,8 @@ export function renderGrowthHomeBody(
   const heroActions = [
     ...(options.approvalsAvailable ? ['<a class="button" href="/portal/approvals">Approvals</a>'] : []),
     ...(options.followupFlowsAvailable && profile.id === 'property_predator_growth' ? ['<a class="button" href="/portal/follow-ups">Build follow-up flows</a>'] : []),
-    ...(options.emailConnectAvailable && profile.id === 'property_predator_growth' ? ['<a class="button secondary" href="/portal/email">Connect email</a>'] : []),
+    // The status card below replaces this link once the business's state could be read.
+    ...(options.emailConnectAvailable && !options.emailStatus && profile.id === 'property_predator_growth' ? ['<a class="button secondary" href="/portal/email">Connect email</a>'] : []),
     actionCentreAvailable
       ? '<a class="button" href="/portal/actions">Open Action Centre</a>'
       : '<a class="button" href="#hot-list">Work the hot list</a>',
@@ -191,6 +196,8 @@ export function renderGrowthHomeBody(
       ? '<a class="button secondary" href="#hot-list">Work the hot list</a>'
       : '<a class="button secondary" href="/portal/crm/contacts">Open CRM</a>',
   ].join('');
+  const emailCard = options.emailConnectAvailable && options.emailStatus && profile.id === 'property_predator_growth'
+    ? renderEmailEntryCard(options.emailStatus, { card: 'pp-panel pp-email-entry' }) : '';
   const attentionCopy = actionCentreAvailable
     ? 'Up to four loaded CRM items: most overdue, then nearest due, then longest unworked. The full evidence-backed queue is in Action Centre.'
     : 'A bounded overview preview, not the complete workspace queue: most overdue, then nearest due, then longest-unworked open opportunities.';
@@ -206,6 +213,7 @@ export function renderGrowthHomeBody(
       <div class="pp-hero-actions">${heroActions}</div>
       <div class="pp-hero-proof"><span><i></i>${escapeHtml(stateTruth)}</span><span><i></i>Actions remain bound to the exact person, account and approval</span><span><i></i>Sale requires collected payment</span></div>
     </div></section>
+    ${emailCard}
     <div class="pp-today-grid"><section class="pp-panel" aria-labelledby="attention-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Needs you now</div><h2 id="attention-title">The next work to do</h2><p>${attentionCopy}</p></div>${attentionLink}</div><div class="pp-panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
       <section class="pp-panel" id="hot-list" aria-labelledby="hot-list-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">People</div><h2 id="hot-list-title">Next conversations</h2><p>Who, the latest evidence and the next useful move.</p></div><a class="pp-panel-action" href="/portal/crm/contacts">All people →</a></div><div class="pp-panel-body">${hotList(growth, snapshot.workspace.timezone)}</div></section></div>
     <details class="pp-reporting" id="analytics"><summary>Results and operating detail</summary><section class="pp-metrics" aria-label="Conversion evidence snapshot">

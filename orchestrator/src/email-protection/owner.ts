@@ -34,7 +34,7 @@ export const SENDING_MESSAGES = Object.freeze({
   testRefusedSender: 'The email service didn\'t accept the test from your address. Press Check again to confirm both records are still found, then try again.',
   testKeyUnreadable: 'We couldn\'t open your saved connection on our side. Press Repair (or Continue) on this page, then try again.',
   testReplayed: 'That test was already sent once. Check your inbox and spam folder.',
-  testReplayedRefused: 'That test did not go the first time. Refresh this page and press Send a test to me again.',
+  testReplayedRefused: 'That test did not go the first time. Refresh this page and send the test again.',
   testRefusedRecipient: (address: string) => `The email service won't send to ${address}: it bounced or was reported as spam before. Use another test address.`,
   testReserved: (address: string) => `${address} can't receive email. Use a real test address.`,
   testUnknown: 'We couldn\'t tell whether the test was sent. Check your inbox in a few minutes before trying again.',
@@ -42,11 +42,11 @@ export const SENDING_MESSAGES = Object.freeze({
   needBusinessName: 'Enter your business\'s real name (2 to 120 characters, without < > " \\ or @).',
   needPostalAddress: 'Enter your business\'s postal address on one line (10 to 300 characters, without < > " \\ or @).',
   needTestList: 'Enter up to 10 test addresses, separated by commas.',
-  requested: 'Waiting for approval. We will email you.',
-  requestedNoEmail: 'Waiting for approval. Check this page for the answer.',
+  requested: 'Waiting for approval. The platform owner approves every new sender, usually quickly. We will email you when it is done; nothing else is needed from you.',
+  requestedNoEmail: 'Waiting for approval. The platform owner approves every new sender, usually quickly. Check back on this page for the answer; nothing else is needed from you.',
   live: 'You are live. Your marketing emails will now go out.',
   test: 'You are testing. Only your test addresses get emails.',
-  unchanged: 'Nothing needed changing.',
+  unchanged: 'That was already done, so nothing needed changing.',
   paused: 'Paused. No marketing emails will go until you press Resume.',
   resumed: 'Resumed. Your marketing emails can go again.',
   resumedStillHeld: (why: string) => `Resumed. ${why}`,
@@ -84,6 +84,8 @@ export interface OwnerSendingView {
   readonly testList: readonly string[];
   /** Hard bounces this business may say "works now" for (at most 50, newest first). */
   readonly bounced: readonly { readonly email: string; readonly since: string }[];
+  /** An approval email can reach the owner (a working alert sender and an owner address): only then "We will email you". */
+  readonly willEmail?: boolean;
 }
 
 export type SendingResult = {
@@ -188,6 +190,16 @@ export class OwnerSendingService {
   /** The database has 0156. */
   async available(): Promise<boolean> { return this.input.protection.present(); }
 
+  /**
+   * The light read behind the "Connect email" status card on the home and follow-ups pages: the sender's own config
+   * (one query: the stored status and mode, the owner's pause, protection, footer, test and approval flags). null: no
+   * connection row; 'absent': this database has no sending controls (0156). Never the counts, the vault or Postmark.
+   */
+  async entryConfig(workspaceId: string): Promise<SendingConfig | null | 'absent'> {
+    if (!(await this.input.protection.present())) return 'absent';
+    return this.input.protection.sendingConfig(workspaceId);
+  }
+
   async view(identity: PortalSessionIdentity, connection: EmailConnectionState): Promise<OwnerSendingView> {
     let sending: SendingState | null = null;
     try { sending = await this.input.protection.state(identity.sessionToken, identity.workspaceId); }
@@ -195,7 +207,8 @@ export class OwnerSendingService {
     const testList = sending.testRecipients.length ? sending.testRecipients : sending.defaultTestEmail ? [sending.defaultTestEmail] : [];
     const bounced = this.input.bounces ? this.input.bounces.registry.snapshot(identity.workspaceId).blocked.filter(item => item.reason === 'hard_bounce')
       .slice(0, 50).map(item => ({ email: item.email, since: item.since })) : [];
-    return { offered: true, sending, banner: bannerFor(connection, sending, this.channel()), testList, bounced };
+    const channel = this.channel();
+    return { offered: true, sending, banner: bannerFor(connection, sending, channel), testList, bounced, willEmail: channel.mailer && sending.ownerEmailCount > 0 };
   }
 
   async saveDetails(identity: PortalSessionIdentity, form: { businessName: string; postalAddress: string; testList: string }): Promise<SendingResult> {
