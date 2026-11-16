@@ -13,6 +13,9 @@ import { websiteFixture } from './seo-blog-website-fixtures.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
 import * as sp from './seo-panel-fixtures.js';
 import { seoPanelPieces, withoutSeoPanel } from './seo-panel-strip.js';
+import * as LS from './seo-panel-lead-fixtures.js';
+import * as R from './seo-score-review-fixtures.js';
+import * as R2 from './seo-score-review2-fixtures.js';
 import { articleId, BRAND_ID, call, identity, showcase } from './content-area-shell-fixtures.js';
 import { goldenPages, GOLDEN_NOW } from './content-area-shell-golden.js';
 
@@ -273,4 +276,47 @@ test('through the real engine and router: the article\'s own brief reaches the r
   const s = showcase('busy');
   const r = await call(s.service, identity(), 'GET', `/portal/seo-blog/b/${BRAND_ID}/articles/${articleId(1)}`, {});
   assert.equal(r.status, 200);
+});
+
+test('the headline never overstates: in each of the review\'s twelve states, really making the listed changes reaches at least the promised score', () => {
+  let promised = 0, n = 100;
+  for (const [name, d] of Object.entries(LS.states())) {
+    const l = LS.lead(d);
+    assert.ok(Number.isFinite(l.score), name);
+    if (l.to === null) { assert.ok(l.capNote || /help most|Every check passes|left to improve/.test(l.headline), `${name}: ${l.headline}`); continue; }
+    let body = d.version.body;
+    for (const raw of l.names) {
+      const k = raw.replace(' [NO LINK]', '');
+      assert.ok(LS.FIX[k], `${name}: no change written for "${k}"`);
+      assert.ok(!raw.includes('[NO LINK]'), `${name}: "${k}" is listed without a link to make the change`);
+      body = LS.FIX[k]!(body);
+    }
+    const v = fx.version(n++ % 9 + 1, body); (v as { id: string }).id = `9000000${n}-bbbb-4ccc-8ddd-0000000000${n}`;
+    const ran = d.article.checks && d.article.checks.versionId === d.version.id;
+    const after = LS.lead({ ...d, article: { ...d.article, currentVersionId: v.id, ...(d.article.publishedVersionId ? { publishedVersionId: v.id } : {}), checks: ran ? { ...d.article.checks, versionId: v.id } : d.article.checks }, version: v, versions: [v] });
+    assert.ok(after.score >= l.to!, `${name}: promised ${l.from} to ${l.to}, really ${after.score}`);
+    promised++;
+  }
+  assert.ok(promised >= 8, `${promised} states made a promise`);
+});
+
+test('every cap state: the panel stays read-only, names no supplier, method or model, escapes hostile text, and says the cap plainly', () => {
+  const hostile = (b: ReturnType<typeof fx.body>) => ({ ...b, seoTitle: `${b.seoTitle} ${HOSTILE}`, metaDescription: `${b.metaDescription} ${HOSTILE}`, image: { kind: 'brand_asset', url: 'https://x.example/a.jpg', alt: HOSTILE, provenance: '', width: null, height: null } });
+  const bodies: [string, ReturnType<typeof fx.body>, RegExp][] = [
+    ['repetition', R.spunArticle(12), /The wording repeats itself a lot, so the score stays at 40 or below until it reads naturally\./],
+    ['some repetition', R2.make(R2.GEN.platitude), /Parts of the wording repeat earlier sentences, so the score stays at 70 or below until each part says something new\./],
+    ['not sentences', R.wordSalad(), /The text does not read as ordinary sentences: it has very few of the small words/],
+    ['stuffing', R2.strongPlusPhrase(16), /The search phrase comes up far too often, so the score stays at 60 or below until it is used naturally\./],
+  ];
+  for (const [kind, raw, sentence] of bodies) for (const shell of [fx.shell(), newLook()]) {
+    const v = fx.version(3, hostile(raw) as never);
+    const html = editorPage(shell, { ...fx.pageData('ready'), version: v, versions: [v], article: fx.article({ currentVersionId: v.id, checks: { versionId: v.id, contentSha: v.contentSha, factsSha: 'f'.repeat(64), ranAt: '2026-11-13T09:00:00.000Z', status: 'passed', issues: [] } as never }), articleBrief: sp.brief(), open: ['seo'] });
+    const panel = panelOf(html);
+    assert.match(visible(panel), sentence, kind);
+    assert.doesNotMatch(panel, /data-primary|ap-primary|ca-btn|<form|<input|<button|<select|<textarea/, kind);
+    assert.doesNotMatch(panel, SECRET_WORDS, kind);
+    assert.doesNotMatch(visible(panel), /[–—]|n-gram|function word|threshold|measure/, `${kind}: plain words only`);
+    assert.doesNotMatch(panel, /<script|<img src=x|"quotes"/, `${kind}: escaped`);
+    assert.match(panel, /&lt;script&gt;/);
+  }
 });
