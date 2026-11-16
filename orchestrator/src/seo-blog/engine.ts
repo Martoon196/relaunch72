@@ -124,6 +124,8 @@ export interface EngineDeps {
   readonly publishers: PublisherRegistry;
   readonly vault: SeoBlogCredentialVault | null;
   readonly keywords?: KeywordProvider | null;
+  /** SEO_BLOG_WORDPRESS_FOCUS_PHRASE: send the article's target phrase to the WordPress plugin. Off by default. */
+  readonly wordpressFocusPhrase?: boolean;
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
@@ -2632,7 +2634,23 @@ export class SeoBlogEngine {
     return { ...next, events };
   }
 
-  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): PublishInput {
+  /**
+   * The target phrase for the website's SEO plugin: the measured phrase on the brief when keyword-first planning gave
+   * it one, otherwise the brief's search target. Single spaces, at most 100 characters; up to four secondary phrases.
+   */
+  private async focusFor(brandId: string, version: ArticleVersion): Promise<PublishInput['focus']> {
+    const brief = await this.store.getBrief(brandId, version.briefId);
+    if (!brief) return null;
+    const clean = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, 100) : '');
+    const seo = (brief as { seo?: { primary?: { phrase?: unknown; basis?: unknown }; secondary?: readonly { phrase?: unknown }[] } }).seo;
+    const measured = seo?.primary && seo.primary.basis !== 'none' ? clean(seo.primary.phrase) : '';
+    const phrase = measured || clean(brief.targetQuery);
+    if (!phrase) return null;
+    const secondary = measured ? [...new Set((seo?.secondary ?? []).map((x) => clean(x?.phrase)).filter((x) => x && x !== phrase))].slice(0, 4) : [];
+    return { phrase, secondary };
+  }
+
+  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion, focus?: PublishInput['focus']): PublishInput {
     const snapshot=publication.websiteSnapshot;const pinned=snapshot?.destination??destination;
     return {
       ...(snapshot?.target?{websiteTarget:snapshot.target}:{}),
@@ -2640,6 +2658,7 @@ export class SeoBlogEngine {
       articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha,
       versionNumber: publication.versionNumber ?? version.number, body: version.body,
       publishedAt: snapshot?.publishedAt??publication.firstAttemptAt ?? this.now(),
+      ...(focus ? { focus } : {}),
     };
   }
 
@@ -2654,7 +2673,8 @@ export class SeoBlogEngine {
     const publisher = publisherFor(this.deps.publishers, destination.type);
     let p = await this.store.updatePublication(this.pub(publication, { state: 'submitted', attempts: publication.attempts + 1, firstAttemptAt: publication.firstAttemptAt ?? this.now(), lastAttemptAt: this.now(), detail: 'Sent to the website.' }));
     try {
-      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version));
+      const focus = this.deps.wordpressFocusPhrase && destination.type === 'wordpress' ? await this.focusFor(brand.id, version) : null;
+      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version, focus));
       p = await this.store.updatePublication(this.pub(p, { state: 'verifying', providerRef: outcome.providerRef, publicUrl: outcome.publicUrl, detail: outcome.status === 'already_present' ? 'Already on the website; confirming the public page.' : 'Accepted by the website; confirming the public page.' }));
       await this.log(brand.id, 'system', 'publish.accepted', `Website accepted the article; waiting for ${p.publicUrl} to serve it.`, p.articleId);
       return this.verify(brand, p, version);

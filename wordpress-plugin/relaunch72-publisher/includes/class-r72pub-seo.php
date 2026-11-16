@@ -130,7 +130,8 @@ class R72Pub_Seo {
 		}
 		$title = sanitize_text_field( (string) ( $p['seoTitle'] ?? $p['title'] ?? '' ) );
 		$desc  = sanitize_text_field( (string) ( $p['metaDescription'] ?? $p['excerpt'] ?? '' ) );
-		return array(
+		$focus = self::focus_from_payload( $wp );
+		return array_merge( $focus ? array( 'focusPhrase' => $focus['phrase'], 'secondaryPhrases' => $focus['secondary'] ) : array(), array(
 			'title'             => mb_substr( $title, 0, 200 ),
 			'description'       => mb_substr( $desc, 0, 400 ),
 			'canonical'         => $canonical,
@@ -141,13 +142,41 @@ class R72Pub_Seo {
 			'author'            => isset( $p['author']['name'] ) && is_string( $p['author']['name'] ) ? sanitize_text_field( $p['author']['name'] ) : '',
 			'locale'            => isset( $p['locale'] ) && is_string( $p['locale'] ) ? sanitize_text_field( $p['locale'] ) : '',
 			'citations'         => $cites,
-		);
+		) );
+	}
+
+	/**
+	 * The target phrase (1.2.0): sent by Relaunch72 only when its focus-phrase setting is on. Null when absent, so an
+	 * older payload never touches a focus phrase a person set. At most four secondary phrases; commas are removed
+	 * from each phrase because Rank Math separates its focus keywords with commas.
+	 *
+	 * @return array{phrase:string,secondary:string[]}|null
+	 */
+	private static function focus_from_payload( array $wp ) {
+		$seo = isset( $wp['seo'] ) && is_array( $wp['seo'] ) ? $wp['seo'] : array();
+		$clean = static function ( $v ) {
+			return is_string( $v ) ? mb_substr( trim( preg_replace( '/\s+/u', ' ', str_replace( ',', ' ', sanitize_text_field( $v ) ) ) ), 0, 100 ) : '';
+		};
+		$phrase = $clean( $seo['focusPhrase'] ?? null );
+		if ( '' === $phrase ) {
+			return null;
+		}
+		$secondary = array();
+		foreach ( ( isset( $seo['secondaryPhrases'] ) && is_array( $seo['secondaryPhrases'] ) ) ? $seo['secondaryPhrases'] : array() as $s ) {
+			$s = $clean( $s );
+			if ( '' !== $s && $s !== $phrase && ! in_array( $s, $secondary, true ) && count( $secondary ) < 4 ) {
+				$secondary[] = $s;
+			}
+		}
+		return array( 'phrase' => $phrase, 'secondary' => $secondary );
 	}
 
 	/** Provider field values for the active mode. Empty = that provider's own site default. */
 	private static function provider_values( $mode, array $intent, $image_id, $image_url ) {
+		$focus = isset( $intent['focusPhrase'] ) && is_string( $intent['focusPhrase'] ) && '' !== $intent['focusPhrase'] ? $intent['focusPhrase'] : null;
 		if ( 'yoast' === $mode ) {
-			return array(
+			// Yoast keeps one focus keyphrase per post; its own score is worked out when a person opens the post.
+			return array_merge( $focus ? array( '_yoast_wpseo_focuskw' => $focus ) : array(), array(
 				'_yoast_wpseo_title'                 => $intent['title'],
 				'_yoast_wpseo_metadesc'              => $intent['description'],
 				'_yoast_wpseo_meta-robots-noindex'   => $intent['index'] ? '' : '1',
@@ -158,10 +187,12 @@ class R72Pub_Seo {
 				'_yoast_wpseo_opengraph-image-id'    => $image_id ? (string) $image_id : '',
 				'_yoast_wpseo_twitter-title'         => $intent['socialTitle'],
 				'_yoast_wpseo_twitter-description'   => $intent['socialDescription'],
-			);
+			) );
 		}
 		if ( 'rank_math' === $mode ) {
-			return array(
+			// Rank Math reads comma-separated focus keywords; the first is the primary one.
+			$secondary = isset( $intent['secondaryPhrases'] ) && is_array( $intent['secondaryPhrases'] ) ? $intent['secondaryPhrases'] : array();
+			return array_merge( $focus ? array( 'rank_math_focus_keyword' => implode( ',', array_merge( array( $focus ), $secondary ) ) ) : array(), array(
 				'rank_math_title'                => $intent['title'],
 				'rank_math_description'          => $intent['description'],
 				'rank_math_robots'               => ( $intent['index'] && $intent['follow'] ) ? array() : array( $intent['index'] ? 'index' : 'noindex', $intent['follow'] ? 'follow' : 'nofollow' ),
@@ -170,7 +201,7 @@ class R72Pub_Seo {
 				'rank_math_facebook_image'       => $image_url,
 				'rank_math_facebook_image_id'    => $image_id ? (string) $image_id : '',
 				'rank_math_twitter_use_facebook' => 'on',
-			);
+			) );
 		}
 		if ( 'standalone' === $mode ) {
 			return array(

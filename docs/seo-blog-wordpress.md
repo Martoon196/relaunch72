@@ -40,7 +40,7 @@ It reuses the signed content-API v2 model (009B), exact-version approval, pause 
 
 **SEO ownership.** Exactly one component renders each output.
 
-- **Yoast SEO / Rank Math mode.** Relaunch72 writes only to that plugin's own per-post fields: title, description, social title, description and image, and robots *only* when an article asks for noindex or nofollow. That plugin renders canonical, robots, Open Graph, schema and the sitemap. The plugin's own SEO box shows provenance only.
+- **Yoast SEO / Rank Math mode.** Relaunch72 writes only to that plugin's own per-post fields: title, description, social title, description and image, and robots *only* when an article asks for noindex or nofollow. That plugin renders canonical, robots, Open Graph, schema and the sitemap. The plugin's own SEO box shows provenance only. From plugin 1.2.0, when Relaunch72 sends the article's target phrase (`wordpress.seo.focusPhrase`, only with `SEO_BLOG_WORDPRESS_FOCUS_PHRASE=true`), it is written to Yoast's `_yoast_wpseo_focuskw` or Rank Math's `rank_math_focus_keyword` (comma-separated, first one primary, up to four more) under the same keep-a-person's-edit rule. No score is written: each plugin works out its own when a person opens the post. Older plugins ignore the key.
 - **Standalone mode (no other SEO plugin).** The plugin is the site's SEO plugin, configured per site like Yoast or Rank Math:
   - *SEO box on every post, page and public post type:* SEO title, meta description, canonical URL, noindex, nofollow, social title/description/image. Explicit per-post values always apply. Relaunch72 writes a managed article's values into these same fields (`_r72_seo_*`), so a person's later change is preserved by the same rule as for Yoast/Rank Math fields.
   - *Site-wide settings* (Relaunch72 → SEO), behind an explicit **site-wide output** switch: separator and title templates (home, posts, pages, archives, search, 404), home/term descriptions, noindex defaults (category, tag, author, date, search, paginated), default social image, Twitter card and handle, Organisation/Person knowledge graph with logo and `sameAs`, Article schema on posts, core sitemap on/off. Until the switch is on, only managed posts and posts with explicit per-post values carry this plugin's tags.
@@ -78,7 +78,7 @@ It reuses the signed content-API v2 model (009B), exact-version approval, pause 
 
 ## Installation (per site)
 
-1. **Install.** WordPress → Plugins → Add New → Upload → `relaunch72-publisher-1.1.0.zip` → Activate. Check the ZIP against its `.sha256` file first. Activation changes nothing.
+1. **Install.** WordPress → Plugins → Add New → Upload → `relaunch72-publisher-1.2.0.zip` → Activate. Check the ZIP against its `.sha256` file first. Activation changes nothing.
 2. **Choose the author.** Settings → Relaunch72 Publisher → choose **Publish as** (a dedicated Author or Editor) → Save.
 3. **Create the key.** Click **Create connection key** and copy it. It is shown once.
 4. **Connect in RL72.** Brand → Setup → Website publishing connection → **Connect: WordPress**. Enter the site address, leave the endpoint blank unless the plugin shows a different one, paste the key into the key field, then Connect. The check publishes nothing.

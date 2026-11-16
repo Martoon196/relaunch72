@@ -37,6 +37,11 @@ export interface PublishInput {
   readonly versionNumber: number;
   readonly body: ArticleBody;
   readonly publishedAt: string;
+  /**
+   * The article's target phrase for the website's SEO plugin (SEO_BLOG_WORDPRESS_FOCUS_PHRASE). Absent: nothing is
+   * sent and the payload is exactly as before. Only the WordPress publisher reads it.
+   */
+  readonly focus?: { readonly phrase: string; readonly secondary: readonly string[] } | null;
 }
 
 export interface PublishOutcome {
