@@ -289,7 +289,9 @@ test('the status card\'s light read: one query, a 300 ms limit, a plain link on 
   // Slow: the page waits at most the limit, then shows the plain link. Failing: the plain link, never a throw.
   const started = Date.now();
   // Generous bounds so a busy build machine cannot fail this: the read takes 10 s, the cut-off is 300 ms, and anything under 5 s proves the cut-off won.
-  assert.equal(await readEmailEntry({ config: () => new Promise(resolve => { const t = setTimeout(() => resolve(config()), 10_000); t.unref?.(); }), state: async () => null }), null);
+  let slow: ReturnType<typeof setTimeout> | undefined;
+  assert.equal(await readEmailEntry({ config: () => new Promise(resolve => { slow = setTimeout(() => resolve(config()), 10_000); }), state: async () => null }), null);
+  clearTimeout(slow);
   assert.ok(Date.now() - started < 5_000, `a slow read is cut off (${Date.now() - started} ms)`);
   assert.equal(await readEmailEntry({ config: async () => { throw new Error('database down'); }, state: async () => null }), null);
   assert.equal(await readEmailEntry({ config: async () => 'absent', state: async () => { throw new Error('down'); } }), null);
