@@ -831,7 +831,7 @@ const NOW = /(?<![\p{L}\p{N}])now(?![\p{L}\p{N}])/iu, WAS_THEN_NOW = /(?<![\p{L}
 const strongIn = (t: string, line: string) => { const w = hyWords(t); return STRONG_SEQ.some((v) => hasRun(w, v)) || WAS_AMOUNT.test(basisText(t)) || (NOW.test(t) && WAS_THEN_NOW.test(line)); };
 const weakIn = (t: string) => { const w = hyWords(t); return WEAK_SEQ.some((v) => hasRun(w, v)); };
 /** A credit or cross-reference: "credits in full", "credited against/towards/to", "deducted". "with credit", "on credit" excuse nothing. */
-const CREDIT_WORDS = /\bcredit(?:s|ed)?\s+(?:in full|against|towards|to)\b|\bdeducted\b/iu;
+const CREDIT_WORDS = /(?<!\b(?:with|on|interest-free)\s+)\bcredit(?:s|ed)?\s+(?:in full|against|towards|to)\b|\bdeducted\b/iu;
 const LABEL_EMPTY = new Set(['price', 'prices', 'cost', 'costs', 'fee', 'fees', 'a', 'an', 'per', 'each', 'every', 'the', 'month', 'months', 'year', 'years', 'week', 'weeks', 'day', 'days', 'hour', 'hours', 'annum', 'monthly', 'yearly', 'annually', 'weekly']);
 const MONEY = /[£$€¥]\s?\d|\d\s?%/u;
 const ONCE_TAIL = /\s+(?:once|one-off|one off|only)$/iu;
@@ -848,6 +848,19 @@ const PRICE_HEADING = /^(?:our\s+)?(?:price|prices|pricing|cost|costs)$/iu;
 /** The clause around an amount: between ; ( ) | spaced dashes, " or ", and commas not inside a number. */
 const CLAUSE_BREAK = /[;()|]|,(?!\d)|\s[–—-]\s|\bor\b/giu;
 const breakCache = new WeakMap<Structure, Map<number, { s: number; e: number }[]>>();
+/**
+ * The cross-source backstop's form of the structure check's excuse (accepted structures only): the amount at [s, e) of one
+ * stored line has a clause (the same clause breaks, at most 300 characters either side) that is a credit or cross-reference
+ * ("credits in full", "credited against / towards / to", "deducted"; never "with / on / interest-free credit"), or the amount
+ * stands directly beside another listed offer's name (`otherKeys`, as keyOf gives them).
+ */
+export function creditOrBesideOther(line: string, s: number, e: number, otherKeys: readonly string[]): boolean {
+  let cs = Math.max(0, s - 300), ce = Math.min(line.length, e + 300);
+  for (const m of line.matchAll(CLAUSE_BREAK)) { const b = m.index!, be = b + m[0].length; if (be <= s) { if (be > cs) cs = be; } else if (b >= e) { if (b < ce) ce = b; break; } }
+  if (CREDIT_WORDS.test(line.slice(cs, ce))) return true;
+  const after = ` ${keyOf(line.slice(e, Math.min(ce, e + 120)))} `, before = ` ${keyOf(line.slice(Math.max(cs, s - 120), s))} `;
+  return otherKeys.some((k) => k && (after.startsWith(` ${k} `) || before.endsWith(` ${k} `)));
+}
 /** Every clause break on a line, found once per line (start and end positions in the basis). */
 function breaksOn(st: Structure, line: number): { s: number; e: number }[] {
   let byLine = breakCache.get(st);

@@ -39,7 +39,7 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  basisPositions, checkAllPricing, priceCandidates, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
+  basisPositions, checkAllPricing, creditOrBesideOther, keyOf, priceCandidates, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
   type CheckedPricing, type CheckDocument, type LinkContext, type PriceStatus, type ProposedPriceLine,
 } from './brand-dna-rules.js';
 
@@ -720,7 +720,21 @@ export function collapsedPositions(text: string): Int32Array {
   return map.subarray(0, h + 1);
 }
 
-function pricesNear(text: string, name: string, otherNames: readonly string[], ignoreAt?: (collapsed: number) => boolean): FoundPrice[] {
+/** Accepted structures only: the backstop's two refinements for one document (credit clauses; passing mentions stop at headings). */
+interface NearRefine { readonly toText: Int32Array; readonly otherKeys: readonly string[]; readonly headings: readonly { s: number; e: number }[] }
+/** The stored text's heading lines ("# " to "###### "), start and end positions in the text. */
+function headingLines(text: string): { s: number; e: number }[] {
+  const out: { s: number; e: number }[] = [];
+  for (const m of text.matchAll(/^#{1,6} [^\n]*/gmu)) out.push({ s: m.index!, e: m.index! + m[0].length });
+  return out;
+}
+/** The first collapsed position whose text position is at or after `t`. */
+function collapsedAt(toText: Int32Array, t: number): number {
+  let lo = 0, hi = toText.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (toText[mid]! < t) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+function pricesNear(text: string, name: string, otherNames: readonly string[], ignoreAt?: (collapsed: number) => boolean, refine?: NearRefine): FoundPrice[] {
   const haystack = text.replace(/\s+/g, ' ');
   const lower = haystack.toLowerCase(), needle = name.replace(/\s+/g, ' ').trim().toLowerCase();
   if (needle.length < 3) return [];
@@ -737,10 +751,28 @@ function pricesNear(text: string, name: string, otherNames: readonly string[], i
     const start = others.some((o) => o.end <= at && o.end > at - 120) ? at : Math.max(0, at - 120);
     const next = Math.min(...others.filter((o) => o.start >= stop).map((o) => o.start), haystack.length);
     const end = Math.min(next, stop + 240);
-    const window = haystack.slice(start, end);
+    // Accepted structures only: a mention inside a sentence (not starting its line, list item, row or cell) reads no further
+    // than the next heading line, and not back past the previous one.
+    let from = start, to = end;
+    if (refine) {
+      const t = refine.toText[at]!, lineStart = text.lastIndexOf('\n', t - 1) + 1;
+      if (!/(?:^|\| )\s*$/u.test(text.slice(lineStart, t).replace(/^(?:#{1,6} |• |\| |❝ )/u, ''))) {
+        for (const h of refine.headings) {
+          if (h.e <= t) from = Math.max(from, collapsedAt(refine.toText, h.e));
+          else if (h.s > t) { to = Math.min(to, collapsedAt(refine.toText, h.s)); break; }
+        }
+      }
+    }
+    const window = haystack.slice(from, to);
     for (const m of window.matchAll(PRICE_PHRASE)) {
       // (Accepted structures only: that very occurrence is another accepted offer's.)
-      if (ignoreAt?.(start + m.index!)) continue;
+      if (ignoreAt?.(from + m.index!)) continue;
+      // (Accepted structures only: its clause is a credit or cross-reference, or it stands beside another listed offer's name.)
+      if (refine) {
+        const pound = m[0].indexOf('£'), s0 = refine.toText[from + m.index! + pound]!, e0 = refine.toText[from + m.index! + m[0].trimEnd().length - 1]! + 1;
+        const ls = text.lastIndexOf('\n', s0 - 1) + 1, le = text.indexOf('\n', s0);
+        if (creditOrBesideOther(text.slice(ls, le === -1 ? text.length : le), s0 - ls, e0 - ls, refine.otherKeys)) continue;
+      }
       const amountText = /£\s?(\d[\d,]*(?:\.\d{1,2})?)\s?(k|m)?/i.exec(m[0]);
       if (!amountText) continue;
       const amount = Number(amountText[1]!.replace(/,/g, '')) * (amountText[2]?.toLowerCase() === 'k' ? 1_000 : amountText[2]?.toLowerCase() === 'm' ? 1_000_000 : 1);
@@ -766,6 +798,7 @@ export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>
   const added: ProfileConflict[] = [];
   // Built once per document, and only when an accepted structure needs it: collapsed position → text → basis.
   const maps = new Map<string, ((collapsed: number) => number) | null>();
+  const refines = new Map<string, { toText: Int32Array; headings: { s: number; e: number }[] }>();
   const basisAt = (d: SourceText) => {
     if (!maps.has(d.id)) {
       const text = d.text ?? '', toText = collapsedPositions(text), toBasis = basisPositions(text);
@@ -784,7 +817,15 @@ export function priceConflicts(value: Pick<ProfileFacts, 'offers' | 'conflicts'>
       // A position that cannot be mapped with certainty is never ignored.
       return at ? (c: number) => { const b = at(c); return b >= 0 && claimed.has(`${d.id}:${b}`); } : undefined;
     };
-    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames, ignoreFor(d)) : [] })).filter((d) => d.prices.length > 0);
+    // Accepted structures only (`claimed` is set): credit clauses and passing mentions across a heading are not read.
+    const otherKeys = claimed ? value.offers.filter((o) => o !== offer).map((o) => keyOf(o.name)).filter((k) => k.length >= 3) : [];
+    const refineFor = (d: SourceText): NearRefine | undefined => {
+      if (!claimed || !d.text) return undefined;
+      let r = refines.get(d.id);
+      if (!r) { r = { toText: collapsedPositions(d.text), headings: headingLines(d.text) }; refines.set(d.id, r); }
+      return { ...r, otherKeys };
+    };
+    const perDoc = documents.map((d) => ({ id: d.id, prices: d.text ? pricesNear(d.text, offer.name, otherNames, ignoreFor(d), refineFor(d)) : [] })).filter((d) => d.prices.length > 0);
     const disagree = perDoc.some((a, i) => perDoc.slice(i + 1).some((b) => !a.prices.some((p) => b.prices.some((q) => q.amount === p.amount))));
     if (!disagree) continue;
     const options: ProfileConflictOption[] = [];
@@ -815,8 +856,11 @@ function pageOptions(doc: SourceText, names: readonly string[], self: number): P
  *     two, it goes and the price stays empty.
  *   - An offer whose cited document gives more than one price is asked about: "We found more than one price for X.
  *     Which is right?", each full expression with its sentence.
- *   - The cross-source backstop is unchanged: two sources disagreeing are always asked. For an offer whose structure was
- *     accepted, the question asked is 8eca59d's same-page one (its cited page's prices) when that page has two or more.
+ *   - The cross-source backstop is 8eca59d's: two sources disagreeing are always asked. Only for an offer whose structure
+ *     was accepted: an amount another accepted offer claims is not read; nor is an amount whose clause is a credit or
+ *     cross-reference, or that stands beside another listed offer's name (the structure check's own excuse); a mention of
+ *     the name inside a sentence (not starting its line, list item, row or cell) reads no further than the next heading line
+ *     nor back past the previous one; and the question asked is 8eca59d's same-page one when its cited page has two or more.
  * Only the offer a price question is about is held; its description loses any sentence that states a price.
  */
 export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents: readonly SourceText[]): T {

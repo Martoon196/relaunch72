@@ -562,34 +562,52 @@ async function mhpReal(given: (id: Record<string, string>) => Record<string, unk
   return { ...(await make(documents, given(ids), MHP_REAL_SITE)), documents };
 }
 
-test('the owner\'s REAL pages, honest answer cited to the Join page: every price and line with its source; the one question left (The Members\' Room)', async () => {
+test('the owner\'s REAL pages, honest answer cited to the Join page: no price questions; every price and line with its source', async () => {
   const { profile, documents } = await mhpReal(mhpRealJoinAnswer);
   const by = (n: string) => profile.offers.find((o) => o.name === n)!;
-  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', '£1,497'], ["The Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['The Deal Partnership', '£7,500']]);
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', '£1,497'], ["The Members' Room", '£67 a month'], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['The Deal Partnership', '£7,500']]);
   assert.deepEqual(linesOf(by('Property Done Properly')), [['plan', '3 x £525', 'for £1,497'], ['special', 'Webinar price', '£997'], ['plan', '3 x £349', 'for £997']]);
   assert.deepEqual(linesOf(by('One Lane Mentoring')), [['plan', '6 x £699', '£4,194 in total', 'for £3,997']]);
   assert.deepEqual(linesOf(by('One Lane Private')), [['plan', '12 x £2,250', '£27,000 in total', 'for £25,000']]);
   const card = brandDnaCard(profile, documents);
-  assert.deepEqual(card.offers.map((o) => o.priceSource?.quote ?? null), ['FREE CHEAT SHEETS', 'The Deal Desk … £47 once', '£1,497 once, or 3 x £525', null, '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)', 'The Deal Partnership, £7,500']);
-  // The Members' Room: its structure (£67 a month, other £670 a year, founders' price £47 a month) is ACCEPTED by the check
-  // (round 7, item 4: its own "## The Members' Room" card sets the first amount, not the course card's bullet). The
-  // cross-source backstop still reads, beside the Room's name, the course card's "• The £997 credits in full against One Lane
-  // Mentoring for 90 days." and, on the Mentoring page, "### Standard / £3,997 / or 6 monthly payments of £699 …" after "…the
-  // course and the Members' Room included.", which no accepted structure claims. Item 6: it is asked 8eca59d's same-page
-  // question on the Join page instead of the cross-source one. Clearing it needs a looser backstop (not done: see round 7 report).
-  const checked = checkAllPricing(documents.map((d) => ({ id: d.id, text: d.text, actionLines: d.origin?.actionLines })), (mhpRealJoinAnswer({ '/': 'doc1', '/join/': 'doc2', '/mentoring/': 'doc3' }).offers as { name: string }[]).map((o) => o.name),
-    (mhpRealJoinAnswer({ '/': 'doc1', '/join/': 'doc2', '/mentoring/': 'doc3' }).offers as { price: string; pricing?: unknown; sourceDocumentId: string }[]).map((o, i) => ({ self: i, price: o.price, proposed: o.pricing ? proposedLines(o.pricing) : null, citedId: o.sourceDocumentId })));
-  assert.deepEqual(checked[3]!.lines.map((l) => [l.role, l.label, l.text]), [['other', null, '£670 a year'], ['special', "Founders' price", '£47 a month']]);
-  assert.deepEqual(profile.conflicts.map((c) => [c.field, c.options?.map((o) => o.value)]), [["The Members' Room: price", ['£47 a month', '£67', '£997', '£1,497', '£349', '£1,047']]]);
+  assert.deepEqual(card.offers.map((o) => o.priceSource?.quote ?? null), ['FREE CHEAT SHEETS', 'The Deal Desk … £47 once', '£1,497 once, or 3 x £525', '£67 a month, or £670 a year', '£3,997 or 6 x £699 (£4,194 in total)', '£25,000 or 12 x £2,250 (£27,000 in total)', 'The Deal Partnership, £7,500']);
+  // The Members' Room (round 7, item 4: its own "## The Members' Room" card sets the first amount; round 8: the backstop does
+  // not read the course card's "• The £997 credits in full against One Lane Mentoring for 90 days." (a credit clause) nor,
+  // after the Mentoring page's passing mention "…the course and the Members' Room included.", the "### Standard" section).
+  assert.deepEqual(linesOf(by("The Members' Room")), [['other', '£670 a year'], ['special', "Founders' price", '£47 a month']]);
+  assert.deepEqual(profile.conflicts, [], 'no price questions');
 });
 
-test('the owner\'s REAL pages, honest answer cited to the Home table: two questions, each 8eca59d\'s same-page question', async () => {
+test('the owner\'s REAL pages, honest answer cited to the Home table: one question (Property Done Properly), 8eca59d\'s same-page question', async () => {
   const { profile } = await mhpReal(mhpRealHomeAnswer);
-  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', null], ["Members' Room", null], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['Deal Partnership', '£7,500']]);
+  assert.deepEqual(profile.offers.map((o) => [o.name, o.price]), [['Free cheat sheets', 'Free'], ['The Deal Desk', '£47'], ['Property Done Properly', null], ["Members' Room", '£67 a month'], ['One Lane Mentoring', '£3,997'], ['One Lane Private', '£25,000'], ['Deal Partnership', '£7,500']]);
   // Property Done Properly: refused, as the model names the Room "Members' Room", the Join course card's bullet
   // "• The Members' Room founders' price, £47 a month instead of £67, …" is no Room anchor, so its £47 a month is unaccounted
-  // in the course's own Join section. Members' Room: accepted, but the backstop reads the Join page's Room prices.
-  assert.deepEqual(profile.conflicts.map((c) => [c.field, c.options?.map((o) => o.value)]), [['Property Done Properly: price', ['£1,497', '£997']], ["Members' Room: price", ['£67 a month', '£47']]]);
+  // in the course's own Join section. Members' Room: accepted (special "for the first 100" £47), no question (round 8).
+  assert.deepEqual(linesOf(profile.offers.find((o) => o.name === "Members' Room")), [['special', 'for the first 100', '£47']]);
+  assert.deepEqual(profile.conflicts.map((c) => [c.field, c.options?.map((o) => o.value)]), [['Property Done Properly: price', ['£1,497', '£997']]]);
+});
+
+test('round 8, the backstop for an accepted structure: credit clauses and passing mentions across a heading are not read; every real disagreement still asks', async () => {
+  const room = kdoc('d1', "## The Members' Room\n£67 a month or £670 a year", 'https://x.example/join');
+  const offers = [{ name: "The Members' Room", description: '', price: '£67 a month', url: null, sourceDocumentId: 'd1', pricing: { lines: [{ kind: 'other', text: '£670 a year' }] } },
+    { name: 'One Lane Mentoring', description: '', price: null, url: null, sourceDocumentId: 'd1' }];
+  const asks = async (text: string, url: string | null = null) => (await make([room, kdoc('d2', text, url)], { offers })).profile.conflicts.map((c) => c.offer);
+  // Not read: a credit clause beside the name; a passing mention's window stops at the next heading.
+  assert.deepEqual(await asks("## Course\n• The Members' Room is included.\n• The £997 credits in full against One Lane Mentoring for 90 days.", 'https://x.example/course'), []);
+  assert.deepEqual(await asks("Private includes the course and the Members' Room included.\n### Standard\n£3,997\nor 6 monthly payments of £699", 'https://x.example/m'), []);
+  // Still asked: a different price on the name's own line, below a name standing on its own line (even past a heading), in
+  // the same sentence as a passing mention, and a credit-looking sentence that states the price.
+  assert.deepEqual(await asks("Price list\nThe Members' Room is now £77 a month."), ["The Members' Room"]);
+  assert.deepEqual(await asks("The Members' Room\n### Price\n£77 a month"), ["The Members' Room"]);
+  assert.deepEqual(await asks("Our course comes with coaching, and the Members' Room, now £77 a month, is included."), ["The Members' Room"]);
+  assert.deepEqual(await asks("The Members' Room costs £77 a month with credit towards nothing"), ["The Members' Room"]);
+  assert.deepEqual(await asks("The Members' Room is £77 a month, on credit to anyone"), ["The Members' Room"]);
+  // Without an accepted structure the backstop is 8eca59d's: the same credit clause is read.
+  const single = kdoc('d1', "## The Members' Room\n£67 a month", 'https://x.example/join');
+  const course = kdoc('d2', "## Course\n• The Members' Room is included.\n• The £997 credits in full against One Lane Mentoring for 90 days.", 'https://x.example/course');
+  const plain = await make([single, course], { offers: offers.map(({ pricing: _p, ...o }) => o) });
+  assert.deepEqual(plain.profile.conflicts.map((c) => [c.offer, c.detail]), [["The Members' Room", 'Your website pages and documents give different prices for this. Nothing was chosen for you.']]);
 });
 
 // ─── Performance (the review's B2 inputs) ────────────────────────────────────
