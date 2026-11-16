@@ -153,6 +153,11 @@ export interface KnowledgeOrigin {
   readonly kind: 'website';
   readonly url: string;
   readonly fetchedAt: IsoInstant;
+  /**
+   * Which lines (0-based) of the stored text were wholly action text on the page (a button, a button-styled link or a form
+   * label), recorded beside the text and never in it. Read only by the price-structure check. Absent on pages stored before.
+   */
+  readonly actionLines?: readonly number[];
 }
 
 export interface KnowledgeRef {
@@ -314,6 +319,8 @@ export interface InventoryPage {
   readonly editorial: boolean;
   /** Bounded page text. Present only on a Brand DNA website read, and never stored with the inventory. */
   readonly text?: string;
+  /** With `text`: which of its lines (0-based) were wholly action text on the page. Never stored with the inventory. */
+  readonly actionLines?: readonly number[];
 }
 
 /** What the home page itself declares about the brand's look. A proposal only: nothing is applied until the owner confirms it. */

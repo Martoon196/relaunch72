@@ -20,6 +20,11 @@
  *   - what writing steps receive is unchanged by these rules (the card's fields, as the owner confirmed them);
  *   - a settled choice takes its value from the stored card, never the browser;
  *   - pages read from the website are only held with the card task until a card built from them is saved.
+ *
+ * A card checked under rules version 3 whose offers carry no proposed price structure (`pricing`) is exactly what 8eca59d
+ * made, with ONE difference on the card view: the "What we could not find" list hides the model's price notes while that
+ * offer has an open price question, and shows at most 6 notes (`gapNotes`). The stored words of every page are 8eca59d's
+ * byte for byte: which lines were action text is recorded beside them (`origin.actionLines`), never in them.
  */
 
 import { createHash } from 'node:crypto';
@@ -31,8 +36,8 @@ import { materialFigures } from './checks.js';
 import { SeoBlogError } from './types.js';
 import {
   AUDIENCE_MAX, audienceUnit, basisText, claimSentence, cutDescription, DESCRIPTION_MAX, linkAllowed, linkLabel, NEVER_SAY_MAX, neverSayKept, OFFER_LIMIT, offerNameProblem,
-  basisPositions, checkAllPricing, priceCandidates, withoutActionMarkers, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
-  type CheckedPricing, type CheckDocument, type LinkContext, type PriceStatus,
+  basisPositions, checkAllPricing, priceCandidates, priceLines, priceStatus, proposedLines, sourceNumbers, VOICE_LINE_MAX, withoutMarkers, wordRun,
+  type CheckedPricing, type CheckDocument, type LinkContext, type PriceStatus, type ProposedPriceLine,
 } from './brand-dna-rules.js';
 
 /**
@@ -57,7 +62,22 @@ export const BRAND_PAGE_TEXT_LIMIT = 8000;
  * Pages stored before this kept one line; every rule also works on that.
  */
 export function brandPageText(text: string): string {
-  return text.replace(/[^\S\n]+/g, ' ').replace(/ *\n[\s]*/g, '\n').trim().slice(0, BRAND_PAGE_TEXT_LIMIT);
+  return collapsePageText(text).slice(0, BRAND_PAGE_TEXT_LIMIT);
+}
+const collapsePageText = (text: string) => text.replace(/[^\S\n]+/g, ' ').replace(/ *\n[\s]*/g, '\n').trim();
+/**
+ * `brandPageText` of a page read, with its action lines carried to the stored text's line numbers. The words are exactly
+ * `brandPageText(read.text)` (the 8,000-character limit applies to them alone). Each read line becomes one stored line, or
+ * none when it is blank; if that cannot be confirmed line for line, no line is recorded as action text.
+ */
+export function brandPageTextRead(read: { readonly text: string; readonly actionLines: readonly number[] }): { readonly text: string; readonly actionLines: readonly number[] } {
+  const text = brandPageText(read.text);
+  if (!read.actionLines.length) return { text, actionLines: [] };
+  const at: number[] = [], kept: string[] = [];
+  for (const line of read.text.split('\n')) { const t = line.replace(/\s+/g, ' ').trim(); at.push(t ? kept.length : -1); if (t) kept.push(t); }
+  if (kept.join('\n') !== collapsePageText(read.text)) return { text, actionLines: [] };
+  const lines = text ? text.split('\n').length : 0;
+  return { text, actionLines: read.actionLines.map((i) => at[i] ?? -1).filter((i) => i >= 0 && i < lines) };
 }
 /**
  * What the owner is told when a read cannot end in a card. Each says what to do next in one sentence;
@@ -157,6 +177,7 @@ export function websiteDocuments(input: {
     .slice(0, BRAND_PAGE_LIMIT);
   for (const page of readable) {
     const text = page.text!.slice(0, BRAND_PAGE_TEXT_LIMIT);
+    const lineCount = text.split('\n').length, actionLines = (page.actionLines ?? []).filter((i) => i < lineCount);
     const count = wordCount(text);
     pagesRead++; words += count;
     const id = websiteDocumentId(input.brandId, page.url);
@@ -167,7 +188,7 @@ export function websiteDocuments(input: {
       id, brandId: input.brandId, version: (prior?.version ?? 0) + 1, category: categoryFor(page.url), title: pageLabel(page.url),
       filename: null, format: 'txt', mime: 'text/plain', sizeBytes: Buffer.byteLength(text), sha256, blobId: null, status: 'extracted',
       statusDetail: `${count.toLocaleString('en-GB')} words read from ${page.url}`, text, pagesRead: null, pagesTotal: null, active: true,
-      createdAt: input.now, origin: { kind: 'website', url: page.url, fetchedAt: input.now },
+      createdAt: input.now, origin: { kind: 'website', url: page.url, fetchedAt: input.now, ...(actionLines.length ? { actionLines } : {}) },
     });
   }
   return { documents, pagesRead, unchanged, words };
@@ -304,6 +325,15 @@ interface Decisions {
   readonly names: readonly string[];
 }
 
+/**
+ * The model's proposed price structure for an offer, or null for none. An empty `lines` list proposes the price alone, which
+ * means something only beside "Free"; beside any other price it is no proposal at all (the plain 8eca59d path).
+ */
+function proposalOf(o: ProfileOffer): ProposedPriceLine[] | null {
+  const lines = proposedLines((o as { pricing?: unknown }).pricing);
+  return lines && (lines.length > 0 || /^free$/iu.test((o.price ?? '').trim())) ? lines : null;
+}
+
 function linkContext(documents: readonly SourceText[], context: SourceContext): LinkContext {
   return { website: context.website ?? null, pages: documents.map((d) => d.page) };
 }
@@ -318,7 +348,7 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
     const self = names.findIndex((n) => sameValue(n, o.name));
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
     const usable = index < OFFER_LIMIT && Boolean(doc) && !offerNameProblem(o.name, doc!);
-    return { self: self < 0 ? names.length : self, price: usable ? o.price : null, proposed: proposedLines((o as { pricing?: unknown }).pricing), citedId: o.sourceDocumentId };
+    return { self: self < 0 ? names.length : self, price: usable ? o.price : null, proposed: proposalOf(o), citedId: o.sourceDocumentId };
   }));
   const offers = value.offers.map((o, index): OfferDecision => {
     const doc = o.sourceDocumentId ? byId.get(o.sourceDocumentId) : undefined;
@@ -331,7 +361,7 @@ function decideOffers(value: ProfileFacts, documents: readonly SourceText[], con
     const self = names.findIndex((n) => sameValue(n, o.name));
     const at = self < 0 ? names.length : self;
     // A proposed price structure is checked line by line; accepted whole, it ties the price. Otherwise the plain rule.
-    const proposal = proposedLines((o as { pricing?: unknown }).pricing);
+    const proposal = proposalOf(o);
     const checked = proposal ? checks[index] ?? null : null;
     const read = checked ? { status: 'tied' as const, hint: null } : priceStatus(o.price ?? '', doc, names, at);
     const lines = o.price && read.status === 'tied' && !checked ? priceLines(doc, names, at, o.price) : null;
@@ -789,7 +819,7 @@ export function holdConflictedPrices<T extends ProfileFacts>(value: T, documents
   const byId = new Map(documents.map((d) => [d.id, d]));
   const names = value.offers.map((o) => o.name);
   // Website door, rules v3: each offer's proposed price structure, accepted only when the check accepts every line of it.
-  const checked = checkAllPricing(documents, names, value.offers.map((o, i) => ({ self: i, price: o.price, proposed: proposedLines((o as { pricing?: unknown }).pricing), citedId: o.sourceDocumentId })));
+  const checked = checkAllPricing(documents, names, value.offers.map((o, i) => ({ self: i, price: o.price, proposed: proposalOf(o), citedId: o.sourceDocumentId })));
   const amountsOf = (i: number) => new Set([value.offers[i]!.price, ...(checked[i]?.lines ?? []).flatMap((l) => [l.text, l.total ?? ''])].flatMap((t) => (t ? moneyAmounts(t) : [])));
   /** Every answer of a question is an amount of the offer's accepted structure (so the structure answers it). */
   const answered = (c: ProfileConflict, i: number) => checked[i] !== null && (c.options ?? []).length > 0 && (c.options ?? []).every((o) => { const a = moneyAmounts(o.value); return a.length > 0 && a.every((n) => amountsOf(i).has(n)); });
@@ -1062,8 +1092,7 @@ export function pricingAfterEdit(offer: ProfileOffer, submitted: string): Profil
 
 function websiteDoorCard(profile: BrandProfile, documents: readonly KnowledgeDocument[]): BrandDnaCard {
   const latest = new Map<string, KnowledgeDocument>();
-  // A website page is read without its action-text markers, exactly as every rule reads it.
-  for (const d of documents) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d.origin?.kind === 'website' && d.text ? { ...d, text: withoutActionMarkers(d.text) } : d);
+  for (const d of documents) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
   const from = (documentId: string | null | undefined, quote: string | null = null): DnaSource | null => {
     if (documentId === undefined) return null;
     if (documentId === null) return { label: 'You told us', url: null, quote: null };

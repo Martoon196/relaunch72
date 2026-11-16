@@ -18,7 +18,7 @@ import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ProfileLeftOut, ResearchSource,
 } from './types.js';
 import { offerForWriting, SeoBlogError } from './types.js';
-import { ACTION_MARKER, actionLineIndexes, withoutActionMarkers, withoutMarkers } from './brand-dna-rules.js';
+import { withoutMarkers } from './brand-dna-rules.js';
 import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSources, repairProfileFacts, strictProfileProblems } from './brand-dna.js';
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
@@ -288,6 +288,13 @@ function knownProfileFields(v: ExtractedProfile): ExtractedProfile {
 
 export type ExtractedProfile = Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts' | 'sources' | 'leftOut'>;
 
+/** The website door's prompt text for a document: action lines shown with "▸ ", a line of its own starting "▸ " escaped. */
+export function actionMarked(text: string, actionLines: readonly number[] | undefined): string {
+  const actions = new Set(actionLines ?? []);
+  if (!actions.size && !text.includes('▸ ')) return text;
+  return text.split('\n').map((l, i) => (actions.has(i) ? `▸ ${l}` : l.startsWith('▸ ') ? `\u200B${l}` : l)).join('\n');
+}
+
 export async function extractProfile(llm: LlmClient, input: {
   readonly brandName: string;
   readonly website: string | null;
@@ -303,16 +310,14 @@ export async function extractProfile(llm: LlmClient, input: {
   const readable = input.documents.filter((d) => d.active && d.text);
   if (readable.length === 0) throw new SeoBlogError(409, 'Upload at least one readable guidance document or paste brand text first.', 'no_knowledge');
   // Setup's prompt does not explain Brand DNA's page markers, so a page Brand DNA read is sent to it without them.
-  // The website door's model is told what "▸ " (action text) means; an uploaded document's own "▸ " bullets are escaped for it.
-  const pageText = (d: KnowledgeDocument) => d.origin?.kind === 'website'
-    ? (!input.strict ? withoutMarkers(withoutActionMarkers(d.text ?? '')) : (d.text ?? ''))
-    : (input.strict && (d.text ?? '').includes(ACTION_MARKER) ? (d.text ?? '').replace(/^▸ /gmu, '\u200B▸ ') : (d.text ?? ''));
+  // (Setup's prompt and documents are exactly 8eca59d's: action text is recorded beside a page's words, never in them.)
+  // The website door's model is shown action lines with "▸ " (its prompt explains it); a document's own line starting "▸ " is
+  // escaped with an invisible character in that prompt only. The stored words are never changed.
+  const pageText = (d: KnowledgeDocument) => !input.strict ? (d.origin?.kind === 'website' ? withoutMarkers(d.text ?? '') : (d.text ?? '')) : actionMarked(d.text ?? '', d.origin?.actionLines);
   const docs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: pageText(d).slice(0, 60_000) }));
-  // Every rule reads the pages exactly as before action text was marked; the price-structure check also gets which lines it was.
-  const ruleDocs = readable.map((d) => {
-    const raw = (d.text ?? '').slice(0, 60_000), web = d.origin?.kind === 'website';
-    return { id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: web ? withoutActionMarkers(raw) : raw, ...(web ? { actionLines: actionLineIndexes(raw) } : {}) };
-  });
+  // Every rule reads each document's stored words; the price-structure check also gets which lines were action text.
+  const ruleDocs = readable.map((d) => ({ id: d.id, version: d.version, category: d.category, title: d.title, ...(d.origin ? { page: d.origin.url } : {}), text: (d.text ?? '').slice(0, 60_000),
+    ...(d.origin?.kind === 'website' && d.origin.actionLines?.length ? { actionLines: d.origin.actionLines } : {}) }));
   // The website door has its own prompt (it asks for a quoted source for every fact), so Setup's documents-only
   // extraction is sent exactly the prompt it always was and returns what it always did.
   const prompt = loadPrompt(input.strict ? 'seo-blog-profile-site.md' : 'seo-blog-profile.md');

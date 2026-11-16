@@ -665,7 +665,7 @@ export class SeoBlogEngine {
     const brand = await this.store.getBrand(brandId);
     if (!brand?.website) throw new SeoBlogError(409, 'Add the brand website before reading its pages.');
     const read = await buildInventory(brandId, brand.website, this.deps.transport, { now: this.now(), captureText: keepText });
-    const scanned: WebsiteInventory = { ...read, pages: read.pages.map(({ text: _words, ...page }) => page) };
+    const scanned: WebsiteInventory = { ...read, pages: read.pages.map(({ text: _words, actionLines: _actions, ...page }) => page) };
     const inventory={...scanned,editorial:editorialRecommendations(scanned)};
     await this.store.saveInventory(inventory);
     const ok = inventory.pages.filter((p) => p.fetchStatus === 'ok');

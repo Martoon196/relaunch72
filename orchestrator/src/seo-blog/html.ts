@@ -254,6 +254,15 @@ function capHtml(html: string): string {
 
 /** The main content of an HTML page as Brand DNA lines (the same main-content choice as `parseHtmlPage`). */
 export function brandPageHtmlLines(html: string): string {
+  return brandPageHtmlRead(html).text;
+}
+
+/**
+ * The same read, with which of its lines (0-based, in `text`) were wholly action text on the page: a button, a
+ * button-styled link or a form control's label. The words are exactly `brandPageHtmlLines`; nothing marks those lines in
+ * them (the line numbers are kept beside the text, so a page's own "▸ " or any other glyph is only ever its own words).
+ */
+export function brandPageHtmlRead(html: string): { readonly text: string; readonly actionLines: readonly number[] } {
   const capped = capHtml(html);
   const lower = capped.toLowerCase();
   const bodyAt = lower.indexOf('<body'), bodyEnd = lower.lastIndexOf('</body>');
@@ -262,9 +271,9 @@ export function brandPageHtmlLines(html: string): string {
   for (const tag of ['main', 'article']) {
     const at = bl.search(new RegExp(`<${tag}\\b`));
     const end = at === -1 ? -1 : bl.indexOf(`</${tag}>`, at);
-    if (at !== -1 && end !== -1) return brandPageLines(body.slice(at, end + tag.length + 3));
+    if (at !== -1 && end !== -1) return readBrandPageLines(body.slice(at, end + tag.length + 3), false);
   }
-  return brandPageLines(body, true);
+  return readBrandPageLines(body, true);
 }
 
 /**
@@ -272,6 +281,10 @@ export function brandPageHtmlLines(html: string): string {
  * does when a page has no main element.
  */
 export function brandPageLines(input: string, dropChrome = false): string {
+  return readBrandPageLines(input, dropChrome).text;
+}
+
+function readBrandPageLines(input: string, dropChrome: boolean): { text: string; actionLines: number[] } {
   const html = capHtml(input);
   const lower = html.toLowerCase();
   const sink: string[][] = [[]];
@@ -286,8 +299,9 @@ export function brandPageLines(input: string, dropChrome = false): string {
   let sectionText = false, sectionSibling = false, siblingOpened = false;
   /** An inline tag was passed since the last text: a letter or digit on both sides gets a space between them. */
   let inlineEdge = false;
-  /** Action text: a button, a button-styled link, or a form control's label. A line made only of action text is marked "▸ "
-   * (the rules read the line without it); a button inside a sentence stays inline and nothing else changes. */
+  /** Action text: a button, a button-styled link, or a form control's label. A line made only of action text is recorded by
+   * its line number (`actionAt`, never in the words); a button inside a sentence stays inline and nothing else changes. */
+  const actionAt = new Set<number>();
   let actionDepth = 0, formDepth = 0, lineAction = false, linePlain = false;
   let buffer = '', bufferItalicOnly = true, bufferHasText = false, bufferTail = '';
   const tables: TableCtx[] = [];
@@ -320,7 +334,7 @@ export function brandPageLines(input: string, dropChrome = false): string {
     const bullet = /^(?:[-–•*]|•)\s+(?=\S)/u.exec(text);
     if (kind === 'para' && bullet) { kind = 'item'; text = text.slice(bullet[0].length); }
     // Words the site itself starts with "#", "|" or "❝" are not our markers: an invisible character keeps them apart.
-    if (/^(?:#{1,6} |\| |❝ |• |▸ )/u.test(text)) text = `\u200B${text}`;
+    if (/^(?:#{1,6} |\| |❝ |• )/u.test(text)) text = `\u200B${text}`;
     // The section of customer words ends when the heading's own container closes (it is the element below the heading).
     // (The heading is still open here, so its container is the element below it; at the top level nothing closes it.)
     if (kind === 'heading') { quotedSection = QUOTED_SECTION.test(text); quotedSectionDepth = stack.length - 2; sectionText = false; sectionSibling = false; siblingOpened = false; }
@@ -339,14 +353,14 @@ export function brandPageLines(input: string, dropChrome = false): string {
       if (!prev.quoted) {
         prev.quoted = true;
         const lines = sink[sink.length - 1]!, t = tables[tables.length - 1];
-        if (!t?.cell && lines.length && (lines[lines.length - 1] === prev.text || lines[lines.length - 1] === `▸ ${prev.text}`)) lines[lines.length - 1] = `❝ ${prev.text}`;
+        if (!t?.cell && lines.length && lines[lines.length - 1] === prev.text) { lines[lines.length - 1] = `❝ ${prev.text}`; actionAt.delete(lines.length - 1); }
       }
     }
     const seg: Segment = { kind, level, text, quoted, italic: italicOnly, stars: starsDepth > 0, container };
     lastSegment = seg;
     emit(seg);
-    // Wholly action text, outside a table: marked for the price-structure check (every rule reads it without the marker).
-    if (actionLine && kind === 'para' && !seg.quoted && !tables[tables.length - 1]?.cell) { const lines = sink[sink.length - 1]!; lines[lines.length - 1] = `▸ ${lines[lines.length - 1]}`; }
+    // Wholly action text, outside a table: its line number is recorded for the price-structure check (the words are unchanged).
+    if (actionLine && kind === 'para' && !seg.quoted && !tables[tables.length - 1]?.cell) actionAt.add(sink[sink.length - 1]!.length - 1);
   };
   const addText = (t: string) => {
     if (struckDepth > 0) return;
@@ -472,5 +486,5 @@ export function brandPageLines(input: string, dropChrome = false): string {
   }
   while (tables.length) closeTable();
   flush();
-  return sink[0]!.join('\n');
+  return { text: sink[0]!.join('\n'), actionLines: [...actionAt].sort((a, b) => a - b) };
 }
