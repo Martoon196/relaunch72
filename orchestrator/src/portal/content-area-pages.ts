@@ -15,7 +15,7 @@ import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
 import { USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
 import type { Article, ArticleBody, ArticleBrief, Brand, Destination, Job, TopicPlan, UsageKind } from '../seo-blog/types.js';
 import { csrfField, layout, SEO_BLOG_BASE, type BrandDnaDoorStatus, type Shell } from './seo-blog-view.js';
-import { longWhen, safeHttps, situation, writingStatus, type ArticleListRow, type Situation, type WritingStatus } from './seo-blog-article-view.js';
+import { longWhen, safeHttps, situation, writingStatus, type ArticleListRow, type ResumeFacts, type Situation, type WritingStatus } from './seo-blog-article-view.js';
 import { autopilot, publishingDays, type ContentAreaAutopilot } from './content-area-layout.js';
 import { CONTENT_AREA_TOKENS } from './content-area-theme.js';
 import { escapeHtml as e } from './ui.js';
@@ -28,6 +28,8 @@ export interface ContentAreaData {
   readonly jobs: readonly Job[];
   readonly briefs: readonly ArticleBrief[];
   readonly now: string;
+  /** Current facts a stopped write is judged against (the article page's ResumeFacts). */
+  readonly resume?: ResumeFacts | null;
 }
 
 /** What the engine needs before it writes for an empty publishing day (all read-only). */
@@ -38,7 +40,8 @@ export interface FillFacts {
   readonly plans: readonly TopicPlan[];
 }
 
-type Problem = 'paused' | 'site_gone' | 'no_website' | 'failed' | 'writing' | 'held' | 'owner_hold' | 'read';
+/** What needs the owner. 'stuck' is writing that stopped and has no button of its own: shown, but below reading and off the badge. */
+type Problem = 'paused' | 'site_gone' | 'no_website' | 'failed' | 'writing' | 'held' | 'owner_hold' | 'read' | 'stuck';
 
 interface Item {
   readonly row: ArticleListRow | null;
@@ -53,8 +56,10 @@ interface Item {
   readonly sit: Situation | null;
   /** The article's own state with the pause set aside: what would need the owner once publishing is back on. */
   readonly own: Situation | null;
-  readonly gone: { readonly id: string; readonly label: string; readonly removed: boolean } | null;
+  readonly gone: { readonly id: string; readonly label: string; readonly removed: boolean; readonly other: boolean } | null;
   readonly retryJobId: string | null;
+  /** The retry button's words ("Write it now" once the cause was cleared). */
+  readonly retryLabel?: string | undefined;
   readonly link: { href: string; label: string } | null;
   /** Set when this needs the owner, with the kind of problem. */
   readonly problem: Problem | null;
@@ -83,34 +88,37 @@ function pictureSrc(b: Brand, article: Article, image: ArticleBody['image'] | un
 /** States where the article page itself puts a planned-but-disconnected website first (mirrors its `plan.goneSite` rule). */
 const GONE_SHOWN = (kind: string) => !['live', 'publishing', 'checking', 'owner_hold', 'must_fix'].includes(kind);
 
-type Groups = Record<'ready' | 'coming' | 'writing' | 'live', Item[]>;
+type Groups = Record<'ready' | 'coming' | 'writing' | 'stopped' | 'live', Item[]>;
 
 /** Every article (and every topic being written) in the articles list's four groups; "ready" is everything that needs the owner. */
 function groups(b: Brand, d: ContentAreaData): Groups {
   const websites = d.destinations.filter((x) => x.status === 'connected').length;
   const briefs = new Map(d.briefs.map((x) => [x.id, x]));
   const unpaused = b.settings.pauseAll ? { ...b, settings: { ...b.settings, pauseAll: false } } : b;
-  const out: Groups = { ready: [], coming: [], writing: [], live: [] };
+  const out: Groups = { ready: [], coming: [], writing: [], stopped: [], live: [] };
   // Writing that will not carry on by itself needs the owner: a retry, a link, or the article page's "Paused:",
   // "Writing stopped" and "Writing was cancelled" sentences (writingStatus). Without an action of its own, the next
   // step is the task history in Activity, where the task can be looked at and tried again.
-  const stalled = (w: WritingStatus): Problem | null => w.retryJobId || w.link || /^(Paused:|Writing stopped|Writing was cancelled)/.test(w.sentence) ? 'writing' : null;
+  // A stop with no button of its own ("stuck": cancelled, stopped, or the writing service not connected) cannot be
+  // restarted from here, so it never pins Home or the badge; it is listed under "Stopped" with Activity as the next step.
+  const stalled = (w: WritingStatus): Problem | null => w.retryJobId || w.link ? 'writing' : /^(Paused:|Writing stopped|Writing was cancelled)/.test(w.sentence) ? 'stuck' : null;
+  const place = (p: Problem | null) => p === 'stuck' ? 'stopped' : p ? 'ready' : 'writing';
   const nextStep = (w: WritingStatus, problem: Problem | null) => w.link ?? (problem && !w.retryJobId ? { href: brandHref(b, 'activity'), label: 'See what happened' } : null);
   for (const row of d.articles) {
     const a = row.article;
     const brief = briefs.get(a.briefId) ?? null;
     const base = { row, brief, href: brandHref(b, `articles/${a.id}`), excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', picture: pictureSrc(b, a, row.image), alt: row.image?.alt ?? '', gone: null };
     if (!a.currentVersionId) {
-      const w = writingStatus(b, a, a.briefId, d.jobs);
+      const w = writingStatus(b, a, a.briefId, d.jobs, d.resume);
       const problem = stalled(w);
-      out[problem ? 'ready' : 'writing'].push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, own: null, retryJobId: w.retryJobId, link: nextStep(w, problem), problem });
+      out[place(problem)].push({ ...base, title: brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase()), line: w.sentence.replace(/\.$/, ''), sit: null, own: null, retryJobId: w.retryJobId, retryLabel: w.retryLabel, link: nextStep(w, problem), problem });
       continue;
     }
     const sit = situation(a, b, d.now, websites);
     const own = b.settings.pauseAll ? situation(a, unpaused, d.now, websites) : sit;
     const planned = GONE_SHOWN(own.kind) ? plannedSiteGone(a, d.destinations) : null;
     // plannedSiteGone names a website that is still on record; one that was removed has no name to give.
-    const gone = planned ? { ...planned, removed: !d.destinations.some((x) => x.id === planned.id) } : null;
+    const gone = planned ? { ...planned, removed: !d.destinations.some((x) => x.id === planned.id), other: d.destinations.some((x) => x.status === 'connected' && x.id !== planned.id) } : null;
     const problem: Problem | null = gone ? 'site_gone' : own.group !== 'ready' ? null
       : own.kind === 'no_website' ? 'no_website' : own.kind === 'failed' ? 'failed' : own.kind === 'held' ? 'held' : own.kind === 'owner_hold' ? 'owner_hold' : 'read';
     const line = gone ? (gone.removed ? 'Planned for a website that has been removed' : `Planned for ${gone.label}, which is not connected any more`) : sit.line;
@@ -119,15 +127,26 @@ function groups(b: Brand, d: ContentAreaData): Groups {
   }
   for (const brief of d.briefs) {
     if (brief.status !== 'generating' || d.articles.some((r) => r.article.briefId === brief.id)) continue;
-    const w = writingStatus(b, null, brief.id, d.jobs);
+    const w = writingStatus(b, null, brief.id, d.jobs, d.resume);
     const problem = stalled(w);
-    out[problem ? 'ready' : 'writing'].push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, own: null, gone: null, retryJobId: w.retryJobId, link: nextStep(w, problem), problem });
+    out[place(problem)].push({ row: null, brief, href: brandHref(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', picture: null, alt: '', sit: null, own: null, gone: null, retryJobId: w.retryJobId, retryLabel: w.retryLabel, link: nextStep(w, problem), problem });
   }
-  const order: Record<Problem, number> = { paused: 0, site_gone: 1, no_website: 2, failed: 3, writing: 4, held: 5, owner_hold: 6, read: 7 };
+  const order: Record<Problem, number> = { paused: 0, site_gone: 1, no_website: 2, failed: 3, writing: 4, held: 5, owner_hold: 6, read: 7, stuck: 8 };
+  out.stopped.sort((x, y) => (x.row?.article.createdAt ?? '~').localeCompare(y.row?.article.createdAt ?? '~'));
   out.ready.sort((x, y) => order[x.problem!] - order[y.problem!] || (x.row?.article.createdAt ?? '~').localeCompare(y.row?.article.createdAt ?? '~'));
   out.coming.sort((x, y) => (x.row!.article.schedule?.publishAtUtc ?? '').localeCompare(y.row!.article.schedule?.publishAtUtc ?? ''));
   out.live.sort((x, y) => (y.row!.article.publishedAt ?? '').localeCompare(x.row!.article.publishedAt ?? ''));
   return out;
+}
+
+/** The written articles that need the owner, in the order Home and the badge use (for "2 of 5 that need you"). */
+export function needsQueue(b: Brand, d: ContentAreaData): string[] {
+  return groups(b, d).ready.flatMap((i) => i.row ? [i.row.article.id.toLowerCase()] : []);
+}
+
+/** An error answer in the new look (a page of its own, no business sidebar), with the same message and way back. */
+export function contentErrorPage(shell: Shell, status: number, message: string): string {
+  return layout(shell, status === 404 ? 'Not found' : 'Something needs attention', `<div class="ca-col"><section class="ca-panel ca-empty-big"><h1 class="ca-h1">${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${e(message)}</p><a class="ca-btn" href="${SEO_BLOG_BASE}" data-primary>Back to your businesses ${arrow}</a></section></div>`, `<style>${PAGE_CSS}</style>`);
 }
 
 /** The number on the Articles badge: everything that needs the owner (the new list's "Needs you" group). */
@@ -204,7 +223,7 @@ const arrow = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fil
 const chevron = '<svg class="ca-ic ca-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg>';
 const bolt = '<svg class="ca-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>';
 const amber = (href: string, label: string, cls = '') => `<a class="ca-btn ${cls}" href="${e(href)}" data-primary>${e(label)} ${arrow}</a>`;
-const retryButton = (shell: Shell, jobId: string, back: string, primary: boolean) => `<form method="post" action="${e(brandHref(shell.brand!, `jobs/${jobId}/retry`))}" class="${primary ? 'ca-hero-form' : 'ca-row-act'}">${csrfField(shell.csrf)}<input type="hidden" name="back" value="${e(back)}"><button type="submit" class="${primary ? 'ca-btn' : 'ca-btn-quiet'}"${primary ? ' data-primary' : ''}>Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`;
+const retryButton = (shell: Shell, jobId: string, back: string, primary: boolean, label = 'Try again') => `<form method="post" action="${e(brandHref(shell.brand!, `jobs/${jobId}/retry`))}" class="${primary ? 'ca-hero-form' : 'ca-row-act'}">${csrfField(shell.csrf)}<input type="hidden" name="back" value="${e(back)}"><button type="submit" class="${primary ? 'ca-btn' : 'ca-btn-quiet'}"${primary ? ' data-primary' : ''}>${e(label)}</button><span class="ca-note">Uses some of your writing allowance.</span></form>`;
 
 /** The words and the one action for the first thing that needs the owner (the article page's own sentence and action). */
 function needHero(shell: Shell, i: Item, others: number): { tag: string; title: string; text: string; action: string } {
@@ -213,20 +232,22 @@ function needHero(shell: Shell, i: Item, others: number): { tag: string; title: 
   const t = `“${e(i.title)}”`;
   switch (i.problem) {
     case 'site_gone': return i.gone!.removed
-      ? { tag: 'Needs you today', title: 'The website for an article was removed', text: `${t} was planned for a website that has been removed. Choose another website for it, or a new time.${more}`, action: amber(i.href, 'Choose another website') }
-      : { tag: 'Needs you today', title: 'Your website is not connected', text: `${t} was planned for ${e(i.gone!.label)}, which is not connected any more. It will not go out until the connection works or you choose another website.${more}`, action: amber(`${brandHref(b, 'setup')}#websites`, `Check the connection to ${i.gone!.label}`) };
-    case 'no_website': return { tag: 'Needs you today', title: 'Connect your website', text: `${t} is ready, but your website is not connected yet, so nothing can go out.${more}`, action: amber(`${brandHref(b, 'setup')}#websites`, 'Connect your website') };
+      ? i.gone!.other
+        ? { tag: 'Needs you today', title: 'The website for an article was removed', text: `${t} was planned for a website that has been removed. Choose another website for it, or a new time.${more}`, action: amber(i.href, 'Choose another website') }
+        : { tag: 'Needs you today', title: 'The website for an article was removed', text: `${t} was planned for a website that has been removed, and no other website is connected. Connect your website and then choose a time for it.${more}`, action: amber(`${brandHref(b, 'setup')}#website-connection`, 'Connect your website') }
+      : { tag: 'Needs you today', title: 'Your website is not connected', text: `${t} was planned for ${e(i.gone!.label)}, which is not connected any more. It will not go out until the connection works or you choose another website.${more}`, action: amber(`${brandHref(b, 'setup')}#website-connection`, `Check the connection to ${i.gone!.label}`) };
+    case 'no_website': return { tag: 'Needs you today', title: 'Connect your website', text: `${t} is ready, but your website is not connected yet, so nothing can go out.${more}`, action: amber(`${brandHref(b, 'setup')}#website-connection`, 'Connect your website') };
     case 'failed': return { tag: 'Needs you today', title: 'An article did not reach your website', text: `${t}: ${e(i.own!.bar)} Open it to try again or choose a time.${more}`, action: amber(i.href, 'Open it and try again') };
     case 'writing': {
       // The Articles row's own sentence, then a true next step for the cases that have no button of their own.
       const step = /writing service is not connected/.test(i.line) ? ' Ask whoever set up your account to connect it. Nothing written so far is lost.'
         : /^Writing was cancelled|^Writing stopped/.test(i.line) ? ' It will not carry on by itself. Activity shows what happened to it.' : '';
       return { tag: 'Needs you today', title: /^Writing was cancelled/.test(i.line) ? 'Writing was cancelled' : 'Writing has stopped', text: `${t}: ${e(i.line)}.${step}${more}`,
-        action: i.retryJobId ? retryButton(shell, i.retryJobId, 'articles', true) : amber(i.link!.href.replace(/&amp;/g, '&'), i.link!.label) };
+        action: i.retryJobId ? retryButton(shell, i.retryJobId, 'articles', true, i.retryLabel) : amber(i.link!.href.replace(/&amp;/g, '&'), i.link!.label) };
     }
     case 'held': {
       const reason = i.row!.article.hold?.reason;
-      const action = reason === 'destination' ? amber(`${brandHref(b, 'setup')}#websites`, 'Check the connection') : reason === 'budget' ? amber(brandHref(b, 'publishing'), 'Check the allowance') : amber(i.href, 'Open it');
+      const action = reason === 'destination' ? amber(`${brandHref(b, 'setup')}#website-connection`, 'Check the connection') : reason === 'budget' ? amber(brandHref(b, 'publishing'), 'Check the allowance') : amber(i.href, 'Open it');
       return { tag: 'Needs you today', title: 'An article is on hold', text: `${t}: ${e(i.own!.bar)}${more}`, action };
     }
     case 'owner_hold': return { tag: 'Needs you today', title: 'An article is waiting for your go-ahead', text: `${t}: ${e(i.own!.bar)} Open it when you want it to go out.${more}`, action: amber(i.href, 'Open it') };
@@ -251,7 +272,7 @@ export function contentHomePage(shell: Shell, d: ContentAreaData & { readonly fi
   const needs = g.ready;
   const reading = needs.filter((i) => i.problem === 'read');
   const problems = needs.filter((i) => i.problem !== 'read');
-  const anything = d.articles.length > 0 || g.writing.length > 0 || needs.length > 0;
+  const anything = d.articles.length > 0 || g.writing.length > 0 || g.stopped.length > 0 || needs.length > 0;
   const dna = d.fill.dna === 'proposed' || d.fill.dna === 'out_of_date' ? DNA_DOOR[d.fill.dna] : null;
   const outlook = fillOutlook(b, d, d.fill);
   const dnaLine = dna ? ` <a class="ca-hero-link" href="${e(brandHref(b, 'dna'))}">${e(dna.title)}</a>` : '';
@@ -288,6 +309,12 @@ export function contentHomePage(shell: Shell, d: ContentAreaData & { readonly fi
       // Not "everything is running": ongoing production is held by something he can fix (the Calendar's reason).
       lede = 'Nothing to read today, but autopilot is waiting for you.';
       hero = heroBox('Autopilot is waiting', outlook.title, `${e(outlook.short)} ${outNext}${writing}`, outlook.fix ? amber(outlook.fix.href, outlook.fix.label) : '');
+    } else if (g.stopped.length) {
+      // Stopped writing with no button of its own: said plainly, but it does not hold Home (nothing he can press fixes it here).
+      const stuck = g.stopped[0]!;
+      lede = 'Nothing needs you today.';
+      hero = heroBox('Nothing to do now', 'Nothing needs you today', `${outNext}${writing} “${e(stuck.title)}”: ${e(stuck.line)}. It will not carry on by itself.${g.stopped.length > 1 ? ` ${plural(g.stopped.length - 1, 'other has', 'others have')} stopped too.` : ''}`,
+        `<a class="ca-btn-2" href="${e(brandHref(b, 'activity'))}">See what happened</a>`, '', true);
     } else {
       lede = 'Everything is running. Nothing needs you today.';
       hero = heroBox('All clear', 'Nothing needs you today', `${outNext}${writing}`, `<a class="ca-btn-2" href="${e(brandHref(b, 'calendar'))}">See the calendar</a>`, '', true);
@@ -404,18 +431,82 @@ function headerLabel(first: Item, n: number): string {
 export function contentArticlesPage(shell: Shell, d: ContentAreaData): string {
   const b = shell.brand!;
   const g = groups(b, d);
-  const titles = { ready: 'Needs you', coming: 'Coming up', writing: 'Being written', live: 'Live' } as const;
+  const titles = { ready: 'Needs you', coming: 'Coming up', writing: 'Being written', stopped: 'Stopped', live: 'Live' } as const;
   const row = (i: Item, group: keyof typeof g) => {
-    const action = i.retryJobId ? `<form method="post" action="${e(brandHref(b, `jobs/${i.retryJobId}/retry`))}" class="ca-row-act">${csrfField(shell.csrf)}<input type="hidden" name="back" value="articles"><button type="submit" class="ca-btn-quiet">Try again</button><span class="ca-note">Uses some of your writing allowance.</span></form>`
+    const action = i.retryJobId ? `<form method="post" action="${e(brandHref(b, `jobs/${i.retryJobId}/retry`))}" class="ca-row-act">${csrfField(shell.csrf)}<input type="hidden" name="back" value="articles"><button type="submit" class="ca-btn-quiet">${e(i.retryLabel ?? 'Try again')}</button><span class="ca-note">Uses some of your writing allowance.</span></form>`
       : i.link ? `<a class="ca-row-act ca-link" href="${e(i.link.href)}">${e(i.link.label)}</a>`
-        : i.gone ? (i.gone.removed ? `<a class="ca-row-act ca-link" href="${e(i.href)}">Choose another website</a>`
-          : `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#websites`)}">Check the connection to ${e(i.gone.label)}</a>`) : '';
-    return `<li class="ca-row"><a class="ca-row-main" href="${e(i.href)}">${picture(i, 'ca-row-pic', group === 'writing')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span>${i.excerpt && group !== 'writing' ? `<span class="ca-row-ex">${e(i.excerpt)}</span>` : ''}</span>${chevron}</a>${action}</li>`;
+        : i.gone ? (i.gone.removed ? (i.gone.other ? `<a class="ca-row-act ca-link" href="${e(i.href)}">Choose another website</a>` : `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#website-connection`)}">Connect your website</a>`)
+          : `<a class="ca-row-act ca-link" href="${e(`${brandHref(b, 'setup')}#website-connection`)}">Check the connection to ${e(i.gone.label)}</a>`) : '';
+    return `<li class="ca-row"><a class="ca-row-main" href="${e(i.href)}">${picture(i, 'ca-row-pic', group === 'writing' || group === 'stopped')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span>${i.excerpt && group !== 'writing' ? `<span class="ca-row-ex">${e(i.excerpt)}</span>` : ''}</span>${chevron}</a>${action}</li>`;
   };
-  const sections = (['ready', 'coming', 'writing', 'live'] as const).filter((k) => g[k].length).map((k) => `<section class="ca-group" aria-labelledby="ca-g-${k}"><div class="ca-group-head"><h2 id="ca-g-${k}" class="ca-h2">${titles[k]}</h2><span class="ca-gcount${k === 'ready' ? ' ca-gcount-needs' : ''}"><span class="ca-sr">: </span>${g[k].length}</span><span class="ca-grow"></span>${k === 'ready' ? amber(g.ready[0]!.href, headerLabel(g.ready[0]!, g.ready.length), 'ca-btn-sm') : ''}</div><ul class="ca-panel ca-rows">${g[k].map((i) => row(i, k)).join('')}</ul></section>`).join('');
+  const sections = (['ready', 'coming', 'writing', 'stopped', 'live'] as const).filter((k) => g[k].length).map((k) => `<section class="ca-group" aria-labelledby="ca-g-${k}"><div class="ca-group-head"><h2 id="ca-g-${k}" class="ca-h2">${titles[k]}</h2><span class="ca-gcount${k === 'ready' ? ' ca-gcount-needs' : ''}"><span class="ca-sr">: </span>${g[k].length}</span><span class="ca-grow"></span>${k === 'ready' ? amber(g.ready[0]!.href, headerLabel(g.ready[0]!, g.ready.length), 'ca-btn-sm') : ''}</div><ul class="ca-panel ca-rows">${g[k].map((i) => row(i, k)).join('')}</ul></section>`).join('');
   const empty = `<section class="ca-panel ca-empty-big"><h2 class="ca-h2">No articles yet</h2><p>Choose the topics you want us to write about. The articles appear here as they are written.</p><a class="ca-btn" href="${e(brandHref(b, 'topics'))}" data-primary>Choose topics ${arrow}</a></section>`;
   return layout(shell, 'Articles', `<div class="ca-col"><header><h1 class="ca-h1">Articles</h1><p class="ca-lede">Everything we have written for ${e(b.name)}.</p></header>${sections || empty}</div>`, `<style>${PAGE_CSS}</style>`);
 }
+
+// ─── Your businesses ─────────────────────────────────────────────────────────
+
+/**
+ * Written articles that need the owner, from two cheap reads (articles and websites): the badge's own rule for written
+ * articles. Writing that stopped needs the write tasks, which this does not read, so the line only ever speaks of
+ * written articles.
+ */
+export function writtenNeedsCount(b: Brand, articles: readonly ArticleListRow[], destinations: readonly PublicDestination[], now: string): number {
+  return groups(b, { articles, destinations, jobs: [], briefs: [], now }).ready.filter((i) => i.row?.article.currentVersionId).length;
+}
+
+export interface BusinessCard {
+  readonly brand: Brand;
+  /** One honest status line, or null when it was not read (beyond the first few businesses, or a read failed). */
+  readonly line: string | null;
+}
+
+/** The status line for one business, from what was read for it. */
+export function businessLine(b: Brand, dna: BrandDnaDoorStatus | undefined, written: number | null): string | null {
+  if (dna && dna !== 'confirmed') return dna === 'none' ? 'Start with your website' : dna === 'proposed' ? 'Your Brand DNA card is waiting for you' : 'Your Brand DNA is out of date';
+  if (b.settings.pauseAll) return 'Publishing is paused';
+  if (written === null) return null;
+  return written ? `${plural(written, 'written article needs', 'written articles need')} you` : 'No written articles waiting for you';
+}
+
+const initialsOf = (name: string) => { const w = name.replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean); return ((w[0]?.[0] ?? '') + (w[1]?.[0] ?? '')).toUpperCase() || '?'; };
+
+/** "Your businesses" in the new look: one calm card per business; the card opens its Home. Every existing action stays. */
+export function contentBusinessesPage(shell: Shell, d: { readonly cards: readonly BusinessCard[]; readonly commandId: string; readonly existing: { readonly commandId: string; readonly name: string; readonly anchor: string } | null; readonly approvalsHref: string; readonly resultsHref: string }): string {
+  const many = shell.brands.length > 1;
+  const cards = d.cards.map(({ brand: b, line }) => `<li class="ca-bcard"><a class="ca-bcard-main" href="${e(brandHref(b, 'overview'))}"><span class="ca-bcard-av" aria-hidden="true">${e(initialsOf(b.name))}</span><span class="ca-bcard-text"><span class="ca-bcard-name">${e(b.name)}</span>${b.website ? `<span class="ca-bcard-site">${e(b.website.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</span>` : ''}${line ? `<span class="ca-bcard-line">${e(line)}</span>` : ''}</span>${chevron}</a>
+<p class="ca-bcard-links"><a href="${e(`${d.approvalsHref}?brand=${b.id}`)}">Approvals</a><a href="${e(`${d.resultsHref}?brand=${b.id}`)}">Campaign results</a></p></li>`).join('');
+  const first = !shell.brands.length;
+  const add = `<section class="ca-panel ca-addbiz" id="add-business" aria-labelledby="add-business-title"><h2 id="add-business-title" class="ca-h2">${first ? 'Add your first business' : 'Add a business'}</h2>
+<p class="ca-sub">Type the name of the business. On the next screen you paste its website address and we read it for you. Adding it publishes nothing, contacts no one and spends nothing.</p>
+<form method="post" action="${SEO_BLOG_BASE}/brands">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.commandId)}">
+<div class="ca-fields"><div><label for="name">Business name</label><input id="name" name="name" type="text" required minlength="2" maxlength="120" autocomplete="organization"></div><div><label for="website">Website address (you can add it on the next screen)</label><input id="website" name="website" type="text" inputmode="url" placeholder="www.example.co.uk"></div></div>
+<button type="submit" class="${first ? 'ca-btn' : 'ca-btn-quiet'}"${first ? ' data-primary' : ''}>Add a business</button></form></section>`;
+  const existing = d.existing ? `<section class="ca-panel ca-addbiz" id="${e(d.existing.anchor)}" aria-labelledby="${e(d.existing.anchor)}-title"><h2 id="${e(d.existing.anchor)}-title" class="ca-h2">${e(d.existing.name)}</h2>
+<p class="ca-sub">Use your existing ${e(d.existing.name)} account for blog and content. Your contacts, webinars and emails stay exactly as they are. Nothing is spent until you set a monthly allowance.</p>
+<form method="post" action="${SEO_BLOG_BASE}/brands/existing">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.existing.commandId)}"><button type="submit" class="ca-btn-quiet">Use ${e(d.existing.name)} here</button></form></section>` : '';
+  const hidden = shell.brands.length - d.cards.filter((c) => c.line !== null).length;
+  return layout(shell, 'Your businesses', `<div class="ca-col"><header><h1 class="ca-h1">Your businesses</h1><p class="ca-lede">${shell.brands.length ? 'Each business has its own articles, calendar and results. Open one to see what needs you.' : 'Add your first business to start.'}</p>
+${shell.brands.length ? `<p class="ca-quiet-links"><a href="${e(`${d.approvalsHref}${many ? '?brand=all' : `?brand=${shell.brands[0]!.id}`}`)}">${many ? 'See what is waiting in every business' : 'See what is waiting for approval'}</a> · <a href="#add-business">Add a business</a></p>` : ''}</header>
+${cards ? `<ul class="ca-bcards">${cards}</ul>${hidden > 0 && shell.brands.length > 12 ? `<p class="ca-sub">The status line is shown for the first 12 businesses; open any other to see what needs you.</p>` : ''}` : ''}${existing}${add}</div>`, `<style>${PAGE_CSS}${BUSINESS_CSS}</style>`);
+}
+
+const BUSINESS_CSS = `
+.ca-bcards{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.ca-bcard{display:flex;flex-direction:column;background:var(--ca-surface);border-radius:var(--ca-radius-l);box-shadow:var(--ca-shadow);overflow:hidden}
+.ca-bcard-main{display:flex;align-items:center;gap:16px;padding:20px 20px 12px;min-height:44px;color:var(--ca-ink)!important;text-decoration:none}
+.ca-bcard-main:hover .ca-bcard-name{text-decoration:underline;text-underline-offset:3px}
+.ca-bcard-av{width:52px;height:52px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--ca-amber);color:var(--ca-on-amber);font:var(--ca-weight-display) 19px/1 var(--ca-font-display)}
+.ca-bcard-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.ca-bcard-name{font:var(--ca-weight-display) 20px/1.2 var(--ca-font-display);overflow-wrap:anywhere}
+.ca-bcard-site{font-size:14px;color:var(--ca-muted);overflow-wrap:anywhere}
+.ca-bcard-line{margin-top:4px;font-size:15px;font-weight:600;color:var(--ca-ink)}
+.ca-bcard-links{margin:0;padding:0 20px 14px 88px;display:flex;flex-wrap:wrap;gap:0 16px;font-size:14px}.ca-bcard-links a{min-height:44px;display:inline-flex;align-items:center;font-weight:600}
+.ca-addbiz{padding:24px;display:grid;gap:10px}.ca-addbiz form{display:grid;gap:14px;justify-items:start}
+.ca-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;width:100%}
+.ca-fields label{display:block;font-weight:600;margin:0 0 6px}.ca-fields input{width:100%;min-height:48px;padding:10px 14px;border:1px solid var(--ca-line);border-radius:var(--ca-radius-s);background:var(--ca-mist);color:var(--ca-ink);font:inherit}
+@media (max-width:700px){.ca-bcards{grid-template-columns:1fr}.ca-bcard-main{padding:16px 16px 8px;gap:14px}.ca-bcard-av{width:46px;height:46px;font-size:17px}.ca-bcard-links{padding:0 16px 10px 76px}.ca-addbiz{padding:18px}}
+`;
 
 // ─── Results ─────────────────────────────────────────────────────────────────
 

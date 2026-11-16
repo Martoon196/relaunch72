@@ -1,0 +1,439 @@
+{
+ "_fixture_source": "Example response from https://docs.dataforseo.com/v3/serp/google/organic/task_get/advanced/ (retrieved 2026-11-16). TRIMMED: only the organic, people_also_ask, related_searches and people_also_search items are kept; all other item types were removed to keep the fixture small.",
+ "version": "0.1.20200129",
+ "status_code": 20000,
+ "status_message": "Ok.",
+ "time": "0.3059 sec.",
+ "cost": 0.003,
+ "tasks_count": 1,
+ "tasks_error": 0,
+ "tasks": [
+  {
+   "id": "01291734-1535-0066-0000-6988734166f9",
+   "status_code": 20000,
+   "status_message": "Ok.",
+   "time": "0.0952 sec.",
+   "cost": 0.003,
+   "result_count": 1,
+   "path": [
+    "v3",
+    "serp",
+    "google",
+    "organic",
+    "task_get",
+    "advanced",
+    "01291734-1535-0066-0000-6988734166f9"
+   ],
+   "data": {
+    "api": "serp",
+    "function": "task_get",
+    "se": "google",
+    "se_type": "organic",
+    "language_name": "English",
+    "location_name": "United States",
+    "keyword": "flight ticket new york san francisco",
+    "tag": "tag2",
+    "device": "desktop",
+    "os": "windows"
+   },
+   "result": [
+    {
+     "keyword": "flight ticket new york san francisco",
+     "type": "organic",
+     "se_domain": "google.com",
+     "location_code": 2840,
+     "language_code": "en",
+     "check_url": "https://www.google.com/search?q=flight%20ticket%20new%20york%20san%20francisco&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+     "datetime": "2019-11-15 12:57:46 +00:00",
+     "spell": null,
+     "refinement_chips": {
+      "type": "refinement_chips",
+      "xpath": "/html[1]/body[1]/div[3]/div[1]/div[9]/div[1]/div[1]/div[3]/div[1]/div[1]",
+      "items": [
+       {
+        "type": "refinement_chips_element",
+        "title": "Remote",
+        "url": "https://www.google.com/search?num=100&sca_esv=427163c40a0d98b7&hl=en&gl=US&glp=1&q=bristol+temp+agencies+remote&uds=ADvngMjcH0KdF7qGWtwTBrP0nt7drlQNXJ_q6WhUnfcnlFQAOVqvQ09aiEx7jUP4Wb5sg6FzKTGyEoBQg36hfgreicnnhtBQv8H25iRkUIMWBSqTcu0nGLObB57jKDn4sIHqgjkv6AqtXzA0gTV6n6-p1_aOUPMmYdgJOPy5xybgxI0ZY3-OZUg&sa=X&ved=2ahUKEwjEjMPzrvyIAxVgpIkEHYTyBqEQxKsJegQIHRAB&ictx=0",
+        "domain": "www.google.com",
+        "options": null
+       },
+       {
+        "type": "refinement_chips_element",
+        "title": "Date posted",
+        "url": null,
+        "domain": null,
+        "options": [
+         {
+          "type": "refinement_chips_option",
+          "title": "Yesterday",
+          "url": "https://www.google.com/search?num=100&sca_esv=427163c40a0d98b7&hl=en&gl=US&glp=1&q=bristol+temp+agencies+since+yesterday&uds=ADvngMjcH0KdF7qGWtwTBrP0nt7d1cxhUU_4I1tnZ_YIEcACz8ZYvzwewv2vtaifFRGAtrClbFOcrHbTAbAeXm1jREcC6VS1VsCvY-sITnX4ozb-ILgfWEVwq_Z5ROUTUSIPShEnKXD5sUUbZbocrG609xSmt2d98g8y8m1lGjX2kp2G7tWTnMoyaYhx7tPHFsc1SlxiTTuylOmQpyaET98nEnMhDFUw8hSQnpfQcpEDEdBLwrOxN3gOZC4RtcHuKTyeCrFRnaDjQ17dNosh1yiBWrSXB9e1dQF-1Pt17wXCHwRUCH6wH0DbAN-oCNd7lMT2v24eI8rDkLQP3kTLpzGMUZReaWIAPw&sa=X&ved=2ahUKEwjEjMPzrvyIAxVgpIkEHYTyBqEQkbEKegQIDxAD",
+          "domain": "www.google.com"
+         },
+         {
+          "type": "refinement_chips_option",
+          "title": "Last 3 days",
+          "url": "https://www.google.com/search?num=100&sca_esv=427163c40a0d98b7&hl=en&gl=US&glp=1&q=bristol+temp+agencies+in+the+last+3+days&uds=ADvngMjcH0KdF7qGWtwTBrP0nt7dLQVdkfQJDu14-gF_eQoKa39tQdXyMUfu3HnnM3Pu4g5hOzwEez_H8t-yULnPJEgal7YGml0mtSaIuH3YeuIhPq5mBSo_ECo7hOJVwSRGkksXQg-RdTy8GhoT8Qm-ZFkyAQnSLmnlmv0Rm042YAlQ6JFqnfOW0VIOgTeTdYm6SLpzQ3a6YSvEf2tau3pEKxnGWKleL613vj0tLBWg4Jhsa0trdMkFPHDQYhc2caGQ8cmSYU4cqdB2Eq3PsNGgjgebvt7_7bbvjixC19O4L9ZB02rwY0EP30_mYAeTG9lYAx8ZJvGDslVLp0DHS93P8ynaiA7Bbw&sa=X&ved=2ahUKEwjEjMPzrvyIAxVgpIkEHYTyBqEQkbEKegQIDxAE",
+          "domain": "www.google.com"
+         }
+        ]
+       }
+      ]
+     },
+     "item_types": [
+      "answer_box",
+      "app",
+      "carousel",
+      "multi_carousel",
+      "featured_snippet",
+      "google_flights",
+      "google_reviews",
+      "images",
+      "jobs",
+      "knowledge_graph",
+      "local_pack",
+      "hotels_pack",
+      "map",
+      "organic",
+      "paid",
+      "people_also_ask",
+      "related_searches",
+      "people_also_search",
+      "shopping",
+      "top_stories",
+      "twitter",
+      "video",
+      "events",
+      "math_solver",
+      "recipes",
+      "top_sights",
+      "scholarly_articles",
+      "popular_products",
+      "questions_and_answers",
+      "find_results_on",
+      "stocks_box",
+      "commercial_units",
+      "local_services",
+      "google_hotels",
+      "currency_box",
+      "short_videos",
+      "refine_products",
+      "perspectives",
+      "discussions_and_forums",
+      "compare_sites",
+      "ai_overview"
+     ],
+     "se_results_count": 85600000,
+     "pages_count": 1,
+     "items_count": 4,
+     "items": [
+      {
+       "type": "organic",
+       "rank_group": 26,
+       "rank_absolute": 30,
+       "page": 1,
+       "position": "left",
+       "xpath": "/html[1]/body[1]/div[7]/div[1]/div[9]/div[1]/div[1]/div[2]/div[2]/div[1]/div[1]/div[29]",
+       "domain": "www.t-mobile.com",
+       "title": "Apple iPhone 12 Pro 5G | 4 colors in 512GB, 256GB & 128GB",
+       "url": "https://www.t-mobile.com/cell-phone/apple-iphone-12-pro",
+       "cache_url": null,
+       "related_search_url": null,
+       "breadcrumb": "https://www.t-mobile.com › Phones › Apple",
+       "website_name": "T-Mobile",
+       "is_image": false,
+       "is_video": false,
+       "is_featured_snippet": false,
+       "is_malicious": false,
+       "is_web_story": false,
+       "checks": [
+        "is_image"
+       ],
+       "description": "Get a great deal on the 5G-ready Apple iPhone 12 Pro. See all the features, specs, price and get it on T-Mobile.",
+       "pre_snippet": null,
+       "extended_snippet": "Rating: 4 · ‎231 reviews · ‎US$30.00 to US$899.99 · ‎In stock",
+       "images": null,
+       "amp_version": false,
+       "rating": {
+        "rating_type": "Max5",
+        "value": 4,
+        "votes_count": 231,
+        "rating_max": 5
+       },
+       "price": {
+        "current": 30,
+        "regular": null,
+        "max_value": 899.99,
+        "currency": "USD",
+        "is_price_range": true,
+        "displayed_price": "US$30.00 to US$899.99"
+       },
+       "highlighted": null,
+       "links": null,
+       "faq": null,
+       "extended_people_also_search": null,
+       "about_this_result": null,
+       "related_result": [
+        {
+         "type": "related_result",
+         "xpath": "/html[1]/body[1]/div[7]/div[1]/div[9]/div[1]/div[1]/div[2]/div[2]/div[1]/div[1]/div[29]/div[1]/div[2]/ul[1]/li[1]",
+         "domain": "www.t-mobile.com",
+         "title": "Apple iPhone 12 | 5 colors in 64GB & 128GB | T-Mobile",
+         "url": "https://www.t-mobile.com/cell-phone/apple-iphone-12",
+         "cache_url": null,
+         "related_search_url": null,
+         "breadcrumb": "https://www.t-mobile.com › Phones › Apple",
+         "is_image": false,
+         "is_video": false,
+         "checks": [
+          "is_image"
+         ],
+         "description": "iPhone 12. 5G to download movies on the fly and stream high-quality video. Beautifully bright 6.1-inch Super Retina XDR display. Ceramic Shield with 4x ...",
+         "pre_snippet": null,
+         "extended_snippet": null,
+         "images": null,
+         "amp_version": false,
+         "rating": {
+          "rating_type": "Max5",
+          "value": 4.6,
+          "votes_count": 30,
+          "rating_max": 5
+         },
+         "price": {
+          "current": 24.34,
+          "regular": null,
+          "max_value": 779.99,
+          "currency": "USD",
+          "is_price_range": true,
+          "displayed_price": "US$24.34 to US$779.99"
+         },
+         "highlighted": null,
+         "about_this_result": null,
+         "timestamp": null
+        }
+       ],
+       "timestamp": null,
+       "rectangle": {
+        "x": 180,
+        "y": 5814,
+        "width": 652,
+        "height": 363
+       }
+      },
+      {
+       "type": "people_also_search",
+       "rank_group": 1,
+       "rank_absolute": 7,
+       "page": 1,
+       "position": "left",
+       "xpath": "/html[1]/body[1]/div[7]/div[3]/div[10]/div[1]/div[2]/div[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]",
+       "title": "List of iPhonesView 3+ moreView 3+",
+       "items": [
+        "View 3+ moreView 3+",
+        "iPhone XR",
+        "Apple iPhone 7 Plus",
+        "Apple iPhone 8 Plus",
+        "iPhone 6 Plus",
+        "iPhone 6s Plus",
+        "iPhone 5s",
+        "iPhone SE"
+       ],
+       "rectangle": {
+        "x": 181,
+        "y": 360,
+        "width": 652,
+        "height": 176
+       }
+      },
+      {
+       "type": "related_searches",
+       "rank_group": 1,
+       "rank_absolute": 8,
+       "page": 1,
+       "xpath": "/html[1]/body[1]/div[7]/div[3]/div[10]/div[1]/div[2]/div[1]/div[4]/div[1]/div[1]/div[3]/g-section-with-header[1]/div[2]",
+       "position": "left",
+       "items": [
+        "iphone xr",
+        "iphone xs",
+        "iphone 11",
+        "iphone price",
+        "iphone 8",
+        "iphone xs max",
+        "iphone 11 price",
+        "iphone xs price"
+       ],
+       "rectangle": {
+        "x": 181,
+        "y": 360,
+        "width": 652,
+        "height": 176
+       }
+      },
+      {
+       "type": "people_also_ask",
+       "rank_group": 1,
+       "rank_absolute": 3,
+       "page": 1,
+       "position": "left",
+       "xpath": "/html[1]/body[1]/div[3]/div[1]/div[11]/div[2]/div[1]/div[2]/div[1]/div[1]/div[2]/div[1]",
+       "items": [
+        {
+         "type": "people_also_ask_element",
+         "title": "What are the symptoms of HIDS disease?",
+         "seed_question": null,
+         "xpath": "/html[1]/body[1]/div[3]/div[1]/div[11]/div[2]/div[1]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[2]/div[1]",
+         "expanded_element": [
+          {
+           "type": "people_also_ask_expanded_element",
+           "featured_title": null,
+           "url": "https://rarediseases.org/rare-diseases/hyper-igd-syndrome/",
+           "domain": "rarediseases.org",
+           "title": "Mevalonate Kinase Deficiency - Symptoms, Causes, Treatment",
+           "description": "Hyper IgD syndrome (HIDS) is part of this spectrum and is characterized by episodes or “attacks” of fever associated with other symptoms including joint pain (arthralgia), muscle pain (myalgia), skin rash and abdominal pain. Most episodes last several days and can repeat throughout life.",
+           "images": null,
+           "timestamp": null,
+           "table": null
+          }
+         ]
+        },
+        {
+         "type": "people_also_ask_element",
+         "title": "What is the difference between HIDS and NIDS?",
+         "seed_question": null,
+         "xpath": "/html[1]/body[1]/div[3]/div[1]/div[11]/div[2]/div[1]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[2]/div[2]",
+         "expanded_element": [
+          {
+           "type": "people_also_ask_ai_overview_expanded_element",
+           "items": [
+            {
+             "type": "ai_overview_element",
+             "position": "left",
+             "title": null,
+             "text": "The BMW M4 F82 is a high-performance coupe known for its aggressive styling and powerful engine. Key specs include a 3.0-liter twin-turbo inline-six engine producing 425 hp (or 444 hp with the Competition Package), a 6-speed manual or 7-speed M DCT transmission, and rear-wheel drive.",
+             "markdown": "![BMW M4 Coupe (F82) Specs, Performance & Photos - 2014, 2015 ...](data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/...)",
+             "links": [
+              {
+               "type": "link_element",
+               "title": "according to Bankrate",
+               "description": null,
+               "url": "https://www.bankrate.com/home-equity/heloc-rates/",
+               "domain": "www.bankrate.com"
+              }
+             ],
+             "images": [
+              {
+               "type": "images_element",
+               "alt": "BMW M4 Coupe (F82) Specs, Performance & Photos - 2014, 2015 ...",
+               "url": null,
+               "image_url": "https://api.dataforseo.com/cdn/i/06170329-5643-0066-0000-4f9b0f8172ba:1"
+              }
+             ],
+             "references": [
+              {
+               "type": "ai_overview_reference",
+               "position": "left",
+               "source": "autoevolution",
+               "domain": "www.autoevolution.com",
+               "url": "https://www.autoevolution.com/cars/bmw-m4-f82-2014.html#:~:text=The%20load%20capacity%20was%20more,4%20GASOLINE%20Engines",
+               "title": "BMW M4 Coupe (F82) ( (2014-2020)) Photos, engines & full specs",
+               "text": "The load capacity was more than enough for two big luggages, as well as the cabin being equipped with lots of storage spaces – not..."
+              },
+              {
+               "type": "ai_overview_reference",
+               "position": "left",
+               "source": "PistonHeads",
+               "domain": "www.pistonheads.com",
+               "url": "https://www.pistonheads.com/news/ph-driven/2014-bmw-m3-and-m4-f80-f82--review/29973",
+               "title": "2014 BMW M3 and M4 (F80/F82) | Review - PistonHeads UK",
+               "text": "May 12, 2014 — * SPECIFICATION | 2014 BMW M4 F82. Engine: 2,979cc 6-cyl twin-turbo. * Transmission: 6-speed manual/7-speed dual-clut..."
+              }
+             ]
+            },
+            {
+             "type": "ai_overview_expanded_element",
+             "position": "left",
+             "title": "Step 4",
+             "text": "Calculate Springfield Division sales for Quarter 2",
+             "components": [
+              {
+               "type": "ai_overview_expanded_component",
+               "title": null,
+               "text": "Springfield Division sales in Quarter 1 are $1,500,000. Growth rate is 3%. Sales in Quarter 2 are $1,500,000 × (1 + 0.03) = $1,545,000.",
+               "markdown": "- Springfield Division sales in Quarter 1 are $1,500,000.n- Growth rate is 3%.n- Sales in Quarter 2 are $1,500,000×(1+0.03)=$1,545,000.",
+               "images": null,
+               "links": null,
+               "references": null
+              }
+             ],
+             "references": null
+            },
+            {
+             "type": "ai_overview_video_element",
+             "position": "left",
+             "title": "Anwar And Cars",
+             "snippet": "Start time is 11 minutes. Segment duration is 59 seconds",
+             "url": "https://www.youtube.com/watch?v=HmyTDeZMgFA&t=684",
+             "domain": "www.youtube.com",
+             "image_url": "https://i.ytimg.com/vi/HmyTDeZMgFA/mqdefault.jpg?sqp=-oaymwEGCPgEEOQC&rs=AMzJL3k9gZe_ujVtsk34XtwaOmPw3Cw0pg",
+             "source": "YouTube",
+             "date": "Apr 26, 2024",
+             "timestamp": "2024-04-26 00:00:00 +00:00"
+            },
+            {
+             "type": "ai_overview_table_element",
+             "position": "left",
+             "markdown": "| Aspect | Sanity Testing | Regression Testing |n|---|---|---|n| **Scope** | Narrow and focused on recently changed functionalities or components. | Broad, covering the entire application to ensure changes don't negatively affect existing functionalities. |n| **Depth of Testing** | Surface-level, a quick check for stability after recent changes. | Deep and thorough, testing various scenarios to ensure all functionalities work after modifications. |n| **Objective** | To quickly validate specific functionalities after minor changes or bug fixes. | To detect defects or regressions introduced by recent code changes, ensuring stability and expected performance. |",
+             "table": {
+              "table_header": null,
+              "table_content": [
+               [
+                "Aspect",
+                "Sanity Testing",
+                "Regression Testing"
+               ],
+               [
+                "Scope",
+                "Narrow and focused on recently changed functionalities or components.",
+                "Broad, covering the entire application to ensure changes don't negatively affect existing functionalities."
+               ],
+               [
+                "Depth of Testing",
+                "Surface-level, a quick check for stability after recent changes.",
+                "Deep and thorough, testing various scenarios to ensure all functionalities work after modifications."
+               ],
+               [
+                "Objective",
+                "To quickly validate specific functionalities after minor changes or bug fixes.",
+                "To detect defects or regressions introduced by recent code changes, ensuring stability and expected performance."
+               ]
+              ]
+             },
+             "references": null
+            }
+           ],
+           "references": [
+            {
+             "type": "ai_overview_reference",
+             "source": "GeeksforGeeks",
+             "domain": "www.geeksforgeeks.org",
+             "url": "https://www.geeksforgeeks.org/difference-between-hids-and-nids/#:~:text=Disadvantage%20of%20HIDS%20*%20Excluded%20from%20the,the%20attack%20without%20doing%20anything%20about%20it.",
+             "title": "Difference between HIDs and NIDs | GeeksforGeeks",
+             "text": "30 Aug 2024 — Disadvantage of HIDS * Excluded from the network. * Needs to be installed on every host spot. * Passive in nature, so ..."
+            }
+           ]
+          }
+         ]
+        }
+       ],
+       "rectangle": {
+        "x": 181,
+        "y": 360,
+        "width": 652,
+        "height": 176
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

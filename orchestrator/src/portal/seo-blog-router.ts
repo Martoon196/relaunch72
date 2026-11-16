@@ -13,7 +13,7 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
-  activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, EXISTING_WORKSPACE_ANCHOR, overviewPage, publishingPage,
+  activityPage, APPROVALS_HREF, articlesPage, brandsPage, CALENDAR_SCRIPT, CAMPAIGN_RESULTS_HREF, calendarPage, editorPage, EXISTING_WORKSPACE_ANCHOR, overviewPage, publishingPage,
   SEO_BLOG_BASE, SEO_BLOG_SWITCH_TARGETS, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
@@ -38,7 +38,7 @@ import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
-import { ARTICLE_FOLDS, approvedOutcome, longWhen, putBackParent } from './seo-blog-article-view.js';
+import { ARTICLE_FOLDS, approvedOutcome, longWhen, putBackParent, type ResumeFacts } from './seo-blog-article-view.js';
 import { keepIfUnchanged, putBackOffers, putBackSentence, restoreCitationsDetailed } from '../seo-blog/citation-edit.js';
 import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 import { creativeKitPage, creativeOverviewPage, creativeSetPage } from './creative-studio-view.js';
@@ -48,8 +48,9 @@ import { websiteLookProposal } from '../creative-studio/website-look.js';
 import { limitFromForm } from '../seo-blog/limits.js';
 import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
-import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, type ContentAreaData, type FillFacts } from './content-area-pages.js';
+import { contentArticlesPage, contentCalendarPage, contentHomePage, contentResultsPage, lookPage, needsYouCount, contentAreaAutopilot, contentBusinessesPage, businessLine, writtenNeedsCount, contentErrorPage, needsQueue, type ContentAreaData, type FillFacts } from './content-area-pages.js';
 import { CONTENT_AREA_SCRIPT } from './content-area-layout.js';
+import { CONTENT_AREA_FONT_PATH, contentAreaFont } from './content-area-fonts.js';
 import type { TopicPlan } from '../seo-blog/types.js';
 
 export interface SeoBlogRouteInput {
@@ -74,10 +75,16 @@ const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
+/** Responses of requests with the new look on (allowed and chosen). Only these can carry the shell's font policy. */
+const previewResponses = new WeakSet<ServerResponse>();
+/** A page that renders the shell may also load the shell's own self-hosted fonts; every other response keeps PAGE_CSP exactly. */
+const SHELL_CSP = `${PAGE_CSP}; font-src 'self'`;
+const rendersShell = (res: ServerResponse, type: string, body: string) => previewResponses.has(res) && type.startsWith('text/html') && /<body class="ca[ "]/.test(body);
+
 function send(res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}): void {
   res.writeHead(status, {
     'content-type': type, 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store', 'referrer-policy': 'same-origin',
-    'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'content-security-policy': PAGE_CSP, ...extra,
+    'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'content-security-policy': rendersShell(res, type, body) ? SHELL_CSP : PAGE_CSP, ...extra,
   });
   res.end(body);
 }
@@ -188,6 +195,14 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   }
   // The preview shell's small script (closes its menus on Escape or a tap outside); absent while the preview is not allowed.
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/content-area.js` && contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW)) return send(res, 200, CONTENT_AREA_SCRIPT, 'text/javascript; charset=utf-8');
+  // The shell's two self-hosted fonts: same origin, cached for good (the names carry the version); absent while not allowed.
+  if ((method === 'GET' || method === 'HEAD') && path.startsWith(CONTENT_AREA_FONT_PATH) && contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW)) {
+    const font = contentAreaFont(path.slice(CONTENT_AREA_FONT_PATH.length));
+    if (font) {
+      res.writeHead(200, { 'content-type': 'font/woff2', 'content-length': String(font.byteLength), 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'cross-origin-resource-policy': 'same-origin' });
+      res.end(method === 'HEAD' ? undefined : font); return;
+    }
+  }
   if (path === `${SEO_BLOG_BASE}/calendar.js`) {
     send(res, 200, CALENDAR_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -200,6 +215,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   // The new look: only when the server allows it AND this browser chose it. Otherwise nothing below changes.
   const previewAllowed = contentAreaPreviewAllowed(input.contentAreaPreview ?? process.env.CONTENT_AREA_PREVIEW);
   const previewOn = previewAllowed && contentAreaCookieOn(req);
+  if (previewOn) previewResponses.add(res);
   const brandMatch = BRAND_PATH.exec(path);
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
@@ -244,7 +260,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
           await limits.save(target, rowVersion, { modelTokens: limitFromForm(form.fields, 'modelTokens'), searchCalls: limitFromForm(form.fields, 'searchCalls'),
             images: limitFromForm(form.fields, 'images'), studioImages: limitFromForm(form.fields, 'studioImages') });
         }
-        return ok(`${SEO_BLOG_BASE}/limits`, 'Limits saved. Usage history and publishing settings are unchanged.');
+        // A raised writing limit: that business's waiting articles carry on now when this account manages it
+        // (otherwise its next worker pass at the new month, or the owner's own save, does it).
+        const target = f('target') ?? '';
+        const resumed = f('action') === 'policy' || !new RegExp(`^${UUID}$`, 'i').test(target) ? 0 : await engine.resumeAllowanceBlockedWrites(actor, target.toLowerCase()).catch(() => 0);
+        return ok(`${SEO_BLOG_BASE}/limits`, `Limits saved. Usage history and publishing settings are unchanged.${resumed ? ` ${resumed === 1 ? '1 article that was waiting is' : `${resumed} articles that were waiting are`} being written now.` : ''}`);
       }
       return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
     }
@@ -264,7 +284,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (previewAllowed && path === CONTENT_AREA_LOOK_PATH && brands.length > 0) return send(res, 200, lookPage(csrf, previewOn, contentAreaBack(url.searchParams.get('back')), brands));
     if (path === `${SEO_BLOG_BASE}/limits`) {
       if (!limits || !limitsAvailable) throw new SeoBlogError(403, 'Only the founder can manage account limits.');
-      return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, await limits.list()));
+      return send(res, 200, limitsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName, ...(previewOn ? { preview: { needsYou: 0, path } } : {}) }, await limits.list()));
     }
     if (path === SEO_BLOG_BASE) {
       // Which door each brand shows ("Start with your website" until it has a card). A brand that cannot be read keeps the default door.
@@ -272,6 +292,16 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         .flatMap(([id, status]) => status ? [[id, status] as const] : []));
       // "Use Martin Howard Property here": only for its eligible owner, only once, never when the database cannot do it.
       const existing = !brands.some((b) => b.id.toLowerCase() === EXISTING_WORKSPACE.id) && await engine.existingWorkspaceOffer(actor).catch(() => false);
+      if (previewOn) {
+        // One card per business. The status line costs two reads (articles, websites) for each of the first 12 only.
+        const now = new Date().toISOString();
+        const cards = await Promise.all(brands.map(async (b, i) => {
+          const written = i < 12 ? await Promise.all([engine.listArticles(actor, b.id), engine.listDestinations(actor, b.id)]).then(([rows, sites]) => writtenNeedsCount(b, rows, sites, now)).catch(() => null) : null;
+          return { brand: b, line: businessLine(b, dna.get(b.id), written) };
+        }));
+        return send(res, 200, contentBusinessesPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName, preview: { needsYou: 0, path } },
+          { cards, commandId: randomUUID(), existing: existing ? { commandId: randomUUID(), name: EXISTING_WORKSPACE.name, anchor: EXISTING_WORKSPACE_ANCHOR } : null, approvalsHref: APPROVALS_HREF, resultsHref: CAMPAIGN_RESULTS_HREF }));
+      }
       return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, limitsAvailable, applicationName: input.applicationName }, randomUUID(), dna,
         existing ? randomUUID() : null));
     }
@@ -296,8 +326,13 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const previewData = previewOn ? await loadContentArea(engine, actor, brandId).catch(() => null) : null;
     const previewNeeds = previewData ? needsYouCount(brand, previewData) : 0;
     const previewAutopilot = previewData ? contentAreaAutopilot(brand, previewData, previewData.fill) : undefined;
+    // On an article that needs him: "2 of 5 that need you", and the next one (the badge's own order).
+    const previewQueue = previewData && /^articles\/[^/]+$/.test(rest) ? (() => {
+      const ids = needsQueue(brand, previewData), at = ids.indexOf(rest.split('/')[1]!.toLowerCase());
+      return at < 0 ? undefined : { index: at + 1, total: ids.length, next: ids[at + 1] ? `${SEO_BLOG_BASE}/b/${brandId}/articles/${ids[at + 1]}` : null };
+    })() : undefined;
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, limitsAvailable, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady,creativeAvailable:input.service.creativeEnabled===true,
-      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}) } } : {}) });
+      ...(previewOn ? { preview: { needsYou: previewNeeds, path, ...(previewAutopilot ? { autopilot: previewAutopilot } : {}), ...(previewQueue ? { queue: previewQueue } : {}) } } : {}) });
     if (rest === 'creative' || rest.startsWith('creative/')) {
       const studio = input.service.creativeFor?.(identity, input.requestId, engine) ?? null;
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
@@ -437,8 +472,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (tab === 'articles') {
       const articleId = rest.split('/')[1];
       if (!articleId) {
-        const [articles, jobs, plans, destinations] = await Promise.all([engine.listArticles(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId)]);
-        return send(res, 200, articlesPage(shell('articles'), { articles, jobs, briefs: plans.flatMap((p) => p.briefs), websites: destinations.filter((d) => d.status === 'connected').length }));
+        const [articles, jobs, plans, destinations, resume] = await Promise.all([engine.listArticles(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId), resumeFacts(engine, actor, brandId)]);
+        return send(res, 200, articlesPage(shell('articles'), { articles, jobs, briefs: plans.flatMap((p) => p.briefs), websites: destinations.filter((d) => d.status === 'connected').length, resume }));
       }
       const action = rest.split('/')[2];
       if(action==='posts')return send(res,200,postingDraftsPage(shell('articles'),await engine.getPostingDrafts(actor,brandId,articleId)));
@@ -465,11 +500,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const social = detail.article.linkedPromotions?.length ? await engine.socialOverview(actor, brandId).catch(() => null) : null;
       // Writing in progress: the page says what the write task is doing (read only).
       const jobs = detail.version ? [] : await engine.listJobs(actor, brandId);
+      const resume = detail.version ? null : await resumeFacts(engine, actor, brandId);
       const workingTitle = detail.version ? null : (await engine.listPlans(actor, brandId)).flatMap((p) => p.briefs).find((x) => x.id === detail.article.briefId)?.workingTitle ?? null;
       const open = url.searchParams.getAll('open').filter((x) => (ARTICLE_FOLDS as readonly string[]).includes(x));
       // The website and time the main press would use, shown beside it and checked again when pressed.
       const plan = detail.version ? await engine.publishingPlan(actor, brandId, articleId) : undefined;
-      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social, jobs, open, workingTitle, plan, now: plan?.now, checkSources: url.searchParams.getAll('checksource').slice(0, 5), mode: url.searchParams.get('edit') === '1' ? 'edit' : 'read' }));
+      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social, jobs, resume, open, workingTitle, plan, now: plan?.now, checkSources: url.searchParams.getAll('checksource').slice(0, 5), mode: url.searchParams.get('edit') === '1' ? 'edit' : 'read' }));
     }
     if (tab === 'calendar') {
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
@@ -505,6 +541,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
+    if (previewOn) {
+      // The same answer in the new look (a page of its own, no business sidebar).
+      const shellOnly: Shell = { brands: [], brand: null, tab: null, csrf, applicationName: input.applicationName, preview: { needsYou: 0, path } };
+      return send(res, status, contentErrorPage(shellOnly, status, message));
+    }
     return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to your businesses</a></p></main></body></html>`);
   }
 }
@@ -512,11 +553,17 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
 /** The preview's own screens (Home, Calendar month, Articles list, Results); null means the existing page renders, in the shell. */
 type ContentAreaLoaded = ContentAreaData & { readonly plans: readonly TopicPlan[]; readonly fill: FillFacts };
 /** Everything the shell and its screens read, once per page (all read-only); what the engine checks before it writes for an empty day counts as "no" when it cannot be read. */
+/** The current facts the article page, the Articles list and the shell judge a stopped write by (read only; unknown stays unknown). */
+async function resumeFacts(engine: SeoBlogEngine, actor: Actor, brandId: string): Promise<ResumeFacts> {
+  const [usage, readiness] = await Promise.all([engine.usage(actor, brandId).catch(() => null), engine.readiness(actor, brandId).catch(() => null)]);
+  return { usage, profile: readiness?.profile ?? null, generation: readiness?.generation ?? null };
+}
+
 async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: string): Promise<ContentAreaLoaded> {
   const [articles, destinations, jobs, plans, readiness, usage, dna] = await Promise.all([engine.listArticles(actor, brandId), engine.listDestinations(actor, brandId), engine.listJobs(actor, brandId), engine.listPlans(actor, brandId),
     engine.readiness(actor, brandId).catch(() => null), engine.usage(actor, brandId).catch(() => null), engine.brandDnaStatus(actor, brandId).catch(() => undefined)]);
   const planList = plans.map((p) => p.plan);
-  return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList } };
+  return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList }, resume: { usage, profile: readiness?.profile ?? null, generation: readiness?.generation ?? null } };
 }
 
 async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null): Promise<string | null> {
@@ -939,7 +986,9 @@ async function handlePost(
         return ok(back('publishing'), 'Saved.');
       }
       await engine.updateSettings(actor, brandId, rowVersion(), settingsFromForm(brand, form.fields));
-      return ok(back('publishing'), 'Settings saved.');
+      // A higher writing allowance: articles that stopped for want of it carry on without anyone pressing anything.
+      const resumed = await engine.resumeAllowanceBlockedWrites(actor, brandId);
+      return ok(back('publishing'), resumed ? `Settings saved. ${resumed === 1 ? '1 article that was waiting for the writing allowance is' : `${resumed} articles that were waiting for the writing allowance are`} being written now.` : 'Settings saved.');
     }
     case 'social': {
       if (parts[1] === 'profile') { await engine.registerSocialProfile(actor, brandId, (f('displayName') ?? '').trim(), f('providerProfileId') ?? ''); return ok(back('social'), 'Zernio profile registered. Connect this brand’s accounts next.'); }
@@ -1156,9 +1205,11 @@ async function handlePost(
         const prior = hiddenCitations ? current!.body : null;
         // The save before this one: a sentence changed back to exactly how it was there gets its sources back.
         const before = hiddenCitations ? editDetail.versions.find((x) => x.id === current!.parentVersionId)?.body ?? null : null;
-        let droppedSentences = 0, typedRemoved = 0, restoredFromEarlier = 0;
+        let droppedSentences = 0, typedRemoved = 0, restoredFromEarlier = 0, notRestored = 0;
+        // A source comes back only if this version still lists it and shows it to readers.
+        const listed = new Set((current?.body.citations ?? []).filter((c) => c.public).map((c) => c.sourceId));
         const keptOnEdited: string[] = [];
-        const text = (stored: string | undefined, edited: string, previous?: string | null) => { if (!prior || stored === undefined) return edited; const r = restoreCitationsDetailed(stored, edited, previous); droppedSentences += r.droppedSentences; restoredFromEarlier += r.restoredFromEarlier; typedRemoved += r.typedRemoved; for (const ids of r.keptOnEdited) keptOnEdited.push(ids[0]!); return r.text; };
+        const text = (stored: string | undefined, edited: string, previous?: string | null) => { if (!prior || stored === undefined) return edited; const r = restoreCitationsDetailed(stored, edited, previous, (id) => listed.has(id)); droppedSentences += r.droppedSentences; restoredFromEarlier += r.restoredFromEarlier; notRestored += r.notRestored; typedRemoved += r.typedRemoved; for (const ids of r.keptOnEdited) keptOnEdited.push(ids[0]!); return r.text; };
         const plainText = (stored: string | undefined, edited: string) => prior && stored !== undefined ? keepIfUnchanged(stored, edited) : edited;
         const imageUrl = (f('imageUrl') ?? '').trim();
         const imageChanged = current && (imageUrl !== (current.body.image.url ?? '') || (f('imageAlt') ?? '') !== current.body.image.alt);
@@ -1177,10 +1228,11 @@ async function handlePost(
         const sources = droppedSentences ? ` You changed ${droppedSentences === 1 ? '1 sentence that had a source, so its source link was' : `${droppedSentences} sentences that had sources, so their source links were`} removed. We re-checked the article.${way}` : '';
         const typed = typedRemoved ? ` Source links cannot be typed in, so ${typedRemoved === 1 ? 'the one you typed was' : `the ${typedRemoved} you typed were`} removed.` : '';
         const back = restoredFromEarlier ? ` ${restoredFromEarlier === 1 ? '1 sentence you changed back has its source again' : `${restoredFromEarlier} sentences you changed back have their sources again`}.` : '';
+        const missing = notRestored ? ` ${notRestored === 1 ? '1 sentence you changed back could not get its source back, because that source is' : `${notRestored} sentences you changed back could not get their sources back, because those sources are`} no longer shown in this article.` : '';
         const kept = keptOnEdited.length ? ` ${keptOnEdited.length === 1 ? '1 sentence you changed still has its source' : `${keptOnEdited.length} sentences you changed still have their sources`}. Check ${keptOnEdited.length === 1 ? 'it still says' : 'they still say'} what the source says.` : '';
         // The page shows a link to each kept sentence's source (ids are checked against the article's own sources there).
         const check = keptOnEdited.length ? `?${keptOnEdited.slice(0, 5).map((id) => `checksource=${encodeURIComponent(id)}`).join('&')}` : '';
-        return ok(`${here}${check}`, hiddenCitations ? `Saved.${back}${sources}${typed}${kept} Have a read, then approve it again.` : `Saved as version ${v.number}. Checks ran again.`);
+        return ok(`${here}${check}`, hiddenCitations ? `Saved.${back}${missing}${sources}${typed}${kept} Have a read, then approve it again.` : `Saved as version ${v.number}. Checks ran again.`);
       }
       if (action === 'put-back') {
         // "Put the earlier wording back": one sentence of the previous version, with its sources, as a new version.

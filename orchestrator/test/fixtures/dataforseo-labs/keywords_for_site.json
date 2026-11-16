@@ -1,0 +1,437 @@
+{
+ "_fixture_source": "Example response copied from https://docs.dataforseo.com/v3/dataforseo_labs-google-keywords_for_site-live/ (retrieved 2026-11-16). Unmodified apart from this note",
+ "version": "0.1.20241227",
+ "status_code": 20000,
+ "status_message": "Ok.",
+ "time": "4.5705 sec.",
+ "cost": 0.0103,
+ "tasks_count": 1,
+ "tasks_error": 0,
+ "tasks": [
+  {
+   "id": "02191653-1535-0398-0000-bc848daab97f",
+   "status_code": 20000,
+   "status_message": "Ok.",
+   "time": "4.4965 sec.",
+   "cost": 0.0103,
+   "result_count": 1,
+   "path": [
+    "v3",
+    "dataforseo_labs",
+    "google",
+    "keywords_for_site",
+    "live"
+   ],
+   "data": {
+    "api": "dataforseo_labs",
+    "function": "keywords_for_site",
+    "se_type": "google",
+    "target": "apple.com",
+    "language_code": "en",
+    "location_code": 2840,
+    "include_serp_info": true,
+    "include_subdomains": true,
+    "filters": [
+     "keyword",
+     "not_match",
+     "camera"
+    ],
+    "limit": 3
+   },
+   "result": [
+    {
+     "se_type": "google",
+     "target": "apple.com",
+     "location_code": 2840,
+     "language_code": "en",
+     "total_count": 61789671,
+     "items_count": 3,
+     "offset": 0,
+     "offset_token": "eyJDdXJyZW50T2Zmc2V0IjozLCJSZXF1ZXN0RGF0YSI6eyJzaXRlIjoiYXBwbGUuY29tIiwibG9jYXRpb24iOjI4NDAsImxhbmd1YWdlIjoiZW4iLCJpbmNsdWRlX3N1YmRvbWFpbnMiOnRydWUsImxvYWRfc2VycF9pbmZvIjp0cnVlLCJzZWFyY2hfYWZ0ZXJfdG9rZW4iOm51bGwsImlnbm9yZV9zeW5vbnltcyI6ZmFsc2UsInNlYXJjaF9lbmdpbmUiOiJnb29nbGUiLCJ1c2VfbmV3X2NhdGVnb3JpZXMiOnRydWUsIm9yZGVyX2J5Ijp7Im9yZGVyX2ZpZWxkIjoiX3Njb3JlIiwib3JkZXJfdHlwZSI6IkRlc2MiLCJuZXh0IjpudWxsfSwibGltaXQiOjMsIm9mZnNldCI6MCwiYWlkIjoxNTM1fSwiUmF3UXVlcnkiOnsidHlwZSI6Im5vdCIsInN1YnF1ZXJ5Ijp7ImZpZWxkIjoia2V5d29yZCIsInR5cGUiOiJmdCIsInZhbHVlIjoiY2FtZXJhIn19LCJJZCI6ImRlMzc5ODVjLTg2YWEtNDU1Ny1iZDQ4LWU3Y2ZjNjJiYjNkZSIsIlNlYXJjaEFmdGVyRGF0YSI6WzI0Ni44NjI2MywiNjMxMDIxYjAtZmZhZi02YzYzLTU3Y2QtMGViY2ExOWZmMzk0Il19",
+     "items": [
+      {
+       "se_type": "google",
+       "keyword": "video editing app for ipad pro",
+       "location_code": 2840,
+       "language_code": "en",
+       "keyword_info": {
+        "se_type": "google",
+        "last_updated_time": "2025-02-06 04:59:38 +00:00",
+        "competition": 0.1,
+        "competition_level": "LOW",
+        "cpc": 1.36,
+        "search_volume": 30,
+        "low_top_of_page_bid": 0.59,
+        "high_top_of_page_bid": 2.17,
+        "categories": [
+         10007,
+         10878,
+         13378,
+         13381
+        ],
+        "monthly_searches": [
+         {
+          "year": 2025,
+          "month": 1,
+          "search_volume": 30
+         },
+         {
+          "year": 2024,
+          "month": 12,
+          "search_volume": 30
+         },
+         {
+          "year": 2024,
+          "month": 11,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 10,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 9,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 8,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 7,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 6,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 5,
+          "search_volume": 40
+         },
+         {
+          "year": 2024,
+          "month": 4,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 3,
+          "search_volume": 40
+         },
+         {
+          "year": 2024,
+          "month": 2,
+          "search_volume": 40
+         }
+        ],
+        "search_volume_trend": {
+         "monthly": 0,
+         "quarterly": 50,
+         "yearly": -57
+        }
+       },
+       "keyword_info_normalized_with_bing": null,
+       "keyword_info_normalized_with_clickstream": null,
+       "clickstream_keyword_info": null,
+       "keyword_properties": {
+        "se_type": "google",
+        "core_keyword": null,
+        "synonym_clustering_algorithm": "text_processing",
+        "keyword_difficulty": 60,
+        "detected_language": "en",
+        "is_another_language": false,
+        "words_count": 6
+       },
+       "serp_info": {
+        "se_type": "google",
+        "check_url": "https://www.google.com/search?q=video%20editing%20app%20for%20ipad%20pro&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+        "serp_item_types": [
+         "found_on_web",
+         "organic",
+         "people_also_ask",
+         "perspectives",
+         "people_also_search",
+         "related_searches"
+        ],
+        "se_results_count": 165000000,
+        "last_updated_time": "2025-01-15 02:36:57 +00:00",
+        "previous_updated_time": "2024-11-15 17:47:55 +00:00"
+       },
+       "avg_backlinks_info": {
+        "se_type": "google",
+        "backlinks": 4616.3,
+        "dofollow": 2067.3,
+        "referring_pages": 2712.8,
+        "referring_domains": 669.1,
+        "referring_main_domains": 591.7,
+        "rank": 250.1,
+        "main_domain_rank": 812.6,
+        "last_updated_time": "2025-01-15 02:36:57 +00:00"
+       },
+       "search_intent_info": {
+        "se_type": "google",
+        "main_intent": "transactional",
+        "foreign_intent": null,
+        "last_updated_time": "2023-03-02 13:20:01 +00:00"
+       }
+      },
+      {
+       "se_type": "google",
+       "keyword": "your apple watch couldn't pair with your iphone",
+       "location_code": 2840,
+       "language_code": "en",
+       "keyword_info": {
+        "se_type": "google",
+        "last_updated_time": "2025-02-07 03:53:40 +00:00",
+        "competition": null,
+        "competition_level": "LOW",
+        "cpc": null,
+        "search_volume": 40,
+        "low_top_of_page_bid": null,
+        "high_top_of_page_bid": null,
+        "categories": [
+         10007,
+         10878,
+         12161,
+         13054,
+         13381
+        ],
+        "monthly_searches": [
+         {
+          "year": 2025,
+          "month": 1,
+          "search_volume": 50
+         },
+         {
+          "year": 2024,
+          "month": 12,
+          "search_volume": 70
+         },
+         {
+          "year": 2024,
+          "month": 11,
+          "search_volume": 50
+         },
+         {
+          "year": 2024,
+          "month": 10,
+          "search_volume": 50
+         },
+         {
+          "year": 2024,
+          "month": 9,
+          "search_volume": 30
+         },
+         {
+          "year": 2024,
+          "month": 8,
+          "search_volume": 30
+         },
+         {
+          "year": 2024,
+          "month": 7,
+          "search_volume": 30
+         },
+         {
+          "year": 2024,
+          "month": 6,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 5,
+          "search_volume": 40
+         },
+         {
+          "year": 2024,
+          "month": 4,
+          "search_volume": 20
+         },
+         {
+          "year": 2024,
+          "month": 3,
+          "search_volume": 40
+         },
+         {
+          "year": 2024,
+          "month": 2,
+          "search_volume": 40
+         }
+        ],
+        "search_volume_trend": {
+         "monthly": -29,
+         "quarterly": 0,
+         "yearly": 25
+        }
+       },
+       "keyword_info_normalized_with_bing": null,
+       "keyword_info_normalized_with_clickstream": null,
+       "clickstream_keyword_info": null,
+       "keyword_properties": {
+        "se_type": "google",
+        "core_keyword": null,
+        "synonym_clustering_algorithm": "text_processing",
+        "keyword_difficulty": 13,
+        "detected_language": "en",
+        "is_another_language": false,
+        "words_count": 8
+       },
+       "serp_info": {
+        "se_type": "google",
+        "check_url": "https://www.google.com/search?q=your%20apple%20watch%20couldn%27t%20pair%20with%20your%20iphone&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+        "serp_item_types": [
+         "ai_overview",
+         "organic",
+         "people_also_ask",
+         "discussions_and_forums",
+         "related_searches"
+        ],
+        "se_results_count": 2680000,
+        "last_updated_time": "2025-01-14 02:41:17 +00:00",
+        "previous_updated_time": "2024-11-14 09:34:22 +00:00"
+       },
+       "avg_backlinks_info": {
+        "se_type": "google",
+        "backlinks": 20.1,
+        "dofollow": 7,
+        "referring_pages": 18,
+        "referring_domains": 6.6,
+        "referring_main_domains": 6.4,
+        "rank": 92.1,
+        "main_domain_rank": 725.3,
+        "last_updated_time": "2025-01-14 02:41:18 +00:00"
+       },
+       "search_intent_info": {
+        "se_type": "google",
+        "main_intent": "commercial",
+        "foreign_intent": [
+         "transactional"
+        ],
+        "last_updated_time": "2023-03-03 16:06:53 +00:00"
+       }
+      },
+      {
+       "se_type": "google",
+       "keyword": "apple ipad pro drawing app",
+       "location_code": 2840,
+       "language_code": "en",
+       "keyword_info": {
+        "se_type": "google",
+        "last_updated_time": "2025-02-10 23:44:28 +00:00",
+        "competition": null,
+        "competition_level": "LOW",
+        "cpc": null,
+        "search_volume": 10,
+        "low_top_of_page_bid": null,
+        "high_top_of_page_bid": null,
+        "categories": [
+         10019,
+         10168,
+         10883,
+         12187,
+         13068
+        ],
+        "monthly_searches": [
+         {
+          "year": 2025,
+          "month": 1,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 12,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 11,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 10,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 9,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 8,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 7,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 6,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 5,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 4,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 3,
+          "search_volume": 10
+         },
+         {
+          "year": 2024,
+          "month": 2,
+          "search_volume": 10
+         }
+        ],
+        "search_volume_trend": {
+         "monthly": 0,
+         "quarterly": 0,
+         "yearly": 0
+        }
+       },
+       "keyword_info_normalized_with_bing": null,
+       "keyword_info_normalized_with_clickstream": null,
+       "clickstream_keyword_info": null,
+       "keyword_properties": {
+        "se_type": "google",
+        "core_keyword": null,
+        "synonym_clustering_algorithm": "text_processing",
+        "keyword_difficulty": null,
+        "detected_language": "en",
+        "is_another_language": false,
+        "words_count": 5
+       },
+       "serp_info": null,
+       "avg_backlinks_info": null,
+       "search_intent_info": {
+        "se_type": "google",
+        "main_intent": "transactional",
+        "foreign_intent": [
+         "commercial"
+        ],
+        "last_updated_time": "2023-03-02 18:51:08 +00:00"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

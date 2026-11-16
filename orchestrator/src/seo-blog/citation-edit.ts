@@ -109,6 +109,8 @@ export interface RestoredText {
   readonly keptOnEdited: readonly (readonly string[])[];
   /** Sentences changed back to how they were in the previous version, whose sources from it came back. */
   readonly restoredFromEarlier: number;
+  /** Sentences changed back whose earlier source is no longer on the article's source list (or not shown to readers), so it did not come back. */
+  readonly notRestored: number;
 }
 
 /** Anything that looks like a citation marker, as typed or pasted by the owner. */
@@ -118,12 +120,12 @@ const TYPED = /[ \t]*\[src:[^\]\n]*\]/gi;
  * `previous` is the version saved before `stored` (when there is one): a sentence the owner changes back to exactly
  * how it was there gets that version's sources back, so "change it back" really undoes a lost source.
  */
-export function restoreCitationsDetailed(stored: string, edited: string, previous?: string | null): RestoredText {
+export function restoreCitationsDetailed(stored: string, edited: string, previous?: string | null, usable?: (sourceId: string) => boolean): RestoredText {
   const typedRemoved = (normal(edited).match(TYPED) ?? []).length;
   const next = normal(edited).replace(TYPED, '');
   const { plain: rawPlain } = strip(stored);
   const plainNormal = normal(rawPlain);
-  const none = { droppedMarkers: 0, droppedSentences: 0, typedRemoved, keptOnEdited: [] as string[][], restoredFromEarlier: 0 };
+  const none = { droppedMarkers: 0, droppedSentences: 0, typedRemoved, keptOnEdited: [] as string[][], restoredFromEarlier: 0, notRestored: 0 };
   if (next === plainNormal || next.trim() === plainNormal.trim()) return { ...none, text: stored };
   const { plain, anchors } = strip(normal(stored));
   const earlier = previous ? strip(normal(previous)) : null;
@@ -221,7 +223,7 @@ export function restoreCitationsDetailed(stored: string, edited: string, previou
     droppedMarkers++; droppedUnits.add(i);
   });
   // Sentences changed back to exactly how they were in the version before: their sources from that version return.
-  let restoredFromEarlier = 0;
+  let restoredFromEarlier = 0, notRestored = 0;
   if (earlier?.anchors.length) {
     const prevUnits = sentenceUnits(earlier.plain);
     const targeted = new Set([...[...matched].filter(([i]) => owner.includes(i)).map(([, j]) => j), ...reworded.values()]);
@@ -232,6 +234,8 @@ export function restoreCitationsDetailed(stored: string, edited: string, previou
       const u = same[0]!;
       const mine = earlier.anchors.filter((a) => a.offset > u.keyStart && a.offset <= u.end);
       if (!mine.length) return;
+      // Only a source this article still lists and shows to readers comes back; otherwise the sentence stays without it.
+      if (usable && !mine.every((a) => usable(/\[src:([A-Za-z0-9-]+)\]/.exec(a.raw)![1]!))) { notRestored++; return; }
       restoredFromEarlier++;
       mine.forEach((a, k) => inserts.push({ at: t.keyStart + (a.offset - u.keyStart), raw: a.raw, order: anchors.length + k }));
     });
@@ -248,7 +252,7 @@ export function restoreCitationsDetailed(stored: string, edited: string, previou
     return { ...none, text: next, droppedMarkers: anchors.length, droppedSentences: new Set(owner).size };
   }
   const keptOnEdited = [...reworded.keys()].map((i) => anchors.filter((_, n) => owner[n] === i).map((a) => /\[src:([A-Za-z0-9-]+)\]/.exec(a.raw)![1]!));
-  return { text: out, droppedMarkers, droppedSentences: droppedUnits.size, typedRemoved, keptOnEdited, restoredFromEarlier };
+  return { text: out, droppedMarkers, droppedSentences: droppedUnits.size, typedRemoved, keptOnEdited, restoredFromEarlier, notRestored };
 }
 
 /** Put the stored text's citation markers back into the owner's edited (marker-free) text. */
