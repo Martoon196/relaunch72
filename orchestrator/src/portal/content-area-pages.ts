@@ -616,3 +616,6 @@ const PAGE_CSS = `
 .ca-cal{display:none}.ca-agenda{display:block}
 }
 `;
+
+/** The page styles, shared with the Keywords place (content-area-keywords.ts). */
+export const CONTENT_PAGE_CSS = PAGE_CSS;
