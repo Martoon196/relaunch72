@@ -9,7 +9,7 @@ import type { SeoBlogEngine } from '../src/seo-blog/engine.js';
 export const NATIVE_TEST_SECRET = 'synthetic-native-test-only-'.repeat(3);
 export function nativeIdentity(userId: string): PortalSessionIdentity { return { userId, sessionToken: `synthetic-${userId}`, workspaceId: '33333333-3333-4333-8333-333333333333', userEmail: 'owner@example.test' }; }
 export function nativeCsrf(identity: PortalSessionIdentity): string { return portalCsrfToken(NATIVE_TEST_SECRET, identity.sessionToken); }
-export async function nativeSeoCall(engine: SeoBlogEngine, input: { who: PortalSessionIdentity | null; method: 'GET' | 'POST'; path: string; fields?: Record<string, string | string[]>; file?: {filename:string;bytes:Buffer}; applicationName?: string; headers?: Record<string, string> }) {
+export async function nativeSeoCall(engine: SeoBlogEngine, input: { who: PortalSessionIdentity | null; method: 'GET' | 'POST'; path: string; fields?: Record<string, string | string[]>; file?: {filename:string;bytes:Buffer}; applicationName?: string; founder?: boolean; preview?: boolean; headers?: Record<string, string> }) {
   const fields: [string,string][] = Object.entries(input.fields ?? {}).flatMap(([k, value]) => (Array.isArray(value) ? value : [value]).map(v => [k, v] as [string,string]));
   let body = Buffer.from(new URLSearchParams(fields).toString()), contentType = 'application/x-www-form-urlencoded';
   if (input.file) {
@@ -22,7 +22,9 @@ export async function nativeSeoCall(engine: SeoBlogEngine, input: { who: PortalS
   req.end(body); let status = 0, headers: Record<string, string> = {}; const chunks: Buffer[] = [];
   const response = { writeHead(code: number, next: Record<string, string>) { status = code; headers = next; return response; }, end(chunk?: string | Buffer) { if (chunk) chunks.push(Buffer.from(chunk)); } } as unknown as ServerResponse;
   await handleSeoBlog(req, response, new URL(input.path, 'https://app.relaunch72.com'), {
-    service: { generation: 'unavailable', research: 'unconfigured', social: 'unavailable', engineFor: () => engine, socialCallback: async () => null },
-    identity: input.who, requestId: randomUUID(), sessionSecret: NATIVE_TEST_SECRET, vaultReady: true, applicationName: input.applicationName });
+    service: { generation: 'unavailable', research: 'unconfigured', social: 'unavailable', engineFor: () => engine, socialCallback: async () => null,
+      // The founder is whoever may manage account limits; only then are founder-only pages open.
+      ...(input.founder ? { limitsFor: () => ({ allowed: async () => true, list: async () => [] }) } : {}) } as never,
+    identity: input.who, requestId: randomUUID(), sessionSecret: NATIVE_TEST_SECRET, vaultReady: true, applicationName: input.applicationName, ...(input.preview ? { contentAreaPreview: 'enabled' } : {}) } as never);
   return { status, headers, body: Buffer.concat(chunks).toString('utf8'), bytes: Buffer.concat(chunks) };
 }

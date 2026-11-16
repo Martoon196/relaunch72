@@ -4,7 +4,7 @@ Tags: seo, meta, open graph, schema, sitemap, publishing, rest-api
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -58,6 +58,9 @@ Deactivation stops incoming writes and this plugin's tags; every post, image, ca
 HMAC-SHA256 over timestamp, method, path, query and body with the site's connection key, within five minutes. The site binds to one Relaunch72 brand and connection on the first verified check. Images are fetched only from approved https prefixes without redirects and must match the digest in their address. The key is stored encrypted with the site's salts and is never returned or logged.
 
 == Changelog ==
+
+= 1.2.0 =
+* Writes the article's target phrase into Yoast SEO's focus keyphrase and Rank Math's focus keywords (first one primary), so their own analysis has a phrase to check. Sent only when Relaunch72 provides one; a phrase a person changed afterwards is kept, as for every other field.
 
 = 1.1.0 =
 * Per-post SEO box on every post, page and public post type.

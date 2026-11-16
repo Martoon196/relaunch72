@@ -128,7 +128,7 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
   let postId = 0; let v1: PublishInput;
 
   await t.test('exact-version delivery: post, featured image, alt, category, marker, SEO', async () => {
-    v1 = input(articleId, 1, b1, t1);
+    v1 = { ...input(articleId, 1, b1, t1), focus: { phrase: 'fixture focus phrase', secondary: ['fixture second phrase'] } };
     const out = await publisher.publish(v1);
     assert.equal(out.status, 'accepted'); assert.equal(out.publicUrl, `${ORIGIN}/${slug}/`);
     postId = Number(/^wp-post:(\d+):/.exec(out.providerRef)![1]);
@@ -140,6 +140,10 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
     if (SCENARIO === 'rank_math') { assert.equal(p.meta.rank_math_title, b1.seoTitle); assert.equal(p.meta.rank_math_description, b1.metaDescription); }
     if (SCENARIO === 'yoast') { assert.equal(p.meta._yoast_wpseo_title, b1.seoTitle); assert.equal(p.meta._yoast_wpseo_metadesc, b1.metaDescription); }
     if (SCENARIO === 'standalone') { assert.equal(p.meta._r72_seo_title, b1.seoTitle); assert.equal(p.meta._r72_seo_description, b1.metaDescription); }
+    // Plugin 1.2.0: the target phrase reaches the SEO plugin's own focus field (never another plugin's).
+    if (SCENARIO === 'rank_math') assert.equal(p.meta.rank_math_focus_keyword, 'fixture focus phrase,fixture second phrase');
+    if (SCENARIO === 'yoast') assert.equal(p.meta._yoast_wpseo_focuskw, 'fixture focus phrase');
+    if (SCENARIO === 'standalone') { assert.ok(!p.meta.rank_math_focus_keyword); assert.ok(!p.meta._yoast_wpseo_focuskw); }
     const thumb = await control('post', { post: p.thumb });
     assert.equal(thumb.meta._wp_attachment_image_alt, 'Disposable hero alt text');
   });

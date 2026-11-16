@@ -146,6 +146,8 @@ export interface EngineDeps {
   readonly publishers: PublisherRegistry;
   readonly vault: SeoBlogCredentialVault | null;
   readonly keywords?: KeywordProvider | null;
+  /** SEO_BLOG_WORDPRESS_FOCUS_PHRASE: send the article's target phrase to the WordPress plugin. Off by default. */
+  readonly wordpressFocusPhrase?: boolean;
   /** SEO_BLOG_REQUIRE_FULL_ENGINE: planning and writing stop with a neutral message rather than produce a weaker article. Off by default. */
   readonly requireFullEngine?: boolean;
   /** Keyword research for the business's keyword list (SEO_BLOG_KEYWORD_POOL). Absent: keyword lists are not offered. */
@@ -2945,7 +2947,25 @@ export class SeoBlogEngine {
     return { ...next, events };
   }
 
-  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): PublishInput {
+  /**
+   * The target phrase for the website's SEO plugin: only the measured phrase keyword-first planning put on the brief
+   * (`brief.seo.primary`, basis other than "none"). With none, nothing is sent: the brief's question-style search target
+   * is not a keyphrase, and a whole question in the plugin's focus field would only make its score look bad. Single
+   * spaces, no trailing question mark, at most 100 characters; up to four secondary phrases (the plugin uses them where
+   * it can: Rank Math takes them, Yoast keeps the primary only).
+   */
+  private async focusFor(brandId: string, version: ArticleVersion): Promise<PublishInput['focus']> {
+    const brief = await this.store.getBrief(brandId, version.briefId);
+    const seo = brief?.seo;
+    if (!seo?.primary || seo.primary.basis === 'none') return null;
+    const clean = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().replace(/[?\uFF1F]+$/u, '').trim().slice(0, 100).trim() : '');
+    const phrase = clean(seo.primary.phrase);
+    if (!phrase) return null;
+    const secondary = [...new Set((Array.isArray(seo.secondary) ? seo.secondary : []).map((x) => clean(x?.phrase)).filter((x) => x && x !== phrase))].slice(0, 4);
+    return { phrase, secondary };
+  }
+
+  private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion, focus?: PublishInput['focus']): PublishInput {
     const snapshot=publication.websiteSnapshot;const pinned=snapshot?.destination??destination;
     return {
       ...(snapshot?.target?{websiteTarget:snapshot.target}:{}),
@@ -2953,6 +2973,7 @@ export class SeoBlogEngine {
       articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha,
       versionNumber: publication.versionNumber ?? version.number, body: version.body,
       publishedAt: snapshot?.publishedAt??publication.firstAttemptAt ?? this.now(),
+      ...(focus ? { focus } : {}),
     };
   }
 
@@ -2967,7 +2988,8 @@ export class SeoBlogEngine {
     const publisher = publisherFor(this.deps.publishers, destination.type);
     let p = await this.store.updatePublication(this.pub(publication, { state: 'submitted', attempts: publication.attempts + 1, firstAttemptAt: publication.firstAttemptAt ?? this.now(), lastAttemptAt: this.now(), detail: 'Sent to the website.' }));
     try {
-      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version));
+      const focus = this.deps.wordpressFocusPhrase && destination.type === 'wordpress' ? await this.focusFor(brand.id, version) : null;
+      const outcome = await publisher.publish(this.publishInput(brand, p, destination, version, focus));
       p = await this.store.updatePublication(this.pub(p, { state: 'verifying', providerRef: outcome.providerRef, publicUrl: outcome.publicUrl, detail: outcome.status === 'already_present' ? 'Already on the website; confirming the public page.' : 'Accepted by the website; confirming the public page.' }));
       await this.log(brand.id, 'system', 'publish.accepted', `Website accepted the article; waiting for ${p.publicUrl} to serve it.`, p.articleId);
       return this.verify(brand, p, version);
@@ -3238,7 +3260,8 @@ export class SeoBlogEngine {
 
   async listJobs(actor: Actor, brandId: string): Promise<Job[]> {
     await this.brandFor(actor, brandId);
-    return (await this.store.listJobs(brandId)).map(imageJobDto);
+    // Pages judge a waiting write from its own task, so an older waiting write is included even past the newest tasks.
+    return (await this.jobsWithWaitingWrites(brandId)).map(imageJobDto);
   }
   async imageJobStatus(actor: Actor, brandId: string, articleId: string, jobId: string): Promise<{ id: string; state: Job['state']; detail: string; prepared: boolean }> {
     await this.brandFor(actor, brandId);
@@ -3443,15 +3466,17 @@ export class SeoBlogEngine {
    * row-version check means a job is requeued at most once even when two passes race.
    */
   private async resumeAllowanceWrites(brand: Brand, why: 'allowance' | 'new_month' | 'daily' | 'worker'): Promise<number> {
-    if (brand.settings.pauseAll) return 0;
-    const jobs = await this.store.listJobs(brand.id);
+    const jobs = await this.jobsWithWaitingWrites(brand.id);
+    // Skipped for a pause or unconfirmed details: keep next month's wake-up, so a write never loses its automatic way back.
+    const keepWake = async () => { if (why !== 'worker' && jobs.some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id); };
+    if (brand.settings.pauseAll) { await keepWake(); return 0; }
     const month = monthStart(this.now()).slice(0, 7);
     // A pass the worker makes by itself requeues a job at most once a month: if it stops again for the allowance
     // (for example a copy step's own reservation rule), it waits for the owner, a new month or a raised allowance.
     const waiting = jobs.filter(allowanceBlockedWrite).filter((j) => why === 'allowance' || why === 'new_month' || j.payload.allowanceResumedMonth !== month).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
     if (!waiting.length) return 0;
     const { profile, stale } = await this.currentFactsKey(brand.id);
-    if (!profile?.confirmedAt || stale) return 0;
+    if (!profile?.confirmedAt || stale) { await keepWake(); return 0; }
     const ceiling = monthlyCeiling(brand.settings, 'model_tokens');
     const used = await this.store.usageSince(brand.id, 'model_tokens', monthStart(this.now()));
     let committed = jobs.filter((j) => isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length * USAGE_ESTIMATES.article;
@@ -3472,8 +3497,16 @@ export class SeoBlogEngine {
       resumed++;
       await this.log(brand.id, 'system', 'job.resumed_allowance', `Article writing queued again automatically: ${reason}.`, job.id);
     }
-    if (why !== 'worker' && (await this.store.listJobs(brand.id)).some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id);
+    if (why !== 'worker' && (await this.jobsWithWaitingWrites(brand.id)).some(allowanceBlockedWrite)) await this.ensureAllowanceWake(brand.id);
     return resumed;
+  }
+
+  /** The business's tasks, with every waiting article write read directly (not only those among the newest tasks). */
+  private async jobsWithWaitingWrites(brandId: string): Promise<Job[]> {
+    const jobs = await this.store.listJobs(brandId);
+    if (!this.store.listBlockedWrites) return jobs;
+    const seen = new Set(jobs.map((j) => j.id));
+    return [...jobs, ...(await this.store.listBlockedWrites(brandId)).filter((j) => !seen.has(j.id))];
   }
 
   /** Owner-side: after saving a higher allowance, resume what now fits. Returns how many articles were queued again. */
