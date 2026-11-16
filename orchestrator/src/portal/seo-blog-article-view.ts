@@ -13,10 +13,10 @@
 import { randomUUID } from 'node:crypto';
 import { sha256 } from '../seo-blog/engine.js';
 import { citationNumbers, renderMarkdown } from '../seo-blog/render.js';
-import { sentencesToPutBack, withoutCitations } from '../seo-blog/citation-edit.js';
+import { putBackOffers, withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
 import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
-import { approvalIsCurrent, approvalRequired } from '../seo-blog/policy.js';
+import { approvalIsCurrent, approvalRequired, DEFAULT_MISSED_WINDOW_MS } from '../seo-blog/policy.js';
 import { nextPublishingSlot, plannedSiteGone, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
 import type { PublishingPlan } from '../seo-blog/engine.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
@@ -455,15 +455,16 @@ function mustFix(shell: Shell, base: string, v: ArticleVersion, critical: readon
 }
 
 /** Sentences that lost their source in the last save, each with a way back (the previous version's wording and sources). */
+/** The version a put-back may restore from: only the current version's own parent (the save just before it). */
+export function putBackParent(v: ArticleVersion, versions: readonly ArticleVersion[]): ArticleVersion | null {
+  if (v.change !== 'edited') return null;
+  return versions.find((x) => x.id === v.parentVersionId) ?? null;
+}
 function putBackList(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string[] {
   void shell; void base;
-  if (v.change !== 'edited') return [];
-  const earlier = d.versions.find((x) => x.id === v.parentVersionId) ?? d.versions.find((x) => x.number === v.number - 1);
+  const earlier = putBackParent(v, d.versions);
   if (!earlier) return [];
-  const fields: [string, string | undefined, string | undefined][] = [['intro', earlier.body.intro, v.body.intro], ['conclusion', earlier.body.conclusion, v.body.conclusion],
-    ...v.body.sections.map((s) => [`section:${s.id}`, earlier.body.sections.find((x) => x.id === s.id)?.body, s.body] as [string, string | undefined, string | undefined]),
-    ...v.body.faqs.map((f, i) => [`faq:${i}`, earlier.body.faqs[i]?.a, f.a] as [string, string | undefined, string | undefined])];
-  return fields.flatMap(([field, from, to]) => (from === undefined || to === undefined ? [] : sentencesToPutBack(from, to).map((x) => `${field}|${x.index}|${earlier.id}|${x.earlier}`)));
+  return putBackOffers(earlier.body, v.body).map((x) => `${x.field}|${x.index}|${earlier.id}|${x.earlier}`);
 }
 function putBack(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string {
   const list = putBackList(shell, d, v, base);
@@ -636,7 +637,10 @@ function moreMenu(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: str
     const now = d.now ?? new Date().toISOString();
     const s = a.schedule;
     const many = (d.plan?.websitesOnRecord ?? d.destinations.length) > 1;
-    if (!s || a.hold) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
+    const future = s && Date.parse(s.publishAtUtc) > Date.parse(now);
+    if (!s) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve without a date', { cls: 'ap-menu-button', note: 'It will not go out until it has a time.' }));
+    else if (a.hold?.reason === 'owner') items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve', { cls: 'ap-menu-button', note: future ? `It goes out on ${shortWhen(s.localDate, null, now.slice(0, 10))} at ${s.localTime.replace(/^0(\d)/, '$1')} only once you allow it to go out.` : Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS ? 'It stays on hold; once you allow it to go out, it goes out within minutes.' : 'It stays on hold; allow it to go out, then choose a new time.' }));
+    else if (a.hold) items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, 'Approve', { cls: 'ap-menu-button', note: 'It will not go out until you choose a new time.' }));
     else if (Date.parse(s.publishAtUtc) > Date.parse(now) && !plannedSiteGone(a, d.destinations)) {
       const site = many ? ` on ${d.destinations.find((x) => x.id === s.destinationId)?.label ?? 'your website'}` : '';
       items.push(postButton(shell, `${base}/approve`, { versionId: v.id }, `Approve: it goes out on ${shortWhen(s.localDate, null, now.slice(0, 10))} at ${s.localTime.replace(/^0(\d)/, '$1')}${site}`, { cls: 'ap-menu-button' }));
@@ -696,6 +700,34 @@ ${historyFold(shell, d, base, open.has('history'))}
 ${fold('download', 'Download', `<p><a href="${base}/export?format=markdown">Download as a text file (Markdown)</a></p><p><a href="${base}/export?format=html">Download as a web page (HTML)</a></p>`, open.has('download'))}
 ${rewriteFold(shell, v, base, open.has('rewrite'))}
 </div></div>`, `<style>${ARTICLE_CSS}</style>`);
+}
+
+/**
+ * What plain approval (the existing /approve step) leads to, as the publishing worker will decide it: a hold
+ * keeps it back; a paused business holds it at its time; a time on a website that is no longer connected stops it;
+ * a future time means it goes out then; a time that passed less than the worker's missed-time window ago means it
+ * goes out at the next worker pass; an older one is held for a new time.
+ */
+export function approvedOutcome(a: Article, b: Pick<Brand, 'settings'>, destinations: readonly Pick<Destination, 'id' | 'label' | 'status' | 'type'>[], now: string): string {
+  const s = a.schedule;
+  if (!s) return 'Approved. It will not go out until it has a time.';
+  const when = longWhen(s.localDate, s.localTime, now.slice(0, 10));
+  const future = Date.parse(s.publishAtUtc) > Date.parse(now);
+  const recent = !future && Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS;
+  if (a.hold?.reason === 'owner') return future ? `Approved. It is on hold, so it goes out on ${when} only once you choose “Allow it to go out”.`
+    : recent ? 'Approved. It is on hold. Its time has just passed, so if you choose “Allow it to go out” now, it goes onto your website within the next few minutes.'
+    : 'Approved. It is on hold and its time passed too long ago: allow it to go out, then choose a new time.';
+  if (a.hold) return 'Approved. It will not go out until you choose a new time.';
+  const gone = plannedSiteGone(a, destinations);
+  if (gone) {
+    // Websites with a live connection check (content API, WordPress) are checked again at the publishing time.
+    const rechecked = ['content_api', 'wordpress'].includes(destinations.find((d) => d.id === s.destinationId)?.type ?? '');
+    return rechecked ? `Approved. It is planned for ${gone.label}, which is not connected right now. At its time the connection is checked again: if the website answers, it goes out; if not, it is held and you choose a new time.`
+      : `Approved. It is planned for ${gone.label}, which is not connected right now. Unless you reconnect it before its time, it will be held and you choose a new time.`;
+  }
+  if (b.settings.pauseAll) return future ? `Approved. Publishing is paused for this business: switch it back on before ${when}, or it will be held.` : 'Approved. Publishing is paused for this business, so it will be held; choose a new time after switching publishing back on.';
+  if (future) return `Approved. It goes out on ${when}.`;
+  return Date.parse(now) - Date.parse(s.publishAtUtc) <= DEFAULT_MISSED_WINDOW_MS ? 'Approved. Its time has just passed, so it goes onto your website within the next few minutes.' : 'Approved. Its time passed too long ago, so it will be held; choose a new time.';
 }
 
 // ─── The articles list ───────────────────────────────────────────────────────

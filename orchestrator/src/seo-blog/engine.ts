@@ -2331,9 +2331,10 @@ export class SeoBlogEngine {
   /**
    * "Approve and publish": the owner's one decision, built only from the existing approve and schedule steps
    * with every gate intact. Everything is resolved and checked first; only then is anything written:
-   *  1. membership; 2. the article; 3. the exact version shown; 4. the row the owner saw (when given);
-   *  5. not held by the owner; 6. publishing not paused for the business; 7. not publishing, not awaiting a
-   *  result, not already live; 8. the website (a chosen one must be connected, never swapped); 9. the time
+   *  1. membership; 2. the article; 3. the exact version shown; 4. not held by the owner; 5. publishing not
+   *  paused for the business; 6. not publishing, not awaiting a result, not already live; then an identical
+   *  repeat of a press that already worked returns the same confirmation (only while all of that is still
+   *  true); 7. the row the owner saw (when given); 8. the website (a chosen one must be connected, never swapped); 9. the time
    *  (a shown "next" time must still be the next time; a typed time must be real and in the future; "now"
    *  is a real future minute even across clock changes); 10. critical checks (approve refuses them);
    * then approve (exact version), then schedule (the existing step). If scheduling still fails, the approval
@@ -2350,21 +2351,27 @@ export class SeoBlogEngine {
     if (!version) throw new SeoBlogError(409, 'The article’s history is incomplete.');
     const minutesAway = (at: string) => Math.max(1, Math.round((Date.parse(at) - Date.parse(now)) / 60_000));
     const label = async (id: string) => (await this.store.getDestination(brandId, id))?.label ?? 'your website';
-    // The same press a second time (a double click, or the page pressed again after it worked): the same answer.
-    const s0 = article.schedule;
-    if (s0 && approvalIsCurrent(article, version) && !article.hold && article.delivery !== 'published' && Date.parse(s0.publishAtUtc) > Date.parse(now) && (!input.destinationId || input.destinationId === s0.destinationId)) {
-      const same = input.when === 'now' ? s0.setBy === actor.userId && Date.parse(now) - Date.parse(s0.setAt) < 5 * 60_000 && Date.parse(s0.publishAtUtc) - Date.parse(s0.setAt) < 3 * 3_600_000
-        : input.when !== 'next' && s0.localDate === input.when.localDate.trim() && s0.localTime === input.when.localTime.trim();
-      // Same confirmation as the first press: "Approved." when that press is what approved it (approval and time set together).
-      if (same) return { approvedNow: input.when !== 'now' && Math.abs(Date.parse(s0.setAt) - Date.parse(article.approval!.approvedAt)) < 10_000, replayed: true, localDate: s0.localDate, localTime: s0.localTime, publishAtUtc: s0.publishAtUtc, destinationLabel: await label(s0.destinationId), siteChanged: false, paused: false, kept: true, minutesAway: minutesAway(s0.publishAtUtc) };
-    }
+    // Every refusal that is true right now comes first, so a repeated press can never confirm something untrue.
     if (article.hold?.reason === 'owner') throw new SeoBlogError(409, 'You asked for this article not to go out. Choose “Allow it to go out” first.');
     if (brand.settings.pauseAll) throw new SeoBlogError(409, 'Publishing is paused for this business. Switch it back on first.', 'paused');
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is going onto your website right now.');
     if (article.delivery === 'unknown') throw new SeoBlogError(409, 'We are still checking whether the last attempt reached your website. Try again once that is settled.');
     if (article.delivery === 'published' && article.publishedVersionId === article.currentVersionId) throw new SeoBlogError(409, 'This article is already live on your website.');
-    if (input.rowVersion !== undefined && input.rowVersion !== null && input.rowVersion !== article.rowVersion) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
     const destinations = await this.store.listDestinations(brandId);
+    // The same press a second time (a double click, or the page pressed again after it worked): the same answer,
+    // only while everything it said is still so: approved, not held, a future time on the website the press named,
+    // and that website still connected. A "Publish now" repeats only a time that a "Publish now" itself set moments
+    // ago (exactly the time such a press would have chosen); a deliberate "Publish now" always moves a later time.
+    const s0 = article.schedule;
+    const siteStillThere = s0 ? destinations.some((d) => d.id === s0.destinationId && d.status === 'connected') : false;
+    if (s0 && siteStillThere && approvalIsCurrent(article, version) && !article.hold && article.checks?.status !== 'critical' && Date.parse(s0.publishAtUtc) > Date.parse(now) && input.destinationId && input.destinationId === s0.destinationId) {
+      const same = input.when === 'now'
+        ? s0.setBy === actor.userId && Date.parse(now) - Date.parse(s0.setAt) < 5 * 60_000 && s0.publishAtUtc === soonSlot(s0.setAt, brand.timezone).publishAtUtc
+        : input.when !== 'next' && s0.localDate === input.when.localDate.trim() && s0.localTime === input.when.localTime.trim();
+      // Same confirmation as the first press: "Approved." when that press is what approved it (approval and time set together).
+      if (same) return { approvedNow: input.when !== 'now' && Math.abs(Date.parse(s0.setAt) - Date.parse(article.approval!.approvedAt)) < 10_000, replayed: true, localDate: s0.localDate, localTime: s0.localTime, publishAtUtc: s0.publishAtUtc, destinationLabel: await label(s0.destinationId), siteChanged: false, paused: false, kept: true, minutesAway: minutesAway(s0.publishAtUtc) };
+    }
+    if (input.rowVersion !== undefined && input.rowVersion !== null && input.rowVersion !== article.rowVersion) throw new SeoBlogError(409, 'This article changed since you opened it. Have another look, then try again.', 'stale_write');
     const site = publishingSite(article, brand, destinations, now, input.destinationId || null);
     if (!site) throw new SeoBlogError(409, 'Your website is not connected yet, so nothing can go out. Connect it in Brand setup first.', 'destination');
     const siteChanged = Boolean(article.schedule && article.schedule.destinationId !== site.id);
