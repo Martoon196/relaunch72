@@ -166,10 +166,16 @@ export function poolInMarket(pool: Pick<StoredKeywordPool, 'locationCode' | 'lan
   return !!pool && !!market && pool.locationCode === market.locationCode && pool.languageCode === market.languageCode;
 }
 
-/** The stored pool for a business in its market, or an empty one (an unreadable list is rebuilt; the caller refuses a newer-shaped one). */
+/**
+ * The stored pool for a business in its market, ready to be added to. A list measured for another market starts empty
+ * in this one, but its cost ledger is kept (a change of country never erases what was spent). A damaged list starts
+ * empty, keeping a readable ledger. The caller refuses a newer-shaped list before getting here.
+ */
 export function storedPool(inventory: WebsiteInventory | null | undefined, market: LabsMarket): InventoryKeywordPool {
   const read = readKeywordPool(inventory?.keywordPool);
-  return read.status === 'ok' && poolInMarket(read.pool, market) ? read.pool : emptyKeywordStore(market.locationCode, market.languageCode).pool;
+  if (read.status === 'ok' && poolInMarket(read.pool, market)) return read.pool;
+  const empty = emptyKeywordStore(market.locationCode, market.languageCode).pool;
+  return { ...empty, ledger: read.ledger ?? empty.ledger, ...(read.pool?.calls ? { calls: read.pool.calls } : {}) };
 }
 
 export function emptyChoices(): KeywordChoices { return emptyKeywordStore(0, '').choices; }
@@ -194,7 +200,9 @@ export function withCost(pool: InventoryKeywordPool, attempt: FillAttempt, answe
 export function rebuiltPool(pool: InventoryKeywordPool, candidates: readonly KeywordCandidate[], business: PoolBusiness, choices: KeywordChoices, at: string): { pool: InventoryKeywordPool; built: KeywordPool } {
   const built = buildKeywordPool(candidates, business, { limit: 300 });
   let store = reduceKeywordStore({ pool, choices }, { type: 'expired_pruned', now: at });
-  store = reduceKeywordStore(store, { type: 'pool_built', at, rows: built.rows, state: built.state });
+  // Rows the builder now excludes (for example cannibalising a planned article) are removed, not carried over.
+  const excludedKeys = built.excluded.map((x) => x.key).filter((k) => k.length > 0);
+  store = reduceKeywordStore(store, { type: 'pool_built', at, rows: built.rows, state: built.state, excludedKeys });
   return { pool: { ...store.pool, calls: pool.calls ?? [] }, built };
 }
 
@@ -202,6 +210,40 @@ export function rebuiltPool(pool: InventoryKeywordPool, candidates: readonly Key
 export function fillAttempts(job: Job): FillAttempt[] {
   const fill = job.payload.keywordFill as { attempts?: FillAttempt[] } | undefined;
   return Array.isArray(fill?.attempts) ? fill!.attempts : [];
+}
+
+/** Attempt nonces an owner command explicitly accepted as uncertain before trying again. */
+export function acknowledgedAttempts(job: Job): string[] {
+  const fill = job.payload.keywordFill as { acknowledged?: unknown } | undefined;
+  return Array.isArray(fill?.acknowledged) ? fill!.acknowledged.filter((x): x is string => typeof x === 'string') : [];
+}
+
+/**
+ * A lookup whose charge is uncertain: it started and never saved an answer (unless its own task is still running
+ * under a live lease, so it may yet save one), or it ended with an unknown outcome such as a timeout. Like the
+ * programme's "uncertain outcome" rule, such a lookup is never repeated without an explicit owner decision.
+ */
+export function uncertainAttempt(attempt: FillAttempt, job: Job, now: string): boolean {
+  if (!attempt.receivedAt) return !(job.state === 'running' && !!job.leaseExpiresAt && job.leaseExpiresAt > now);
+  return attempt.status === 'failed' && (attempt.diagnosticCategory === 'unknown' || attempt.diagnosticCategory === null || attempt.diagnosticCategory === undefined);
+}
+
+/** Every uncertain lookup for one business across all its fill tasks, less those an owner command acknowledged. */
+export function uncertainLookups(jobs: readonly Job[], now: string): { sha: string; nonce: string; jobId: string }[] {
+  const fills = jobs.filter(isKeywordFillJob);
+  const acknowledged = new Set(fills.flatMap(acknowledgedAttempts));
+  return fills.flatMap((j) => fillAttempts(j).filter((a) => uncertainAttempt(a, j, now) && !acknowledged.has(a.nonce)).map((a) => ({ sha: a.sha, nonce: a.nonce, jobId: j.id })));
+}
+
+/** Another fill task for the same business that is already doing the work (running under a live lease, marked active). */
+export function activeFill(jobs: readonly Job[], selfId: string, now: string): Job | null {
+  return jobs.find((j) => j.id !== selfId && isKeywordFillJob(j) && j.state === 'running' && !!j.leaseExpiresAt && j.leaseExpiresAt > now
+    && typeof (j.payload.keywordFill as { activeAt?: unknown }).activeAt === 'string') ?? null;
+}
+
+/** Calls a fill would have to pay for now (fresh cached answers spend nothing). */
+export function paidCallsNeeded(pool: InventoryKeywordPool | null | undefined, calls: readonly FillCall[], now: string): FillCall[] {
+  return calls.filter((c) => !cachedFor(pool, c, now));
 }
 export const isKeywordFillJob = (job: Job): boolean => job.kind === 'inventory' && typeof job.payload.keywordFill === 'object' && job.payload.keywordFill !== null;
 
@@ -219,5 +261,14 @@ export const FILL_MESSAGE = {
   unknown: 'An earlier keyword search did not save its result, so it is paused rather than paid for twice. Please ask us to check it.',
   allFailed: 'We could not fetch your keyword list just now. Nothing more will be tried automatically; please try again later.',
   done: 'Your keyword list is up to date.',
+  joined: 'Your keyword list was already being refreshed, so this request was joined to that one. Nothing was paid twice.',
+  stopped: 'This refresh of your keyword list stopped part way. Nothing was paid twice. Please try again later.',
   newer: 'Your keyword list was saved by a newer version of this service, so it was left as it is. Nothing was spent.',
+  unsupportedCountry: 'Keyword lists are not available for your business\'s country yet. Nothing was spent.',
 } as const;
+
+/** The plain owner message when the research allowance is too small for a whole refresh. */
+export function fillAllowanceMessage(needed: number, remaining: number): string {
+  const n = (x: number) => x.toLocaleString('en-GB');
+  return `There is not enough research allowance left this month to refresh your keyword list. It needs up to ${n(needed)} ${needed === 1 ? 'search' : 'searches'} and ${remaining <= 0 ? 'none are' : `${n(remaining)} ${remaining === 1 ? 'is' : 'are'}`} left. You can raise the allowance in Settings, or it renews at the start of next month. Nothing was spent.`;
+}

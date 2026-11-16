@@ -169,7 +169,7 @@ test('no research allowance left: nothing is called; a failed call is recorded o
   await e.tick('worker-1');
   const held = await fillJob(h, brand.id);
   assert.equal(held.state, 'blocked');
-  assert.match(held.error!, /Research allowance/);
+  assert.match(held.error!, /not enough research allowance left this month to refresh your keyword list/);
   assert.equal(kw.calls.length, 0);
 
   const h2 = harness();

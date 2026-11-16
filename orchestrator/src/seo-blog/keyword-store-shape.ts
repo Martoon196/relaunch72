@@ -127,8 +127,12 @@ export function emptyKeywordStore(locationCode: number, languageCode: string): K
 }
 
 export type KeywordStoreEvent =
-  /** A rebuilt pool. Rows not in the new pool but measured within the show window are carried over, so a thin rebuild never erases good data. */
-  | { readonly type: 'pool_built'; readonly at: string; readonly rows: readonly PoolRow[]; readonly state: 'measured' | 'thin' | 'no_data' }
+  /**
+   * A rebuilt pool. Rows not in the new pool but measured within the show window are carried over, so a thin rebuild
+   * never erases good data; rows the builder now excludes (`excludedKeys`: cannibalising, off-topic, covered, too hard
+   * and so on) are never carried over.
+   */
+  | { readonly type: 'pool_built'; readonly at: string; readonly rows: readonly PoolRow[]; readonly state: 'measured' | 'thin' | 'no_data'; readonly excludedKeys?: readonly string[] }
   | { readonly type: 'cost_recorded'; readonly entry: CostLedgerEntry }
   | { readonly type: 'dismissed'; readonly key: string; readonly phrase: string; readonly at: string; readonly by: string }
   | { readonly type: 'undismissed'; readonly key: string }
@@ -160,7 +164,8 @@ export function reduceKeywordStore(store: KeywordStore, event: KeywordStoreEvent
       const prior = new Map(store.pool.rows.map((r) => [r.key, r]));
       const fresh = event.rows.filter((r) => !dismissed.has(r.key)).map((r) => toStored(r, event.at, prior.get(r.key)));
       const freshKeys = new Set(fresh.map((r) => r.key));
-      const carried = store.pool.rows.filter((r) => !freshKeys.has(r.key) && !dismissed.has(r.key) && freshness(r.measuredAt, event.at) !== 'expired');
+      const excluded = new Set(event.excludedKeys ?? []);
+      const carried = store.pool.rows.filter((r) => !freshKeys.has(r.key) && !dismissed.has(r.key) && !excluded.has(r.key) && freshness(r.measuredAt, event.at) !== 'expired');
       const rows = [...fresh, ...carried.sort((a, b) => b.opportunity - a.opportunity || byKey(a, b))].slice(0, KEYWORD_POOL_ROW_CAP);
       return { ...store, pool: { ...store.pool, builtAt: event.at, rows, state: rows.length ? event.state : 'no_data' } };
     }

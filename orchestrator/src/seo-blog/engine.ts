@@ -84,12 +84,12 @@ interface PlanExecution {
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
 import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
-import { marketForLocale, supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
+import { supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
 import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, type PlanningCandidates, type ShortlistRow } from './keyword-planning.js';
-import { cachedFor, dismissedPhrases, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, poolInMarket, readablePool, readKeywordPool, rebuiltPool, runFillCall, storedPool, withCachedCall, withCost, type FillAttempt, type FillCall, type KeywordPoolRead } from './keyword-fill.js';
+import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllowanceMessage, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, KEYWORD_FILL_CALLS, paidCallsNeeded, poolInMarket, readablePool, readKeywordPool, rebuiltPool, runFillCall, storedPool, uncertainLookups, withCachedCall, withCost, type FillAttempt, type FillCall, type KeywordPoolRead } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
@@ -2224,20 +2224,46 @@ export class SeoBlogEngine {
   /** Whether keyword lists are offered by this engine (the switch is on and the store can hold them). */
   get keywordListsReady(): boolean { return Boolean(this.deps.keywordResearch && this.store.keywordBoundary); }
 
-  /** Fill or refresh the business's keyword list. Idempotent per command; one research attempt per supplier call at most, cached answers spend nothing. */
-  async requestKeywordFill(actor: Actor, brandId: string, input: { commandId: string }): Promise<Job> {
+  /** Research attempts left this month (Infinity when unlimited), from the same ceiling rule as every other check. */
+  private async searchAllowanceLeft(brand: Brand): Promise<number> {
+    const ceiling = monthlyCeiling(brand.settings, 'search_calls');
+    const used = await this.store.usageSince(brand.id, 'search_calls', monthStart(this.now()));
+    return ceiling <= 0 ? 0 : ceiling - used;
+  }
+
+  /**
+   * Fill or refresh the business's keyword list. Idempotent per command. A second request while a fill for the same
+   * business is queued or running is joined to it (never a second set of paid lookups). A lookup whose charge is
+   * uncertain is never repeated unless the owner explicitly accepts that (`acceptUncertain`). The allowance is
+   * checked for the whole refresh up front, so a refresh is never half paid for and then refused.
+   */
+  async requestKeywordFill(actor: Actor, brandId: string, input: { commandId: string; acceptUncertain?: boolean }): Promise<Job> {
     const brand = await this.brandFor(actor, brandId);
     if (!this.keywordListsReady) throw new SeoBlogError(409, FILL_MESSAGE.notAvailable, 'keywords_unavailable');
     if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
-    const prior = (await this.store.listJobs(brandId)).find((j) => j.idempotencyKey === `keywords:${input.commandId}`);
+    const jobs = await this.store.listJobs(brandId);
+    const prior = jobs.find((j) => j.idempotencyKey === `keywords:${input.commandId}`);
     if (prior) return prior;
+    const pending = jobs.find((j) => isKeywordFillJob(j) && ['queued', 'running'].includes(j.state));
+    if (pending) return pending;
+    const market = supportedMarketForLocale(brand.locale);
+    if (!market) throw new SeoBlogError(409, FILL_MESSAGE.unsupportedCountry, 'keywords_unsupported_country');
     if (!brand.website) throw new SeoBlogError(409, FILL_MESSAGE.needsWebsite, 'not_ready');
-    // A list saved by a newer release is never overwritten by this one.
-    if (readKeywordPool((await this.store.getInventory(brandId))?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
     const { profile, stale } = await this.currentFactsKey(brandId);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, FILL_MESSAGE.needsBrandDna, 'not_ready');
-    await this.requireBudget(brand, 'search_calls', 1);
-    return this.enqueue(brandId, 'inventory', `keywords:${input.commandId}`, { keywordFill: { commandId: input.commandId, attempts: [] }, requestedBy: actor.userId });
+    const inventory = await this.store.getInventory(brandId);
+    if (readKeywordPool(inventory?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
+    // The calls this refresh would pay for now (before the website is read the planned calls are not known: assume all).
+    const calls = inventory ? fillCalls(await this.keywordBusiness(brand, profile, inventory), market) : null;
+    const needed = calls ? paidCallsNeeded(storedPool(inventory, market), calls, this.now()) : null;
+    const uncertain = uncertainLookups(jobs, this.now()).filter((u) => !needed || needed.some((c) => c.sha === u.sha));
+    if (uncertain.length && !input.acceptUncertain) throw new SeoBlogError(409, FILL_MESSAGE.unknown, 'keywords_outcome_unknown');
+    const count = needed ? needed.length : KEYWORD_FILL_CALLS;
+    if (count > 0) {
+      const left = await this.searchAllowanceLeft(brand);
+      if (left < count) throw new SeoBlogError(409, fillAllowanceMessage(count, left), 'budget_exceeded');
+    }
+    return this.enqueue(brandId, 'inventory', `keywords:${input.commandId}`, { keywordFill: { commandId: input.commandId, attempts: [], ...(uncertain.length ? { acknowledged: uncertain.map((u) => u.nonce) } : {}) }, requestedBy: actor.userId });
   }
 
   /** What is stored, through the one shape check: absent, readable, damaged or newer-shaped (read only; a view never spends). Never throws on a bad list. */
@@ -2293,16 +2319,33 @@ export class SeoBlogEngine {
     if (!provider || !this.store.keywordBoundary) throw new SeoBlogError(409, FILL_MESSAGE.notAvailable, 'keywords_unavailable');
     const brand = await this.store.getBrand(claim.brandId);
     if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    const market = supportedMarketForLocale(brand.locale);
+    if (!market) throw new SeoBlogError(409, FILL_MESSAGE.unsupportedCountry, 'keywords_unsupported_country');
     if (!brand.website) throw new SeoBlogError(409, FILL_MESSAGE.needsWebsite, 'not_ready');
     const { profile, stale } = await this.currentFactsKey(brand.id);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, FILL_MESSAGE.needsBrandDna, 'not_ready');
     let inventory = await this.store.getInventory(brand.id);
     // Reading the website is free; the list is built against the current pages.
     if (!inventory || Date.parse(this.now()) - Date.parse(inventory.fetchedAt) > 24 * 3600_000) inventory = await this.refreshInventory(brand.id);
-    if (readKeywordPool(inventory.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
-    const market = marketForLocale(brand.locale);
     const business = await this.keywordBusiness(brand, profile, inventory);
     const calls = fillCalls(business, market);
+    // One fill per business at a time, and the whole refresh must fit in the allowance before anything is paid.
+    let joined = false;
+    await this.store.keywordBoundary({ brandId: brand.id, jobId: claim.id, now: this.now(), decide: (s) => {
+      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, FILL_MESSAGE.stopped, 'keywords_lease');
+      if (readKeywordPool(s.inventory?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
+      if (activeFill(s.jobs, s.job.id, this.now())) { joined = true; return { job: s.job, writeJob: false }; }
+      const pool = storedPool(s.inventory, market);
+      const ownAnswered = new Set(fillAttempts(s.job).filter((a) => a.receivedAt).map((a) => a.sha));
+      const needed = paidCallsNeeded(pool, calls, this.now()).filter((c) => !ownAnswered.has(c.sha));
+      const ceiling = s.brand.settings.budgets.searchCallsPerMonth;
+      const unlimited = monthlyCeiling(s.brand.settings, 'search_calls') === Number.POSITIVE_INFINITY;
+      if (needed.length && !unlimited && (ceiling <= 0 || s.usage.search_calls + needed.length > ceiling)) {
+        throw new SeoBlogError(409, fillAllowanceMessage(needed.length, Math.max(0, ceiling - s.usage.search_calls)), 'budget_exceeded');
+      }
+      return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), activeAt: this.now() } }, updatedAt: this.now() }, writeJob: true };
+    } });
+    if (joined) { await this.log(brand.id, 'system', 'keywords.joined', FILL_MESSAGE.joined, claim.id); return; }
     const candidates: KeywordCandidate[] = [];
     let answered = 0;
     for (const call of calls) {
@@ -2312,7 +2355,7 @@ export class SeoBlogEngine {
     if (calls.length && !answered) throw new SeoBlogError(409, FILL_MESSAGE.allFailed, 'keywords_unavailable');
     let phrases = 0;
     await this.store.keywordBoundary({ brandId: brand.id, jobId: claim.id, now: this.now(), decide: (s) => {
-      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, 'The keyword task lease ended.');
+      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, FILL_MESSAGE.stopped, 'keywords_lease');
       if (readKeywordPool(s.inventory?.keywordPool).status === 'newer') throw new SeoBlogError(409, FILL_MESSAGE.newer, 'keywords_newer');
       const rebuilt = rebuiltPool(storedPool(s.inventory, market), candidates, business, this.keywordChoices(s.brand) ?? { schema: 1, dismissed: [], chosen: [], ownerSeeds: [] }, this.now());
       phrases = rebuilt.pool.rows.length;
@@ -2325,21 +2368,28 @@ export class SeoBlogEngine {
     return current.state === 'running' && current.leaseOwner === claim.leaseOwner && current.attempts === claim.attempts;
   }
 
-  /** One supplier call: served from the cache when fresh; otherwise reserved, made once, and its receipt saved. Null when it failed. */
+  /**
+   * One supplier call: served from the cache when fresh; otherwise reserved, made once, and its receipt saved. Null
+   * when it failed. Attempts are checked per business and lookup, across every fill task: a lookup another task left
+   * with an uncertain charge is never repeated unless this task's owner command explicitly accepted that.
+   */
   private async keywordCall(claim: Job, provider: KeywordResearchProvider, call: FillCall, market: LabsMarket): Promise<readonly KeywordCandidate[] | null> {
     const boundary = this.store.keywordBoundary!.bind(this.store);
     let served: readonly KeywordCandidate[] | null | undefined;
     let attempt: FillAttempt | null = null;
     await boundary({ brandId: claim.brandId, jobId: claim.id, now: this.now(), decide: (s) => {
-      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, 'The keyword task lease ended.');
+      if (!s.job || !this.keywordOwns(s.job, claim)) throw new SeoBlogError(409, FILL_MESSAGE.stopped, 'keywords_lease');
       const hit = cachedFor(storedPool(s.inventory, market), call, this.now());
       if (hit) { served = hit.rows; return { job: s.job, writeJob: false }; }
       const attempts = fillAttempts(s.job);
       const prior = attempts.find((a) => a.sha === call.sha);
       if (prior && !prior.receivedAt) throw new SeoBlogError(409, FILL_MESSAGE.unknown, 'keywords_outcome_unknown');
       if (prior) { served = null; return { job: s.job, writeJob: false }; }
+      const elsewhere = uncertainLookups(s.jobs.filter((j) => j.id !== s.job!.id), this.now()).filter((u) => u.sha === call.sha && !acknowledgedAttempts(s.job!).includes(u.nonce));
+      if (elsewhere.length) throw new SeoBlogError(409, FILL_MESSAGE.unknown, 'keywords_outcome_unknown');
       const ceiling = s.brand.settings.budgets.searchCallsPerMonth;
-      if (ceiling <= 0 || s.usage.search_calls + 1 > ceiling) throw new BudgetExceededError('search_calls', s.usage.search_calls, ceiling, 1);
+      const unlimited = monthlyCeiling(s.brand.settings, 'search_calls') === Number.POSITIVE_INFINITY;
+      if (!unlimited && (ceiling <= 0 || s.usage.search_calls + 1 > ceiling)) throw new SeoBlogError(409, fillAllowanceMessage(1, Math.max(0, ceiling - s.usage.search_calls)), 'budget_exceeded');
       const now = this.now();
       attempt = { sha: call.sha, endpoint: call.endpoint, nonce: randomUUID(), startedAt: now };
       return { job: { ...s.job, payload: { ...s.job.payload, keywordFill: { ...(s.job.payload.keywordFill as object), attempts: [...attempts, attempt] } }, progress: 'Finding the searches that matter to your business.', updatedAt: now },
