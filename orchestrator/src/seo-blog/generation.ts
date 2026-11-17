@@ -23,7 +23,7 @@ import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSour
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
 import {decodeArticleOutput} from './article-output.js';
-import { chooseSearchFields, DESCRIPTION_OPTIONS, TITLE_OPTIONS, type SearchRequirements } from './search-requirements.js';
+import { chooseSearchFields, requirementsSha, type SearchRequirements } from './search-requirements.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = new Map<AnySchema, ValidateFunction>();
@@ -61,6 +61,8 @@ export async function callJson<T>(llm: LlmClient, input: {
   /** Private stage revision: complete facts with redundant prompt text removed. */
   readonly correctionUser?: string;
   readonly schema: AnySchema;
+  /** The schema a structured method run sends to the provider, when it differs from the one the answer is validated against. */
+  readonly outputSchema?: AnySchema;
   readonly maxTokens: number;
   readonly validate?: (value: T) => string[];
   /** Campaign proposals never silently pay for a format-correction call. */
@@ -106,7 +108,7 @@ export async function callJson<T>(llm: LlmClient, input: {
     try {
       response = await llm.complete({
         model, maxTokens: input.maxTokens, system: input.system ?? input.prompt.body, messages, thinking: false,
-        ...(methodRun?.structuredPlanning||methodRun?.structuredArticle?{outputSchema:input.schema as Record<string,unknown>}:{}),
+        ...(methodRun?.structuredPlanning||methodRun?.structuredArticle?{outputSchema:(input.outputSchema??input.schema) as Record<string,unknown>}:{}),
         meta: { stage: input.prompt.header.stage, attempt },
       });
     } catch (error) {
@@ -558,19 +560,28 @@ export const ARTICLE_SCHEMA: AnySchema = {
 
 /**
  * Article output contract, version 2 (prompt `seo-blog-article-v2.md`), used only when the brief has a measured target
- * phrase. The same contract as ARTICLE_SCHEMA plus two small, optional, bounded lists: alternative SEO titles and
- * meta descriptions for the server to choose among. Optional, so a missing list never rejects a draft (the writer's
- * main fields are kept); item bounds are loose on purpose, the server's choice applies the real limits.
+ * phrase and the engine is configured for keyword-first work. The same contract as ARTICLE_SCHEMA plus two lists of
+ * alternative SEO titles and meta descriptions for the server to choose among.
+ *
+ * The answer is validated against ARTICLE_SCHEMA_V2, where both lists are UNCONSTRAINED (any type, any length, any
+ * count, null or missing): a fault in a cosmetic list must never reject, and so re-buy, a paid article. The server's
+ * choice slices, type-checks and ignores bad entries. The native (method) grammar gets ARTICLE_SCHEMA_V2_NATIVE instead,
+ * where both are REQUIRED string arrays that may be empty, so the provider grammar gains no optional property.
  * ARTICLE_SCHEMA itself is unchanged, so every other brief is sent exactly what it always was.
  */
 export const ARTICLE_PROMPT_V2 = 'seo-blog-article-v2.md';
 export const ARTICLE_SCHEMA_V2: AnySchema = {
   ...(ARTICLE_SCHEMA as Record<string, unknown>),
-  properties: { ...(ARTICLE_SCHEMA as { properties: Record<string, unknown> }).properties,
-    title_options: { type: 'array', maxItems: TITLE_OPTIONS, items: { type: 'string', maxLength: 200 } },
-    description_options: { type: 'array', maxItems: DESCRIPTION_OPTIONS, items: { type: 'string', maxLength: 300 } },
-  },
+  properties: { ...(ARTICLE_SCHEMA as { properties: Record<string, unknown> }).properties, title_options: {}, description_options: {} },
 };
+export const ARTICLE_SCHEMA_V2_NATIVE: AnySchema = {
+  ...(ARTICLE_SCHEMA as Record<string, unknown>),
+  required: [...(ARTICLE_SCHEMA as { required: string[] }).required, 'title_options', 'description_options'],
+  properties: { ...(ARTICLE_SCHEMA as { properties: Record<string, unknown> }).properties,
+    title_options: { type: 'array', items: { type: 'string' } }, description_options: { type: 'array', items: { type: 'string' } } },
+};
+/** Section rewrites of an article written under prompt v2 carry the same block (prompt `seo-blog-section-v2.md`). */
+export const SECTION_PROMPT_V2 = 'seo-blog-section-v2.md';
 
 export interface WrittenArticle {
   readonly title: string;
@@ -583,9 +594,9 @@ export interface WrittenArticle {
   readonly faqs: { q: string; a: string }[];
   readonly image_alt: string;
   readonly public_source_ids: string[];
-  /** Contract v2 only. */
-  readonly title_options?: string[];
-  readonly description_options?: string[];
+  /** Contract v2 only: anything at all may arrive here; only the server's choice reads it. */
+  readonly title_options?: unknown;
+  readonly description_options?: unknown;
 }
 
 const LENGTH_HINT: Record<LengthPreference, string> = {
@@ -606,6 +617,8 @@ export async function writeArticle(llm: LlmClient, input: {
   readonly length: LengthPreference;
   /** Release 8: the brief's bounded search requirements (search-requirements.ts). Absent: the original prompt, contract and request, unchanged. */
   readonly search?: SearchRequirements | null;
+  /** With `search`: the business's own name and its other articles' Google titles, for the title choice. */
+  readonly searchContext?: { readonly brandName?: string | null; readonly takenTitles?: readonly string[] };
 }): Promise<JsonCallResult<WrittenArticle> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
   const search = input.search ?? null;
@@ -633,6 +646,7 @@ export async function writeArticle(llm: LlmClient, input: {
     prompt,
     system: prompt.body.replace('{{LENGTH}}', LENGTH_HINT[input.length]),
     schema: search ? ARTICLE_SCHEMA_V2 : ARTICLE_SCHEMA,
+    ...(search ? { outputSchema: ARTICLE_SCHEMA_V2_NATIVE } : {}),
     maxTokens: 16000,
     user,
     ...(structured?{correctionUser:[dataBlock('brand_profile',referencedProfile),brief,dataBlock('linkable_pages',linkable.map(l=>({url:l.url})))].join('\n\n')}:{}),
@@ -649,10 +663,12 @@ export async function writeArticle(llm: LlmClient, input: {
     },
   });
   if (!search) return { ...result, short };
-  // The server, not the model, picks the Google title and short description: first option that passes, else the main field.
+  // The server, not the model, settles the Google title and short description: the writer's own when it passes the
+  // checks, else the first option that does, else the writer's own. The prose (not the H1) is the evidence base.
   const v = result.value;
-  const proseText = [v.title, v.intro, ...v.sections.flatMap((x) => [x.heading, x.body]), v.conclusion, ...v.faqs.flatMap((f) => [f.q, f.a])].join('\n');
-  const chosen = chooseSearchFields({ seoTitle: v.seo_title, metaDescription: v.meta_description, titleOptions: v.title_options, descriptionOptions: v.description_options, proseText, requirements: search });
+  const proseText = [v.intro, ...v.sections.flatMap((x) => [x.heading, x.body]), v.conclusion, ...v.faqs.flatMap((f) => [f.q, f.a])].join('\n');
+  const chosen = chooseSearchFields({ seoTitle: v.seo_title, metaDescription: v.meta_description, titleOptions: v.title_options, descriptionOptions: v.description_options, proseText, requirements: search,
+    exclusions: input.profile.exclusions, brandName: input.searchContext?.brandName ?? null, takenTitles: input.searchContext?.takenTitles ?? [] });
   const { title_options: _t, description_options: _d, ...article } = v;
   return { value: { ...article, seo_title: chosen.seoTitle, meta_description: chosen.metaDescription }, record: { ...result.record, searchDraft: chosen.record }, short };
 }
@@ -664,17 +680,21 @@ export async function rewriteSection(llm: LlmClient, input: {
   readonly instruction: string;
   readonly sources: readonly ResearchSource[];
   readonly linkable: readonly { url: string; title: string | null }[];
+  /** Release 8: only for an article written under prompt v2, the block it was written with. Absent: the original section prompt and request, unchanged. */
+  readonly search?: SearchRequirements | null;
 }): Promise<JsonCallResult<{ heading: string; body: string }> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
+  const search = input.search ?? null;
   const allowedLinks = new Set([...input.linkable.map((l) => l.url), ...input.sources.map((s) => s.url)]);
   const result = await callJson<{ heading: string; body: string }>(llm, {
-    prompt: loadPrompt('seo-blog-section.md'),
+    prompt: loadPrompt(search ? SECTION_PROMPT_V2 : 'seo-blog-section.md'),
     schema: { type: 'object', required: ['heading', 'body'], properties: { heading: { type: 'string', minLength: 3, maxLength: 140 }, body: { type: 'string', minLength: 40, maxLength: 12000 } } },
     maxTokens: 6000,
     user: [
       dataBlock('brand_profile', profileForPrompt(input.profile)),
       dataBlock('article_outline', input.outline),
       dataBlock('section', input.section),
+      ...(search ? [dataBlock('search_requirements', search)] : []),
       dataBlock('owner_instruction', input.instruction.slice(0, 1000) || 'Improve clarity and usefulness without changing the facts.'),
       dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('linkable_pages', input.linkable.slice(0, 80)),
@@ -686,7 +706,7 @@ export async function rewriteSection(llm: LlmClient, input: {
       return problems;
     },
   });
-  return { ...result, short };
+  return search ? { ...result, record: { ...result.record, searchDraft: { schema: 1, requirementsSha: requirementsSha(search), requirements: search } }, short } : { ...result, short };
 }
 
 /** Replace short prompt ids ([src:S3]) with durable source ids. */

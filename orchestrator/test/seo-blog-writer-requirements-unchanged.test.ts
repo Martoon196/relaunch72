@@ -2,7 +2,8 @@
  * Release 8 ("Writer gets the requirements"), the unchanged path. A brief with no measured target phrase (every
  * article in production while SEO_BLOG_KEYWORD_POOL is off) is written exactly as on d4e5527: the same prompt file,
  * version and hash, the same request byte for byte (plain and method-wrapped), and the same stored version shape.
- * The hashes below were recorded on d4e5527 with these fixtures before any release 8 change. No live calls.
+ * The hashes below were recorded on d4e5527 with these fixtures before any release 8 change (the section-rewrite hash
+ * was added in the review fix round, recorded the same way on d4e5527). No live calls.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -68,6 +69,15 @@ test('no measured target: the whole writing request and the stored version are b
   const { createdAt: _c, engine, promotionPack: _p, ...rest } = version;
   // contentSha follows the body's random section ids, so 64-hex digests are normalised too; the body itself is compared.
   assert.equal(hash(JSON.parse(JSON.stringify({ ...rest, engine: { ...engine, at: 'AT' } }).replace(/[a-f0-9]{64}/g, 'H'))), 'b9559d070554680bcb6d95aa3a7b8da4612f9fec9cf124d87de752e714626da4');
+  // A one-section rewrite of that article: the original section prompt and the whole request, byte for byte.
+  const sectionSeen: unknown[] = [];
+  h.llm.complete = async (req: LlmRequest) => { if (req.meta?.stage === 'SEO_BLOG_SECTION') sectionSeen.push(requestOf(req)); return inner(req); };
+  const sectioned = await h.engine.regenerateSection(OWNER, brand.id, article.id, version.id, version.body.sections[0]!.id, 'Make it tighter.');
+  assert.equal(sectionSeen.length, 1);
+  assert.equal((sectionSeen[0] as { system: string }).system, loadPrompt('seo-blog-section.md').body);
+  assert.equal(sectioned.generation!.promptVersion, `seo-blog-section.md@${loadPrompt('seo-blog-section.md').header.version}#${loadPrompt('seo-blog-section.md').sha256.slice(0, 12)}`);
+  assert.deepEqual(Object.keys(sectioned.generation!).sort(), ['mode', 'model', 'promptVersion', 'tokensIn', 'tokensOut']);
+  assert.equal(hash(JSON.parse(JSON.stringify(sectionSeen).replace(/[a-f0-9]{64}/g, 'H'))), '9b588b2a6dbbdc768f063e5853975b6c7b6a3d35dc4bea2349e7186e4b82172c');
 });
 
 test('no measured target, method-wrapped (structured article): the request is byte for byte that of d4e5527', async () => {

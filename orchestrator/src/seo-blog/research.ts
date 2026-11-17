@@ -293,6 +293,7 @@ export async function researchQueries(input: {
   // receipts are available, so earlier pages are not fetched on every poll.
   for(const {query,hits} of batches) {
     let kept = 0;
+    let outlined = 0;
     // Prefer primary sources first within each query.
     const ordered = [...hits].sort((a, b) => Number(isPrimarySource(b.url, input.brandWebsite)) - Number(isPrimarySource(a.url, input.brandWebsite)));
     for (const hit of ordered) {
@@ -318,6 +319,10 @@ export async function researchQueries(input: {
         const text = (parsed ? parsed.text : rawText).replace(/\u0000/gu,' ');
         const passage = supportingPassage(text, query);
         if (passage.length < 60) { notes.push(`${key} had no usable text.`); continue; }
+        // Keyword-first only: the first readable pages of EACH search keep their outline (same bytes, nothing fetched).
+        const outline = input.captureOutlines && parsed && outlined < SEARCH_CAPS.outlinePerQuery && sources.filter((x) => x.outline).length < SEARCH_CAPS.outlinePages
+          ? pageOutline(rawText.replace(/\u0000/gu, ' '), SEARCH_CAPS.outlineHeadings, SEARCH_CAPS.outlineHeadingChars, SEARCH_CAPS.outlineMaxHtml) : null;
+        if (outline) outlined++;
         sources.push({
           id: randomUUID(),
           url: key,
@@ -330,8 +335,7 @@ export async function researchQueries(input: {
           provider: input.search.id,
           primary: isPrimarySource(key, input.brandWebsite),
           query,
-          ...(input.captureOutlines && parsed && sources.filter((x) => x.outline).length < SEARCH_CAPS.outlinePages
-            ? { outline: pageOutline(rawText.replace(/\u0000/gu, ' '), SEARCH_CAPS.outlineHeadings, SEARCH_CAPS.outlineHeadingChars) } : {}),
+          ...(outline ? { outline } : {}),
         });
         kept++;
       } catch (error) {

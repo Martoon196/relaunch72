@@ -474,8 +474,10 @@ export interface GenerationRecord {
   readonly promptVersion: string;
   readonly tokensIn: number;
   readonly tokensOut: number;
-  /** Article writing with search requirements only (release 8): which title and description option was kept, and why. Internal. */
+  /** Writing with search requirements only (release 8): the exact block given, and (articles) which title and description were kept and why. Internal. */
   readonly searchDraft?: import('./search-requirements.js').SearchDraftRecord;
+  /** A brief with a measured target written with the original writer instead (release 8), and why. Internal. */
+  readonly searchFallback?: { readonly schema: 1; readonly reason: import('./search-requirements.js').SearchFallbackReason };
 }
 
 // ─── Articles ────────────────────────────────────────────────────────────────

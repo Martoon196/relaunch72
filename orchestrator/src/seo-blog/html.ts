@@ -167,24 +167,96 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
 }
 
 /**
- * A research page's outline: the text of its H2 and H3 headings inside the readable region (the same region
- * `parseHtmlPage` reads text from) and its word count. Bounded: at most `maxHeadings` headings, each kept whole only
- * when it is at most `maxChars` characters (a longer one is left out, never cut), control characters removed.
- * Used only for pages research already fetched; it reads the same bytes and fetches nothing.
+ * A research page's outline: the text of its H2 and H3 headings inside the page's own content, and its word count.
+ *
+ * The content is the first `<main>`; with no `<main>`, the `<article>` with the most text (never the first one, which
+ * is often a teaser card); with neither, or when that region has under 150 words, there is no outline (null) rather
+ * than a guess that would pick up sidebar, banner and cookie headings. Bounded: a page over `maxHtml` characters keeps
+ * no outline; at most `maxHeadings` headings, each kept whole only when it is at most `maxChars` characters (never cut);
+ * a heading must close within 2,000 characters. The scan is linear (indexOf only, no backtracking regular expression),
+ * so a hostile page of unclosed tags costs milliseconds. Invisible characters are removed, not turned into spaces.
+ * Used only for pages research already fetched; it reads the same bytes and fetches nothing. `parseHtmlPage` is
+ * unchanged.
  */
-export function pageOutline(html: string, maxHeadings = 12, maxChars = 100): { headings: string[]; words: number } {
-  const bodyHtml = /<body\b[\s\S]*<\/body>/i.exec(html)?.[0] ?? html;
-  const mainHtml = /<(main|article)\b[\s\S]*?<\/\1>/i.exec(bodyHtml)?.[0]
-    ?? bodyHtml.replace(/<(nav|header|footer)\b[\s\S]*?<\/\1>/gi, ' ');
-  const headings: string[] = [];
-  const headingRe = /<h([23])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi;
-  let hm: RegExpExecArray | null;
-  while ((hm = headingRe.exec(mainHtml)) !== null && headings.length < maxHeadings) {
-    const text = stripTags(hm[2] ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim();
-    if (text && text.length <= maxChars && !headings.includes(text)) headings.push(text);
+export function pageOutline(html: string, maxHeadings = 12, maxChars = 100, maxHtml = 1_000_000): { headings: string[]; words: number } | null {
+  if (typeof html !== 'string' || html.length > maxHtml) return null;
+  const lower = html.toLowerCase();
+  const region = (tag: string, from: number): [number, number] | null => {
+    const open = lower.indexOf(`<${tag}`, from);
+    if (open < 0) return null;
+    const after = lower.charCodeAt(open + tag.length + 1);
+    // "<main" must be the whole tag name ("<mainly" is not it).
+    if (!(after === 62 || after === 32 || after === 9 || after === 10 || after === 13 || after === 47)) return region(tag, open + 1);
+    const gt = lower.indexOf('>', open);
+    if (gt < 0) return null;
+    const close = lower.indexOf(`</${tag}`, gt);
+    return close < 0 ? null : [gt + 1, close];
+  };
+  let span = region('main', 0);
+  if (!span) {
+    let best: [number, number] | null = null, bestLen = -1;
+    for (let at = 0, n = 0; n < 200; n++) {
+      const r = region('article', at);
+      if (!r) break;
+      const len = plainText(html.slice(r[0], r[1])).length;
+      if (len > bestLen) { best = r; bestLen = len; }
+      at = r[1] + 1;
+    }
+    span = best;
   }
-  const words = Math.min(200_000, (stripTags(mainHtml).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length);
+  if (!span) return null;
+  const main = html.slice(span[0], span[1]);
+  const text = plainText(main);
+  const words = Math.min(200_000, (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length);
+  if (words < 150) return null;
+  const lowerMain = main.toLowerCase();
+  const headings: string[] = [];
+  // Next-occurrence positions are cached and every look-ahead is windowed, so no step rescans the rest of the page.
+  let next2 = lowerMain.indexOf('<h2'), next3 = lowerMain.indexOf('<h3');
+  for (let at = 0; headings.length < maxHeadings;) {
+    if (next2 >= 0 && next2 < at) next2 = lowerMain.indexOf('<h2', at);
+    if (next3 >= 0 && next3 < at) next3 = lowerMain.indexOf('<h3', at);
+    const open = next2 < 0 ? next3 : next3 < 0 ? next2 : Math.min(next2, next3);
+    if (open < 0) break;
+    const level = lowerMain[open + 2];
+    const gtAt = lowerMain.slice(open, open + 500).indexOf('>');
+    if (gtAt < 0) { at = open + 3; continue; }
+    const gt = open + gtAt;
+    const closeAt = lowerMain.slice(gt, gt + 2_000).indexOf(`</h${level}`);
+    if (closeAt < 0) { at = gt + 1; continue; }
+    const close = gt + closeAt;
+    const t = plainText(main.slice(gt + 1, close)).replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Cs}]/gu, '').replace(/[\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim();
+    if (t && t.length <= maxChars && !headings.includes(t)) headings.push(t);
+    at = close + 4;
+  }
   return { headings, words };
+}
+
+/** Text of an HTML fragment by a single linear scan: tags dropped, script/style/template/svg/noscript content skipped, entities decoded. */
+function plainText(fragment: string): string {
+  const lower = fragment.toLowerCase();
+  let out = '';
+  let i = 0;
+  while (i < fragment.length) {
+    const lt = fragment.indexOf('<', i);
+    if (lt < 0) { out += fragment.slice(i); break; }
+    out += fragment.slice(i, lt);
+    const skip = /^<(script|style|template|svg|noscript|iframe)\b/.exec(lower.slice(lt, lt + 12));
+    if (skip) {
+      const end = lower.indexOf(`</${skip[1]}`, lt);
+      if (end < 0) break;
+      const gt = lower.indexOf('>', end);
+      i = gt < 0 ? fragment.length : gt + 1;
+      out += ' ';
+      continue;
+    }
+    if (lower.startsWith('<!--', lt)) { const end = lower.indexOf('-->', lt + 4); i = end < 0 ? fragment.length : end + 3; out += ' '; continue; }
+    const gt = fragment.indexOf('>', lt);
+    if (gt < 0) break;
+    i = gt + 1;
+    out += ' ';
+  }
+  return decodeEntities(out.replace(/&(?:shy|zwj|zwnj|lrm|rlm);/gi, '')).replace(/\s+/g, ' ').trim();
 }
 
 function validDate(value: string | null): string | null {

@@ -91,7 +91,7 @@ import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
 import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, type PlanningCandidates, type ShortlistRow } from './keyword-planning.js';
-import { hasSearchTarget, searchRequirements, topResultPages } from './search-requirements.js';
+import { claimsSearchTarget, hasSearchTarget, searchRequirements, storedRequirements, topResultPages, type SearchFallbackReason, type SearchRequirements } from './search-requirements.js';
 import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllowanceMessage, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, KEYWORD_FILL_CALLS, paidCallsNeeded, poolInMarket, readablePool, readKeywordPool, rebuiltPool, runFillCall, storedPool, uncertainLookups, withCachedCall, withCost, type FillAttempt, type FillCall, type KeywordPoolRead } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
@@ -167,6 +167,11 @@ export interface EngineDeps {
   readonly campaignQueue?: SeoBlogCampaignQueueService;
   /** Creative Studio worker jobs (typed-brief images, durable renders). Absent: such jobs are held, never run by the article paths. */
   readonly creativeJobs?: { handles(job: Job): boolean; run(job: Job): Promise<Job> };
+  /**
+   * Internal structured events (never shown to an owner). Today only "a measured brief was written with the original
+   * writer". Default: one JSON line on stderr.
+   */
+  readonly internalLog?: (event: { readonly event: string; readonly brandId: string; readonly subjectId: string; readonly reason: string }) => void;
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
@@ -1501,6 +1506,61 @@ export class SeoBlogEngine {
     return this.enqueue(brandId, 'write', `rewrite:${articleId}:${expectedVersionId}`, { briefId: article.briefId, fromVersionId: expectedVersionId, requestedBy: actor.userId });
   }
 
+  /**
+   * The writer's search requirements for a brief, or why a brief that claims a measured target is written with the
+   * original writer. Never throws: any fault falls back to the original writer, so a damaged record writes normally.
+   */
+  private async searchFor(brand: Brand, brief: ArticleBrief, profile: BrandProfile, linkable: readonly { url: string }[]): Promise<{ search: SearchRequirements | null; fallback: SearchFallbackReason | null }> {
+    if (!claimsSearchTarget(brief)) return { search: null, fallback: null };
+    let search: SearchRequirements | null = null;
+    let fallback: SearchFallbackReason | null = null;
+    try {
+      if (!this.keywordListsReady) fallback = 'switch_off';
+      else if (!hasSearchTarget(brief)) fallback = 'damaged';
+      else {
+        const plan = await this.store.getPlan(brand.id, brief.planId);
+        search = searchRequirements({ brief, pages: topResultPages(plan?.sources ?? [], brief.seo!.primary.phrase, brand.website), length: brand.settings.lengthPreference, linkable,
+          exclusions: profile.exclusions, brandWebsite: brand.website });
+        if (!search) fallback = 'phrase_dropped';
+      }
+    } catch { search = null; fallback = 'error'; }
+    if (fallback) this.internalEvent({ event: 'seo_blog.search_requirements.fallback', brandId: brand.id, subjectId: brief.id, reason: fallback });
+    return { search, fallback };
+  }
+
+  private internalEvent(e: { readonly event: string; readonly brandId: string; readonly subjectId: string; readonly reason: string }): void {
+    try {
+      if (this.deps.internalLog) this.deps.internalLog(e);
+      else process.stderr.write(`${JSON.stringify({ schemaVersion: 1, level: 'info', at: this.now(), ...e })}\n`);
+    } catch { /* An internal note must never stop writing. */ }
+  }
+
+  /** The current Google titles of the business's other articles (a chosen title must not repeat one). */
+  private async takenSeoTitles(brandId: string, articleId: string): Promise<string[]> {
+    const titles: string[] = [];
+    for (const a of await this.store.listArticles(brandId)) {
+      if (a.id === articleId || !a.currentVersionId) continue;
+      const v = await this.store.getVersion(brandId, a.currentVersionId).catch(() => null);
+      if (v && typeof v.body.seoTitle === 'string' && v.body.seoTitle.trim()) titles.push(v.body.seoTitle);
+    }
+    return titles;
+  }
+
+  /**
+   * The block an article was written with, for a section rewrite: from the most recent model-written version of it
+   * (an owner edit records no generation). Only an article written under prompt v2, and only while keyword-first work
+   * is configured; otherwise null and the original section prompt is used.
+   */
+  private async writtenRequirements(brandId: string, articleId: string, current: ArticleVersion): Promise<SearchRequirements | null> {
+    if (!this.keywordListsReady) return null;
+    const versions = [...await this.store.listVersions(brandId, articleId)].sort((a, b) => b.number - a.number);
+    for (const v of [current, ...versions.filter((x) => x.id !== current.id && x.number < current.number)]) {
+      if (!v.generation) continue;
+      return storedRequirements(v.generation.searchDraft?.requirements);
+    }
+    return null;
+  }
+
   private async sourcesForBrief(brandId: string, brief: ArticleBrief): Promise<ResearchSource[]> {
     const plan = await this.store.getPlan(brandId, brief.planId);
     const all = plan?.sources ?? [];
@@ -1578,15 +1638,15 @@ export class SeoBlogEngine {
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
     const sources = await this.sourcesForBrief(brandId, brief);
     const linkable = await this.linkable(brandId);
-    // A brief with a measured target phrase is written to the search standard (prompt v2); every other brief is sent
-    // exactly as before, with no `search` input at all.
-    const search = hasSearchTarget(brief)
-      ? searchRequirements({ brief, pages: topResultPages((await this.store.getPlan(brandId, brief.planId))?.sources ?? [], brief.seo!.primary.phrase),
-        length: brand.settings.lengthPreference, linkable, exclusions: profile.exclusions })
-      : null;
+    // A brief with a measured target phrase is written to the search standard (prompt v2) only while the engine is
+    // configured for keyword-first work (the planner's own condition); every other brief is sent exactly as before, with
+    // no `search` input at all. A measured brief that falls back is logged internally and stamped on its record.
+    const { search, fallback } = await this.searchFor(brand, brief, profile, linkable);
     let written;
     try {
-      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference, ...(search ? { search } : {}) });
+      const searchContext = search ? { brandName: brand.name, takenTitles: await this.takenSeoTitles(brandId, article.id) } : null;
+      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference, ...(search ? { search, searchContext: searchContext! } : {}) });
+      if (fallback) written = { ...written, record: { ...written.record, searchFallback: { schema: 1 as const, reason: fallback } } };
     } catch (error) {
       await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: (error as Error).message.slice(0, 300) }).catch(() => undefined);
       throw error;
@@ -2520,9 +2580,12 @@ export class SeoBlogEngine {
     if (index < 0) throw new SeoBlogError(404, 'That section was not found.');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.section);
     const sources = await this.sourcesForBrief(brandId, brief);
+    // An article written under prompt v2 keeps its search requirements and rules on a section rewrite; any other keeps
+    // the original section prompt and request byte for byte.
+    const search = await this.writtenRequirements(brandId, articleId, version).catch(() => null);
     const result = await rewriteSection(await this.methodLlm(brand,profile,'revision','article:'+articleId,sources,version.generation?.methodReceiptId??null), {
       profile, outline: version.body.sections.map((s) => s.heading), section: version.body.sections[index]!,
-      instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId),
+      instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId), ...(search ? { search } : {}),
     });
     await this.recordGeneration(brandId, result.record, `section:${articleId}`);
     // Only the target section changes; every other section is carried over byte-for-byte.

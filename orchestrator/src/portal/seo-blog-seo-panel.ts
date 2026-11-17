@@ -10,6 +10,7 @@
 import type { Article, ArticleBrief, ArticleVersion, Brand, Destination } from '../seo-blog/types.js';
 import { SEO_GROUP_LABELS, seoNextSteps, seoScore, type SeoCheck, type SeoFix, type SeoScore } from '../seo-blog/seo-score.js';
 import { SEO_BLOG_BASE } from './seo-blog-view.js';
+import { hasSearchTarget } from '../seo-blog/search-requirements.js';
 import { escapeHtml as e } from './ui.js';
 
 export const SEO_PANEL_START = '<!--r72-seo-panel-->';
@@ -44,7 +45,9 @@ export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): S
   const ranHere = Boolean(d.article.checks && d.article.checks.versionId === v.id);
   const checkIssues = ranHere ? d.article.checks!.issues : null;
   const staleCheckIssues = !ranHere && d.article.checks ? d.article.checks.issues : null;
-  const s = seoScore(d.articleBrief ?? null, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
+  // A brief with a measured target is scored against the phrase the writer was given, not the question; others as before.
+  const brief = d.articleBrief && hasSearchTarget(d.articleBrief) ? { ...d.articleBrief, targetQuery: d.articleBrief.seo!.primary.phrase } : d.articleBrief ?? null;
+  const s = seoScore(brief, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
   scored.set(v, { b, d, s });
   return s;
 }

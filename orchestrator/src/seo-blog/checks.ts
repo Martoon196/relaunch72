@@ -27,8 +27,8 @@ export interface CheckContext {
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const PROMISE = /(?<!\b(?:no|not|never|without|cannot|can't|isn't)\s(?:a\s)?)\b(guarantee[sd]?|risk[- ]free|no[- ]risk|can't lose|cannot lose|you will (?:make|earn|double|profit)|will double|100% (?:safe|certain|success)|instant (?:profit|returns)|passive income for life|rank (?:#?1|first) on google)\b/i;
 const REGULATORY = /\b(tax|stamp duty|sdlt|lbtt|land transaction tax|capital gains|income tax|vat|hmrc|fca|regulat\w*|legislation|statut\w*|licen[cs]\w*|planning permission|permitted development|article 4|renters'? rights|section 21|section 8|deposit protection|epc|minimum energy|mortgage rates?|interest rates?|base rate|act \d{4})\b/i;
-const ASSERTIVE = /\b(must|required|requirement|illegal|unlawful|legal(?:ly)?|allowed|exempt|liable|penalt\w*|fine[sd]?|banned|mandatory|from \d{1,2} \w+ \d{4}|as of \d{4})\b/i;
-const PROOF = /\b(case stud(?:y|ies)|testimonials?|our clients (?:have|achieved|made)|award[- ]winning|trusted by|rated \d|\d+ (?:happy|satisfied) (?:clients|customers|investors)|five[- ]star|5[- ]star)\b/i;
+export const ASSERTIVE = /\b(must|required|requirement|illegal|unlawful|legal(?:ly)?|allowed|exempt|liable|penalt\w*|fine[sd]?|banned|mandatory|from \d{1,2} \w+ \d{4}|as of \d{4})\b/i;
+export const PROOF = /\b(case stud(?:y|ies)|testimonials?|our clients (?:have|achieved|made)|award[- ]winning|trusted by|rated \d|\d+ (?:happy|satisfied) (?:clients|customers|investors)|five[- ]star|5[- ]star)\b/i;
 const MARKER = /\[src:([A-Za-z0-9-]{1,64})\]/g;
 
 interface Located { readonly text: string; readonly where: string }
@@ -65,7 +65,7 @@ function digitsOf(figure: string): string {
   return figure.replace(/[^\d.]/g, '').replace(/\.0+$/, '').replace(/^0+(?=\d)/, '');
 }
 
-function figureInText(figure: string, text: string): boolean {
+export function figureInText(figure: string, text: string): boolean {
   const wanted = digitsOf(figure);
   if (!wanted) return true;
   const haystack = text.replace(/,(?=\d{3})/g, '');
