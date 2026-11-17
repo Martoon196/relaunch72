@@ -43,13 +43,15 @@ interface MhpMountDependencies {
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
   bookLeads?: NonNullable<MhpMarketingWorkspaceDependencies['bookLeads']> & NonNullable<MhpGrowthRouterDependencies['bookLeads']>;
   emailHealth?: MhpMarketingWorkspaceDependencies['emailHealth'];
-  ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
+  ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>
+    & Partial<Pick<MhpOwnerEmailService, 'schedulePlan' | 'schedule' | 'unsentPlan' | 'changeUnsent'>>;
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
   eventPhone?: { reminders?: Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>
     & Partial<Pick<PgMhpEventPhonePublic, 'whatsappNumber' | 'whatsappStatus' | 'chooseWhatsApp' | 'withdrawWhatsApp' | 'fromSignup'>>;
     owner?: Pick<MhpEventPhoneOwner, 'programmes' | 'smsTexts' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control'>;
     whatsappOwner?: Pick<MhpEventWhatsAppOwner, 'programmes' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control' | 'connect'>; campaign: string };
-  sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'>>;
+  sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'
+    | 'startPlan' | 'start' | 'pauseAll' | 'stopAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace'>>;
   readiness(): Promise<readonly string[]>;
 }
 
