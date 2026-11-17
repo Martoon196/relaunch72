@@ -1,3 +1,4 @@
+import { bookInterestRegistrants } from './book-interest.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -259,14 +260,16 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     if (path === '/hq/registrants') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
       if (!deps.growth.listRegistrants) throw new HttpError(503, 'Registrants are temporarily unavailable.');
-      const registrants = await deps.growth.listRegistrants(token);
+      const bookOnly = url.searchParams.get('audience') === 'book';
+      const allRegistrants = await deps.growth.listRegistrants(token);
+      const registrants = bookOnly ? bookInterestRegistrants(allRegistrants) : allRegistrants;
       if (url.searchParams.get('format') === 'csv') {
         const csv = registrantsCsv(registrants);
-        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="mhp-registrants.csv"',
+        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${bookOnly ? 'mhp-before-you-buy-interest' : 'mhp-registrants'}.csv"`,
           'cache-control': 'no-store', 'content-length': String(Buffer.byteLength(csv)), 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff' });
         res.end(csv); return true;
       }
-      send(res, 200, hqRegistrantsPage(registrants)); return true;
+      send(res, 200, hqRegistrantsPage(registrants, bookOnly)); return true;
     }
     if (path === '/hq/course') {
       if (method === 'GET') {
