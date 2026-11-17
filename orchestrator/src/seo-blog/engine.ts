@@ -85,7 +85,7 @@ interface PlanExecution {
 }
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
-import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
+import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE } from './engine-stamp.js';
 import { supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
@@ -1169,13 +1169,18 @@ export class SeoBlogEngine {
       const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
       const hold=s.brand.settings.programme?.researchHold??legacy;
       const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
-      if(hold && !explicit && !(hold.jobId===current.id && run.modelReceipt)) {
+      // The owner's Retry on this same task, held only because its numbers lookup failed (strict setting): it resumes
+      // this task, for an autopilot plan as for an owner-requested one. It repeats only that lookup.
+      const own=s.brand.settings.programme?.researchHold;
+      const numbersResume=!explicit&&!!own&&own.jobId===current.id&&current.payload.resumeHoldId===own.logicalRunId&&current.payload.numbersRetry===true&&run.hold==='engine_incomplete'&&!run.modelStart;
+      if(hold && !explicit && !numbersResume && !(hold.jobId===current.id && run.modelReceipt)) {
         const held=this.programmeHeld(s,withRun,run,'research_held',legacy?'An older planning task needs review. No historical supplier code or charge was inferred. A managing owner can explicitly resume with a new intent.':'Research is held. A managing owner can review and explicitly resume with a new intent.');
         return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
       }
       if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt&&!(a.supplierTask&&this.deps.search.readTask)) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
       return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
-        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}:{})};
+        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}
+          :numbersResume?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null}}}:{})};
     });
     if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
     const run=programmeRun(ready)!;
@@ -1250,7 +1255,19 @@ export class SeoBlogEngine {
         }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
-        if(error instanceof EngineIncompleteError) return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        if(error instanceof EngineIncompleteError) {
+          // Strict setting, autopilot plan, one failed numbers lookup: check it once more by itself (nobody may be
+          // watching Topics), within the research allowance, reusing every saved search. Never twice, never for an
+          // owner-requested plan (the owner's Retry does that), never for a lookup whose outcome is unknown.
+          const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
+          if(this.deps.requireFullEngine===true&&error.gap==='numbers'&&authority.origin!=='manual'&&!latest.numbersRecheckAt&&!latest.modelStart&&!latest.modelReceipt&&latest.metricsWarning
+            &&!latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)&&ceiling>0&&s.usage.search_calls+1<=ceiling) {
+            const now=this.now();
+            return {job:{...current,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+NUMBERS_RECHECK_DELAY_MS).toISOString(),
+              payload:{...current.payload,programme:{...latest,metricsWarning:undefined,numbersRecheckAt:now}},error:null,progress:NUMBERS_RECHECK_MESSAGE,updatedAt:now},writeJob:true};
+          }
+          return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        }
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
       });
     }
@@ -3453,7 +3470,7 @@ export class SeoBlogEngine {
       // Held only because the search-numbers lookup failed or was skipped for allowance (strict setting): Retry repeats
       // that one lookup, within the allowance, and reuses every saved search.
       const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
-      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined}}:{})},state:'queued',runAfter:this.now(),error:null,
+      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})},state:'queued',runAfter:this.now(),error:null,
         progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');

@@ -69,6 +69,14 @@ export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
   planned_without_numbers: 'This article was planned without checking how many people search for it, so it is paused rather than written without that. Nothing has been spent. Please ask us to check it.',
 };
 
+/**
+ * Strict setting, autopilot plans only: one failed search-numbers lookup is checked once more by itself after this
+ * delay (nobody may be watching Topics). A second failure holds with `ENGINE_GAP_MESSAGE.numbers`.
+ */
+export const NUMBERS_RECHECK_DELAY_MS = 30 * 60_000;
+/** What the owner reads while that one re-check is queued. */
+export const NUMBERS_RECHECK_MESSAGE = 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. We will check once more by ourselves in about half an hour, reusing your saved searches. Nothing has been spent on writing.';
+
 /** Thrown when the strict setting stops planning or writing. A 409, so jobs hold (they are not retried automatically). */
 export class EngineIncompleteError extends SeoBlogError {
   constructor(readonly gap: EngineGap) {
