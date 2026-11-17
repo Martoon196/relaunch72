@@ -10,7 +10,9 @@
  * A GATE, NOT A TARGET. The score is a bar to pass, not a number to push as high as it will go. Use seoGate() on a
  * score made in strict `targetMode`: an automatic step may keep a rewrite only when it passes, and then it stops.
  * The gate is NECESSARY, NOT SUFFICIENT: a separate meaning check is required before any automatic rewrite is
- * accepted, because fluent empty filler passes this score (the tests keep two such articles as the known limit).
+ * accepted, because fluent empty filler passes this score. What a word count cannot decide is listed, with an example
+ * and the reason, in KNOWN_LIMITS (test/seo-score-review5-rubbish.ts, mirrored in docs/seo-blog-engine.md): that list
+ * is the meaning check's to-do list, and the tests keep it exact.
  * Above the bar the last points come from small placement details, and chasing them makes writing worse. Good
  * natural writing scores in the mid-90s without being bent; the caps below keep the rubbish they can see (repeats,
  * stuffing, text that is not sentences) at 70 or below.
@@ -72,18 +74,22 @@
  *   one: at most 59;
  * - heavy repetition (over 25% of sentences and list items repeat an earlier one word for word or with a word or two
  *   changed, or over 25% of the article's five-word runs came earlier, or a very small vocabulary): at most 40. A
- *   short list item counts when it is a repeat (a pasted list of three-word bullets is one), never otherwise, so
- *   different short items cannot dilute the measure; a short sentence of prose is never a repeat ("Yes.");
+ *   list item counts when it is a repeat (a pasted list of bullets is one), never otherwise, so different items
+ *   cannot dilute the measure; a one-word sentence of prose is never a repeat ("Yes."), a two- or three-word one from
+ *   its sixth time ("Stir well." four times is ordinary); a sub-heading or question said again is a repeat;
  * - text that is not built of sentences (under 28% of its words are the small joining words such as "the", "of",
- *   "is"; ordinary prose is 40% to 55%): at most 40;
+ *   "is", read also without list items of under ten words; ordinary prose is 40% to 55%): at most 40;
  * - a stuffed search phrase (six uses or more, in every close form and every place, taking over 3.5% of the words;
  *   good articles measure 0% to 2.3%): at most 60. Over 2.5% the gate refuses, though the score is only marked down a
- *   little. Four uses are never too many, and a sub-heading or question that asks a question on record never counts;
- * - much of the article in short list items (over 12% of its words in items of up to three words, or over 60% in
- *   items of four to nine words, each measured on a sliding weight; good articles measure up to 6% and 28%, a
- *   thorough checklist post about 45% of the second kind): at most 70;
- * - run-on text (over 20% of the prose words in "sentences" of over 50 words: keyword lines run together; good
- *   articles measure 0%, one quoting a regulation 6%): at most 70;
+ *   little. Four uses are never too many; one sub-heading or question for each question on record that asks it is
+ *   not counted (never a "### " line); the share is of the words outside list items of under ten words, and a list's
+ *   numbering is not a word. The gate also refuses the phrase as searched in more than two sub-headings and over half
+ *   of them;
+ * - much of the article in short list items (over 25% of its words in items of up to three words, or over 60% in
+ *   items of four to nine words, each measured on a sliding weight; a kit list measures 19.8% of the first kind, a
+ *   thorough checklist post about 45% of the second): at most 70;
+ * - run-on text (over 20% of the prose words in "sentences" of over 40 words: keyword lines run together; good
+ *   articles measure 0% to 14.7%, the highest quoting a regulation): at most 70;
  * - some repetition (over 10% by either measure above): at most 70.
  * Length alone never caps: padding is caught as repetition, and a long guide that stays useful is fine.
  *
@@ -301,8 +307,8 @@ const SENTENCE_WORDS_CAP = 28;
  * sub-headings inside the text. Each counts an item's words by a weight that falls away with its length, so padding an
  * item by a word or two never jumps it out of the measure:
  * - very short items (keyword bullets, "- flats in York"): items of up to three words count in full, four words half,
- *   five a quarter. Above TINY_ITEMS_CAP the score is capped. Good articles measure 0% to 6% (the recipe-style how-to's
- *   tools list); keyword bullets 15% and up.
+ *   five a quarter. Above TINY_ITEMS_CAP the score is capped. Good articles measure 0% to 6%, a kit list 19.8% and
+ *   price lists 13.8%; keyword bullets from 11% (under the line: a known limit for the meaning check).
  * - step-sized items ("Clean the oven, shelves and door glass"): four to nine words count in full, then a sixth less for
  *   each word up to fourteen. Above STEP_ITEMS_CAP the score is capped. Good articles measure 0% to 28%, a thorough
  *   checklist post about 45%; bullets of filler in place of writing 70% and up.
@@ -313,7 +319,7 @@ const TINY_ITEMS_CAP = 25;
 /** What to do while much of the article is short list items: the other reading advice does not apply then. */
 const LIST_HEAVY_TODO = 'Write more of the article as full sentences that explain things, and keep lists for steps and short items.';
 /** A "sentence" of over RUN_ON_WORDS words is a run-on; over RUN_ON_CAP% of the prose words in run-ons caps the score.
- * Good articles measure 0%, the article quoting a regulation 6%; keyword lines joined into one paragraph 60% and up. */
+ * Good articles measure 0% to 14.7% (quoting a regulation); one 50-word keyword sentence per part 46.7%. */
 const RUN_ON_WORDS = 40;
 const RUN_ON_CAP = 20;
 const STEP_ITEMS_CAP = 60;
@@ -757,15 +763,17 @@ const SHARED_ITEMS_PER_LIST = 5;
  * swapped), or, for a sentence of five to seven words, when an earlier one matches it in all but one word (rotating
  * templates); and the share of all runs of REPEAT_RUN words that came earlier in the article.
  *
- * Prose is measured as it always was: a sentence of under FRAGMENT_WORDS words is never a repeat ("Yes." opening many
- * answers). List items:
- * - an item of FRAGMENT_WORDS words or more is measured like a sentence, one by one;
- * - a shorter item enters the measure only when it repeats (its third time: "Cost" as a pro and a con is ordinary), so
- *   different short items can never dilute it;
+ * Prose: a sentence of under FRAGMENT_WORDS words is not counted until it repeats: a one-word sentence never ("Yes."
+ * opening many answers), a two- or three-word one from its sixth time (SHORT_PROSE_FREE). List items:
+ * - an item of FRAGMENT_WORDS words or more is compared like a sentence, but enters the measure only when it repeats,
+ *   so different items, of any length, can never dilute it;
+ * - a shorter item enters the measure only when it repeats (its third time: "Cost" as a pro and a con is ordinary);
  * - the items of one list are also read as one run of words, so a pasted list of short items is repeated wording; those
  *   runs enter the measure only when they repeat, for the same reason;
  * - an item that comes back in other parts (a job every room shares) is not a repeat until its fifth part, as long as
- *   such items are no more than half of their list; a pasted list is all of its list, so it always counts.
+ *   such items are no more than half of their list and no more than five of it; a pasted list always counts;
+ * - `wholes` are texts compared whole for exact repeats only: an item whose short sentences were read as prose (so a
+ *   pasted bullet of short sentences is still a repeat), and the sub-headings and questions.
  */
 type Whole = { readonly t: readonly string[]; readonly short: number };
 function repetition(units: readonly Unit[], wholes: readonly (readonly Whole[])[] = []): Repetition {
@@ -974,7 +982,8 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const tinyOf = (b: { whole: readonly string[]; heads: readonly string[] }) => [...b.whole, ...b.heads].map((x) => wordsOf(x).length).filter((k) => k < FRAGMENT_WORDS);
   const tinyWords = blockSentences.reduce((a, b) => a + tinyOf(b).reduce((x, y) => x + y, 0), 0);
   const leanCount = Math.max(0, wordCount - tinyWords - blockSentences.reduce((a, b) => a + b.tinyMarks, 0));
-  // A list's numbering ("1.", "a)") is not a word of the article, so it never dilutes the phrase's share.
+  // The phrase's share is of the words outside list items and sub-headings inside the text of under STEP_WORDS words
+  // (uses there still count), and a list's numbering ("1.", "a)") is not a word: different bullets never dilute it.
   const shareBase = Math.max(0, wordCount - blockSentences.reduce((a, b) => a + b.marks + [...b.whole, ...b.heads].map((x) => wordsOf(x).length).filter((k) => k < STEP_WORDS).reduce((x, y) => x + y, 0), 0));
   const leanUnits = units.filter((u) => u.list < 0 || u.t.length >= FRAGMENT_WORDS);
   const leanWords = [...headings.flatMap(words), ...leanUnits.flatMap((u) => u.t)];
