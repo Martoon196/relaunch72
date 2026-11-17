@@ -34,13 +34,15 @@ const t = (question: string, title = question) => ({ question, title });
 
 // ─── N1: the fit check ───────────────────────────────────────────────────────
 
-test('N1: simple stems make plural and singular, and the -ing and -ed forms, compare alike', () => {
-  for (const [a, b] of [['fees', 'fee'], ['properties', 'property'], ['letting', 'let'], ['lets', 'let'], ['rented', 'rent'], ['renting', 'rents'], ['managed', 'managing'], ['manage', 'managed'],
-    ['taxes', 'tax'], ['housing', 'houses'], ['returning', 'returned'], ['studies', 'studied'], ['planning', 'plans'], ['deposits', 'deposit'], ['agents', 'agent'], ['calling', 'called']] as const) {
+test('N1, F1-d: simple stems join plurals and -ing/-ed forms, never two different words; licence and evict families come from a table', () => {
+  for (const [a, b] of [['fees', 'fee'], ['properties', 'property'], ['lettings', 'letting'], ['lets', 'let'], ['rented', 'rent'], ['renting', 'rents'], ['managed', 'managing'],
+    ['taxes', 'tax'], ['houses', 'house'], ['classes', 'class'], ['returning', 'returned'], ['studies', 'studied'], ['deposits', 'deposit'], ['agents', 'agent'], ['calling', 'called'], ['rates', 'rate'],
+    ['licence', 'licensing'], ['license', 'licences'], ['licensed', 'licence'], ['evict', 'eviction'], ['evicting', 'evictions']] as const) {
     assert.equal(simpleStem(a), simpleStem(b), `${a} / ${b}`);
   }
-  // Not over-eager: words that only end alike stay apart, and short words are left alone.
-  for (const [a, b] of [['fall', 'fal'], ['dress', 'dres'], ['status', 'statu'], ['speed', 'spe'], ['bed', 'b']] as const) assert.notEqual(simpleStem(a), simpleStem(b), `${a} / ${b}`);
+  // Under-stemming is preferred: these pairs are different words and stay apart (the review's over-stemming cases).
+  for (const [a, b] of [['new', 'news'], ['rat', 'rate'], ['rats', 'rates'], ['site', 'sitting'], ['plan', 'planning'], ['bus', 'business'], ['let', 'letter'], ['let', 'letting'],
+    ['fall', 'fal'], ['dress', 'dres'], ['status', 'statu'], ['speed', 'spe'], ['bed', 'b']] as const) assert.notEqual(simpleStem(a), simpleStem(b), `${a} / ${b}`);
   assert.equal(simpleStem('2026'), '2026');
 });
 
@@ -55,7 +57,7 @@ test('N1: half of the meaning words, exactly at the boundary; stop words do not 
   assert.equal(phraseFits('landlord insurance', t('Do landlords need a licence?')), true, '1 of 2 is exactly half');
   assert.equal(phraseFits('combi boiler', t('How long does a new kitchen take?')), false, '0 of 2');
   // Stop words never count either way: "the best guide to" adds nothing.
-  assert.deepEqual([...meaningWords('the best guide to letting agent fees in the UK')].sort(), ['agent', 'fee', 'let']);
+  assert.deepEqual([...meaningWords('the best guide to letting agent fees in the UK')].sort(), ['agent', 'fee', 'lett']);
   // The title counts as well as the question.
   assert.equal(phraseFits('rental yield calculator', t('How do I work out what my flat earns?', 'Rental yield: a calculator and a worked example')), true);
 });
@@ -93,14 +95,15 @@ test('N1: binding with the brief\'s words: a target that does not fit leaves the
     // Chose the same target as the brief above; it fits here, so this brief keeps it (it was not taken above).
     { key: 'notice', primaryId: id('section 21 notice'), secondaryIds: [], text: t('How long is a section 21 notice valid?') },
   ];
-  const { bound, stripped, unfit, dropped } = bindByIds(briefs, c);
+  const { bound, stripped, unfit, withdrawn, dropped } = bindByIds(briefs, c);
   assert.equal(bound.get('deposits')!.primary?.phrase, 'tenancy deposit protection');
   assert.deepEqual(bound.get('deposits')!.secondary.map((r) => r.phrase), ['deposit protection schemes'], 'the secondary that does not fit is dropped; the primary stays');
   assert.equal(bound.get('insurance')!.primary, null, 'never re-bound to another phrase by guesswork');
   assert.deepEqual(bound.get('insurance')!.secondary, [], 'an unbound brief carries no secondary phrase (no number)');
   assert.equal(bound.get('notice')!.primary?.phrase, 'section 21 notice');
   assert.equal(unfit, 2);
-  assert.equal(stripped, 1, 'the unbound brief\'s secondary');
+  assert.equal(stripped, 0, 'no bad id');
+  assert.equal(withdrawn, 1, 'the unbound brief\'s secondary is counted apart, not as a bad id');
   assert.deepEqual(dropped.map((d) => `${d.key}:${d.field}:${d.reason}`), ['insurance:primary:does_not_fit', 'deposits:secondary:does_not_fit', 'insurance:secondary:brief_unbound']);
   const seo = briefSeo({ targetQuery: 'Is landlord insurance a legal requirement?', binding: bound.get('insurance')!, pool: pool([row('section 21 notice', 8100)]), now });
   assert.equal(seo.primary.basis, 'none');
@@ -110,7 +113,7 @@ test('N1: binding with the brief\'s words: a target that does not fit leaves the
   assert.deepEqual(seo.questions, []);
 });
 
-test('N1: the reviewer\'s rotation: every id valid but each brief given the next brief\'s phrase; the cooperative choice is never unbound', () => {
+test('N1, F1: the reviewer\'s rotation, asserted brief by brief: right ids bind their own phrase; ids shifted by one bind nothing', () => {
   const phrases = ['letting agent', 'letting agent fees', 'letting agent leeds', 'how to choose a letting agent', 'letting agent vs self manage', 'letting agent contract', 'change letting agent'];
   const texts = [t('What does a letting agent do for a landlord?', 'What a letting agent does: a plain guide for landlords'), t('How much are letting agent fees?', 'Letting agent fees explained'),
     t('Which letting agent in Leeds should I use?', 'Choosing a letting agent in Leeds'), t('How do I choose a letting agent?', 'How to choose a letting agent: eight checks'),
@@ -118,23 +121,21 @@ test('N1: the reviewer\'s rotation: every id valid but each brief given the next
     t('How do I change letting agent?', 'How to change letting agent without losing your tenant')];
   const c = cands(phrases);
   const ids = [...candidateIds(c).keys()];
-  const right = bindByIds(texts.map((text, i) => ({ key: `k${i}`, primaryId: ids[i], secondaryIds: [], text })), c);
-  assert.equal(right.unfit, 0, 'no correct binding is lost');
-  const rotated = bindByIds(texts.map((text, i) => ({ key: `k${i}`, primaryId: ids[(i + 1) % ids.length], secondaryIds: [], text })), c);
-  // In one niche every phrase shares "letting agent", so rotation inside it can still pass: the check is a floor, not
-  // a guarantee (as the review says). What it must never do is bind a phrase whose words are absent.
-  for (const [i, text] of texts.entries()) {
-    const got = rotated.bound.get(`k${i}`)!.primary;
-    if (got) assert.ok(phraseFits(got.phrase, text));
-  }
-  // Across different subjects, rotation is caught.
+  const boundTo = (shift: number) => { const out = bindByIds(texts.map((text, i) => ({ key: `k${i}`, primaryId: ids[(i + shift) % ids.length], secondaryIds: [], text })), c);
+    return { phrases: texts.map((_, i) => out.bound.get(`k${i}`)!.primary?.phrase ?? null), reasons: out.dropped.map((d) => d.reason) }; };
+  assert.deepEqual(boundTo(0).phrases, phrases, 'every brief keeps the phrase it really targets');
+  // Before F1, 5 of these 7 were bound to the next article's phrase and number (all share "letting agent").
+  const shifted = boundTo(1);
+  assert.deepEqual(shifted.phrases, [null, null, null, null, null, null, null]);
+  assert.deepEqual(shifted.reasons, ['fits_another_better', 'fits_another_better', 'does_not_fit', 'fits_another_better', 'fits_another_better', 'fits_another_better', 'fits_another_better']);
+  // Across different subjects, rotation is caught as well, by the half rule alone.
   const mixed = ['tenancy deposit protection', 'landlord insurance', 'section 21 notice', 'rental yield calculator', 'gas safety certificate', 'hmo licence', 'rent arrears'];
   const mixedTexts = [t('How does tenancy deposit protection work?'), t('Is landlord insurance a legal requirement?'), t('How do I serve a section 21 notice?'), t('How do I work out rental yield?'),
     t('How often is a gas safety certificate needed?'), t('Who needs an HMO licence?'), t('What can a landlord do about rent arrears?')];
   const mc = cands(mixed);
   const mids = [...candidateIds(mc).keys()];
   const mixedRight = bindByIds(mixedTexts.map((text, i) => ({ key: `k${i}`, primaryId: mids[i], secondaryIds: [], text })), mc);
-  assert.equal(mixedRight.unfit, 0);
+  assert.deepEqual(mixedTexts.map((_, i) => mixedRight.bound.get(`k${i}`)!.primary?.phrase), mixed);
   const mixedRotated = bindByIds(mixedTexts.map((text, i) => ({ key: `k${i}`, primaryId: mids[(i + 1) % mids.length], secondaryIds: [], text })), mc);
   assert.equal(mixedRotated.unfit, 7, 'all seven wrong choices are left unbound');
   assert.ok([...mixedRotated.bound.values()].every((b) => b.primary === null));

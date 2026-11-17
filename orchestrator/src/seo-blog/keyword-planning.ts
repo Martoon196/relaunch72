@@ -161,7 +161,7 @@ export interface Binding {
 
 /** Why a returned id was not used (internal: logged and counted, never shown to a client). */
 export type DropReason =
-  | 'not_text' | 'unknown_id' | 'not_a_target' | 'target_taken' | 'does_not_fit'
+  | 'not_text' | 'unknown_id' | 'not_a_target' | 'target_taken' | 'does_not_fit' | 'fits_another_better' | 'tied'
   | 'not_a_list' | 'is_a_target' | 'duplicate' | 'over_limit' | 'not_measured' | 'brief_unbound';
 export interface DroppedId {
   readonly key: string;
@@ -177,71 +177,195 @@ export interface DroppedId {
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'can', 'do', 'does', 'for', 'from', 'how', 'i', 'in', 'is', 'it', 'its', 'my', 'of', 'on', 'or',
   'our', 'should', 'so', 'than', 'that', 'the', 'their', 'this', 'to', 'uk', 'up', 'vs', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with',
-  'you', 'your', 'guide', 'complete', 'ultimate', 'best', 'need', 'know', 'things', 'about', 'into', 'more', 'most', 'me', 'we', 'us', 'if', 'not', 'no',
+  'you', 'your', 'guide', 'complete', 'ultimate', 'best', 'need', 'know', 'things', 'about', 'into', 'more', 'most', 'me', 'we', 'us', 'if',
   'was', 'were', 'has', 'have', 'had', 'there', 'these', 'those', 'them', 'they', 'any', 'all', 'get', 'much', 'many', 'near',
 ]);
+/** Negations are never filler: "no deposit mortgage" is not about a deposit. In a phrase they must be in the brief. */
+const NEGATIONS = new Set(['no', 'not', 'without', 'non']);
+/** A single letter after one of these words is a meaning word that must be in the brief: band D, class Q, EPC rating C. */
+const LETTER_QUALIFIERS = new Set(['band', 'class', 'grade', 'type', 'zone', 'level', 'tier', 'stage', 'rating', 'category', 'part', 'schedule']);
+/** Prepositions after which a capitalised name in a question is read as a place (see `phraseFits`). */
+const PLACE_PREPOSITIONS = new Set(['in', 'near', 'around', 'across', 'from', 'at', 'outside', 'within', 'throughout']);
+/**
+ * A few UK property word families a suffix rule must not be stretched to: each form maps to one word. Deliberately
+ * small and explicit, so the stemmer itself can stay cautious.
+ */
+const WORD_FAMILIES: Readonly<Record<string, string>> = Object.fromEntries([
+  ...['licence', 'licences', 'license', 'licenses', 'licensing', 'licensed', 'licencing', 'licenced'].map((w) => [w, 'licence']),
+  ...['evict', 'evicts', 'evicted', 'evicting', 'eviction', 'evictions'].map((w) => [w, 'evict']),
+]);
+/** Words a suffix rule would wrongly shorten into another word. */
+const KEEP_AS_IS = new Set(['news', 'business', 'bus', 'gas', 'yes', 'lens', 'series', 'species', 'thing', 'things', 'ceiling', 'building', 'buildings']);
 
 /**
- * A simple stem for an English word, so a plural and its singular, and the -ing and -ed forms, compare alike:
- * properties/property, fees/fee, taxes/tax, letting/let, rented/rent, managed/manage, housing/house. Words in other
- * scripts, and words with digits, are compared exactly.
+ * A cautious stem for an English word: plurals (fees/fee, properties/property, taxes/tax, houses/house, classes/class)
+ * and the -ing and -ed forms (renting/rented/rent, returning/return). It prefers to leave two forms apart rather than
+ * merge two different words: no final "e" is removed (rate/rat, site/sit stay apart) and no doubled letter is undone
+ * (planning/plan, sitting/sit stay apart). A small explicit table joins licence/licensing/license and evict/eviction.
+ * Words in other scripts, and words with digits, are compared exactly.
  */
 export function simpleStem(word: string): string {
   if (!/^[a-z]+$/.test(word)) return word;
+  const family = WORD_FAMILIES[word];
+  if (family) return family;
+  if (KEEP_AS_IS.has(word)) return word === 'buildings' ? 'building' : word === 'things' ? 'thing' : word;
   let w = word;
   if (w.length > 4 && w.endsWith('ies')) w = `${w.slice(0, -3)}y`;
-  else if (w.length > 4 && /(?:s|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2);
+  else if (w.length > 4 && /(?:x|z|ch|sh|ss)es$/.test(w)) w = w.slice(0, -2);
   else if (w.length > 3 && w.endsWith('s') && !/(?:ss|us|is)$/.test(w)) w = w.slice(0, -1);
-  let suffixed = false;
+  const plural = WORD_FAMILIES[w];
+  if (plural) return plural;
   if (w.length > 4 && w.endsWith('ied')) w = `${w.slice(0, -3)}y`;
-  else if (w.length > 5 && w.endsWith('ing')) { w = w.slice(0, -3); suffixed = true; }
-  else if (w.length > 4 && w.endsWith('ed') && !w.endsWith('eed')) { w = w.slice(0, -2); suffixed = true; }
-  // letting → lett → let; stopped → stopp → stop (but not fall, dress, buzz).
-  if (suffixed && w.length > 2 && w.at(-1) === w.at(-2) && !/[aeiouylsz]/.test(w.at(-1)!)) w = w.slice(0, -1);
-  if (w.length > 3 && w.endsWith('e')) w = w.slice(0, -1);
+  else if (w.length > 6 && w.endsWith('ing')) w = w.slice(0, -3);
+  else if (w.length > 5 && w.endsWith('ed') && !w.endsWith('eed')) w = w.slice(0, -2);
   return w;
 }
 
+function fold(word: string): string {
+  return word.normalize('NFKD').replace(/[̀-ͯ]/g, '').normalize('NFC');
+}
+function tokens(text: string): string[] {
+  return text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).map(fold).filter((w) => w.length > 0);
+}
+const hasDigit = (w: string) => /\p{N}/u.test(w);
+
 /**
- * The meaning words of a text, stemmed: any script (letters and digits of every language), lower-cased, Latin accents
- * removed, stop words and single Latin letters dropped.
+ * The meaning words of a text, and which of them a brief must contain. Any script, lower-cased, Latin accents removed,
+ * stemmed (`simpleStem`); stop words dropped. Kept and required: a word with a digit (section 21, form 6a), a
+ * negation (no, not, without, non), and a single letter that follows a qualifier (band d, class q, rating c) or sits
+ * next to a number. Any other single Latin letter is dropped.
  */
+export function meaningTerms(text: string): { readonly words: Set<string>; readonly required: Set<string> } {
+  const raw = tokens(text);
+  const words = new Set<string>();
+  const required = new Set<string>();
+  raw.forEach((w, i) => {
+    const prev = raw[i - 1], next = raw[i + 1];
+    if (hasDigit(w)) { words.add(w); required.add(w); return; }
+    if (/^[a-z]$/.test(w)) {
+      if (prev && LETTER_QUALIFIERS.has(prev)) { const t = `${prev} ${w}`; words.add(t); required.add(t); return; }
+      if ((prev && hasDigit(prev)) || (next && hasDigit(next))) { words.add(w); required.add(w); }
+      return;
+    }
+    if (NEGATIONS.has(w)) { words.add(w); required.add(w); return; }
+    if (STOP_WORDS.has(w)) return;
+    words.add(simpleStem(w));
+  });
+  return { words, required };
+}
+
+/** The meaning words of a text (see `meaningTerms`). */
 export function meaningWords(text: string): Set<string> {
-  const words = text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u)
-    .map((w) => w.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'))
-    .filter((w) => w.length > 0 && !STOP_WORDS.has(w) && !/^[a-z]$/.test(w));
-  return new Set(words.map(simpleStem));
+  return meaningTerms(text).words;
 }
 
 /**
- * The fit check: at least half of the phrase's meaning words appear in the brief's question or title. A phrase with
- * no meaning word (stop words only) never fits: nothing in it can be checked.
+ * Places a question names: a capitalised name (one word or several in a row, not at the start of a sentence, not an
+ * all-capitals abbreviation, not "I") right after "in", "near", "around", "across", "from", "at", "outside", "within"
+ * or "throughout". Each place is its set of meaning words. Titles are not read: they capitalise every word.
  */
-export function phraseFits(phrase: string, text: { readonly question: string; readonly title: string }): boolean {
-  const p = meaningWords(phrase);
-  if (p.size === 0) return false;
+function placesIn(question: string): Set<string>[] {
+  const parts = question.split(/\s+/).filter(Boolean);
+  const places: Set<string>[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const before = parts[i - 1]!;
+    if (/[.?!:;]$/.test(before) || !PLACE_PREPOSITIONS.has(before.toLowerCase().replace(/[^\p{L}]/gu, ''))) continue;
+    const place = new Set<string>();
+    for (let j = i; j < parts.length; j++) {
+      const word = parts[j]!;
+      if (!/^\p{Lu}\p{Ll}/u.test(word)) break;
+      for (const w of meaningWords(word.replace(/['’]s\b/u, ''))) place.add(w);
+      if (/[.?!:;,]$/.test(word)) break;
+    }
+    if (place.size) places.push(place);
+  }
+  return places;
+}
+
+/** How a phrase fits a brief: whether it passes the hard checks, and its share and count of matched meaning words. */
+export interface FitScore { readonly fits: boolean; readonly share: number; readonly matched: number; readonly size: number }
+
+/**
+ * The fit of one phrase to one brief (its question and title). It fits when all of these hold:
+ * - at least half of the phrase's meaning words are in the brief (the half rule);
+ * - every required word is in the brief: each word with a digit, each negation, each qualified or numbered letter;
+ * - the question does not name a different place: no place named in the question (see `placesIn`) shares a word with
+ *   the phrase without being wholly in it (New York against "york"), and none names a place outside the phrase while
+ *   one of the phrase's own words is missing (Bradford against "plumber leeds").
+ * A phrase with no meaning word (stop words only) never fits. Lower-case place names inside a phrase cannot be told
+ * from ordinary words, so "letting agents reading" against "read a letting agent's contract" is left to the
+ * comparison with the other candidates in `bindByIds`.
+ */
+export function fitScore(phrase: string, text: { readonly question: string; readonly title: string }): FitScore {
+  const p = meaningTerms(phrase);
+  const size = p.words.size;
+  if (size === 0) return { fits: false, share: 0, matched: 0, size };
   const brief = new Set([...meaningWords(text.question), ...meaningWords(text.title)]);
-  let found = 0;
-  for (const w of p) if (brief.has(w)) found++;
-  return found * 2 >= p.size;
+  let matched = 0;
+  for (const w of p.words) if (brief.has(w)) matched++;
+  const share = matched / size;
+  const fail = { fits: false, share, matched, size };
+  if (matched * 2 < size) return fail;
+  for (const w of p.required) if (!brief.has(w)) return fail;
+  const missing = matched < size;
+  for (const place of placesIn(text.question)) {
+    const shared = [...place].filter((w) => p.words.has(w)).length;
+    if (shared > 0 && shared < place.size) return fail;
+    if (shared === 0 && missing) return fail;
+  }
+  return { fits: true, share, matched, size };
+}
+
+/** The fit check on its own (see `fitScore`). */
+export function phraseFits(phrase: string, text: { readonly question: string; readonly title: string }): boolean {
+  return fitScore(phrase, text).fits;
+}
+
+/** Whether `other` fits the brief better than `mine`: a higher share, or the same share over more words (a longer phrase). */
+function beats(other: FitScore, mine: FitScore): boolean {
+  return other.fits && (other.share > mine.share || (other.share === mine.share && other.matched > mine.matched));
+}
+const ties = (other: FitScore, mine: FitScore) => other.fits && other.share === mine.share && other.matched === mine.matched;
+
+/**
+ * Whether `row` is the phrase for this brief among the target candidates: it fits (`fitScore`), no other target
+ * candidate fits better, and none fits exactly as well (a tie is left unbound: there is no way to tell them apart).
+ * `except` are candidates not compared against (for a secondary phrase: the brief's own target).
+ */
+export function bestFit(row: ShortlistRow, text: { readonly question: string; readonly title: string }, targets: readonly ShortlistRow[], except: ReadonlySet<string> = new Set()): 'fits' | 'does_not_fit' | 'fits_another_better' | 'tied' {
+  const mine = fitScore(row.phrase, text);
+  if (!mine.fits) return 'does_not_fit';
+  let tied = false;
+  for (const other of targets) {
+    if (other.id === row.id || except.has(other.id) || other.phrase === row.phrase) continue;
+    const o = fitScore(other.phrase, text);
+    if (beats(o, mine)) return 'fits_another_better';
+    // The same share over the same number of words: the brief cannot tell the two apart, so neither is bound.
+    if (ties(o, mine)) tied = true;
+  }
+  return tied ? 'tied' : 'fits';
 }
 
 /**
  * Bind each brief by the ids the planner returned, in plan order. Strips any id that was not sent (or is not text), a
  * target id that is not a target candidate, a target another brief already took, a secondary id equal to any brief's
- * target, and duplicates; at most six secondary phrases. Then, when the brief's words are given, a chosen phrase that
- * does not fit them is dropped (a target that does not fit is not taken, so a later brief that chose it may keep it);
- * nothing is ever re-bound to another phrase. A brief with no target keeps no secondary phrase.
- * `stripped` counts ids removed by the id rules, `unfit` choices removed by the fit check; `dropped` lists each.
+ * target, and duplicates; at most six secondary phrases. Then, when the brief's words are given, a chosen phrase must
+ * be the best fit among the target candidates (`bestFit`), else it is dropped: a target dropped this way is not taken,
+ * so a later brief that chose it may keep it, and nothing is ever re-bound to another phrase. A secondary phrase must
+ * pass the same rule, compared with every target candidate except the brief's own target. A brief with no target
+ * keeps no secondary phrase.
+ * Counts: `stripped` ids removed by the id rules, `unfit` choices removed by the fit rule, `withdrawn` secondary
+ * phrases that were fine but belonged to a brief left without a target. `dropped` lists each.
  * Never throws, whatever the planner returned.
  */
-export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): { bound: Map<string, Binding>; stripped: number; unfit: number; dropped: DroppedId[] } {
+export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): { bound: Map<string, Binding>; stripped: number; unfit: number; withdrawn: number; dropped: DroppedId[] } {
   const ids = candidateIds(c);
   const bound = new Map<string, Binding>();
   const dropped: DroppedId[] = [];
   const known = (id: unknown): string | null => (typeof id === 'string' && ids.has(id) ? id : null);
   const drop = (key: string, field: DroppedId['field'], id: unknown, reason: DropReason) => { dropped.push({ key, field, id: known(id), reason }); };
   const targets = new Set<string>();
+  const targetRows = [...ids.values()].filter((v) => v.target).map((v) => v.row);
   const primaryOf = new Map<string, ShortlistRow | null>();
   for (const b of briefs) {
     primaryOf.set(b.key, null);
@@ -252,7 +376,7 @@ export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): 
     if (!hit) { drop(b.key, 'primary', id, 'unknown_id'); continue; }
     if (!hit.target) { drop(b.key, 'primary', id, 'not_a_target'); continue; }
     if (targets.has(id)) { drop(b.key, 'primary', id, 'target_taken'); continue; }
-    if (b.text && !phraseFits(hit.row.phrase, b.text)) { drop(b.key, 'primary', id, 'does_not_fit'); continue; }
+    if (b.text) { const fit = bestFit(hit.row, b.text, targetRows); if (fit !== 'fits') { drop(b.key, 'primary', id, fit); continue; } }
     targets.add(id);
     primaryOf.set(b.key, hit.row);
   }
@@ -270,14 +394,16 @@ export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): 
       if (hit.row.basis !== 'measured') { drop(b.key, 'secondary', id, 'not_measured'); continue; }
       if (!primary) { drop(b.key, 'secondary', id, 'brief_unbound'); continue; }
       if (secondary.length >= SECONDARY_PER_BRIEF) { drop(b.key, 'secondary', id, 'over_limit'); continue; }
-      if (b.text && !phraseFits(hit.row.phrase, b.text)) { drop(b.key, 'secondary', id, 'does_not_fit'); continue; }
+      if (b.text) { const fit = bestFit(hit.row, b.text, targetRows, new Set([primary.id])); if (fit !== 'fits') { drop(b.key, 'secondary', id, fit); continue; } }
       seen.add(id); secondary.push(hit.row);
     }
     bound.set(b.key, { primary, secondary });
   }
-  const unfit = dropped.filter((d) => d.reason === 'does_not_fit').length;
-  return { bound, stripped: dropped.length - unfit, unfit, dropped };
+  const unfit = dropped.filter((d) => FIT_REASONS.has(d.reason)).length;
+  const withdrawn = dropped.filter((d) => d.reason === 'brief_unbound').length;
+  return { bound, stripped: dropped.length - unfit - withdrawn, unfit, withdrawn, dropped };
 }
+const FIT_REASONS: ReadonlySet<DropReason> = new Set(['does_not_fit', 'fits_another_better', 'tied']);
 
 /** Every token of the target phrase appears in the question (a strict word rule, not a similarity score). */
 function asksAbout(question: string, phrase: string): boolean {

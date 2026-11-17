@@ -447,10 +447,11 @@ export interface TopicPlan {
   readonly engine?: EngineStamp;
   /**
    * Keyword-first planning only (internal): the output contract used, how many candidates were shown, how many returned
-   * ids were stripped by the id rules, and how many chosen phrases were dropped because they did not fit their brief.
-   * `unfit` is absent on plans made before the fit check.
+   * ids were stripped by the id rules, how many chosen phrases were dropped by the fit rule (`unfit`), and how many
+   * acceptable secondary phrases were withdrawn only because their brief was left without a target (`withdrawn`).
+   * `unfit` and `withdrawn` are absent on plans made before they existed.
    */
-  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number; readonly unfit?: number };
+  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number; readonly unfit?: number; readonly withdrawn?: number };
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';

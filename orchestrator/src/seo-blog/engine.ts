@@ -1380,7 +1380,7 @@ export class SeoBlogEngine {
     const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids,
       text: { question: item.target_query, title: item.working_title } })), candidates) : null;
     // Internal only: an operator log line, never an activity line or any client-visible text.
-    if (binding?.dropped.length) console.info(JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId, planId, candidates: ids?.size ?? 0, stripped: binding.stripped, unfit: binding.unfit,
+    if (binding?.dropped.length) console.info(JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId, planId, candidates: ids?.size ?? 0, stripped: binding.stripped, unfit: binding.unfit, withdrawn: binding.withdrawn,
       dropped: binding.dropped.map((d) => ({ brief: d.key, field: d.field, id: d.id, reason: d.reason })) }));
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
@@ -1433,7 +1433,7 @@ export class SeoBlogEngine {
       inputs: { focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl },
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
       engine: planStamp,
-      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0, unfit: binding?.unfit ?? 0 } } : {}),
+      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0, unfit: binding?.unfit ?? 0, withdrawn: binding?.withdrawn ?? 0 } } : {}),
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
     if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
