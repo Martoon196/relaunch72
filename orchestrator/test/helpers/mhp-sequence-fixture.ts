@@ -15,4 +15,5 @@ export const sequenceDetail: MhpSequenceReview = { review: { ...review, contentI
     canonicalContent: sequenceCanonical, contentSha256: followupSequenceSha(sequenceCanonical), valid: true,
     exact: { ...local.exact!, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, sourceItemId: `sequence:${sequenceIds.item}`, sourceVersion: `edit:${sequenceIds.version}`,
       canonicalContent: sequenceCanonical, contentSha256: followupSequenceSha(sequenceCanonical), definition: sequenceDefinition, campaign: sequenceDefinition.campaign } },
-  definition: sequenceDefinition, blockers: [], timeline: followupTimeline(sequenceDefinition) };
+  definition: sequenceDefinition, blockers: [], timeline: followupTimeline(sequenceDefinition),
+  audience: { kind: 'webinar_signups', campaign: sequenceDefinition.campaign, origin: 'chosen' }, subjects: { [ids.version]: review.email!.subject } };

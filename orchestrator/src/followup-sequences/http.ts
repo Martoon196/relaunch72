@@ -7,7 +7,8 @@ export function sendNativeFlow(res: ServerResponse, status: number, body: string
   res.writeHead(status, { 'content-type': type, 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store',
     'referrer-policy': 'same-origin', 'content-security-policy': FLOW_NATIVE_CSP, 'x-content-type-options': 'nosniff' }); res.end(body);
 }
-export async function readNativeFlowForm(req: IncomingMessage, required: readonly string[], editing: boolean): Promise<URLSearchParams> {
+/** `optional` names fields a form may omit (an unticked checkbox, a field older pages do not carry); every other field is exact. */
+export async function readNativeFlowForm(req: IncomingMessage, required: readonly string[], editing: boolean, optional: readonly string[] = []): Promise<URLSearchParams> {
   if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/iu.test(String(req.headers['content-type'] ?? ''))) throw new FlowWorkspaceError(415, 'Use the native flow form.');
   const maximum = editing ? 240_000 : 4096, declared = Number(req.headers['content-length'] ?? 0);
   if (declared > maximum) throw new FlowWorkspaceError(413, 'This flow form is too large.');
@@ -16,7 +17,7 @@ export async function readNativeFlowForm(req: IncomingMessage, required: readonl
     if (size > maximum) throw new FlowWorkspaceError(413, 'This flow form is too large.'); chunks.push(chunk); }
   const fields = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
   if (editing && !fields.has('inlineMessages') && Math.max(size, declared) > 140_000) throw new FlowWorkspaceError(413, 'This flow form is too large.');
-  const expected = editing ? [...required, ...['inlineMessages', 'simulationCase'].filter(key => fields.has(key))] : required;
+  const expected = [...required, ...[...(editing ? ['inlineMessages', 'simulationCase'] : []), ...optional].filter(key => fields.has(key) && !required.includes(key))];
   if (fields.size !== expected.length || [...fields.keys()].some(key => !expected.includes(key) || fields.getAll(key).length !== 1)) throw new FlowWorkspaceError(400, 'Refresh the native flow form before continuing.');
   return fields;
 }

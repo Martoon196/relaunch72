@@ -18,9 +18,17 @@ import { FlowLocalStore } from '../followup-sequences/local-store.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { simulateFollowupFlow, flowSimulationPreset } from '../followup-sequences/simulation.js';
 import type { FollowupEntryRule } from '../followup-sequences/entry.js';
+import { classifyLegacyFollowupAudience, followupAudienceCanStart, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience,
+  FOLLOWUP_NO_AUDIENCE_LINE, type FollowupAudience, type FollowupAudienceKind } from '../followup-sequences/audience.js';
+import { FollowupSequenceValidationError } from '../followup-sequences/definition.js';
 
 const hash = (value: string): Buffer => createHash('sha256').update(value).digest();
 const uuid = (value: string): boolean => FOLLOWUP_SEQUENCE_UUID.test(value);
+/** Prospect ids come from the database; any canonical lower-case UUID. */
+const ANY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const OPEN_STATES: readonly FollowupRunState[] = ['active', 'paused', 'held'];
+/** The database enrols, pauses or resumes at most this many people per command. */
+export const MHP_SEQUENCE_BATCH = 500;
 export interface MhpSequenceRun {
   id: string; contentItemId: string; contentVersionId: string; email: string; firstName: string | null;
   state: FollowupRunState; position: number; dueAt: string; reason: string | null; createdAt: string;
@@ -41,22 +49,36 @@ export interface MhpSequenceAction {
 }
 export interface MhpSequenceActionResult { action: MhpSequenceAction['action']; contentItemId: string; contentVersionId: string;
   changed: number; remaining: number; blocked: number; inFlight: number; replayed: boolean }
-export interface MhpEntryAction { action: 'activate' | 'off'; commandId: string; itemId: string; versionId: string; ruleId: string; expiresAt: string }
+export interface MhpEntryAction { action: 'activate' | 'off'; commandId: string; itemId: string; versionId: string; ruleId: string; expiresAt: string;
+  /** The owner ticked the confirmation that names who will be added automatically, and until when. Required to switch entry on. */
+  confirmed?: boolean }
 export interface MhpEntryActionResult { action: MhpEntryAction['action']; contentItemId: string; contentVersionId: string; ruleId: string;
   state: 'active' | 'off'; expiresAt: string; watermark: string; replayed: boolean }
+/** One registration of the configured webinar, as the existing owner-only lead reader returns it. */
+export interface MhpAudienceCandidate {
+  prospectId: string; email: string; firstName: string | null; label: string | null; registeredAt: string | null;
+  marketingConsent: boolean; unsubscribed: boolean; signupConsentGiven: boolean;
+}
+export interface MhpAudienceCandidatePage { candidates: readonly MhpAudienceCandidate[]; hasMore: boolean; nextAfter: string | null }
 export interface MhpSequenceRepository {
   snapshot(identity: PortalSessionIdentity, campaign: string): Promise<MhpSequenceDatabaseSnapshot>;
+  /** Reads who registered for the webinar (25 at a time). Without it nothing can be started, because nobody could be shown. */
+  audienceCandidates?(identity: PortalSessionIdentity, campaign: string, after: string | null): Promise<MhpAudienceCandidatePage>;
   local(identity: PortalSessionIdentity, versionId: string | null, revision: string | null): Promise<MhpSequenceLocal | null>;
   command(identity: PortalSessionIdentity, input: MhpSequenceAction & { campaign: string; requestId: string }): Promise<MhpSequenceActionResult>;
   entryCommand?(identity: PortalSessionIdentity, input: MhpEntryAction & { campaign: string; requestId: string }): Promise<MhpEntryActionResult>;
 }
+export const MHP_SEQUENCE_CHANGED = 'This sequence, one of its emails or its approval changed while you were looking at it, so nothing was done. Open the sequence again to see where things stand now.';
+export const MHP_SEQUENCE_UNAVAILABLE = 'Sequence controls are temporarily unavailable. Nothing was changed. Try again in a minute.';
+export const MHP_SEQUENCE_NOT_READY = 'This sequence is not ready to send yet. Publish each of its emails and sort out any setup notes shown on the sequence page.';
+export const MHP_START_NEEDS_CONFIRMATION = 'Starting a sequence now has a confirmation step that shows exactly who will receive it. Open the sequence and press Start again.';
 function failure(error: unknown): never {
   if (error instanceof MhpCommerceError) throw error;
   const code = (error as { code?: string })?.code;
   if (code === '42501') throw new MhpCommerceError(403, 'Open the MHP marketing workspace with your owner account.');
-  if (['23514', '23505', '40001'].includes(code ?? '')) throw new MhpCommerceError(409, 'The sequence, its content or its approval changed. Refresh before continuing.');
-  if (code === '22023') throw new MhpCommerceError(400, 'Check the sequence and selected action.');
-  throw new MhpCommerceError(503, 'Sequence controls are temporarily unavailable.');
+  if (['23514', '23505', '40001'].includes(code ?? '')) throw new MhpCommerceError(409, MHP_SEQUENCE_CHANGED);
+  if (code === '22023') throw new MhpCommerceError(400, 'That request could not be read. Open the sequence again and try once more.');
+  throw new MhpCommerceError(503, MHP_SEQUENCE_UNAVAILABLE);
 }
 export class PgMhpSequenceRepository implements MhpSequenceRepository {
   constructor(private readonly web: Pick<Pool, 'query'>, private readonly commands: Pick<Pool, 'query'>) {}
@@ -100,6 +122,22 @@ export class PgMhpSequenceRepository implements MhpSequenceRepository {
       return value;
     } catch (error) { return failure(error); }
   }
+  async audienceCandidates(identity: PortalSessionIdentity, campaign: string, after: string | null): Promise<MhpAudienceCandidatePage> {
+    try {
+      // The existing owner-session reader of 0125: the same anchor and consent columns the enrol audience (0126) uses.
+      const result = await this.web.query<{ page: { campaign: string; candidates: MhpAudienceCandidate[]; hasMore: boolean; nextAfter: string | null } }>(
+        'SELECT app_private.mhp_webinar_lead_candidates($1::bytea,$2::text,$3::uuid,$4::integer) AS page', [this.token(identity), campaign, after, 25]);
+      const page = result.rows[0]?.page;
+      if (!page || page.campaign !== campaign || !Array.isArray(page.candidates) || page.candidates.length > 25 || typeof page.hasMore !== 'boolean'
+          || (page.nextAfter !== null && !ANY_UUID.test(page.nextAfter)) || (page.hasMore && page.nextAfter === null)
+          || page.candidates.some(row => !ANY_UUID.test(row.prospectId) || (after !== null && row.prospectId <= after) || typeof row.email !== 'string' || !row.email.includes('@')
+            || (row.firstName !== null && typeof row.firstName !== 'string') || (row.label !== null && typeof row.label !== 'string')
+            || ![row.marketingConsent, row.unsubscribed, row.signupConsentGiven].every(flag => typeof flag === 'boolean'))) throw new Error('Invalid webinar audience page');
+      return { candidates: page.candidates.map(row => ({ prospectId: row.prospectId, email: row.email, firstName: row.firstName, label: row.label,
+        registeredAt: row.registeredAt ?? null, marketingConsent: row.marketingConsent, unsubscribed: row.unsubscribed, signupConsentGiven: row.signupConsentGiven })),
+        hasMore: page.hasMore, nextAfter: page.nextAfter };
+    } catch (error) { return failure(error); }
+  }
   async entryCommand(identity: PortalSessionIdentity, input: MhpEntryAction & { campaign: string; requestId: string }): Promise<MhpEntryActionResult> {
     try {
       const result = await this.commands.query<{ value: MhpEntryActionResult }>('SELECT app_private.mhp_sequence_entry_command($1,$2,$3,$4,$5,$6,$7,$8) AS value',
@@ -112,7 +150,44 @@ export class PgMhpSequenceRepository implements MhpSequenceRepository {
     } catch (error) { return failure(error); }
   }
 }
-export interface MhpSequenceSaveInput { commandId: string; contentItemId: string; previousVersionId: string; definition: unknown; inlineMessages?: unknown }
+/** `audience` omitted (an older form, or the owner draft tool) saves the sequence for no one yet; it is never silently the webinar. */
+export interface MhpStartRecipient { prospectId: string; firstName: string | null; email: string }
+export interface MhpStartRefusal { code: 'older_version' | 'no_audience' | 'not_published' | 'not_ready' | 'list_unavailable' | 'too_many' | 'list_changed' | 'nobody'; message: string }
+export interface MhpStartPlan {
+  ready: boolean; refusal: MhpStartRefusal | null; itemId: string; versionId: string; title: string; audience: FollowupAudience; campaign: string;
+  webinar: { label: string | null; date: string | null };
+  /** Exactly who the next Start would email, in the database's own order, at most one batch of 500. */
+  recipients: readonly MhpStartRecipient[]; count: number; digest: string;
+  /** Eligible people beyond this batch; they need their own confirmation afterwards. */
+  later: number;
+  heldBack: { noConsent: number; unsubscribed: number; alreadyIn: number; earlierVersion: number };
+  messages: readonly { number: number; channel: string; subject: string | null; waitMinutes: number; offsetMinutes: number }[];
+  mode: string;
+}
+export interface MhpStartInput { commandId: string; itemId: string; versionId: string; count: number; digest: string;
+  /** First 8 hex characters of each confirmed person's id, used only to explain a difference. */
+  people: string; confirmed: boolean }
+export type MhpStartResult =
+  | { kind: 'started'; started: number; expected: number; replayed: boolean; unexpected: number; unexpectedPaused: number; inFlight: number; later: number; firstWaitMinutes: number }
+  | { kind: 'already_started'; count: number }
+  | { kind: 'changed'; plan: MhpStartPlan; previousCount: number; added: readonly MhpStartRecipient[]; removed: readonly MhpStartRecipient[] };
+export interface MhpBulkResult { kind: 'bulk'; action: 'pause' | 'resume'; changed: number; remaining: number; blocked: number; inFlight: number; replayed: boolean; batches: number }
+export interface MhpResumePlan { ready: boolean; refusal: string | null; itemId: string; versionId: string; title: string; people: readonly MhpSequenceRun[]; needsCheck: number; digest: string }
+export interface MhpPersonOutcome { runId: string; action: MhpSequenceAction['action']; code: 'done' | 'already' | 'used' | 'blocked' | 'not_ready' | 'unchanged' | 'gone';
+  before: FollowupRunState | null; after: FollowupRunState | null; inFlight: boolean }
+export function startDigest(itemId: string, versionId: string, prospectIds: readonly string[]): string {
+  return createHash('sha256').update(['mhp.sequence-start/v1', itemId, versionId, ...prospectIds].join('\n')).digest('hex');
+}
+export function resumeDigest(itemId: string, runIds: readonly string[]): string {
+  return createHash('sha256').update(['mhp.sequence-resume/v1', itemId, ...runIds].join('\n')).digest('hex');
+}
+/** The configured campaign key carries the webinar date (webinar-YYYY-MM-DD); nothing is guessed when it does not. */
+export function webinarDate(campaign: string): string | null {
+  const match = /(?:^|-)(\d{4}-\d{2}-\d{2})(?:$|-)/u.exec(campaign); if (!match) return null;
+  const at = Date.parse(`${match[1]}T12:00:00Z`);
+  return Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === match[1] ? new Date(at).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : null;
+}
+export interface MhpSequenceSaveInput { commandId: string; contentItemId: string; previousVersionId: string; definition: unknown; inlineMessages?: unknown; audience?: unknown }
 export class MhpSequenceService {
   constructor(private readonly dependencies: {
     marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; repository: MhpSequenceRepository;
@@ -155,19 +230,31 @@ export class MhpSequenceService {
     const definition = this.checked(readCanonicalFollowupSequence(review.canonicalContent));
     const blockers = new Set(followupActivationBlockers(definition, this.readiness));
     const selected = new Map(definition.steps.filter((step): step is FollowupMessage => step.kind !== 'wait' && (Boolean(this.dependencies.messages) || step.kind === 'email')).map(step => [step.contentVersionId, step]));
-    const messages: FlowMessageReview[] = [];
+    const messages: FlowMessageReview[] = [], subjects: Record<string, string> = {};
     for (const step of selected.values()) {
       try {
         if (this.dependencies.messages) {
           const message = await this.dependencies.messages.review(identity, requestId, step.kind, step.contentItemId, step.contentVersionId); messages.push(message);
+          if ('subject' in message.payload && typeof message.payload.subject === 'string') subjects[step.contentVersionId] = message.payload.subject;
           if (!message.review.isLatest || message.review.approvalStatus !== 'approved' || message.review.approvalStale || !message.valid || message.review.contentSha256 !== step.contentSha256) blockers.add('email_version_not_ready');
         } else {
           const email = await this.dependencies.emails.review(identity, requestId, step.contentItemId, step.contentVersionId);
+          if (typeof email.review.email?.subject === 'string') subjects[step.contentVersionId] = email.review.email.subject;
           if (!email.review.isLatest || email.review.approvalStatus !== 'approved' || email.review.approvalStale || !email.local.valid || email.review.contentSha256 !== step.contentSha256) blockers.add('email_version_not_ready');
         }
       } catch (error) { if ((error instanceof MhpCommerceError || error instanceof FlowWorkspaceError) && [404, 409].includes(error.status)) blockers.add('email_version_not_ready'); else throw error; }
     }
-    return { review, local, definition, blockers: [...blockers], timeline: followupTimeline(definition), ...(this.dependencies.messages ? { messages } : {}) };
+    const audience = await this.audienceOf(identity, itemId, local.metadata);
+    return { review, local, definition, blockers: [...blockers], timeline: followupTimeline(definition), audience, subjects, ...(this.dependencies.messages ? { messages } : {}) };
+  }
+  /** The saved audience of a version, or, for a version saved before audiences existed, the cautious classification. */
+  private async audienceOf(identity: PortalSessionIdentity, itemId: string, metadata: unknown, database?: MhpSequenceDatabaseSnapshot): Promise<FollowupAudience> {
+    const stored = readStoredFollowupAudience(metadata);
+    if (stored) return stored;
+    const snapshot = database ?? await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
+    return classifyLegacyFollowupAudience({ campaign: this.dependencies.campaign,
+      hasRuns: snapshot.campaign === this.dependencies.campaign && snapshot.runs.some(run => run.contentItemId === itemId),
+      hasEntryRule: snapshot.campaign === this.dependencies.campaign && (snapshot.entryRules ?? []).some(rule => rule.contentItemId === itemId) });
   }
   async preview(identity: PortalSessionIdentity, requestId: string, value: unknown, inlineMessages?: unknown) {
     await this.context(identity, requestId); const composition = inlineMessages === undefined ? null : parseFlowComposition(value, inlineMessages), definition = this.checked(composition?.definition ?? value);
@@ -196,6 +283,8 @@ export class MhpSequenceService {
   }
   async save(identity: PortalSessionIdentity, requestId: string, input: MhpSequenceSaveInput, now = Date.now()) {
     if (!uuid(input.commandId) || Boolean(input.contentItemId) !== Boolean(input.previousVersionId)) throw new MhpCommerceError(400, 'Refresh the sequence form before saving.');
+    let audienceKind: FollowupAudienceKind;
+    try { audienceKind = parseFollowupAudienceChoice(input.audience); } catch (error) { throw new MhpCommerceError(400, (error as FollowupSequenceValidationError).message); }
     const context = await this.context(identity, requestId), composition = input.inlineMessages === undefined ? null : parseFlowComposition(input.definition, input.inlineMessages);
     let definition = this.checked(composition?.definition ?? input.definition);
     if (composition && Object.keys(composition.inlineMessages).length) {
@@ -208,7 +297,8 @@ export class MhpSequenceService {
     const replay = async () => {
       const saved = await this.dependencies.repository.local(identity, null, `edit:${input.commandId}`);
       if (!saved) return null;
-      if (saved.canonicalContent !== canonical || saved.previousVersionId !== (input.previousVersionId || null) || (input.contentItemId && saved.contentItemId !== input.contentItemId))
+      if (saved.canonicalContent !== canonical || saved.previousVersionId !== (input.previousVersionId || null) || (input.contentItemId && saved.contentItemId !== input.contentItemId)
+          || readStoredFollowupAudience(saved.metadata)?.kind !== audienceKind)
         throw new MhpCommerceError(409, 'This save command already has different sequence details. Refresh the editor.');
       return { contentItemId: saved.contentItemId, contentVersionId: saved.contentVersionId, replayed: true };
     };
@@ -224,7 +314,8 @@ export class MhpSequenceService {
       previousVersionId: old?.review.contentVersionId ?? null, origin: old ? 'edited' : 'imported', kind: 'other', title: definition.title, contentMimeType: FOLLOWUP_SEQUENCE_MIME,
       content: canonical, source: { system: FOLLOWUP_SEQUENCE_SOURCE, itemId: item, version: revision }, blob: { storageKey, sha256: sha }, brand: { snapshotRef: brand.ref, sha256: brand.sha256 },
       attestation: { catalogSha256: followupSequenceSha(manifest), checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + 900_000).toISOString() },
-      metadata: { mhpSequence: { schema: 'mhp.followup-sequence-local/v1', brandCanonical: brand.canonical, manifestCanonical: manifest, manifestSha256: followupSequenceSha(manifest), authoredBy: 'native-owner' } } };
+      metadata: { mhpSequence: { schema: 'mhp.followup-sequence-local/v1', brandCanonical: brand.canonical, manifestCanonical: manifest, manifestSha256: followupSequenceSha(manifest), authoredBy: 'native-owner',
+        audience: storedFollowupAudience(audienceKind, this.dependencies.campaign) } } };
     try { const result = await this.dependencies.adapter.createVersion(context, command); return { contentItemId: result.contentItemId, contentVersionId: result.contentVersionId, replayed: result.disposition === 'replayed' }; }
     catch (error) { const winner = await replay(); if (winner) return winner; return failure(error); }
   }
@@ -259,8 +350,10 @@ export class MhpSequenceService {
   }
   async command(identity: PortalSessionIdentity, requestId: string, input: MhpSequenceAction): Promise<MhpSequenceActionResult> {
     if (!uuid(input.commandId) || !uuid(input.versionId) || !uuid(input.itemId) || (input.runId && !uuid(input.runId)) || (input.ackProofId && !uuid(input.ackProofId))) throw new MhpCommerceError(400, 'Refresh the sequence controls before continuing.');
+    // Starting is only ever the confirmed path below (start), bound to the exact people the owner saw.
+    if (input.action === 'enrol') throw new MhpCommerceError(409, MHP_START_NEEDS_CONFIRMATION);
     const detail = await this.review(identity, requestId, input.itemId, input.versionId);
-    if (['enrol', 'resume'].includes(input.action) && detail.blockers.length) throw new MhpCommerceError(409, 'This sequence is not ready to start. Publish the selected email versions and review any connection notes.');
+    if (input.action === 'resume' && detail.blockers.length) throw new MhpCommerceError(409, MHP_SEQUENCE_NOT_READY);
     return this.dependencies.repository.command(identity, { ...input, campaign: this.dependencies.campaign, requestId });
   }
   async entryCommand(identity: PortalSessionIdentity, requestId: string, input: MhpEntryAction, now = Date.now()): Promise<MhpEntryActionResult> {
@@ -270,13 +363,167 @@ export class MhpSequenceService {
     if (input.action === 'activate') {
       const expires = Date.parse(input.expiresAt);
       if (!Number.isFinite(expires) || expires <= now || new Date(expires).toISOString() !== input.expiresAt) throw new MhpCommerceError(400, 'Choose a valid future stop time in UTC.');
+      if (!followupAudienceCanStart(detail.audience, this.dependencies.campaign)) throw new MhpCommerceError(409, FOLLOWUP_NO_AUDIENCE_LINE);
       if (!detail.review.isLatest || detail.review.approvalStatus !== 'approved' || detail.review.approvalStale || !detail.local.valid
           || detail.blockers.length || followupEntryIntent(detail.definition).mode !== 'webinar_signup') {
-        throw new MhpCommerceError(409, 'Publish the latest ready sequence with future webinar entry selected before enabling its rule.');
+        throw new MhpCommerceError(409, 'Publish the latest version of this sequence, with "Future webinar sign-ups" chosen under How people join, before switching on automatic sign-ups.');
       }
+      if (input.confirmed !== true) throw new MhpCommerceError(400, 'Tick the box to confirm who will be added automatically, then press the button again.');
     }
     if (!this.dependencies.repository.entryCommand) throw new MhpCommerceError(503, 'Future webinar entry is not connected yet.');
     return this.dependencies.repository.entryCommand(identity, { ...input, campaign: this.dependencies.campaign, requestId });
+  }
+  /** Who pressing Start would email right now, exactly as the database will choose them, or why it cannot be started. Reads only. */
+  async startPlan(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string): Promise<MhpStartPlan> {
+    const detail = await this.review(identity, requestId, itemId, versionId);
+    return this.plan(identity, detail, await this.dependencies.repository.snapshot(identity, this.dependencies.campaign));
+  }
+  private async plan(identity: PortalSessionIdentity, detail: MhpSequenceReview, database: MhpSequenceDatabaseSnapshot): Promise<MhpStartPlan> {
+    const campaign = this.dependencies.campaign, itemId = detail.review.contentItemId, versionId = detail.review.contentVersionId;
+    const messages = detail.timeline.map((step, index) => ({ number: index + 1, channel: step.step.kind, subject: detail.subjects?.[step.step.contentVersionId] ?? null,
+      waitMinutes: step.waitMinutes, offsetMinutes: step.earliestOffsetMinutes }));
+    const base = { itemId, versionId, title: detail.definition.title, audience: detail.audience, campaign, webinar: { label: null as string | null, date: webinarDate(campaign) },
+      recipients: [] as MhpStartRecipient[], count: 0, digest: '', later: 0, heldBack: { noConsent: 0, unsubscribed: 0, alreadyIn: 0, earlierVersion: 0 },
+      messages, mode: this.dependencies.emails.status.mode };
+    const refuse = (code: MhpStartRefusal['code'], message: string, extra: Partial<MhpStartPlan> = {}): MhpStartPlan => ({ ...base, ...extra, ready: false, refusal: { code, message } });
+    if (!detail.review.isLatest) return refuse('older_version', 'This is an older version of the sequence. Open the latest version to start it.');
+    if (!followupAudienceCanStart(detail.audience, campaign)) return refuse('no_audience', detail.audience.kind === 'webinar_signups'
+      ? 'This sequence is for the sign-ups of a different webinar, so it cannot be started from here.' : FOLLOWUP_NO_AUDIENCE_LINE);
+    if (detail.review.approvalStatus !== 'approved' || detail.review.approvalStale || !detail.local.valid) return refuse('not_published', 'Publish this version before starting it.');
+    if (detail.blockers.length) return refuse('not_ready', MHP_SEQUENCE_NOT_READY);
+    if (database.campaign !== campaign) return refuse('list_unavailable', 'The list of people could not be read. Nothing was started.');
+    const reader = this.dependencies.repository.audienceCandidates?.bind(this.dependencies.repository);
+    if (!reader) return refuse('list_unavailable', 'The list of people who would receive this cannot be shown here yet, so the sequence cannot be started.');
+    // Every person the page knows about must be the whole story, or exclusions could be wrong.
+    if (database.runs.length < database.runCount) return refuse('too_many', 'This webinar already has more people in sequences than this page can list, so it cannot be started safely from here. Nothing was started.');
+    const candidates: MhpAudienceCandidate[] = []; let after: string | null = null;
+    for (let page = 0; ; page++) {
+      if (page >= 400) return refuse('too_many', 'There are too many sign-ups to list on one page, so this cannot be started from here. Nothing was started.');
+      const next: MhpAudienceCandidatePage = await reader(identity, campaign, after);
+      candidates.push(...next.candidates);
+      if (!next.hasMore) break; after = next.nextAfter;
+    }
+    const key = (email: string) => email.trim().toLowerCase();
+    const runs = database.runs.filter(run => run.contentItemId === itemId);
+    const inThisVersion = new Set(runs.filter(run => run.contentVersionId === versionId).map(run => key(run.email)));
+    const inEarlier = new Set(runs.filter(run => run.contentVersionId !== versionId && OPEN_STATES.includes(run.state)).map(run => key(run.email)));
+    const eligible = candidates.filter(c => c.marketingConsent && !c.unsubscribed && c.signupConsentGiven);
+    const heldBack = { unsubscribed: candidates.filter(c => c.unsubscribed).length, noConsent: candidates.filter(c => !c.unsubscribed && !(c.marketingConsent && c.signupConsentGiven)).length,
+      alreadyIn: eligible.filter(c => inThisVersion.has(key(c.email))).length, earlierVersion: eligible.filter(c => !inThisVersion.has(key(c.email)) && inEarlier.has(key(c.email))).length };
+    const labels = new Map<string, number>(); for (const c of eligible) if (c.label) labels.set(c.label, (labels.get(c.label) ?? 0) + 1);
+    const webinar = { label: [...labels.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null, date: base.webinar.date };
+    if (eligible.length !== database.eligible) return refuse('list_changed', 'The list of people changed while it was being read. Nothing was started. Open this page again to see the current list.', { webinar, heldBack });
+    const pending = eligible.filter(c => !inThisVersion.has(key(c.email)) && !inEarlier.has(key(c.email))).sort((a, b) => a.prospectId < b.prospectId ? -1 : a.prospectId > b.prospectId ? 1 : 0);
+    const batch = pending.slice(0, MHP_SEQUENCE_BATCH).map(c => ({ prospectId: c.prospectId, firstName: c.firstName, email: c.email }));
+    const result = { webinar, heldBack, recipients: batch, count: batch.length, digest: startDigest(itemId, versionId, batch.map(r => r.prospectId)), later: pending.length - batch.length };
+    if (!batch.length) return refuse('nobody', heldBack.alreadyIn ? 'Everyone who can receive this sequence is already in it. Nobody new would be emailed.' : 'Nobody can receive this sequence right now: nobody who registered has agreed to emails or is not already in it.', result);
+    return { ...base, ...result, ready: true, refusal: null };
+  }
+  /**
+   * The only way a sequence starts. It recomputes who would receive it immediately before the database
+   * call and refuses, starting nothing, unless that is exactly the list the owner confirmed.
+   */
+  async start(identity: PortalSessionIdentity, requestId: string, input: MhpStartInput): Promise<MhpStartResult> {
+    if (!uuid(input.commandId) || !uuid(input.itemId) || !uuid(input.versionId) || !Number.isSafeInteger(input.count) || input.count < 1 || input.count > MHP_SEQUENCE_BATCH
+        || !/^[a-f0-9]{64}$/u.test(input.digest) || !/^(?:[a-f0-9]{8})*$/u.test(input.people)) throw new MhpCommerceError(400, 'Open the sequence and press Start again.');
+    if (!input.confirmed) throw new MhpCommerceError(400, 'Tick the box to confirm who will receive this, then press the button again.');
+    const detail = await this.review(identity, requestId, input.itemId, input.versionId);
+    const before = await this.dependencies.repository.snapshot(identity, this.dependencies.campaign), plan = await this.plan(identity, detail, before);
+    const confirmed = new Set(input.people.match(/.{8}/gu) ?? []);
+    if (!plan.ready || plan.count !== input.count || plan.digest !== input.digest) {
+      // Pressing the same confirmation twice: everyone confirmed is already in this version, so this is the earlier start, not a change.
+      const started = new Set(before.runs.filter(run => run.contentVersionId === input.versionId).map(run => run.email.trim().toLowerCase()));
+      const known = await this.knownPeople(identity, plan, confirmed);
+      if (confirmed.size === input.count && known.length === confirmed.size && known.every(person => started.has(person.email.trim().toLowerCase())))
+        return { kind: 'already_started', count: input.count };
+      if (!plan.ready && !['nobody', 'list_changed'].includes(plan.refusal!.code)) throw new MhpCommerceError(409, plan.refusal!.message);
+      const now = new Set(plan.recipients.map(person => person.prospectId.slice(0, 8)));
+      return { kind: 'changed', plan, previousCount: input.count, added: plan.recipients.filter(person => confirmed.size && !confirmed.has(person.prospectId.slice(0, 8))),
+        removed: known.filter(person => !now.has(person.prospectId.slice(0, 8))) };
+    }
+    const result = await this.dependencies.repository.command(identity, { action: 'enrol', commandId: input.commandId, itemId: input.itemId, versionId: input.versionId,
+      runId: '', ackProofId: '', campaign: this.dependencies.campaign, requestId });
+    // Narrow race: someone who became eligible between the check above and the database call is started too.
+    // Pause anyone new who was not on the confirmed list before any later step; their first email may already be on its way.
+    const after = await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
+    const known = new Set(before.runs.map(run => run.id)), listed = new Set(plan.recipients.map(person => person.email.trim().toLowerCase()));
+    const extra = after.runs.filter(run => run.contentVersionId === input.versionId && !known.has(run.id) && !listed.has(run.email.trim().toLowerCase()) && run.state === 'active');
+    let paused = 0;
+    for (const [index, run] of extra.entries()) {
+      const outcome = await this.dependencies.repository.command(identity, { action: 'pause', commandId: flowCommandUuid(input.commandId, `extra-${index}`), itemId: input.itemId,
+        versionId: input.versionId, runId: run.id, ackProofId: '', campaign: this.dependencies.campaign, requestId });
+      paused += outcome.changed;
+    }
+    return { kind: 'started', started: result.changed, expected: plan.count, replayed: result.replayed, unexpected: Math.max(extra.length, result.changed - plan.count),
+      unexpectedPaused: paused, inFlight: result.inFlight, later: plan.later, firstWaitMinutes: plan.messages[0]?.waitMinutes ?? 0 };
+  }
+  private async knownPeople(identity: PortalSessionIdentity, plan: MhpStartPlan, shortIds: ReadonlySet<string>): Promise<MhpStartRecipient[]> {
+    if (!shortIds.size) return [];
+    const found = new Map<string, MhpStartRecipient>();
+    for (const person of plan.recipients) if (shortIds.has(person.prospectId.slice(0, 8))) found.set(person.prospectId, person);
+    const reader = this.dependencies.repository.audienceCandidates?.bind(this.dependencies.repository);
+    if (reader && found.size < shortIds.size) {
+      let after: string | null = null;
+      for (let page = 0; page < 400; page++) {
+        const next: MhpAudienceCandidatePage = await reader(identity, this.dependencies.campaign, after);
+        for (const c of next.candidates) if (shortIds.has(c.prospectId.slice(0, 8))) found.set(c.prospectId, { prospectId: c.prospectId, firstName: c.firstName, email: c.email });
+        if (!next.hasMore) break; after = next.nextAfter;
+      }
+    }
+    return [...found.values()];
+  }
+  /** Pauses every active person in this sequence (every version), in database batches of up to 500 until none is left. */
+  async pauseAll(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
+    return this.bulk(identity, requestId, 'pause', input);
+  }
+  /** Who "Resume everyone" would resume, bound to their exact ids. Reads only. */
+  async resumePlan(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string): Promise<MhpResumePlan> {
+    const detail = await this.review(identity, requestId, itemId, versionId);
+    const database = await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
+    const waiting = database.runs.filter(run => run.contentItemId === itemId && (run.state === 'paused' || run.state === 'held'));
+    const people = waiting.filter(run => !run.unknownProofId).sort((a, b) => a.id < b.id ? -1 : 1);
+    const base = { itemId, versionId, title: detail.definition.title, people, needsCheck: waiting.length - people.length, digest: resumeDigest(itemId, people.map(run => run.id)) };
+    if (database.runs.length < database.runCount) return { ...base, ready: false, refusal: 'This webinar has more people in sequences than this page can list, so resume people one at a time from their cards.' };
+    if (detail.blockers.length) return { ...base, ready: false, refusal: MHP_SEQUENCE_NOT_READY };
+    if (!people.length) return { ...base, ready: false, refusal: 'Nobody in this sequence is paused.' };
+    return { ...base, ready: true, refusal: null };
+  }
+  async resumeAll(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; itemId: string; versionId: string; count: number; digest: string }): Promise<MhpBulkResult | { kind: 'changed'; plan: MhpResumePlan; previousCount: number }> {
+    if (!Number.isSafeInteger(input.count) || input.count < 1 || !/^[a-f0-9]{64}$/u.test(input.digest)) throw new MhpCommerceError(400, 'Open the sequence and press Resume everyone again.');
+    const plan = await this.resumePlan(identity, requestId, input.itemId, input.versionId);
+    if (!plan.ready && plan.people.length) throw new MhpCommerceError(409, plan.refusal!);
+    if (plan.people.length !== input.count || plan.digest !== input.digest) return { kind: 'changed', plan, previousCount: input.count };
+    return this.bulk(identity, requestId, 'resume', input);
+  }
+  private async bulk(identity: PortalSessionIdentity, requestId: string, action: 'pause' | 'resume', input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
+    if (!uuid(input.commandId) || !uuid(input.itemId) || !uuid(input.versionId)) throw new MhpCommerceError(400, 'Open the sequence and try again.');
+    const total = { kind: 'bulk' as const, action, changed: 0, remaining: 0, blocked: 0, inFlight: 0, replayed: false, batches: 0 };
+    for (let batch = 0; batch < 20; batch++) {
+      const result = await this.command(identity, requestId, { action, commandId: batch === 0 ? input.commandId : flowCommandUuid(input.commandId, `batch-${batch}`),
+        itemId: input.itemId, versionId: input.versionId, runId: '', ackProofId: '' });
+      total.batches++; total.changed += result.changed; total.blocked += result.blocked; total.inFlight += result.inFlight; total.remaining = result.remaining;
+      total.replayed ||= result.replayed;
+      // Stop once nothing is left, or when a batch changed nobody (the rest are blocked and need individual attention).
+      if (result.remaining === 0 || result.changed === 0 || result.replayed) break;
+    }
+    return total;
+  }
+  /** One person's pause, resume, stop or cancel. A person who already changed is not an error: the result says where they are now. */
+  async personAction(identity: PortalSessionIdentity, requestId: string, input: MhpSequenceAction): Promise<MhpPersonOutcome> {
+    if (input.action === 'enrol' || !uuid(input.runId)) throw new MhpCommerceError(400, 'Open the sequence and use the button on the person\'s card.');
+    const before = (await this.dependencies.repository.snapshot(identity, this.dependencies.campaign)).runs.find(run => run.id === input.runId && run.contentItemId === input.itemId);
+    if (!before) return { runId: input.runId, action: input.action, code: 'gone', before: null, after: null, inFlight: false };
+    let result: MhpSequenceActionResult | null = null, code: MhpPersonOutcome['code'] | null = null;
+    try { result = await this.command(identity, requestId, input); }
+    catch (error) {
+      if (!(error instanceof MhpCommerceError) || error.status !== 409) throw error;
+      code = error.message === MHP_SEQUENCE_NOT_READY ? 'not_ready' : 'unchanged';
+    }
+    const after = (await this.dependencies.repository.snapshot(identity, this.dependencies.campaign)).runs.find(run => run.id === input.runId) ?? null;
+    const target: FollowupRunState = input.action === 'pause' ? 'paused' : input.action === 'resume' ? 'active' : input.action === 'stop' ? 'stopped' : 'cancelled';
+    if (!code && result) code = after?.state === target ? (result.replayed ? 'already' : result.changed > 0 ? 'done' : 'already')
+      : result.replayed ? 'used' : result.blocked > 0 ? 'blocked' : 'unchanged';
+    return { runId: input.runId, action: input.action, code: code ?? 'unchanged', before: before.state, after: after?.state ?? null, inFlight: Boolean(result?.inFlight) || Boolean(after?.inFlight) };
   }
 }
 export function createMhpSequenceService(input: { web: Pool; identity: Pool; adapter: Pool; approvals: Pool; marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; emails: MhpOwnerEmailService; campaign: string }): MhpSequenceService {
