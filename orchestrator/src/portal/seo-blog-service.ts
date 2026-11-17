@@ -30,6 +30,10 @@ import type { CreativeStudioService } from '../creative-studio/service.js';
 import { PgEnquiryCapture } from '../creative-studio/enquiry-capture.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
 import { createPgCrmTransactionRunner } from '../crm-pg/repository.js';
+import { logPortalSeoBlogCapabilities } from './seo-blog-capabilities.js';
+import { fullEngineRequired, researchCredentials } from '../seo-blog/engine-stamp.js';
+import { DataForSeoLabsProvider, type KeywordResearchProvider } from '../keyword/dataforseo-labs.js';
+import { keywordPoolEnabled } from '../seo-blog/keyword-fill.js';
 
 export interface PortalSeoBlogService {
   limitsFor?(identity: PortalSessionIdentity, requestId: string): SeoLimitsService;
@@ -63,6 +67,10 @@ export interface SeoBlogRuntime {
   readonly search: SearchProvider;
   readonly keywords: KeywordProvider | null;
   readonly vault: SeoBlogCredentialVault | null;
+  /** SEO_BLOG_REQUIRE_FULL_ENGINE: stop rather than produce a weaker article (off by default). */
+  readonly requireFullEngine: boolean;
+  /** SEO_BLOG_KEYWORD_POOL: the business keyword list (off by default; needs the research credentials). */
+  readonly keywordResearch: KeywordResearchProvider | null;
 }
 
 export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRuntime {
@@ -73,15 +81,19 @@ export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRun
     try { llm = scopedApiKey ? new AnthropicClient(scopedApiKey) : new AnthropicClient(); } catch { llm = null; }
   }
   let keywords: KeywordProvider | null = null;
-  if (env.SEO_BLOG_KEYWORD_METRICS === 'dataforseo' && env.DATAFORSEO_LOGIN && env.DATAFORSEO_PASSWORD) {
-    keywords = new DataForSeoProvider(env.DATAFORSEO_LOGIN, env.DATAFORSEO_PASSWORD, Number(env.DATAFORSEO_LOCATION_CODE ?? 2826), 'en');
+  // Search numbers use the same credentials as research (one resolution), and stay opt-in.
+  const credentials = researchCredentials(env);
+  if (env.SEO_BLOG_KEYWORD_METRICS === 'dataforseo' && credentials) {
+    keywords = new DataForSeoProvider(credentials.login, credentials.password, Number(env.DATAFORSEO_LOCATION_CODE ?? 2826), 'en');
   }
-  return { llm, search: configuredSearchProvider(env), keywords, vault: SeoBlogCredentialVault.fromEnv(env) };
+  const keywordResearch = keywordPoolEnabled(env) && credentials && env.SEO_BLOG_RESEARCH_PROVIDER !== 'none' ? new DataForSeoLabsProvider(credentials.login, credentials.password) : null;
+  return { llm, search: configuredSearchProvider(env), keywords, vault: SeoBlogCredentialVault.fromEnv(env), requireFullEngine: fullEngineRequired(env), keywordResearch };
 }
 
 export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool, socialPools?: PortalSeoBlogSocialPools,
   crmCommandPool?: Pool): PortalSeoBlogService {
   const runtime = seoBlogRuntime(env);
+  logPortalSeoBlogCapabilities({ search: runtime.search.mode, keywords: runtime.keywords?.mode ?? 'off', methods: env.SEO_BLOG_METHOD_PACKS === 'true' });
   const transport = new GuardedFetchTransport();
   const publishers = defaultPublishers();
   const promotionsReady = env.R72_CONTENT_ENABLED === 'true' && Boolean(contentAdapterPool);
@@ -116,6 +128,9 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       return new SeoBlogEngine({ ...media,
         ...(env.SEO_BLOG_METHOD_PACKS==='true'&&env.SEO_BLOG_CAMPAIGN_CREATORS==='true'?{creatorStore:new PgCampaignCreatorStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId})}:{}),
         ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId}),true)}:{}), llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
+        ...(env.SEO_BLOG_WORDPRESS_FOCUS_PHRASE?.trim() === 'true' ? { wordpressFocusPhrase: true } : {}),
+        ...(runtime.requireFullEngine ? { requireFullEngine: true, ...(env.SEO_BLOG_METHOD_PACKS === 'true' ? {} : { methodAssignments: new PgMethodStore(contentCommandPool, { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId }) }) } : {}),
+        ...(runtime.keywordResearch ? { keywordResearch: runtime.keywordResearch } : {}),
         ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
         ...(social ? { social } : {}) });
     },
@@ -137,6 +152,9 @@ export function createWorkerSeoBlogEngine(contentCommandPool: Pool, requestId: s
     ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'worker',requestId}),true)}:{}),
     llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport: new GuardedFetchTransport(),
     publishers: defaultPublishers(), vault: runtime.vault, batchLimit: Number(env.SEO_BLOG_WORKER_BATCH ?? 5),
+    ...(env.SEO_BLOG_WORDPRESS_FOCUS_PHRASE?.trim() === 'true' ? { wordpressFocusPhrase: true } : {}),
+    ...(runtime.requireFullEngine ? { requireFullEngine: true, ...(env.SEO_BLOG_METHOD_PACKS === 'true' ? {} : { methodAssignments: new PgMethodStore(contentCommandPool, { kind: 'worker', requestId }) }) } : {}),
+    ...(runtime.keywordResearch ? { keywordResearch: runtime.keywordResearch } : {}),
     ...(creativeJobs ? { creativeJobs } : {}),
   });
 }

@@ -14,30 +14,24 @@ if(process.env.RELAUNCH72_DATABASE_INTEGRATION!=='explicit-disposable-run'
   throw new Error('Media schema drafts may be tested only in an explicitly authorised disposable localhost database');
 
 const draftFiles=[
-  "0157_creative_media_products.sql",
-  "0158_creative_media_reports.sql",
-  "0159_creative_media_video_jobs.sql",
-  "0160_creative_media_source_videos.sql",
-  "0161_creative_source_video_private_preview.sql",
-  "0162_creative_media_video_probe.sql",
-  "0163_creative_media_video_output_capture.sql",
-  "0164_creative_media_access_grants.sql",
-  "0165_creative_video_private_output_preview.sql",
-  "0166_creative_media_edit_projects.sql",
-  "0167_creative_media_global_budget.sql",
-  "output-private-review.sql",
+  "native-video-role.sql",
+  "media-erasure-table.sql",
+  "source-videos.sql",
+  "source-private-preview.sql",
+  "source-video-probe.sql",
+  "edit-projects.sql",
   "local-render-jobs.sql",
   "local-output-private-review.sql",
   "media-worker-dispatch.sql",
   "local-video-canonical-handoff.sql",
-  "affiliate-link-evidence.sql",
   "private-object-sources.sql",
   "native-video-release.sql",
-  "affiliate-link-distribution.sql",
   "media-retention.sql",
   "native-video-jit.sql",
-  "native-video-planner.sql"
+  "native-video-planner.sql",
+  "native-video-call-trigger.sql"
 ];
+
 const client=new pg.Client({connectionString:DATABASE});
 await client.connect();
 try{

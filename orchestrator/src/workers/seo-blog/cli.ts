@@ -17,6 +17,7 @@ import { loadDatabaseConfig } from '../../db/config.js';
 import { createDatabasePool } from '../../db/pool.js';
 import { createWorkerSeoBlogEngine } from '../../portal/seo-blog-service.js';
 import { idleUntilShutdown } from './lifecycle.js';
+import { seoBlogCapabilitiesLine } from '../../portal/seo-blog-capabilities.js';
 import { findCreativeChromium } from '../../creative-studio/renderer.js';
 
 async function main(): Promise<void> {
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
   console.log('seo-blog worker: capability programme-research-v1 (budgeted plan attempts; durable receipts and bounded supplier retries).');
   console.log('seo-blog worker: capability website-target-v2 (pinned reviewed targets, independent delivery evidence and sitemap-only repair).');
   console.log('seo-blog worker: capability campaign-media-v1 (committed image intents, private crops, exact media release and genuine-owner deferred social instructions).');
+  console.log(seoBlogCapabilitiesLine('worker', createWorkerSeoBlogEngine(pool, `seo-blog-worker-startup-${randomUUID()}`).runtimeCapabilities()));
   if (process.env.CREATIVE_STUDIO_ENABLED?.trim() === 'true') {
     const chromium = findCreativeChromium();
     console.log(`seo-blog worker: capability creative-studio-v1 (typed-brief images through the shared paid-image admission; durable local renders; renderer ${chromium ? 'found' : 'NOT found: render tasks will stop with a message'}).`);

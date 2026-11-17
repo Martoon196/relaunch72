@@ -3,12 +3,11 @@ import type {Pool} from 'pg';
 import {withTransaction} from '../db/transaction.js';
 import {SeoBlogError} from '../seo-blog/types.js';
 import {checkedEditId} from './media-edit-plan.js';
-export type OfflineMediaWork={kind:'probe'|'render-local'|'probe-output';id:string};
+export type OfflineMediaWork={kind:'probe'|'render-local';id:string};
 export interface MediaDispatchPorts {
  pending:(workspaceId:string,limit:number)=>Promise<OfflineMediaWork[]>;
  probe:(workspaceId:string,id:string)=>Promise<unknown>;
  render:(workspaceId:string,id:string)=>Promise<{state:string}>;
- probeOutput:(workspaceId:string,id:string)=>Promise<unknown>;
 }
 export async function runOfflineMediaTick(workspace:string,ports:MediaDispatchPorts,options:{env?:NodeJS.ProcessEnv;limit?:number;signal?:AbortSignal}={}){
  const env=options.env??process.env,ws=checkedEditId(workspace),limit=options.limit??3;
@@ -18,7 +17,7 @@ export async function runOfflineMediaTick(workspace:string,ports:MediaDispatchPo
  const jobs=await ports.pending(ws,limit);
  if(jobs.length>limit)throw new SeoBlogError(409,'Worker discovery exceeded its batch bound');
  // Validate the complete batch before starting any work. Never interpret a new kind as a provider submit.
- for(const job of jobs){checkedEditId(job.id);if(!['probe','render-local','probe-output'].includes(job.kind))throw new SeoBlogError(409,'Unknown offline work kind');}
+ for(const job of jobs){checkedEditId(job.id);if(!['probe','render-local'].includes(job.kind))throw new SeoBlogError(409,'Unknown offline work kind');}
  const receipts:Array<{id:string;kind:OfflineMediaWork['kind'];state:'completed'|'held'|'reconciliation_required'}>=[];
  const seen=new Set<string>();
  for(const job of jobs){
@@ -27,7 +26,6 @@ export async function runOfflineMediaTick(workspace:string,ports:MediaDispatchPo
   try{
    let result:unknown;
    if(job.kind==='probe')result=await ports.probe(ws,job.id);
-   else if(job.kind==='probe-output')result=await ports.probeOutput(ws,job.id);
    else result=await ports.render(ws,job.id);
    const state=(result as {state?:string}|null)?.state;
    receipts.push({id:job.id,kind:job.kind,state:state==='reconciliation_required'?'reconciliation_required':state==='failed'?'held':'completed'});

@@ -19,16 +19,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
 import {PgOfflineMediaDiscovery} from '../../src/creative-studio/media-worker-dispatch.js';
-import {PgMediaAccessOwner} from '../../src/creative-studio/media-access-pg-store.js';
-import {PgCreativeMediaProductStore} from '../../src/creative-studio/media-product-pg-store.js';
-import {PgMediaLinkEvidenceOwner} from '../../src/creative-studio/media-link-evidence.js';
 import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-canonical-handoff.js';
 import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../../src/creative-studio/media-private-files.js';
 import {PgPrivateObjectSources,PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../src/creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../src/creative-studio/media-local-render.js';
 import {PgSetupDeliveryService,SetupDeliveryKeyring,setupDeliveryAad} from '../../src/portal/setup-delivery-pg-service.js';
 import {PgPortalAuthService} from '../../src/portal/auth-pg-service.js';
-import {PgAffiliatePublicationOwner,PgAffiliatePublicPages} from '../../src/creative-studio/media-affiliate-pages.js';
 import {PgNativeVideoReleaseOwner,PgNativeVideoReleaseWorker} from '../../src/creative-studio/media-video-release.js';
 import {CompanyContentService} from '../../src/company-content-pg/index.js';
 import {withTransaction} from '../../src/db/transaction.js';
@@ -153,9 +149,7 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
    await assert.rejects(b.owner.load(b.brand.id,finished.outputId!),/not found|unavailable/iu);
    await assert.rejects(b.owner.load(a.brand.id,finished.outputId!),/owner|session|workspace/iu);
    await assert.rejects(worker.claim(a.brand.id,jobId),/cannot be claimed again/iu);
-   const paid=(await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_jobs WHERE workspace_id=$1',
-    [a.brand.id])).rows[0]?.n;
-   assert.equal(paid,0,'Local rendering must not create a paid provider reservation');
+   assert.equal((await admin.query("SELECT to_regclass('app.creative_media_video_jobs') AS name")).rows[0].name,null,'native-only schema has no paid job table');
   });
   const extra:pg.Pool[]=[];
   const offset=async(value:string)=>{if(process.env.RL72_MEDIA_CLOCK_CONTAINER)execFileSync('docker',['exec','-u','postgres',process.env.RL72_MEDIA_CLOCK_CONTAINER,'sh','-c',"printf '%s\\n' '"+value+"' > /tmp/rl72-native-clock"]);else await writeFile(process.env.RL72_MEDIA_CLOCK_FILE!,value+'\n');};
@@ -180,6 +174,18 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
    const firstRequest=request(accounts[0]!),positive=await planner.plan(firstRequest),negative=await planner.plan(request(accounts[1]!));
    const future=await planner.plan({...request(accounts[2]!),scheduledFor:new Date(Date.now()+4*86400000).toISOString()});
    assert.equal((await planner.plan(firstRequest)).jobId,positive.jobId);
+   // Separate trigger-isolation fixture: canonical foreign keys remain enabled.
+   // This cloned text-only row is NOT used as planner/claim/calling proof above or below.
+   const isolated=await admin.connect();try{
+    await isolated.query('BEGIN');const textJob=randomUUID();
+    const columns=(await isolated.query("SELECT attname FROM pg_attribute WHERE attrelid='app.property_predator_owned_social_jobs'::regclass AND attnum>0 AND NOT attisdropped AND attgenerated='' ORDER BY attnum")).rows.map(r=>'"'+String(r.attname).replaceAll('"','""')+'"').join(',');
+    await isolated.query(`INSERT INTO app.property_predator_owned_social_jobs(${columns}) SELECT ${columns.split(',').map(c=>'copy.'+c).join(',')} FROM app.property_predator_owned_social_jobs j CROSS JOIN LATERAL jsonb_populate_record(NULL::app.property_predator_owned_social_jobs,to_jsonb(j)||jsonb_build_object('id',$3::text,'idempotency_key_sha256',('\\x'||encode(public.digest($3::text,'sha256'),'hex')),'state','leased','lease_version',1,'lease_attempt_kind','publish','lease_expires_at',clock_timestamp()+interval '90 seconds')) copy WHERE j.workspace_id=$1 AND j.id=$2`,[a.brand.id,positive.jobId,textJob]);
+    await isolated.query('REVOKE EXECUTE ON FUNCTION app_private.current_workspace_id(),app_private.current_actor_kind() FROM r72_media_job_definer');
+    await isolated.query("SELECT set_config('app.workspace_id',$1,true),set_config('app.actor_kind','worker',true)",[a.brand.id]);
+    await isolated.query('SET LOCAL ROLE r72_owned_social_definer');
+    assert.equal((await isolated.query("UPDATE app.property_predator_owned_social_jobs SET state='calling' WHERE workspace_id=$1 AND id=$2 RETURNING state",[a.brand.id,textJob])).rows[0].state,'calling','text job bypasses media guard even with media context grants revoked');
+   }finally{await isolated.query('ROLLBACK');isolated.release();}
+
    await assert.rejects(new PgNativeVideoPlanner(adapter,planning,zernio,b.principal,flags).plan({...firstRequest,workspaceId:b.brand.id,commandId:randomUUID()}),/approved|owner|workspace/iu);
    assert.equal(await jit.attest(a.brand.id),0,'no premature proof days before the slot');
    const repository=new PgZernioCalendarRepository(social,{workspaceId:a.brand.id,connectionId:binding.connectionId});

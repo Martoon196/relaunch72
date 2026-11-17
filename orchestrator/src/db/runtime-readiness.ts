@@ -14,6 +14,7 @@ import { SEO_BLOG_ATTACH_MIGRATION, SEO_BLOG_ATTACH_CHECKSUM } from './seo-blog-
 import { EMAIL_CONNECTION_MIGRATION, EMAIL_CONNECTION_CHECKSUM } from './email-connection-schema.js';
 import { EMAIL_PROTECTION_MIGRATION, EMAIL_PROTECTION_CHECKSUM } from './email-protection-schema.js';
 import { EMAIL_ALLOWLIST_MIGRATION, EMAIL_ALLOWLIST_CHECKSUM } from './email-allowlist-schema.js';
+import { AFFILIATE_MIGRATION, AFFILIATE_CHECKSUM } from './affiliate-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -323,6 +324,12 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[155]?.checksum===EMAIL_PROTECTION_CHECKSUM
       && applied.get(EMAIL_PROTECTION_MIGRATION)===EMAIL_PROTECTION_CHECKSUM
       && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM) applied.delete(EMAIL_ALLOWLIST_MIGRATION);
+  // Successor bridge, the same shape again: a build whose bundled migrations end exactly at 157 stays ready after the
+  // exact additive 158. It helps only a 157-file build that contains this code; the released 157 build (744a19d) does not have it.
+  if (migrations.length===157 && migrations[156]?.filename===EMAIL_ALLOWLIST_MIGRATION
+      && migrations[156]?.checksum===EMAIL_ALLOWLIST_CHECKSUM
+      && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM
+      && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM) applied.delete(AFFILIATE_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -415,6 +422,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===EMAIL_ALLOWLIST_MIGRATION && pending[0]?.checksum===EMAIL_ALLOWLIST_CHECKSUM
       && applied.get(EMAIL_PROTECTION_MIGRATION)===EMAIL_PROTECTION_CHECKSUM
       && applied.get(EMAIL_CONNECTION_MIGRATION)===EMAIL_CONNECTION_CHECKSUM) return;
+  // Affiliate Studio's data layer (158) is capable only after the exact allow-list (157) is applied. While 158 is
+  // pending nothing changes: no page, worker or route reads its tables yet, and its stores answer "not opened yet".
+  if (migrations.length===158 && migrations[157]?.filename===AFFILIATE_MIGRATION
+      && migrations[156]?.filename===EMAIL_ALLOWLIST_MIGRATION && pending.length===1
+      && pending[0]?.filename===AFFILIATE_MIGRATION && pending[0]?.checksum===AFFILIATE_CHECKSUM
+      && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM
+      && applied.get(EMAIL_PROTECTION_MIGRATION)===EMAIL_PROTECTION_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

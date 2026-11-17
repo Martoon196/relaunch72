@@ -32,7 +32,7 @@ test('manual native render cannot run with just media enablement or paid API fla
    {CREATIVE_MEDIA:'enabled',RL72_MEDIA_WORKER_ENABLED:'true'}])
   assert.throws(()=>workerCommandGate(e,'render-local'),/disabled/);
  assert.doesNotThrow(()=>workerCommandGate(env,'render-local'));
- assert.throws(()=>workerCommandGate(env,'submit'),/not permitted/);
+ assert.throws(()=>workerCommandGate(env,'submit'),/Usage/);
 });
 test('owner queue requires exact rights, source and timeline revision, worker cannot impersonate owner',async()=>{
  const never={connect:async()=>{throw Error('Unexpected SQL');}} as never;
@@ -92,4 +92,17 @@ test('worker query is disabled before requesting a database connection',async()=
  const never={connect:async()=>{throw Error('Unexpected SQL');}} as never;
  const worker=new PgLocalRenderWorker(never,'id',{RL72_MEDIA_WORKER_ENABLED:'true'});
  await assert.rejects(worker.claim(ws,job),/disabled/);
+});
+
+test('one transient heartbeat failure does not permanently fail the render',async(t)=>{
+ let tick:(()=>void)|undefined,completed=0,failed=0;
+ t.mock.method(globalThis,'setInterval',(callback:()=>void)=>{tick=callback;return {unref(){}} as never;});
+ t.mock.method(globalThis,'clearInterval',()=>{});
+ const receipt=await runQueuedLocalRender(ws,job,{ledger:{
+  claim:async()=>({claimToken:claim,bytes,sourceSha256:sourceSha,planSha256:videoEditDigest(plan),probe:source.probe,plan}) as never,
+  heartbeat:async()=>{throw Error('temporary transport interruption');},
+  complete:async()=>{completed++;return{id:project,sha256:sourceSha,state:'completed' as const,replayed:false};},
+  fail:async()=>{failed++;return{id:job,state:'failed' as const};},
+ },renderer:async()=>{tick!();await new Promise(r=>setImmediate(r));return result;}});
+ assert.equal(receipt.state,'completed');assert.equal(completed,1);assert.equal(failed,0);
 });

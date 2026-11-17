@@ -4,8 +4,6 @@ import {withTransaction} from '../db/transaction.js';
 import type {PgSeoBlogPrincipal} from '../seo-blog/pg-store.js';
 import {SeoBlogError} from '../seo-blog/types.js';
 import {checkedEditId} from './media-edit-plan.js';
-import {PgCreativeMediaProductStore} from './media-product-pg-store.js';
-import {PgMediaLinkEvidenceOwner} from './media-link-evidence.js';
 import {affiliateDirectLinkPreview} from './affiliate-direct-link.js';
 export interface AffiliatePublicPage {publicationId:string;productRevision:number;productName:string;merchantName:string;productUrl:string;affiliateUrl:string;network:'amazon_associates';disclosureVersion:string;registeredSite:string;origin:string;signingKeySha256:string}
 /** Trusted socket/proxy-resolved source only, never a browser form field. */
@@ -35,11 +33,7 @@ export class PgAffiliatePublicationOwner {
  async publish(input:{workspaceId:string;productId:string;productRevision:number;evidenceCommandId:string;publicationId:string;commandId:string;consent:boolean}){
   input=Object.freeze({...input});for(const id of [input.productId,input.evidenceCommandId,input.publicationId,input.commandId])checkedEditId(id);
   if(input.consent!==true)throw new SeoBlogError(400,'Explicit product-page publication consent required');
-  const product=await new PgCreativeMediaProductStore(this.pool,this.principal).get(input.workspaceId,input.productId);
-  const evidence=(await new PgMediaLinkEvidenceOwner(this.pool,this.principal,{...this.env,RL72_MEDIA_LINK_EVIDENCE_ENABLED:'true'}).list(input.workspaceId)).find(x=>x.commandId===input.evidenceCommandId&&x.current);
-  if(!product||product.revision!==input.productRevision||!evidence)throw new SeoBlogError(409,'Current exact product and evidence required');
-  const link=affiliateDirectLinkPreview(product);if(link.status==='blocked')throw new SeoBlogError(409,link.reason);
-  return this.command<{publicationId:string;url:string;state:'owner_authorized'}>(input.workspaceId,'publish',{...input,exactLink:product.proposed_affiliate_url,registeredSite:evidence.registeredSite});
+  throw new SeoBlogError(503,'Public product pages await the production affiliate article adapter');
  }
  withdraw(workspaceId:string,publicationId:string,commandId:string){checkedEditId(publicationId);checkedEditId(commandId);return this.command(workspaceId,'withdraw',{publicationId,commandId,consent:true});}
 }

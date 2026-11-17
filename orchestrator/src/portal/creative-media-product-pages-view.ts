@@ -1,7 +1,7 @@
 import {layout,csrfField,type Shell} from './seo-blog-view.js';
 import {base,STYLE} from './creative-studio-view.js';
-import type {AffiliateMediaProductRecord} from '../creative-studio/media-product-pg-store.js';
-import type {LinkEvidence} from '../creative-studio/media-link-evidence.js';
+interface AffiliateMediaProductRecord {network:string;product_id:string;revision:number;product_name:string}
+interface LinkEvidence {current:boolean;productId:string;productRevision:number;registeredSite:string;commandId:string}
 const e=(v:unknown)=>String(v??'').replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export function affiliateProductPagesOwnerPage(shell:Shell,model:{products:readonly AffiliateMediaProductRecord[];evidence:readonly LinkEvidence[];pages:readonly {publicationId:string;productId:string;productRevision:number;withdrawn:boolean;observedClicks:number;orders:null;commission:null}[];newId:()=>string}):string{
  const path=base(shell);

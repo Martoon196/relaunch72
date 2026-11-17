@@ -80,7 +80,8 @@ CREATE POLICY creative_media_edit_projects_worker_read ON app.creative_media_edi
  FOR SELECT TO r72_media_job_definer
  USING(workspace_id=app_private.current_workspace_id());
 GRANT SELECT ON app.creative_media_source_videos TO r72_media_job_definer;
-GRANT SELECT ON app.seo_blog_blobs TO r72_media_job_definer;
+GRANT SELECT,INSERT ON app.seo_blog_blobs TO r72_media_job_definer;
+CREATE POLICY native_video_output_blob_insert ON app.seo_blog_blobs FOR INSERT TO r72_media_job_definer WITH CHECK(workspace_id=app_private.current_workspace_id() AND mime='video/mp4' AND octet_length(bytes) BETWEEN 1024 AND 20000000 AND sha256=public.digest(bytes,'sha256'));
 CREATE TRIGGER creative_media_local_render_outputs_immutable
  BEFORE UPDATE OR DELETE ON app.creative_media_local_render_outputs
  FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
@@ -149,6 +150,7 @@ BEGIN
  IF project.source_sha256 IS DISTINCT FROM p_input->>'sourceSha256'
   OR project.plan_sha256 IS DISTINCT FROM p_input->>'planSha256' THEN
   RAISE EXCEPTION 'Approved source and plan SHA changed' USING ERRCODE='40001'; END IF;
+ IF (SELECT sum(((c->>'endMs')::numeric-(c->>'startMs')::numeric)/(c->>'speed')::numeric) FROM jsonb_array_elements(project.plan->'clips') c)/1000*72000*1.08+262144>=20000000 THEN RAISE EXCEPTION 'Shorten the timeline: private MP4 exports have a 20 MB limit' USING ERRCODE='54000'; END IF;
  SELECT * INTO source FROM app.creative_media_source_videos
   WHERE workspace_id=p_workspace AND id=project.source_id;
  IF source.id IS NULL OR source.sha256 IS DISTINCT FROM project.source_sha256

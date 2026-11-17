@@ -202,7 +202,7 @@ export async function runQueuedLocalRender(
  const claim=await ports.ledger.claim(workspaceId,jobId);
  let output:LocalRenderOutput;
  let alive=true,busy=false;
- const heartbeat=ports.ledger.heartbeat?setInterval(()=>{if(busy)return;busy=true;ports.ledger.heartbeat!(workspaceId,jobId,claim.claimToken).then(ok=>{if(!ok)alive=false;}).catch(()=>{alive=false;}).finally(()=>{busy=false;});},15000):null;
+ const heartbeat=ports.ledger.heartbeat?setInterval(()=>{if(busy)return;busy=true;ports.ledger.heartbeat!(workspaceId,jobId,claim.claimToken).then(ok=>{if(!ok)alive=false;}).catch(()=>{/* transient transport failure: the lease/final settlement remain authoritative */}).finally(()=>{busy=false;});},15000):null;
  try{
   if(claim.object){
    if(!ports.objectRenderer)throw new SeoBlogError(503,'Private object renderer unavailable');
@@ -213,7 +213,7 @@ export async function runQueuedLocalRender(
    bytes:claim.bytes,sha256:claim.sourceSha256,probe:claim.probe,
   },claim.plan);
   }
-  if(!alive)throw new SeoBlogError(409,'Render lease heartbeat lost');
+  if(!alive){if(heartbeat)clearInterval(heartbeat);return {state:'reconciliation_required',jobId};}
   if(output.sourceSha256!==claim.sourceSha256||output.planSha256!==claim.planSha256)
    throw new SeoBlogError(422,'Native output is not tied to exact claimed timeline');
  }catch(error){

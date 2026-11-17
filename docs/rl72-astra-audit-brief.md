@@ -1,28 +1,21 @@
-# Independent media audit repair status
+# Native media: second audit repair round
 
-PR #108 remains a draft for Claude’s independent review and integration. Both previously open proof gates now have executable tests and local evidence. Exact-head CI status is recorded in the PR. No media routes, production migrations or external effects were activated.
+PR #108 remains draft. Nothing is mounted, applied to production or deployed. Claude owns integration. Production's `src/affiliate/` and migration `0158_affiliate_studio.sql` own products, programmes and reports. This branch supplies no competing affiliate database, billing or signup implementation. Shared application source files and package.json match the merged foundation.
 
-| Finding | Repair / remaining proof |
-| --- | --- |
-| 1. Renderer memory | Sequential encoding/demuxer concat and limits retained. Continuous three-minute live-action HD footage, letterboxed to 1920×1080 without upscaling or looping, passed the 1.5 GiB combined RSS watchdog. Actual decoded frame count: 4,320. Source provenance, preparation and measurements are committed; CI repeats the benchmark. |
-| 2. Worker | Default-off supervised offline loop, token lease heartbeat, fenced retries (three attempts), SQL queue and stored-output caps. Requires genuine PG tests and operator service supervision before enabling. |
-| 3. Zernio | Implemented native caption/video pair, native source adapter into canonical planning tables, existing connected-account enqueue and scoped JIT proof. Disposable PG clock advances three days; old planning attestations expire, fresh proof lasts exactly 15 minutes, real canonical begin-call reaches the enabled BEFORE UPDATE trigger. Withdrawal, expiry, erasure and cross-workspace cases are tested. No fake job inserts, disabled constraints, modified canonical functions or provider calls. |
-| 4. Signup/billing | Removed standalone signup, its provisioning grant draft and UI, and separate Stripe checkout/webhook/receipt rail. Canonical paid-order and billing integration belongs to Claude. |
-| 5. Deletion | Added owner tombstones, source-derived local-output takedown, bounded worker payload erasure and automatic staging/media/click retention. External provider and backup erasure still require canonical integration/operations. |
-| 6. Owner screens | Replaced typed evidence hashes with document selection, removed displayed hashes and micro-USD labels, mandatory burned-in #ad, removed redundant video authorize action in favour of canonical approval. Private evidence checks remain preparatory. |
-| 7. Range/status | No full-file rehash on range or status; immutable inode checks and short part receipts. Full integrity checks remain at assembly/probe/render boundaries. |
-| 8. Docs/drafts | All three docs rewritten around actual unmounted modules. Superseded resumable draft/store/UI removed. No production migration numbers assigned or changed. |
-| 9. Click beacon | Stable server-source/page/day nonce, constant-time application HMAC validation, dedicated backend record capability, cap index, 30-day retention; signing secret removed from SQL. Distributed scripted traffic remains possible; label counts unverified. |
+## Repairs and evidence
 
-## Evidence and remaining integration work
+- Disclosure: renderer burns a separate immutable `#ad` label at x=15%, y=22%, after clip fades. Caption text is wrapped into at most four central lines, with an ellipsis when shortened. Owners cannot remove the renderer's fixed label. The plan still requires a disclosure statement. This corrects the former inaccurate claim that merely requiring `#ad` in a string guaranteed visibility.
+- `media-visible-disclosure.test.ts` renders a full 240-character caption in portrait, square and landscape, extracts actual frames and OCRs the label's safe area. Frames are in `rl72-media-audit-evidence/visible-ad-240-{portrait,square,landscape}.png`. These show a 240-character input with its on-screen caption excerpt; they do not claim all 240 characters fit.
+- Paid-provider jobs, access, admission, capture, reconciliation and review are removed. The native draft manifest applies without any provider tables or provider role bootstrap. Native video owns its restricted function-owner role and grants. The erasure table is created before functions that use it.
+- Calling trigger: independent `native-video-call-trigger.sql` installs `BEFORE UPDATE OF state` and a WHEN predicate for entering `calling` with native video. Its classifier is owned by the canonical owner and uses only canonical media/version tables. Non-video jobs do not enter the media-role guard. A separate rolled-back text-job fixture proves the state transition works after media context-function grants are revoked. This fixture is not used as planner/lease proof.
+- Native planner proof still uses actual canonical planning, enqueue, lease and begin-call functions after three elapsed database days, with the real calling trigger enabled. Account inventory/webhook data are explicit provider test fixtures; there are no live provider calls or replication-role bypasses.
+- Retention: absent/NULL settings retain the owner's library indefinitely. Expiry requires an explicit authenticated owner choice, 1–3650 days, through `PgMediaErasureOwner.setRetention`. Manual erasure and expired staging cleanup remain active. Missing filesystem configuration leaves disk erasure pending and does not throw. A transient heartbeat transport error no longer becomes permanent `source_changed`; definitive lost ownership leaves settlement/recovery to the lease fence.
+- Output admission: fixed 480 kbit/s H.264 plus 96 kbit/s AAC, an 8% envelope and 256 KiB allowance must fit under 20,000,000 bytes. SQL checks the saved plan before queueing, and rendering checks before probe/encoding. Maximum file size remains an independent enforcement boundary. Upload screens state H.264 up to 1080p; render screens state the 20 MB export limit.
+- Owner UI: two visible render digests removed; JSON serialization is a hidden field, with no visible JSON fallback textarea. Removed provider/commerce/product/report screens and media-plan terminology. Technical digests remain internal evidence and hidden form values.
+- Public product-page rendering and beacon logic remain unmounted and parked for later production affiliate-article integration. Their SQL is deliberately excluded from the native manifest because it references withdrawn affiliate draft tables. The obsolete owner publication adapter now fails explicitly rather than loading removed stores. No attempt was made to port these pages to production's articles in this round.
 
-- `docs/rl72-media-audit-evidence/live-action-1080p-memory.json`: normal Node JIT benchmark, source hashes, decoded frames and exact limits.
-- `docs/rl72-media-audit-evidence/live-action-strict-address-space-memory.json`: additional strict 1.5 GiB address-space run with Node JIT disabled; distinct from normal worker-mode evidence.
-- `docs/rl72-media-audit-evidence/native-calendar-clock-proof.json`: local genuine-role PostgreSQL journey receipt.
-- `orchestrator/test/tools/media-real-footage-memory.sh`: repeatable live-action benchmark. Film footage is a private technical fixture, never an affiliate advertisement or published asset.
-- `orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts`: actual planner → enqueue → elapsed-clock → JIT → lease → calling test, with call-check receipt produced by the real trigger.
-- The workflow’s `native-calendar-clock` job repeats the clock journey and real-footage benchmark independently of ordinary regressions.
+## What is not verified
 
-Claude still consolidates/applies draft SQL, mounts the prepared routes/adapters, configures durable storage and real accounts, reviews the change and performs live end-to-end verification. Native calendar support matches the existing canonical Instagram/LinkedIn rail. Account inventory/webhook data in integration tests are explicit provider fixtures, not live OAuth proof.
+Production application of drafts, actual OAuth/provider publishing, platform UI overlays across every app/device, operational backup/WAL deletion, and removal of already-published provider copies require Claude's integration/operations work. The tested central safe area avoids common edge overlays; live preview remains required. Historical memory measurements describe the earlier renderer revision and are retained as historical receipts, not presented as measurements of the new fixed-rate/layout revision.
 
-No production deployment, provider publication, signup email or charge was performed.
+See `rl72-native-media-integration.md` for the exact active draft list and integration hooks.

@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { sha256 } from '../seo-blog/engine.js';
+import { sha256, USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
 import { citationNumbers, renderMarkdown } from '../seo-blog/render.js';
 import { putBackOffers, withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
@@ -20,15 +20,16 @@ import { approvalIsCurrent, approvalRequired, DEFAULT_MISSED_WINDOW_MS } from '.
 import { nextPublishingSlot, plannedSiteGone, publishingSite, type PlannedSlot } from '../seo-blog/publishing-plan.js';
 import type { PublishingPlan } from '../seo-blog/engine.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
-import { unlimited } from '../seo-blog/limits.js';
+import { monthlyCeiling, unlimited } from '../seo-blog/limits.js';
 import { isArticleWriteJob } from '../seo-blog/image-campaign.js';
-import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, CheckIssue, Destination, Job, Publication, SocialDispatch } from '../seo-blog/types.js';
+import type { Article, ArticleBody, ArticleBrief, ArticleVersion, Brand, CheckIssue, Destination, Job, Publication, SocialDispatch, UsageKind } from '../seo-blog/types.js';
 import { csrfField, layout, savedCampaignCopyStatus, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
 import { escapeHtml as e } from './ui.js';
+import { seoPanel, seoSummaryLine } from './seo-blog-seo-panel.js';
 
 type PublicDestination = Omit<Destination, 'sealedCredential'>;
 export type ArticlePageMode = 'read' | 'edit';
-export const ARTICLE_FOLDS = ['google', 'where', 'sources', 'history', 'download', 'rewrite', 'improve'] as const;
+export const ARTICLE_FOLDS = ['seo', 'google', 'where', 'sources', 'history', 'download', 'rewrite', 'improve'] as const;
 export type ArticleFold = typeof ARTICLE_FOLDS[number];
 
 /** Ids in addresses are escaped wherever they come from (they are placed straight into attributes). */
@@ -146,10 +147,31 @@ export interface WritingStatus {
   readonly retryJobId: string | null;
   readonly retryCosts: boolean;
   readonly link: { readonly href: string; readonly label: string } | null;
+  /** The retry button's words ("Write it now" once the cause has been cleared; "Try again" otherwise). */
+  readonly retryLabel?: string;
+}
+
+/**
+ * The current facts a stopped write is judged against, so the page never says it is still waiting for something
+ * that has since been sorted out. Absent facts count as "not known": the waiting sentence and its link stay.
+ */
+export interface ResumeFacts {
+  readonly usage: Readonly<Record<UsageKind, number>> | null;
+  readonly profile: BrandReadiness['profile'] | null;
+  readonly generation: BrandReadiness['generation'] | null;
+}
+
+/**
+ * The automatic resume's own arithmetic (engine resumeAllowanceWrites): the month's usage, plus an article estimate
+ * for every article write already queued or running, plus this one, within a ceiling above zero (unlimited fits).
+ */
+export function writingAllowanceFits(b: Pick<Brand, 'settings'>, usage: Readonly<Record<UsageKind, number>>, alreadyWriting = 0): boolean {
+  const ceiling = monthlyCeiling(b.settings, 'model_tokens');
+  return ceiling > 0 && usage.model_tokens + (alreadyWriting + 1) * USAGE_ESTIMATES.article <= ceiling;
 }
 
 /** Why an article with no written version is where it is, from its write task. Nothing is invented. */
-export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'editorialState' | 'failure' | 'campaignGeneration'> | null, briefId: string, jobs: readonly Job[]): WritingStatus {
+export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'editorialState' | 'failure' | 'campaignGeneration'> | null, briefId: string, jobs: readonly Job[], facts?: ResumeFacts | null): WritingStatus {
   const job = [...jobs].filter((j) => isArticleWriteJob(j) && j.payload.briefId === briefId && !j.payload.fromVersionId).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt))[0];
   const none = { retryJobId: null, retryCosts: false, link: null };
   if (article?.campaignGeneration?.startedAt && !article.campaignGeneration.receipt) {
@@ -165,17 +187,53 @@ export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'edit
   if (job.state === 'cancelled') return { ...none, sentence: 'Writing was cancelled.' };
   if (job.state === 'done') return { ...none, sentence: article?.editorialState === 'failed' ? `Writing stopped${article.failure ? `: ${plainWritingError(article.failure).reason}` : '.'}` : 'Being written' };
   const plain = plainWritingError(job.error ?? job.progress);
-  return { sentence: `Paused: ${plain.reason}`, retryJobId: plain.retry ? job.id : null, retryCosts: plain.retry, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
+  // Stopped for a reason that has since been sorted out: say so, and offer the existing Retry as the way forward.
+  const writingNow = jobs.filter((j) => j.id !== job.id && isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length;
+  // Enough this month, but only after the articles already being written: no button (pressing would stop again).
+  if (plain.cause === 'allowance' && facts?.usage && !b.settings.pauseAll && writingNow && writingAllowanceFits(b, facts.usage) && !writingAllowanceFits(b, facts.usage, writingNow)) {
+    return { sentence: 'Other articles are being written first. This one starts when they finish, if there is still enough writing allowance.', retryJobId: null, retryCosts: false, link: null };
+  }
+  // Every condition the write itself checks, judged on current facts (unknown counts as "not yet").
+  const holds = {
+    paused: !b.settings.pauseAll,
+    profile: facts?.profile === 'confirmed',
+    service: Boolean(facts?.generation && facts.generation !== 'unavailable'),
+    allowance: facts?.usage ? writingAllowanceFits(b, facts.usage, writingNow) : false,
+  };
+  const cleared = plain.cause === 'allowance' || plain.cause === 'profile' || plain.cause === 'paused' || plain.cause === 'service' ? holds[plain.cause] : false;
+  // Its own reason is sorted out, but something else would stop it again: say that instead, and offer no button.
+  if (cleared && !(holds.paused && holds.profile && holds.service && holds.allowance)) {
+    const other = !holds.paused ? 'paused' : !holds.profile ? (facts?.profile ? 'profile' : null) : !holds.service ? (facts?.generation ? 'service' : null) : 'allowance';
+    const next = other ? plainWritingError(OTHER_CAUSE[other]) : null;
+    if (next) return { sentence: `Paused: ${next.reason}`, retryJobId: null, retryCosts: false, link: next.link ? { href: brandUrl(b, next.link.path), label: next.link.label } : null };
+    return { sentence: `Paused: ${plain.reason}`, retryJobId: null, retryCosts: false, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
+  }
+  if (cleared) {
+    const was = ({ allowance: 'It stopped because the writing allowance ran out. There is enough now.', profile: 'It stopped because your business details needed confirming. They are confirmed now.',
+      paused: 'It stopped because writing was paused. Writing is switched back on now.', service: 'It stopped because the writing service was not connected. It is connected now.' } as Record<string, string>)[plain.cause]!;
+    return { sentence: was, retryJobId: job.id, retryCosts: true, link: null, retryLabel: 'Write it now' };
+  }
+  // A write waiting for the allowance starts again by itself (a worker pass once there is room, or the new month), as
+  // long as a whole article can fit in the month's allowance at all and nothing else (a pause, unconfirmed details,
+  // the writing service) would stop it: the automatic restart skips a business in any of those states.
+  const restarts = plain.cause === 'allowance' && holds.paused && holds.profile && holds.service && monthlyCeiling(b.settings, 'model_tokens') >= USAGE_ESTIMATES.article;
+  return { sentence: `Paused: ${plain.reason}${restarts ? ' It starts again by itself when next month’s allowance begins, if not before.' : ''}`, retryJobId: plain.retry ? job.id : null, retryCosts: plain.retry, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
 }
 
-function plainWritingError(message: string): { reason: string; retry: boolean; link: { path: string; label: string } | null } {
-  if (/allowance/i.test(message)) return { reason: 'waiting for more writing allowance this month.', retry: false, link: { path: 'publishing#writing-budget', label: 'Check the allowance' } };
-  if (/brand profile|business details|Confirm the current/i.test(message)) return { reason: 'waiting for you to confirm your business details.', retry: false, link: { path: 'dna', label: 'Confirm your details' } };
-  if (/paused by the owner|paused/i.test(message)) return { reason: 'writing is paused for your business.', retry: false, link: { path: 'publishing', label: 'Open publishing settings' } };
-  if (/not configured|Connect a model/i.test(message)) return { reason: 'the writing service is not connected.', retry: false, link: null };
-  if (/uncertain outcome|awaiting a durable receipt|Another worker started/i.test(message)) return { reason: 'the last writing step did not confirm its result, so it will not repeat by itself.', retry: false, link: { path: 'activity', label: 'See what happened' } };
-  if (/programme authority|Review a new plan|changed profile or editorial guidance/i.test(message)) return { reason: 'its plan is out of date. Plan this topic again.', retry: false, link: { path: 'topics', label: 'Open Topics' } };
-  return { reason: 'something stopped it before it finished.', retry: true, link: null };
+/** The engine's own message for each other stopping condition, so the same plain wording and link are used. */
+const OTHER_CAUSE: Record<'paused' | 'profile' | 'service' | 'allowance', string> = {
+  paused: 'Draft production is paused by the owner.', profile: 'Confirm the current brand profile before writing.',
+  service: 'The writing model is not configured.', allowance: 'Writing allowance: monthly ceiling reached.',
+};
+
+function plainWritingError(message: string): { reason: string; retry: boolean; cause: 'allowance' | 'profile' | 'paused' | 'service' | 'uncertain' | 'plan' | 'other'; link: { path: string; label: string } | null } {
+  if (/allowance/i.test(message)) return { cause: 'allowance', reason: 'waiting for more writing allowance this month.', retry: false, link: { path: 'publishing#writing-budget', label: 'Check the allowance' } };
+  if (/brand profile|business details|Confirm the current/i.test(message)) return { cause: 'profile', reason: 'waiting for you to confirm your business details.', retry: false, link: { path: 'dna', label: 'Confirm your details' } };
+  if (/paused by the owner|paused/i.test(message)) return { cause: 'paused', reason: 'writing is paused for your business.', retry: false, link: { path: 'publishing', label: 'Open publishing settings' } };
+  if (/not configured|Connect a model/i.test(message)) return { cause: 'service', reason: 'the writing service is not connected.', retry: false, link: null };
+  if (/uncertain outcome|awaiting a durable receipt|Another worker started/i.test(message)) return { cause: 'uncertain', reason: 'the last writing step did not confirm its result, so it will not repeat by itself.', retry: false, link: { path: 'activity', label: 'See what happened' } };
+  if (/programme authority|Review a new plan|changed profile or editorial guidance/i.test(message)) return { cause: 'plan', reason: 'its plan is out of date. Plan this topic again.', retry: false, link: { path: 'topics', label: 'Open Topics' } };
+  return { cause: 'other', reason: 'something stopped it before it finished.', retry: true, link: null };
 }
 
 // ─── Shared bits ─────────────────────────────────────────────────────────────
@@ -383,10 +441,14 @@ export interface ArticlePageData {
   readonly checkSources?: readonly string[];
   /** Where and when the main press would put it (computed by the engine; recomputed here when absent). */
   readonly plan?: PublishingPlan;
+  /** Current facts a stopped write is judged against (see ResumeFacts). */
+  readonly resume?: ResumeFacts | null;
   /** The planned working title, shown while the article has no written version. */
   readonly workingTitle?: string | null;
   /** The current instant (tests and screenshots pin it). */
   readonly now?: string;
+  /** The article's plan (search phrase, intent, demand) for the SEO report; null for articles planned before it was kept. */
+  readonly articleBrief?: ArticleBrief | null;
 }
 
 /** The reading column: the article as it will be published (same renderer, same order, same citations). */
@@ -664,10 +726,10 @@ export function editorPage(shell: Shell, d: ArticlePageData): string {
   const base = brandUrl(b, `articles/${a.id}`);
   const open = new Set(d.open ?? []);
   if (!v) {
-    const status = writingStatus(b, a, a.briefId, d.jobs ?? []);
+    const status = writingStatus(b, a, a.briefId, d.jobs ?? [], d.resume);
     const failed = a.editorialState === 'failed';
     const sentence = a.campaignGeneration ? 'This article is written, but its last step did not finish.' : failed ? status.sentence : status.sentence === 'Being written' ? 'This article is being written. You can leave this page; it carries on.' : `${status.sentence}${/[.:]$/.test(status.sentence) ? '' : '.'}`;
-    const action = status.retryJobId ? postButton(shell, brandUrl(b, `jobs/${status.retryJobId}/retry`), { back: `articles/${a.id}` }, 'Try again', { primary: true }) : status.link ? primaryLink(status.link.href, status.link.label) : '';
+    const action = status.retryJobId ? postButton(shell, brandUrl(b, `jobs/${status.retryJobId}/retry`), { back: `articles/${a.id}` }, status.retryLabel ?? 'Try again', { primary: true }) : status.link ? primaryLink(status.link.href, status.link.label) : '';
     const title = d.workingTitle || a.slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
     return layout(shell, 'Article', `<div class="ap">${bar(`<p class="ap-state">${e(sentence)}${status.retryCosts ? ' <span class="ap-note">Trying again uses some of your writing allowance.</span>' : ''}</p><div class="ap-actions">${action}</div>`)}
 <article class="ap-read"><h1 class="ap-title">${e(title)}</h1><p class="ap-note">Not written yet. The article appears here as soon as it is ready.</p></article>${a.campaignGeneration ? `<div class="ap-column">${savedCampaignCopyStatus(shell, a)}</div>` : ''}</div>`, `<style>${ARTICLE_CSS}</style>`);
@@ -688,11 +750,12 @@ ${editingColumn(v.body)}
   const state = screenState(shell, d, v, critical);
   const head = bar(`<p class="ap-state">${e(state.sentence)}${state.detail ? ` <span class="ap-note">${e(state.detail)}</span>` : ''}</p><div class="ap-actions">${state.secondary.map((s) => s.html).join('')}${moreMenu(shell, d, v, base)}${state.primary?.html ?? ''}</div>`);
   return layout(shell, v.body.title, `<div class="ap">${head}
-<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}</div>
+<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}${seoSummaryLine(shell, d, v)}</div>
 <article class="ap-read">${pictureArea(shell, a, v, base)}
 ${readingColumn(b, a, v.body)}</article>
 <div class="ap-column">${postsSection(shell, d, v, base)}</div>
 <div class="ap-folds">
+${seoPanel(shell, d, v, open.has('seo'))}
 ${googleFold(d, v, base, false, open.has('google'))}
 ${whereFold(shell, d, v, base, open.has('where'))}
 ${sourcesFold(v, open.has('sources'))}
@@ -740,42 +803,42 @@ export interface ArticleListRow {
   readonly image?: ArticleBody['image'];
 }
 
-function rowState(b: Brand, row: ArticleListRow, jobs: readonly Job[], now: string, websites: number): { group: Group; line: string; retryJobId: string | null; link: WritingStatus['link'] } {
+function rowState(b: Brand, row: ArticleListRow, jobs: readonly Job[], now: string, websites: number, facts?: ResumeFacts | null): { group: Group; line: string; retryJobId: string | null; retryLabel?: string; link: WritingStatus['link'] } {
   const a = row.article;
   if (!a.currentVersionId) {
-    const w = writingStatus(b, a, a.briefId, jobs);
-    return { group: 'writing', line: w.sentence.replace(/\.$/, ''), retryJobId: w.retryJobId, link: w.link };
+    const w = writingStatus(b, a, a.briefId, jobs, facts);
+    return { group: 'writing', line: w.sentence.replace(/\.$/, ''), retryJobId: w.retryJobId, link: w.link, ...(w.retryLabel ? { retryLabel: w.retryLabel } : {}) };
   }
   // The same sentence the article page's bar is built from.
   const sit = situation(a, b, now, websites);
   return { group: sit.group, line: sit.line, retryJobId: null, link: null };
 }
 
-export function articlesPage(shell: Shell, data: { articles: readonly ArticleListRow[]; jobs?: readonly Job[]; briefs?: readonly ArticleBrief[]; now?: string; websites?: number }): string {
+export function articlesPage(shell: Shell, data: { articles: readonly ArticleListRow[]; jobs?: readonly Job[]; briefs?: readonly ArticleBrief[]; now?: string; websites?: number; resume?: ResumeFacts | null }): string {
   const b = shell.brand!;
   const now = data.now ?? new Date().toISOString();
   const jobs = data.jobs ?? [];
   const briefs = new Map((data.briefs ?? []).map((x) => [x.id, x]));
-  type Item = { href: string; title: string; line: string; excerpt: string; thumb: string | null; alt: string; retryJobId: string | null; link: WritingStatus['link']; sort: string };
+  type Item = { href: string; title: string; line: string; excerpt: string; thumb: string | null; alt: string; retryJobId: string | null; retryLabel?: string; link: WritingStatus['link']; sort: string };
   const groups: Record<Group, Item[]> = { ready: [], coming: [], writing: [], live: [] };
   for (const row of data.articles) {
-    const s = rowState(b, row, jobs, now, data.websites ?? 1);
+    const s = rowState(b, row, jobs, now, data.websites ?? 1, data.resume);
     const brief = briefs.get(row.article.briefId);
     const title = row.article.currentVersionId ? row.title : brief?.workingTitle || row.title.replace(/^./, (c) => c.toUpperCase());
     const src = row.image ? pictureSrc(b, row.article, row.image) : null;
-    groups[s.group].push({ href: brandUrl(b, `articles/${row.article.id}`), title, line: s.line, excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', thumb: src, alt: row.image?.alt ?? '', retryJobId: s.retryJobId, link: s.link,
+    groups[s.group].push({ href: brandUrl(b, `articles/${row.article.id}`), title, line: s.line, excerpt: (row.excerpt ?? '').split(/\n/)[0] ?? '', thumb: src, alt: row.image?.alt ?? '', retryJobId: s.retryJobId, ...(s.retryLabel ? { retryLabel: s.retryLabel } : {}), link: s.link,
       sort: s.group === 'coming' ? row.article.schedule?.publishAtUtc ?? '' : s.group === 'live' ? `~${row.article.publishedAt ?? ''}` : row.article.createdAt });
   }
   // Topics asked for but not started yet (the article record appears when writing starts).
   for (const brief of data.briefs ?? []) {
     if (brief.status !== 'generating' || data.articles.some((r) => r.article.briefId === brief.id)) continue;
-    const w = writingStatus(b, null, brief.id, jobs);
-    groups.writing.push({ href: brandUrl(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', thumb: null, alt: '', retryJobId: w.retryJobId, link: w.link, sort: brief.id });
+    const w = writingStatus(b, null, brief.id, jobs, data.resume);
+    groups.writing.push({ href: brandUrl(b, 'topics'), title: brief.workingTitle, line: w.sentence.replace(/\.$/, ''), excerpt: '', thumb: null, alt: '', retryJobId: w.retryJobId, ...(w.retryLabel ? { retryLabel: w.retryLabel } : {}), link: w.link, sort: brief.id });
   }
   groups.coming.sort((x, y) => x.sort.localeCompare(y.sort));
   groups.live.sort((x, y) => y.sort.localeCompare(x.sort));
   const titles: Record<Group, string> = { ready: 'Ready for you', coming: 'Coming up', writing: 'Being written', live: 'Live' };
-  const row = (i: Item) => `<li class="al-row"><a class="al-link" href="${e(i.href)}"><span class="al-thumb">${i.thumb ? `<img src="${e(i.thumb)}" alt="${e(i.alt)}">` : '<span class="al-thumb-empty" aria-hidden="true"></span>'}</span><span class="al-text"><span class="al-title">${e(i.title)}</span><span class="al-line${i.retryJobId || i.link ? ' al-line-wrap' : ''}">${e(i.line)}${i.excerpt ? ` · ${e(i.excerpt)}` : ''}</span></span></a>${i.retryJobId ? `<form method="post" action="${e(brandUrl(b, `jobs/${i.retryJobId}/retry`))}" class="al-act">${csrfField(shell.csrf)}${hidden({ back: 'articles' })}<button type="submit" class="secondary">Try again</button><span class="ap-note al-cost">Uses some of your writing allowance.</span></form>` : i.link ? `<a class="al-act ap-textbutton" href="${e(i.link.href)}">${e(i.link.label)}</a>` : ''}</li>`;
+  const row = (i: Item) => `<li class="al-row"><a class="al-link" href="${e(i.href)}"><span class="al-thumb">${i.thumb ? `<img src="${e(i.thumb)}" alt="${e(i.alt)}">` : '<span class="al-thumb-empty" aria-hidden="true"></span>'}</span><span class="al-text"><span class="al-title">${e(i.title)}</span><span class="al-line${i.retryJobId || i.link ? ' al-line-wrap' : ''}">${e(i.line)}${i.excerpt ? ` · ${e(i.excerpt)}` : ''}</span></span></a>${i.retryJobId ? `<form method="post" action="${e(brandUrl(b, `jobs/${i.retryJobId}/retry`))}" class="al-act">${csrfField(shell.csrf)}${hidden({ back: 'articles' })}<button type="submit" class="secondary">${e(i.retryLabel ?? 'Try again')}</button><span class="ap-note al-cost">Uses some of your writing allowance.</span></form>` : i.link ? `<a class="al-act ap-textbutton" href="${e(i.link.href)}">${e(i.link.label)}</a>` : ''}</li>`;
   const sections = (['ready', 'coming', 'writing', 'live'] as const).filter((g) => groups[g].length).map((g) => `<section class="al-group" aria-labelledby="al-${g}"><h2 id="al-${g}">${titles[g]} <span class="al-count">(${groups[g].length})</span></h2><ul class="al-list">${groups[g].map(row).join('')}</ul></section>`).join('');
   return layout(shell, 'Articles', `<div class="al"><h1>Articles</h1>${sections || `<p class="al-empty">No articles yet. Choose topics in <a href="${brandUrl(b, 'topics')}">Topics</a> and they appear here as they are written.</p>`}</div>`, `<style>${ARTICLE_CSS}</style>`);
 }

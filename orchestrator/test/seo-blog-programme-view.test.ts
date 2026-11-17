@@ -19,7 +19,11 @@ test('programme overview gives an unconfirmed profile a direct action while supp
   const brand={...shell.brand!,settings:{...shell.brand!.settings,programme:{researchHold:{logicalRunId:'demo',jobId:'demo',at:f.h.clock.now(),reason:'transient',diagnostic:researchDiagnostic(40101)}}}};
   const html=overviewPage({...shell,brand},{readiness:await f.h.engine.readiness(OWNER,f.brand.id),articles:[],usage:await f.h.engine.usage(OWNER,f.brand.id),jobs:[]});
   assert.match(html,/programme-hero/);assert.match(html,/Your brand profile needs review/);assert.ok(html.includes(`/b/${f.brand.id}/setup#brand-profile`));
-  assert.match(html,/Needs attention/);assert.match(html,/Supplier status 40101/);assert.match(html,/Supplier attempts, including failed calls/);
+  assert.match(html,/Needs attention/);assert.match(html,/The research service had a temporary problem/);assert.match(html,/Research attempts, including ones that did not finish/);
+  // Supplier codes are founder-only technical detail (neutral words release).
+  assert.doesNotMatch(html,/40101|[Ss]upplier/);
+  const founder=overviewPage({...shell,brand,limitsAvailable:true},{readiness:await f.h.engine.readiness(OWNER,f.brand.id),articles:[],usage:await f.h.engine.usage(OWNER,f.brand.id),jobs:[]});
+  assert.match(founder,/<summary>Technical detail<\/summary>[\s\S]*supplier status 40101/);
   assert.equal((await f.h.engine.getProfile(OWNER,f.brand.id))!.confirmedAt,null);
 });
 test('calendar has a real desktop week grid and occupied-day mobile agenda with keyboard proposal moves and no implicit publication schedule',async()=>{

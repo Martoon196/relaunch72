@@ -10,7 +10,7 @@ const env={CREATIVE_MEDIA:'enabled',RL72_MEDIA_WORKER_ENABLED:'true',RL72_MEDIA_
 test('bounded offline dispatch deduplicates and holds uncertain jobs without retries or provider operations',async()=>{
  const called:string[]=[];
  const receipts=await runOfflineMediaTick(ws,{pending:async()=>[{kind:'render-local',id},{kind:'render-local',id},{kind:'probe',id}],
-  render:async()=>{called.push('render');return{state:'reconciliation_required'};},probe:async()=>{called.push('probe');throw Error('held');},probeOutput:async()=>{throw Error('unexpected');}},{env});
+  render:async()=>{called.push('render');return{state:'reconciliation_required'};},probe:async()=>{called.push('probe');throw Error('held');}},{env});
  assert.deepEqual(called,['render','probe']);assert.deepEqual(receipts.map(x=>x.state),['reconciliation_required','held']);
  await assert.rejects(runOfflineMediaTick(ws,{} as never,{env:{}}),/disabled/);
  await assert.rejects(runOfflineMediaTick(ws,{pending:async()=>[{kind:'submit',id}]} as never,{env}),/Unknown offline/);
@@ -34,8 +34,8 @@ test('canonical handoff binds video digest, review and caption without granting 
  assert.throws(()=>localVideoDraftCommand({...input,outputSha256:'f'.repeat(64)},manifest,now),/Exact reviewed/);
  assert.throws(()=>localVideoDraftCommand(input,manifest,new Date(now.getTime()+15*60000)),/fresh private review/);
 });
-test('standalone presentation exposes only actually integrated features and no invented prices or sales',()=>{
+test('workspace presentation exposes only actually integrated features and no invented prices or sales',()=>{
  const shell={csrf:'x',applicationName:'RL72',brands:[],creativeAvailable:true,tab:'creative',brand:{id:ws,name:'Brand'}} as never;
- const html=creativeMediaSuitePage(shell,{audience:'affiliate',access:{active:false,tier:null,source:null,monthlyVideoMicrousd:0,maxJobMicrousd:0,validUntil:null},counts:{products:2,sources:1,timelines:1,renders:0,reports:0},available:new Set(['products'])});
+ const html=creativeMediaSuitePage(shell,{audience:'affiliate',counts:{products:2,sources:1,timelines:1,renders:0,reports:0},available:new Set(['products'])});
  assert.match(html,/RL72 Affiliate Studio/);assert.match(html,/Awaiting integration/);assert.doesNotMatch(html,/href="[^"]*\/billing"/);
 });

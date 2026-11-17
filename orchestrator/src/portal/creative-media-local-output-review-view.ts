@@ -3,7 +3,7 @@
  * Displaying a review is never equivalent to authorising a social publication.
  */
 import type {LocalRenderOutputRow} from '../creative-studio/media-local-render-pg-store.js';
-import type {PrivateOutputReview} from '../creative-studio/media-output-review.js';
+import type {PrivateOutputReview} from '../creative-studio/media-private-review.js';
 import {layout,csrfField,type Shell} from './seo-blog-view.js';
 import {base,STYLE} from './creative-studio-view.js';
 

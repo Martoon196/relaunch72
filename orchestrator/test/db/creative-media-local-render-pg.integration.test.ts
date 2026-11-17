@@ -14,16 +14,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
 import {PgOfflineMediaDiscovery} from '../../src/creative-studio/media-worker-dispatch.js';
-import {PgMediaAccessOwner} from '../../src/creative-studio/media-access-pg-store.js';
-import {PgCreativeMediaProductStore} from '../../src/creative-studio/media-product-pg-store.js';
-import {PgMediaLinkEvidenceOwner} from '../../src/creative-studio/media-link-evidence.js';
 import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-canonical-handoff.js';
 import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../../src/creative-studio/media-private-files.js';
 import {PgPrivateObjectSources,PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../src/creative-studio/media-object-sources.js';
 import {renderLocalVideoFile} from '../../src/creative-studio/media-local-render.js';
 import {PgSetupDeliveryService,SetupDeliveryKeyring,setupDeliveryAad} from '../../src/portal/setup-delivery-pg-service.js';
 import {PgPortalAuthService} from '../../src/portal/auth-pg-service.js';
-import {PgAffiliatePublicationOwner,PgAffiliatePublicPages} from '../../src/creative-studio/media-affiliate-pages.js';
 import {PgNativeVideoReleaseOwner,PgNativeVideoReleaseWorker} from '../../src/creative-studio/media-video-release.js';
 import {CompanyContentService} from '../../src/company-content-pg/index.js';
 import {withTransaction} from '../../src/db/transaction.js';
@@ -148,9 +144,7 @@ test('real native render starts from exact owned, independently probed source an
    await assert.rejects(b.owner.load(b.brand.id,finished.outputId!),/not found|unavailable/iu);
    await assert.rejects(b.owner.load(a.brand.id,finished.outputId!),/owner|session|workspace/iu);
    await assert.rejects(worker.claim(a.brand.id,jobId),/cannot be claimed again/iu);
-   const paid=(await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_jobs WHERE workspace_id=$1',
-    [a.brand.id])).rows[0]?.n;
-   assert.equal(paid,0,'Local rendering must not create a paid provider reservation');
+   assert.equal((await admin.query("SELECT to_regclass('app.creative_media_video_jobs') AS name")).rows[0].name,null,'native-only schema has no paid job table');
   });
   await t.test('local output exact owner review is isolated, replay-safe, withdrawable and never published',async()=>{
    const review=new PgLocalOutputReviewOwner(content,a.principal,env);
@@ -193,7 +187,7 @@ test('real native render starts from exact owned, independently probed source an
    const history=await admin.query('SELECT decision FROM app.creative_media_local_output_reviews WHERE workspace_id=$1 AND output_id=$2 ORDER BY revision',[a.brand.id,output.id]);
    assert.deepEqual(history.rows.map(x=>x.decision),['reviewed_private','withdrawn_private','reviewed_private']);
    // Review never copies the local render to provider capture or publication records.
-   assert.equal((await admin.query('SELECT count(*)::int AS n FROM app.creative_media_video_outputs WHERE workspace_id=$1',[a.brand.id])).rows[0].n,0);
+   assert.equal((await admin.query("SELECT to_regclass('app.creative_media_video_outputs') AS name")).rows[0].name,null);
   });
   await t.test('24 MB private source follows canonical upload, actual file probe, immutable edit and offline render',async()=>{
    const files=new PrivateMediaFiles(join(temp,'private-objects')),flags={...env,RL72_MEDIA_PRIVATE_FILES_ENABLED:'true'};
@@ -242,35 +236,6 @@ test('real native render starts from exact owned, independently probed source an
     await review.review({workspaceId:a.brand.id,outputId:output.id,outputSha256:output.sha256,expectedRevision:current.revision,commandId:randomUUID(),decision:'withdrawn_private',rightsConfirmed:false,claimsConfirmed:false,disclosureConfirmed:false});
     await assert.rejects(handoff.request({...input,commandId:randomUUID()}),/review required/iu);
    }finally{await adapter.end();}
-  });
-  await t.test('merchant evidence is private, exact-product-version bound and superseded by product edits',async()=>{
-   const store=new PgCreativeMediaProductStore(content,a.principal),links=new PgMediaLinkEvidenceOwner(content,a.principal,{...env,RL72_MEDIA_LINK_EVIDENCE_ENABLED:'true'});
-   const product={network:'amazon_associates' as const,merchantName:'Amazon UK',productName:'Owner supplied item',productUrl:'https://www.amazon.co.uk/dp/B000000001',affiliateUrl:'https://www.amazon.co.uk/dp/B000000001?tag=owner-21',sourceRights:'owned' as const,productReviewed:true,channelEligible:true,mediaRightsConfirmed:true,disclosureVersion:'uk-v1'};
-   const saved=await store.save({workspaceId:a.brand.id,expectedRevision:0,product});
-   const input={workspaceId:a.brand.id,commandId:randomUUID(),productId:saved.productId,productRevision:1,evidenceSha256:'a'.repeat(64),registeredSite:'https://owner.example/',programmeConfirmed:true,siteConfirmed:true,tagOwnershipConfirmed:true};
-   assert.equal((await links.save(input)).status,'owner_asserted_private');assert.equal((await links.list(a.brand.id))[0]?.current,true);
-   await store.save({workspaceId:a.brand.id,productId:saved.productId,expectedRevision:1,product:{...product,productName:'Revised owner item'}});
-   assert.equal((await links.list(a.brand.id))[0]?.current,false);
-   await assert.rejects(links.save({...input,commandId:randomUUID()}),/Current product/iu);
-  });
-  await t.test('direct affiliate pages record signed observed clicks once and disappear after withdrawal or changed products',async()=>{
-   const key=Buffer.alloc(32,8);await admin.query("UPDATE app_private.creative_media_link_public_policy SET enabled=true,origin='https://studio.example',signing_key_sha256=public.digest($1,'sha256') WHERE id=1",[key]);
-   const flags={...env,RL72_MEDIA_LINK_EVIDENCE_ENABLED:'true',RL72_MEDIA_AFFILIATE_PAGES_ENABLED:'true'},products=new PgCreativeMediaProductStore(content,a.principal);
-   const product={network:'amazon_associates' as const,merchantName:'Amazon UK',productName:'Owner page product',productUrl:'https://www.amazon.co.uk/dp/B000000002',affiliateUrl:'https://www.amazon.co.uk/dp/B000000002?tag=owner-21',sourceRights:'owned' as const,productReviewed:true,channelEligible:true,mediaRightsConfirmed:true,disclosureVersion:'uk-v1'};
-   const saved=await products.save({workspaceId:a.brand.id,expectedRevision:0,product});
-   const evidenceCommand=randomUUID();await new PgMediaLinkEvidenceOwner(content,a.principal,flags).save({workspaceId:a.brand.id,productId:saved.productId,productRevision:1,commandId:evidenceCommand,evidenceSha256:'f'.repeat(64),registeredSite:'https://studio.example/',programmeConfirmed:true,siteConfirmed:true,tagOwnershipConfirmed:true});
-   const publisher=new PgAffiliatePublicationOwner(content,a.principal,flags),publication=randomUUID(),command=randomUUID();
-   await publisher.publish({workspaceId:a.brand.id,productId:saved.productId,productRevision:1,evidenceCommandId:evidenceCommand,publicationId:publication,commandId:command,consent:true});
-   await admin.query("ALTER ROLE r72_public PASSWORD 'local-methods-test-only'");const publicUri=new URL(uri);publicUri.username='r72_public';publicUri.password='local-methods-test-only';const publicPool=new pg.Pool({connectionString:publicUri.toString(),max:2});
-   await admin.query("ALTER ROLE r72_media_click_command LOGIN PASSWORD 'local-methods-test-only'");const clickUri=new URL(uri);clickUri.username='r72_media_click_command';clickUri.password='local-methods-test-only';const clickPool=new pg.Pool({connectionString:clickUri.toString(),max:2});
-   try{
-    const publicPages=new PgAffiliatePublicPages(publicPool,key,flags,clickPool),page=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.ok(page);assert.equal(page.page.affiliateUrl,product.affiliateUrl);
-    assert.equal(await publicPages.click(page.clickToken),true);const reload=await publicPages.page(publication,{sourceHash:Buffer.alloc(32,9)});assert.equal(await publicPages.click(reload!.clickToken),false);await assert.rejects(publicPool.query('SELECT app_private.creative_media_affiliate_click($1)',[page.clickToken]),/permission denied/iu);assert.equal(await publicPages.click(page.clickToken),false);assert.equal(await publicPages.click(page.clickToken.slice(0,-1)+'x'),false);
-    const analytics=(await publisher.list(a.brand.id)).find(x=>x.publicationId===publication)!;assert.equal(analytics.observedClicks,1);assert.equal(analytics.orders,null);assert.equal(analytics.commission,null);
-    await assert.rejects(publicPool.query('SELECT * FROM app.creative_media_products'),/permission denied/iu);
-    await publisher.withdraw(a.brand.id,publication,randomUUID());assert.equal(await publicPages.page(publication),null);
-    assert.equal(await publicPages.click(page.clickToken),false);
-   }finally{await publicPool.end();await clickPool.end();}
   });
   await t.test('newer edit makes an older timeline unqueueable',async()=>{
    const newer:VideoEditPlan={...plan,clips:[...plan.clips].reverse()};
@@ -333,6 +298,9 @@ test('real native render starts from exact owned, independently probed source an
      SELECT $1,$3,$3,blob.id,'retention.mp4',encode(public.digest($2::bytea,'sha256'),'hex'),octet_length($2::bytea),'video/mp4','owned',$4,clock_timestamp()-interval '31 days' FROM blob`,[a.brand.id,bytes,id,a.principal.userId]);
    }
    const janitor=new PgMediaRetentionWorker(admin,'automatic-retention-proof',null);
+   await janitor.sweep(a.brand.id);
+   assert.equal((await admin.query("SELECT count(*)::int n FROM app.creative_media_erasures WHERE workspace_id=$1 AND id=ANY($2::uuid[])",[a.brand.id,ids])).rows[0].n,0,'default retains owner library indefinitely');
+   await new PgMediaErasureOwner(content,a.principal,{...env,RL72_MEDIA_RETENTION_ENABLED:'true'}).setRetention(a.brand.id,30,true);
    for(let n=0;n<6;n++)await janitor.sweep(a.brand.id);
    const result=await admin.query("SELECT count(*)::int n FROM app.creative_media_erasures WHERE workspace_id=$1 AND kind='source' AND id=ANY($2::uuid[]) AND erased_at IS NOT NULL",[a.brand.id,ids]);assert.equal(result.rows[0].n,14);
   });

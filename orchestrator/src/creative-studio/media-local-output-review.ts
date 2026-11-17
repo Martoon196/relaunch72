@@ -4,7 +4,7 @@ import type {Pool} from 'pg';
 import {withTransaction} from '../db/transaction.js';
 import {SeoBlogError} from '../seo-blog/types.js';
 import type {PgSeoBlogPrincipal} from '../seo-blog/pg-store.js';
-import {checkedPrivateReview,type PrivateOutputReview,type PrivateReviewInput,type PrivateReviewDecision} from './media-output-review.js';
+import {checkedPrivateReview,type PrivateOutputReview,type PrivateReviewInput,type PrivateReviewDecision} from './media-private-review.js';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 export class PgLocalOutputReviewOwner {

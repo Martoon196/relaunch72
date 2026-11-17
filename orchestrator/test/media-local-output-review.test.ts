@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PgLocalOutputReviewOwner} from '../src/creative-studio/media-local-output-review.js';
-import {checkedPrivateReview} from '../src/creative-studio/media-output-review.js';
+import {checkedPrivateReview} from '../src/creative-studio/media-private-review.js';
 
 const workspace='11111111-1111-4111-8111-111111111111',
  output='22222222-2222-4222-8222-222222222222',

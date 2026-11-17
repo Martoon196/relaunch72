@@ -16,3 +16,11 @@ test('affiliate timeline cannot omit or remove on-screen ad disclosure',()=>{
  for(const disclosure of ['', 'optional', '#advertisement', 'foo#ad'])assert.throws(()=>checkVideoEditPlan({...plan,disclosure}),/disclosure/);
  assert.equal(checkVideoEditPlan({...plan,disclosure:'#ad Affiliate promotion'}).disclosure,'#ad Affiliate promotion');
 });
+
+test('missing private disk keeps erasure pending without throwing or stalling the workspace',async()=>{
+ const {PgMediaRetentionWorker}=await import('../src/creative-studio/media-retention.js');
+ const queries:string[]=[];
+ const client={query:async(sql:string)=>{queries.push(sql);return{rows:sql.includes(' AS v')?[{v:[{kind:'source',id:'22222222-2222-4222-8222-222222222222',object:{}}]}]:[]};},release:()=>{}};
+ await new PgMediaRetentionWorker({connect:async()=>client} as never,'missing-disk',null).sweep('11111111-1111-4111-8111-111111111111');
+ assert.equal(queries.filter(q=>q.includes('creative_media_retention')).length,1,'do not acknowledge disk erasure before deleting bytes');
+});

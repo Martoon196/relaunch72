@@ -6,7 +6,7 @@
  * https://affiliate-program.amazon.co.uk/help/operating/policies
  * UK Amazon requires Special Links visibly point to the Amazon Site.
  */
-import type { AffiliateMediaProductRecord } from './media-product-pg-store.js';
+interface AffiliateMediaProductRecord {network:string;product_url:string;proposed_affiliate_url:string|null;owner_product_reviewed:boolean;owner_channel_eligible:boolean;disclosure_version:string|null}
 export type DirectLinkReview=Readonly<{
   status:'manual_review'|'blocked';
   href:string|null;

@@ -22,10 +22,6 @@ BEGIN
   UNION ALL
   SELECT 'render-local'::text,j.id,j.created_at FROM app.creative_media_local_render_jobs j
    WHERE j.workspace_id=p_workspace AND j.state='queued' AND j.retry_at<=clock_timestamp()
-  UNION ALL
-  SELECT 'probe-output'::text,o.id,o.created_at FROM app.creative_media_video_outputs o
-   WHERE o.workspace_id=p_workspace AND o.state='captured_unverified'
-    AND NOT EXISTS(SELECT 1 FROM app.creative_media_output_probes p WHERE p.workspace_id=o.workspace_id AND p.output_id=o.id)
  ) work ORDER BY work.created_at,work.kind,work.id LIMIT p_limit;
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_work_pending(uuid,integer) FROM PUBLIC;

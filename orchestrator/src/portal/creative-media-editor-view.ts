@@ -15,7 +15,7 @@ export function creativeMediaEditorPage(shell:Shell,sources:readonly VideoSource
   +'<input type="hidden" name="projectId" value="'+e(p?.id??'')+'">'
   +'<input type="hidden" name="expectedRevision" value="'+(p?.revision??0)+'">'
   +(p?'<input type="hidden" name="source" value="'+e(p.sourceId+':'+p.sourceSha256)+'">':select)
-  +'<label>Editable timeline draft (JSON fallback)<textarea name="planJson" maxlength="12000" rows="8" required>'
+  +'<label hidden><textarea name="planJson" hidden maxlength="12000">'
   +e(JSON.stringify(p?.plan??blank,null,2))+'</textarea></label>'
   +'<button type="submit">Save new private timeline version</button></form>';
  const items=projects.map(p=>'<details class="card"><summary>Timeline '+e(p.id.slice(0,8))

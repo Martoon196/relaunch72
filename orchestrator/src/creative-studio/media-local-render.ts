@@ -45,6 +45,23 @@ export function localRenderDimensions(canvas: VideoCanvas): RenderDimensions {
   if (canvas === 'square') return { width: 720, height: 720 };
   return { width: 1280, height: 720 };
 }
+
+/** Conservative fixed-rate envelope including AAC, muxing and timing margin. */
+export const LOCAL_RENDER_VIDEO_BITRATE=480_000;
+export function assertLocalRenderCapacity(plan:VideoEditPlan):number {
+ const p=checkVideoEditPlan(plan),ms=p.clips.reduce((n,c)=>n+(c.endMs-c.startMs)/c.speed,0);
+ const estimate=Math.ceil(ms/1000*(LOCAL_RENDER_VIDEO_BITRATE+96_000)/8*1.08)+262144;
+ if(estimate>=LOCAL_RENDER_MAX_BYTES)throw new SeoBlogError(413,'This timeline cannot fit the 20 MB private MP4 limit. Shorten the video before rendering.');
+ return estimate;
+}
+/** Four conservative-width lines; wide glyphs still fit the central safe area. */
+export function wrappedVideoCaption(text:string,width:number):string {
+ const max=Math.floor(width*.7/28),chars=Array.from(text.trim().replace(/\s+/gu,' '));
+ const visible=chars.slice(0,max*4);if(chars.length>visible.length)visible.splice(-1,1,'…');
+ const lines:string[]=[];for(let i=0;i<visible.length;i+=max)lines.push(visible.slice(i,i+max).join(''));
+ return lines.join('\n');
+}
+
 const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
 const safe = (value: string): string => value.replace(/[^a-zA-Z0-9_/.-]/gu, '');
 const filterPath = (value: string): string => safe(value).replaceAll(':','\\:');
@@ -70,19 +87,19 @@ export function localRenderFilterGraph(
     const segment = (clip.endMs - clip.startMs) / clip.speed / 1000;
     duration += segment;
     const caption = clip.caption.trim();
-    const disclosure = p.disclosure.trim();
-    const title = [caption, disclosure].filter(Boolean).join('  |  ').slice(0, 400);
+    const title = caption;
     let graph = `[0:v:0]trim=start=${start}:end=${end},setpts=(PTS-STARTPTS)/${clip.speed},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p`;
     if (title) {
       const path = captionPaths[i];
       if (!path || !/^[a-zA-Z0-9_/.-]+$/u.test(path))
         throw new SeoBlogError(400, 'Caption file path is not trusted');
-      graph += `,drawtext=textfile=${filterPath(path)}:expansion=none:fontcolor=white:fontsize=36:x=(w-text_w)/2:y=h-text_h-64:box=1:boxcolor=black@0.55:boxborderw=12`;
+      graph += `,drawtext=textfile=${filterPath(path)}:expansion=none:fontcolor=white:fontsize=28:line_spacing=8:x=(w-text_w)/2:y=h*0.45:box=1:boxcolor=black@0.55:boxborderw=12`;
     }
     if (clip.transition === 'fade' && segment >= 0.5) {
       const fade = Math.min(0.25, segment / 4);
       graph += `,fade=t=in:st=0:d=${fade},fade=t=out:st=${Math.max(0, segment-fade).toFixed(3)}:d=${fade}`;
     }
+    graph += ",drawtext=text='#ad':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf:expansion=none:fontcolor=white:fontsize=48:x=w*0.15:y=h*0.22:box=1:boxcolor=black:boxborderw=12";
     fragments.push(graph+`[v${i}]`);
     const audio = audioPresent
       ? `[0:a:0]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,atempo=${clip.speed},volume=${clip.volume??1}[a${i}]`
@@ -144,6 +161,7 @@ export async function renderLocalVideo(
   if (!Buffer.isBuffer(source.bytes) || source.bytes.length < 1024
     || source.bytes.length > LOCAL_RENDER_MAX_BYTES || sha(source.bytes) !== source.sha256)
     throw new SeoBlogError(409, 'Private video bytes no longer match approved source');
+  assertLocalRenderCapacity(plan);
   const measured = source.probe;
   if (measured.status !== 'verified_technical' || measured.checkerVersion !== VIDEO_PROBE_VERSION
     || !Number.isSafeInteger(measured.durationMs) || measured.durationMs! < 1000
@@ -171,11 +189,12 @@ export async function renderLocalVideo(
 
 async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,checked:VideoEditPlan,measured:VideoProbe,
  measure:(bytes:Buffer)=>Promise<VideoProbe>,opts:{ffmpeg?:string;render?:(binary:string,args:readonly string[])=>Promise<void>}):Promise<LocalRenderOutput>{
+ assertLocalRenderCapacity(checked);
  const outputPath=join(dir,'candidate.mp4');
     const captionFiles: string[] = [];
     for (const [i, clip] of checked.clips.entries()) {
       const path = join(dir,`caption-${i}.txt`);
-      const content = [clip.caption.trim(),checked.disclosure.trim()].filter(Boolean).join('  |  ');
+      const content = wrappedVideoCaption(clip.caption,localRenderDimensions(checked.canvas).width);
       if (content) await writeFile(path, content, {flag:'wx',mode:0o600});
       captionFiles.push(path);
     }
@@ -192,7 +211,7 @@ async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,c
         '-format_whitelist','mov,matroska,webm','-codec_whitelist','h264,aac,pcm_s16le',
         '-ss',String(clip.startMs/1000),'-t',String(duration),'-i',inputPath,
         '-filter_complex',single.graph,'-map','[v]','-map','[a]',
-        '-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p',
+        '-c:v','libx264','-preset','veryfast','-b:v',String(LOCAL_RENDER_VIDEO_BITRATE),'-maxrate',String(LOCAL_RENDER_VIDEO_BITRATE),'-bufsize',String(LOCAL_RENDER_VIDEO_BITRATE*2),'-pix_fmt','yuv420p',
         '-x264-params','threads=1:lookahead_threads=1:rc-lookahead=4',
         '-c:a','aac','-b:a','96k','-ac','2','-ar','44100','-threads','1',
         '-fs',String(LOCAL_RENDER_MAX_BYTES),segmentPath];
@@ -230,6 +249,7 @@ async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,c
 
 /** Streaming large-source path; private source bytes never enter a whole-file Buffer. */
 export async function renderLocalVideoFile(files:PrivateMediaFiles,object:PrivateMediaObject,probe:VideoProbe,plan:VideoEditPlan):Promise<LocalRenderOutput>{
+ assertLocalRenderCapacity(plan);
  const input=await files.verify(object),fresh=await probePrivateMediaFile(input);
  if(fresh.status!=='verified_technical'||probe.status!=='verified_technical'||fresh.checkerVersion!==probe.checkerVersion
   ||fresh.durationMs!==probe.durationMs||fresh.width!==probe.width||fresh.height!==probe.height||fresh.videoCodec!==probe.videoCodec||fresh.audioPresent!==probe.audioPresent)throw new SeoBlogError(409,'Exact independently measured object source required');

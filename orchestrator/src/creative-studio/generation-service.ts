@@ -63,14 +63,14 @@ export class CreativeGeneration {
     const brandLimit = brand.settings.budgets.imagesPerMonth, used = state.usage.brandImagesThisMonth + state.usage.brandUnresolvedEarlier;
     const sharedOpen = Boolean(policy && policy.enabled && policy.maxConcurrency > 0 && policy.perAttemptMicrousd > 0 && (policy.monthlyUnlimited === true || policy.monthlyMicrousd > 0));
     const blockers = [
-      ...(!this.deps.providerConfigured ? ['The image provider is not configured on this server.'] : []),
+      ...(!this.deps.providerConfigured ? ['Image generation is not connected on this server.'] : []),
       ...(policyUnreadable ? ['The platform image policy could not be read just now. Try again shortly.'] : !sharedOpen ? ['Paid image generation is not enabled by the platform operator.'] : []),
       ...(!enabled ? ['Studio image generation is switched off for this brand.'] : !unlimited(brand.settings, 'studioImages') && studioLimit - state.usage.studioImagesCounted <= 0 ? ['The studio image allowance for this month is used up or zero.'] : []),
       ...(!unlimited(brand.settings, 'images') && brandLimit - used <= 0 ? ['The brand image allowance (shared with blog images) is used up or zero.'] : []),
     ];
     return Object.freeze({ paidGenerations: 1 as const, model: CREATIVE_IMAGE_MODEL, quality: CREATIVE_IMAGE_QUALITY, size: brief.size, references: brief.references.length,
       reservedMicrousd: policy && sharedOpen ? policy.perAttemptMicrousd : null,
-      exactCost: 'The provider bills by tokens and returns usage after the call; the exact charge is not known in advance. If usage is not returned, the cost is recorded as unknown, never as zero. Reference images add input cost.',
+      exactCost: 'The image service reports its usage after the request, so the exact charge is not known in advance. If usage is not returned, the cost is recorded as unknown, never as zero. Reference images add input cost.',
       brandAllowance: { limit: brandLimit, used, unlimited: unlimited(brand.settings, 'images'), remaining: unlimited(brand.settings, 'images') ? COMPATIBLE_UNLIMITED : Math.max(0, brandLimit - used) },
       studioAllowance: { enabled, limit: studioLimit, counted: state.usage.studioImagesCounted, unresolved: state.usage.studioUnresolved, unlimited: unlimited(brand.settings, 'studioImages'), remaining: unlimited(brand.settings, 'studioImages') ? COMPATIBLE_UNLIMITED : Math.max(0, studioLimit - state.usage.studioImagesCounted) },
       sharedLimitOpen: sharedOpen, blockers });

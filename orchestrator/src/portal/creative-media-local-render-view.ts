@@ -34,8 +34,7 @@ export function creativeMediaLocalRenderPage(shell:Shell, model:{
   return '<details class="card"><summary><strong>'+e(source?.fileName??'Video source')
    +'</strong> · '+e(p.plan.canvas)+' · v'+e(p.revision)
    +' · '+duration.toFixed(1)+' s</summary>'
-   +'<p class="small muted">Source digest: <code>'+e(p.sourceSha256)+'</code></p>'
-   +'<p class="small muted">Exact saved edit: <code>'+e(p.planSha256)+'</code></p>'
+   +'<p>Private MP4 exports have a 20 MB limit. Captions show a maximum four wrapped lines; longer captions are shortened. The #ad label stays on its own line.</p>'
    +'<form method="post" action="'+path+'/local-renders">'
    +csrfField(shell.csrf)
    +'<input type="hidden" name="commandId" value="'+e(model.newCommand())+'">'
@@ -61,7 +60,7 @@ export function creativeMediaLocalRenderPage(shell:Shell, model:{
    +'. Canonical approval required.</p>'+creativeMediaErasureForm(shell,'local_output',o.id)+'</li>').join('');
  const intro='<section class="card"><h1>Offline native video renders</h1>'
   +'<p>Use an independently probed private video and your saved edit plan.'
-  +' The trusted worker will trim clips, preserve audio, add captions and export a new private MP4.'
+  +' Exports are limited to 20 MB; timelines that cannot fit are rejected before encoding. The trusted worker will trim clips, preserve audio, add captions and export a new private MP4.'
   +' No external Vizard or Shotstack call is needed.</p>'
   +'<p class="notice">Draft workspace only. Rendering is not social publishing, affiliate compliance,'
   +' merchant approval or proof of a video licence. This screen is not connected to the live portal.</p>'

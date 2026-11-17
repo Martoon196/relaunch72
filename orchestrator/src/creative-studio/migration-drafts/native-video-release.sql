@@ -105,7 +105,7 @@ REVOKE ALL ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boo
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boolean) TO r72_creative_studio_definer;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_release_bytes(uuid,uuid,uuid) TO r72_owned_social_worker_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;
-CREATE TRIGGER creative_media_native_video_call_guard BEFORE UPDATE ON app.property_predator_owned_social_jobs FOR EACH ROW EXECUTE FUNCTION app_private.creative_media_video_call_guard();
+-- The independently granted, narrowly filtered calling trigger is installed last.
 REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;

@@ -1,51 +1,59 @@
-# Native media branch: actual integration boundary
+# Native video integration handoff
 
-This branch contains unmounted media modules. It does not contain working media HTTP routes, production migration assignments or a deployed service. Claude owns those changes. PR #108 remains a draft. All feature flags and operator policies remain disabled unless explicitly configured outside this build.
+All capabilities are dark. PR #108 stays draft. Claude owns route/server wiring, production migration names/numbers, service mount and live verification. Do not run the disposable bootstrap on production.
 
-Read `rl72-media-final-components.md` for the current module inventory and `rl72-astra-audit-brief.md` for proof details and review scope. These rewritten documents replace earlier claims of full readiness.
+Production's affiliate layer is authoritative. Duplicate creative-media product/report/link-evidence stores and drafts, the shared Creative Studio service hook, and paid-provider modules/views are removed. No shared application source or package manifest differs from the merged foundation; `.env.example` only documents dark native gates.
 
-## Components and proposed integration seams
+## Active drafts, exact application order
 
-| Existing module | Prepared capability | Claude's integration work |
-| --- | --- | --- |
-| `orchestrator/src/creative-studio/media-product-pg-store.ts` and `media-link-evidence.ts` | Owner product revisions and programme evidence | Authenticated product/evidence handlers; compute evidence digest from uploaded document using `media-owner-input.ts` |
-| `media-video-source-pg-store.ts` | Small private source intake | Owner multipart handler and private preview |
-| `media-object-sources.ts` and `media-private-files.ts` | Large private resumable source intake, ranges, source probe, staging cleanup | Owner begin/status/part/complete/cancel handlers and durable shared private disk |
-| `media-edit-pg-store.ts` and `media-local-render-pg-store.ts` | Immutable timelines and local render queue | Owner edit/enqueue/list handlers |
-| `media-local-render.ts` and `media-source-probe.ts` | Sequential segment rendering; bounded Linux child processes | Install FFmpeg/FFprobe and util-linux `prlimit`; isolate and supervise worker |
-| `orchestrator/src/workers/creative-media/cli.ts` and `service.ts` | Disabled supervised offline loop | Mount as a worker service only after audit gates pass |
-| `media-output-review.ts`, `media-local-output-review.ts`, `media-canonical-handoff.ts` | Private evidence preparation and canonical pending video draft | Compose into canonical queue; private checks are not publication approval |
-| `media-native-calendar.ts` and `media-video-release.ts` | Canonical native caption/video planning, short-lived JIT, resolver and withdrawal | Inject existing adapter/planning/Zernio pools; mount owner planning and existing calendar worker resolver |
-| `media-retention.ts` and `orchestrator/src/portal/creative-media-erasure-view.ts` | Owner erasure request, bounded automatic payload erasure | Owner/CSRF erase handler, confirm action; provider takedown remains canonical integration |
-| `media-affiliate-pages.ts` | Direct merchant page and bounded unverified click observations | Public page/read pool and separate backend click command pool; server-derived source hash |
-| `amazon-report-pg-store.ts` | Merchant-reported earnings ingestion | Owner report import/list handlers |
+1. `native-video-role.sql`
+2. `media-erasure-table.sql`
+3. `source-videos.sql`
+4. `source-private-preview.sql`
+5. `source-video-probe.sql`
+6. `edit-projects.sql`
+7. `local-render-jobs.sql`
+8. `local-output-private-review.sql`
+9. `media-worker-dispatch.sql`
+10. `local-video-canonical-handoff.sql`
+11. `private-object-sources.sql`
+12. `native-video-release.sql`
+13. `media-retention.sql`
+14. `native-video-jit.sql`
+15. `native-video-planner.sql`
+16. `native-video-call-trigger.sql`
 
-The `orchestrator/src/portal/creative-media-*.ts` modules export HTML renderers, not mounted screens. Serve owned scripts from `media-cut-editor.ts`, `media-scene-timeline.ts`, `media-streaming-sha256.ts` and `MEDIA_LARGE_UPLOAD_SCRIPT` only where the corresponding view is mounted. No route names in this document imply an implemented router.
+`migration-drafts/apply-to-disposable.mjs` is authoritative for this native-only list. All draft filenames are descriptive, without production-style numbers. `affiliate-link-distribution.sql` remains parked and unchanged, outside this manifest, for the later affiliate-article rework. It cannot apply without its retired affiliate schema and must not be included in production's native migration batch.
 
-## SQL and ownership
+## Required integration hooks
 
-`orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs` is the authoritative ordered list of remaining media draft files. Its filename prefixes are historical draft names, **not production migration numbers**. No draft has been renumbered for integration. Claude assigns actual production migration numbers, orders dependencies and reviews grants before applying anything.
+- Source owner upload/private streaming: `media-video-source-pg-store.ts`, `media-object-sources.ts`, `PrivateMediaFiles`, source/large-upload views. H.264 up to 1080p; durable private disk shared between upload and worker. Root is configured using `RL72_MEDIA_PRIVATE_FILES_ROOT`.
+- Saved timeline/editor: `media-edit-pg-store.ts`, editor view and cut-editor script. Plan JSON is hidden transport, never an owner-facing fallback. Always-visible `#ad` is a fixed renderer overlay; captions wrap and shorten to four lines.
+- Queue/render/status/preview: `media-local-render-pg-store.ts`, local render view and byte-range helper. Export cap: 20 MB. SQL rejects estimates that cannot fit before queueing. Keep immutable exact-source/edit checks.
+- Private review: `media-local-output-review.ts`, `media-private-review.ts`, local output review view. Canonical approval remains the publication approval; no second media authorization.
+- Erasure and retention: `PgMediaErasureOwner.erase` and `.setRetention`, erasure/retention forms. Owner session, CSRF and explicit consent required. NULL retention means indefinite; never silently opt an existing library into expiry. Missing disk leaves deletion pending. Connect provider takedown and backup policies separately.
+- Native calendar: `PgNativeVideoPlanner` and `PgNativeVideoJitWorker`. Use the existing canonical campaign revision, enqueue, scoped revalidation proof, claim and calling transport. Current rails: Instagram/LinkedIn. Original planning attestations may expire while waiting; near-slot JIT proof remains exactly 15 minutes.
+- Calling: `native-video-call-trigger.sql` owns classification grants and installs a video-only WHEN condition. Keep the canonical classifier independent of the media role, and preserve its grants to canonical posting roles. Wrap the existing media resolver with `createNativeVideoMediaResolver`; preserve canonical emergency/provider-effect gates and settlement.
+- Worker: invoke `node --import tsx orchestrator/src/workers/creative-media/cli.ts serve` from repository root. No npm package hook is added. Native commands: serve, tick, probe, render-local, cleanup-objects, attest-native. Paid submit/reconcile/probe-output commands no longer exist. Native service does not call the parked click-retention SQL.
 
-The superseded `resumable-video-uploads.sql`, its small-buffer uploader/store, standalone signup and separate media Stripe rail were removed. Canonical paid-order provisioning and billing are required; this branch supplies neither a replacement signup endpoint nor a second webhook/checkout flow.
+## Dark gates
 
-## Configuration required, all dark
+`CREATIVE_MEDIA=enabled` plus the applicable boolean flags (all false in `.env.example`):
 
-Use the actual module gates: `CREATIVE_MEDIA=enabled`, `RL72_MEDIA_WORKER_ENABLED`, `RL72_MEDIA_LOCAL_RENDER_ENABLED`, `RL72_MEDIA_DISPATCH_ENABLED`, `RL72_MEDIA_SERVICE_ENABLED`, `RL72_MEDIA_RETENTION_ENABLED`, `RL72_MEDIA_PRIVATE_FILES_ENABLED`, `RL72_MEDIA_PRIVATE_FILES_ROOT`. No service is started by these code changes. Paid-provider submit/read permissions remain separate and are never exercised by the offline loop.
+- `RL72_MEDIA_WORKER_ENABLED`
+- `RL72_MEDIA_LOCAL_RENDER_ENABLED`
+- `RL72_MEDIA_DISPATCH_ENABLED`
+- `RL72_MEDIA_SERVICE_ENABLED`
+- `RL72_MEDIA_RETENTION_ENABLED`
+- `RL72_MEDIA_PRIVATE_FILES_ENABLED`
+- `RL72_MEDIA_CANONICAL_HANDOFF_ENABLED`
+- `RL72_MEDIA_NATIVE_CALENDAR_ENABLED`
+- `RL72_MEDIA_VIDEO_RELEASE_ENABLED`
 
-Proposed owner handlers must derive workspace from selected authenticated session, enforce owner capability/CSRF and bound request bodies. Digests and immutable IDs are server/browser implementation data, not owner-entered fields. Uploaded evidence must be bounded to 5 MB; use `mediaEvidenceDigest` server-side for multipart forms. The large uploader computes its own document digest.
+The parked page gate `RL72_MEDIA_AFFILIATE_PAGES_ENABLED` also stays false. Public pages, beacon signing/verification, and their legacy SQL remain unmounted for a later production affiliate-article adapter. Owner publication fails explicitly until that adapter exists. Do not revive the deleted duplicate stores.
 
-Affiliate page enablement additionally needs reviewed origin/programme eligibility, `RL72_MEDIA_AFFILIATE_PAGES_ENABLED`, a 32-byte signing key in application secret configuration, **only its SHA256 digest** in the SQL policy, and a separate restricted backend click command pool. The `r72_public` role cannot record clicks. Do not accept a browser-provided source hash or untrusted forwarding header. Missing server-derived source hash renders a direct merchant link without a beacon token. Counts are unverified, pseudonymously deduplicated source/page/day observations, not unique people or sales; rotating source networks can still inflate them.
+## Verification
 
-## Native calendar integration
+`media-visible-disclosure.test.ts` OCRs actual exported frames with a 240-character caption across three canvases. `native-calendar-local-run.mjs` bootstraps a fresh disposable PostgreSQL and the native-only manifest, then runs the native render and three-day clock tests. CI repeats these checks. FFmpeg, FFprobe, DejaVu Sans Mono Bold and Tesseract are required for pixel/OCR tests.
 
-`PgLocalVideoCanonicalHandoff.request` returns `draft/approval` for video and `postDraft/postApproval` for the exact accompanying caption. Present both in the canonical approval queue; there is no second per-job authorize step. Pass their approved version IDs to `PgNativeVideoPlanner.plan` together with the chosen actual registered account/profile digests, connection ID, schedule and command ID. Derive all owner authority from the selected real portal session. The planner uses existing content-adapter, public-social-command and Zernio-command pools and the existing canonical connected-account enqueue function.
-
-New source adapters are in `native-video-jit.sql` and `native-video-planner.sql`, after `media-retention.sql` in the disposable manifest. They retain canonical intent hashes, media tuples, row-level scope, approvals, cancellations, caps and the 15-minute proof window. No foundation SQL function is replaced. Claude assigns production migration names/numbers.
-
-Add `RL72_MEDIA_NATIVE_CALENDAR_ENABLED=true` only after integration review. The prepared dark offline service handles scoped due-native JIT observations before its ordinary work. Wrap the existing Zernio media resolver with `createNativeVideoMediaResolver`; retain its canonical claim/begin-call/settlement/reconciliation and emergency/provider-effect gates. The trigger’s immutable call-check receipt is evidence of the native check inside an actual state transition, not a separate permission ledger.
-
-The clock integration test uses libfaketime solely in disposable PostgreSQL to advance three days. It does not alter timestamps in immutable production rows, replace SQL time functions, disable triggers or manually insert social jobs. Account discovery/webhook responses are explicit provider fixtures; no real OAuth/provider posting or merchant sale is claimed.
-
-## Release boundary
-
-Both previously open pre-integration proof cases are executable and have local results. Review exact-head CI in PR #108. Claude still audits, mounts, configures and verifies real live receipts before enabling anything. The branch remains a draft and no production release has occurred.
+The clock proof uses libfaketime solely in PostgreSQL, not Node, and real canonical planner/claim/calling functions. A separate rolled-back cloned text-job fixture tests trigger isolation with revoked media grants; it is not planner proof. No triggers, foreign keys or replication settings are disabled. Provider inventory/webhooks remain explicit fixtures. Live OAuth, provider publishing and platform previews remain Claude's integration checks.

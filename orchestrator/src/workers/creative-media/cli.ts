@@ -3,10 +3,7 @@
  * Usage:
  *   npm --prefix orchestrator run media:worker -- serve
  *   npm --prefix orchestrator run media:worker -- probe <workspace-uuid> <source-uuid>
- *   npm --prefix orchestrator run media:worker -- probe-output <workspace-uuid> <output-uuid>
  *   npm --prefix orchestrator run media:worker -- render-local <workspace-uuid> <job-uuid>
- *   npm --prefix orchestrator run media:worker -- submit <workspace-uuid> <job-uuid>
- *   npm --prefix orchestrator run media:worker -- reconcile <workspace-uuid> <job-uuid>
  * Default OFF. Service discovers bounded workspace UUID batches and enters each
  * tenant scope. It polls offline work and cleanup; never retries paid calls.
  */
@@ -20,13 +17,7 @@ import {renderLocalVideoFile} from '../../creative-studio/media-local-render.js'
 import { randomUUID } from 'node:crypto';
 import { createWorkerDatabasePool } from '../../db/pool.js';
 import { PgVideoSourceProbeWorker } from '../../creative-studio/media-source-probe.js';
-import { PgMediaOutputProbeWorker } from '../../creative-studio/media-output-review.js';
 import { PgLocalRenderWorker,runQueuedLocalRender,renderLocalVideo } from '../../creative-studio/media-local-render-pg-store.js';
-import { PgVideoAdmissionWorker } from '../../creative-studio/media-admission-pg-store.js';
-import { submitApprovedMediaJob } from '../../creative-studio/media-work-executor.js';
-import { VizardVideoProvider, ShotstackVideoProvider } from '../../creative-studio/media-providers.js';
-import { PgMediaVideoOutputWorker,downloadProviderVideo } from '../../creative-studio/media-video-output-pg-store.js';
-import { reconcileMediaJob } from '../../creative-studio/media-reconciler.js';
 import {PgOfflineMediaDiscovery,runOfflineMediaTick} from '../../creative-studio/media-worker-dispatch.js';
 import { workerCommandGate } from './worker-gate.js';
 
@@ -49,9 +40,9 @@ async function main():Promise<void>{
     if(action==='serve'){
       const controller=new AbortController(),stop=()=>controller.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
       const discovery=new PgMediaServiceDiscovery(pool,requestId);
-      try{await runMediaService({workspaces:after=>discovery.workspaces(after),clickRetention:()=>discovery.clickRetention(),
+      try{await runMediaService({workspaces:after=>discovery.workspaces(after),clickRetention:async()=>{},
        cleanup:async ws=>{if(process.env.RL72_MEDIA_NATIVE_CALENDAR_ENABLED==='true')await new PgNativeVideoJitWorker(pool,requestId).attest(ws);await new PgMediaRetentionWorker(pool,requestId,files).sweep(ws);if(files)await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(ws,10);},
-       tick:ws=>runOfflineMediaTick(ws,{pending:(w,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(w,n),probe:probeSource,probeOutput:(w,id)=>new PgMediaOutputProbeWorker(pool,requestId).probe(w,id),render:(w,id)=>runQueuedLocalRender(w,id,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer})},{limit:1,signal:controller.signal}),
+       tick:ws=>runOfflineMediaTick(ws,{pending:(w,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(w,n),probe:probeSource,render:(w,id)=>runQueuedLocalRender(w,id,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer})},{limit:1,signal:controller.signal}),
        onError:()=>console.error('Offline media batch held; retrying after bounded delay')},{signal:controller.signal});}
       finally{process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}return;
     }
@@ -60,19 +51,12 @@ async function main():Promise<void>{
       const receipts=await runOfflineMediaTick(workspaceId!,{
         pending:(ws,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(ws,n),
         probe:(ws,record)=>probeSource(ws,record),
-        probeOutput:(ws,record)=>new PgMediaOutputProbeWorker(pool,requestId).probe(ws,record),
         render:(ws,record)=>runQueuedLocalRender(ws,record,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer}),
       });console.log('offline media batch:',receipts);return;
     }
     if(action==='probe'){
       const result=await probeSource(workspaceId!,id!);
       console.log('private video technical probe:',result.status,result.replayed?'already recorded':'new receipt');
-      return;
-    }
-    if(action==='probe-output'){
-      const result=await new PgMediaOutputProbeWorker(pool,requestId).probe(workspaceId!,id!);
-      console.log('private provider output technical probe:',result.status,
-        result.replayed?'existing receipt':'new receipt');
       return;
     }
     if(action==='render-local'){
@@ -83,28 +67,7 @@ async function main():Promise<void>{
       console.log('private native offline render:',result.state,'job:',result.jobId);
       return;
     }
-    const vizard=new VizardVideoProvider(process.env.RL72_MEDIA_VIZARD_API_KEY??'',
-      process.env.RL72_MEDIA_PROVIDER_SUBMISSIONS_ALLOWED==='true'||process.env.RL72_MEDIA_PROVIDER_READS_ALLOWED==='true');
-    const shotstackEnv=process.env.RL72_MEDIA_SHOTSTACK_ENV==='v1'?'v1':'stage';
-    const shotstack=new ShotstackVideoProvider(process.env.RL72_MEDIA_SHOTSTACK_API_KEY??'',
-      process.env.RL72_MEDIA_PROVIDER_SUBMISSIONS_ALLOWED==='true'||process.env.RL72_MEDIA_PROVIDER_READS_ALLOWED==='true',
-      shotstackEnv);
-    const store=new PgMediaVideoOutputWorker(pool,requestId);
-    if(action==='submit'){
-      const result=await submitApprovedMediaJob(workspaceId!,id!,{
-        ledger:new PgVideoAdmissionWorker(pool,requestId),vizard,shotstack});
-      console.log('video submission:',result.state,'job:',result.jobId);
-      return;
-    }
-    const result=await reconcileMediaJob(workspaceId!,id!,{
-      pending:(ws,job)=>store.pending(ws,job),
-      inspectVizard:(providerId)=>vizard.inspect(providerId),
-      inspectShotstack:(providerId)=>shotstack.inspect(providerId),
-      download:(url)=>downloadProviderVideo(url),
-      capture:(input)=>store.capture(input),
-    });
-    console.log('read-only video reconciliation:',result.state,'assets:',result.assets,
-      'provider credit receipt:',result.providerCredits??'unknown');
+
   }finally{await pool.end();}
 }
 main().catch(error=>{
