@@ -165,7 +165,7 @@ export interface MhpStartPlan {
   mode: string;
 }
 export interface MhpStartInput { commandId: string; itemId: string; versionId: string; count: number; digest: string;
-  /** First 8 hex characters of each confirmed person's id, used only to explain a difference. */
+  /** Last 8 hex characters of each confirmed person's id, used only to explain a difference. */
   people: string; confirmed: boolean }
 export type MhpStartResult =
   | { kind: 'started'; started: number; expected: number; replayed: boolean; unexpected: number; unexpectedPaused: number; inFlight: number; later: number; firstWaitMinutes: number }
@@ -444,9 +444,9 @@ export class MhpSequenceService {
       if (confirmed.size === input.count && known.length === confirmed.size && known.every(person => started.has(person.email.trim().toLowerCase())))
         return { kind: 'already_started', count: input.count };
       if (!plan.ready && !['nobody', 'list_changed'].includes(plan.refusal!.code)) throw new MhpCommerceError(409, plan.refusal!.message);
-      const now = new Set(plan.recipients.map(person => person.prospectId.slice(0, 8)));
-      return { kind: 'changed', plan, previousCount: input.count, added: plan.recipients.filter(person => confirmed.size && !confirmed.has(person.prospectId.slice(0, 8))),
-        removed: known.filter(person => !now.has(person.prospectId.slice(0, 8))) };
+      const now = new Set(plan.recipients.map(person => person.prospectId.slice(-8)));
+      return { kind: 'changed', plan, previousCount: input.count, added: plan.recipients.filter(person => confirmed.size && !confirmed.has(person.prospectId.slice(-8))),
+        removed: known.filter(person => !now.has(person.prospectId.slice(-8))) };
     }
     const result = await this.dependencies.repository.command(identity, { action: 'enrol', commandId: input.commandId, itemId: input.itemId, versionId: input.versionId,
       runId: '', ackProofId: '', campaign: this.dependencies.campaign, requestId });
@@ -467,13 +467,13 @@ export class MhpSequenceService {
   private async knownPeople(identity: PortalSessionIdentity, plan: MhpStartPlan, shortIds: ReadonlySet<string>): Promise<MhpStartRecipient[]> {
     if (!shortIds.size) return [];
     const found = new Map<string, MhpStartRecipient>();
-    for (const person of plan.recipients) if (shortIds.has(person.prospectId.slice(0, 8))) found.set(person.prospectId, person);
+    for (const person of plan.recipients) if (shortIds.has(person.prospectId.slice(-8))) found.set(person.prospectId, person);
     const reader = this.dependencies.repository.audienceCandidates?.bind(this.dependencies.repository);
     if (reader && found.size < shortIds.size) {
       let after: string | null = null;
       for (let page = 0; page < 400; page++) {
         const next: MhpAudienceCandidatePage = await reader(identity, this.dependencies.campaign, after);
-        for (const c of next.candidates) if (shortIds.has(c.prospectId.slice(0, 8))) found.set(c.prospectId, { prospectId: c.prospectId, firstName: c.firstName, email: c.email });
+        for (const c of next.candidates) if (shortIds.has(c.prospectId.slice(-8))) found.set(c.prospectId, { prospectId: c.prospectId, firstName: c.firstName, email: c.email });
         if (!next.hasMore) break; after = next.nextAfter;
       }
     }

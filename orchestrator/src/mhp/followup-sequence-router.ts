@@ -16,6 +16,7 @@ import { FOLLOWUP_SEQUENCE_UUID } from '../followup-sequences/definition.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { FlowDraftValidationError } from '../followup-sequences/channel-drafts.js';
 import { mhpLink, mhpOwnerProblemPage, mhpWorkspaceProblem } from './owner-frame.js';
+import { escapeHtml } from '../portal/ui.js';
 
 const BASE = '/hq/marketing/sequences';
 const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'start', 'pause', 'resume', 'cancel', 'stop', 'pause-all', 'resume-all', 'entry-activate', 'entry-off', 'open-workspace'] as const;
@@ -141,8 +142,9 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     const keys = editing ? DRAFT : action === 'publish' || action === 'pause-all' ? SAVED : action === 'start' ? START : action === 'resume-all' ? RESUME_ALL
       : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : action === 'open-workspace' ? OPEN_WORKSPACE : CONTROL;
     const fields = await form(req, keys, editing ? ['audience'] : ['start', 'resume-all', 'entry-activate'].includes(action) ? ['confirm'] : []), field = (key: string) => fields.get(key) ?? '';
-    if (!verifyPortalCsrf(portal.sessionSecret, token, field('csrf'))) throw new MhpCommerceError(403, 'This page was out of date. Open the sequence again and try once more.');
+    // Only for the way back from an error: validated ids, never trusted for an action.
     if (uuid(field('itemId')) && uuid(field('versionId'))) place = { itemId: field('itemId'), versionId: field('versionId') };
+    if (!verifyPortalCsrf(portal.sessionSecret, token, field('csrf'))) throw new MhpCommerceError(403, 'This page was out of date. Open the sequence again and try once more.');
     const itemId = field('itemId'), versionId = field('versionId'), commandId = field('commandId');
     if (action === 'open-workspace') {
       if (!sequences.openWorkspace) throw new MhpCommerceError(503, 'Open the marketing workspace from the Marketing workspace page.');
@@ -246,7 +248,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
 }
 function startToken(secret: string, session: string, commandId: string, plan: Awaited<ReturnType<MhpSequenceService['startPlan']>>, now: number): Record<string, string> {
   const f: Record<string, string> = { commandId, itemId: plan.itemId, versionId: plan.versionId, count: String(plan.count), digest: plan.digest || '0'.repeat(64),
-    people: plan.count <= NAMED_DIFF_LIMIT ? plan.recipients.map(person => person.prospectId.slice(0, 8)).join('') : '', issued: String(now) };
+    people: plan.count <= NAMED_DIFF_LIMIT ? plan.recipients.map(person => person.prospectId.slice(-8)).join('') : '', issued: String(now) };
   return { count: f.count!, digest: f.digest!, people: f.people!, issued: f.issued!, sig: startSignature(secret, session, f) };
 }
 function resumeToken(secret: string, session: string, commandId: string, plan: Awaited<ReturnType<MhpSequenceService['resumePlan']>>, now: number): Record<string, string> {
@@ -258,11 +260,10 @@ function problemPage(status: number, message: string, place: { itemId: string; v
   const backTo = place ? sequenceHref(place.itemId, place.versionId) : BASE;
   const backButton = mhpLink(backTo, place ? 'Back to the sequence' : 'Back to follow-up sequences', mhpWorkspaceProblem(status, message));
   if (mhpWorkspaceProblem(status, message)) {
-    const open = csrf ? `<form method="post" action="${BASE}/open-workspace"><input type="hidden" name="csrf" value="${csrfEscape(csrf)}"><input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="back" value="${csrfEscape(backTo)}"><button>Open marketing workspace</button></form>`
+    const open = csrf ? `<form method="post" action="${BASE}/open-workspace"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="commandId" value="${randomUUID()}"><input type="hidden" name="back" value="${escapeHtml(backTo)}"><button>Open marketing workspace</button></form>`
       : mhpLink('/hq/marketing', 'Open marketing workspace');
     return mhpOwnerProblemPage({ heading: 'Open your marketing workspace', message: 'Follow-up sequences live in the Martin Howard Property marketing workspace. Open it, and you will come straight back here.', actions: open + backButton, title: 'Open your marketing workspace' });
   }
   const heading = status === 409 ? 'Nothing was changed' : status === 429 ? 'Please wait a moment' : status === 404 ? 'Not found' : status >= 500 ? 'Temporarily unavailable' : 'Please try again';
   return mhpOwnerProblemPage({ heading, message, actions: backButton, title: heading });
 }
-const csrfEscape = (value: string) => value.replace(/[&<>"']/gu, char => `&#${char.charCodeAt(0)};`);
