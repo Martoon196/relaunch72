@@ -4,7 +4,7 @@
 the first) record SQL that was run by hand on production outside the migration ledger. They are kept as the record of
 what production has. **Do not run them again.**
 
-They are superseded by migration `0159_mhp_book_crm_retire_trigger.sql` together with the application code in
+They are superseded by migration `0159_mhp_book_crm.sql` together with the application code in
 `orchestrator/src/mhp/book-leads-service.ts` (see `docs/mhp-book-leads.md`):
 
 - 0159 drops the trigger `mhp_book_contact_after_signup`, the function `app_private.mhp_book_contact_after_signup()`,

@@ -5,8 +5,13 @@
  * app_private.mhp_book_contact_after_signup(), the ten mhp_book_* policies for r72_mhp_prospect_definer on app.contacts,
  * app.contact_points, app.pipelines, app.pipeline_stages, app.opportunities, app.opportunity_stage_history and app.tasks
  * (and any other policy of that prefix there for that role), and revokes exactly the grants those files added. On a
- * database at 0158 without them (fresh) every statement is a no-op. It touches no row: the CRM records the trigger made
+ * database at 0158 without them (fresh) every one of those statements is a no-op. It touches no row: the CRM records the trigger made
  * stay, and the application (src/mhp/book-leads-service.ts) recognises them. It keeps 0134's SELECT on app.contact_points.
+ *
+ * It also keeps a book sign-up's mobile durably (both starting states end identical): a nullable
+ * app_private.mhp_prospect_signups.phone (never mhp_prospects.phone, which the webinar text reminders read), the
+ * capture login's app_private.mhp_book_signup_keep_phone(uuid,uuid,text) and the owner read app_private.mhp_book_signups(bytea).
+ * Code built with this file treats both functions as absent (skipped softly) while 0159 is pending.
  *
  * Compatibility, exactly: code built with this file runs correctly on a database that still has the trigger (0159
  * pending; the app path and the trigger take the same per-email lock and the app never adds a second book enquiry) and
