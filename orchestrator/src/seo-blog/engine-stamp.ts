@@ -56,12 +56,13 @@ export function engineStamp(input: { strict: boolean; research: EngineStamp['res
 export const MIN_PLAN_SOURCES = 3;
 
 /** Why the strict setting stopped (internal; the owner sees only the neutral message). */
-export type EngineGap = 'research' | 'numbers' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers';
+export type EngineGap = 'research' | 'numbers' | 'numbers_unknown' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers';
 
 /** Neutral owner messages: no supplier, method, model or mechanism. */
 export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
   research: 'Topic research is not available right now, so planning is paused. Nothing has been spent. We will pick it up once it is back.',
   numbers: 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. Nothing has been spent on writing. To check again, press Retry beside this planning task in Activity. Your saved searches are reused.',
+  numbers_unknown: 'We could not confirm whether the last check of how many people search for these topics finished, so it will not be repeated for this plan and planning is paused rather than guessing. Nothing has been spent on writing. To try afresh, open Topics and choose to resume research as a new intent. Its searches count again against your research allowance.',
   numbers_off: 'Checking how many people search for these topics is not switched on for this business yet, so planning is paused rather than guessing. Nothing has been spent. Please ask us to check your set-up.',
   numbers_allowance: 'There is not enough research allowance left this month to check how many people search for these topics, so planning is paused rather than guessing. Nothing has been spent on writing. Once the allowance is raised in Settings or renews next month, press Retry beside this planning task in Activity.',
   thin_research: 'We did not find enough trustworthy sources to plan these articles properly, so planning is paused rather than going ahead on thin evidence. Nothing has been spent on writing. To try again, start a new plan in Topics, ideally with a focus, and confirm the fresh search it asks for.',

@@ -99,6 +99,14 @@ import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllo
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
 const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
 /** Of those, the answers that stand in for a request skipped because the research allowance was too small. */
+/**
+ * A planning task held (strict setting) after a search-numbers lookup whose outcome is unknown: it is never bought
+ * again for that task, so Retry cannot help; a fresh plan from Topics can.
+ */
+export function numbersOutcomeUnknown(job: Job): boolean {
+  const run = job.kind === 'plan' ? programmeRun(job) : null;
+  return !!run && run.hold === 'engine_incomplete' && run.attempts.some((a) => a.kind === 'metrics' && !a.receivedAt);
+}
 const NUMBERS_ALLOWANCE = new WeakSet<object>();
 const allowanceSkippedNumbers = <T extends object>(receipt: T): T => { NUMBERS_ALLOWANCE.add(receipt); return unavailableNumbers(receipt); };
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
@@ -1279,6 +1287,8 @@ export class SeoBlogEngine {
             return {job:{...current,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+NUMBERS_RECHECK_DELAY_MS).toISOString(),
               payload:{...current.payload,programme:{...latest,metricsWarning:undefined,numbersRecheckAt:now}},error:null,progress:NUMBERS_RECHECK_MESSAGE,updatedAt:now},writeJob:true};
           }
+          // A lookup whose outcome is unknown is never bought again for this plan: say so, and point to what works.
+          if(error.gap==='numbers'&&latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)) return this.programmeHeld(s,current,latest,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers_unknown);
           return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
         }
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
@@ -3622,6 +3632,8 @@ export class SeoBlogEngine {
       // Held only because the search-numbers lookup failed or was skipped for allowance (strict setting): Retry repeats
       // that one lookup, within the allowance, and reuses every saved search.
       const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
+      // Retry would only skip the same unknown lookup again: refuse with the true words instead.
+      if(numbersRetry&&numbersOutcomeUnknown(job)) throw new SeoBlogError(409,ENGINE_GAP_MESSAGE.numbers_unknown,'numbers_unknown');
       return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})},state:'queued',runAfter:this.now(),error:null,
         progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }

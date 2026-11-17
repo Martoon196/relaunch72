@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
+import { activityPage } from '../src/portal/seo-blog-view.js';
 import { ENGINE_GAP_MESSAGE, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from '../src/seo-blog/engine-stamp.js';
 import { ownerWords, revealsInternals } from '../src/seo-blog/owner-words.js';
 import type { KeywordMetric, KeywordProvider } from '../src/keyword/types.js';
@@ -191,4 +192,57 @@ test('F3: if a plan was made after the re-check was queued anyway, the re-check 
   assert.equal(research(h, brand.id), spent);
   assert.equal(h.llm.calls.length, calls, 'no planning call');
   assert.equal((await e.listPlans(OWNER, brand.id)).length, 1);
+});
+
+// ─── F4: an unknown lookup outcome is never answered with a Retry that cannot work ───
+
+async function unknownLookup(origin: 'autopilot' | 'owner') {
+  const h = harness(); const kw = flaky() as ReturnType<typeof flaky> & { hang: Promise<never> | null }; kw.hang = null;
+  const metrics = kw.metrics.bind(kw);
+  kw.metrics = async (keywords: string[]) => { if (kw.hang) { kw.calls++; return kw.hang; } return metrics(keywords); };
+  const e = strictEngine(h, kw, true);
+  const brand = await readyBrand(h, e);
+  kw.hang = new Promise<never>(() => undefined);
+  if (origin === 'autopilot') { const b = await e.getBrand(OWNER, brand.id); await e.updateSettings(OWNER, brand.id, b.rowVersion, { ongoingProduction: true }); await e.runDaily(brand.id); }
+  else await e.requestPlan(OWNER, brand.id, { commandId: randomUUID() });
+  h.clock.advance(1000);
+  void e.tick('A'); // This worker dies inside the lookup: its outcome is never known.
+  for (let i = 0; i < 50 && kw.calls === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  kw.hang = null; kw.healthy = true;
+  h.clock.advance(20 * 60_000); await e.tick('B');
+  return { h, kw, e, brand, job: (await planJobs(h, brand.id))[0]! };
+}
+
+for (const origin of ['autopilot', 'owner'] as const) {
+  test(`F4 (${origin} plan): an unknown lookup outcome holds with a true message and no working-looking Retry; it is never bought again`, async () => {
+    const { h, kw, e, brand, job } = await unknownLookup(origin);
+    assert.equal(job.state, 'blocked');
+    assert.equal(job.error, ENGINE_GAP_MESSAGE.numbers_unknown);
+    assert.doesNotMatch(job.error!, /Retry/);
+    assert.match(job.error!, /will not be repeated/);
+    assert.match(job.error!, /Topics/);
+    assert.equal(kw.calls, 1);
+    // Before: Retry said "Checking … again", checked nothing and held again. Now it refuses with the same plain words.
+    await assert.rejects(() => e.retryJob(OWNER, brand.id, job.id), (x: Error) => x.message === ENGINE_GAP_MESSAGE.numbers_unknown);
+    h.clock.advance(NUMBERS_RECHECK_DELAY_MS * 3); await e.tick('B');
+    assert.equal(kw.calls, 1, 'never bought again, by itself or by Retry');
+    // The Activity page offers no Retry for it, only the way that works.
+    const html = activityPage({ brand: await e.getBrand(OWNER, brand.id), brands: [await e.getBrand(OWNER, brand.id)], tab: 'activity', csrf: 'x' }, { jobs: await e.listJobs(OWNER, brand.id), events: [] } as never);
+    assert.ok(!html.includes(`jobs/${job.id}/retry`), 'no Retry form for this task');
+    assert.match(html, /Start a fresh plan in Topics/);
+    // The fresh start it names really works.
+    const hold = (await e.getBrand(OWNER, brand.id)).settings.programme!.researchHold!;
+    await e.requestPlan(OWNER, brand.id, { commandId: randomUUID(), resumeHoldId: hold.logicalRunId });
+    h.clock.advance(1000); await e.tick('B');
+    assert.equal((await planJobs(h, brand.id)).find((j) => j.id !== job.id)!.state, 'done');
+    assert.equal(kw.calls, 2);
+  });
+}
+
+test('F4: the message is plain and neutral and passes the owner-words rule unchanged', () => {
+  const m = ENGINE_GAP_MESSAGE.numbers_unknown;
+  assert.equal(ownerWords(m), m);
+  assert.equal(revealsInternals(m), false);
+  assert.ok(m.length <= 400, 'fits the stored error');
+  assert.doesNotMatch(m, /[–—]|supplier|provider|\bmodel\b|method|engine|Retry/i);
 });
