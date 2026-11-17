@@ -1,0 +1,162 @@
+{
+ "title": "Before You Buy: chapter readers, part 1 (email + text, days 0-15)",
+ "entry": "manual",
+ "retryWindowHours": 48,
+ "steps": [
+  {
+   "email": {
+    "name": "Book 1: your chapter, and one thing to do tonight",
+    "subject": "Your chapter, and one thing to do tonight",
+    "body": "{{FIRSTNAME}}, here is Chapter One of Before You Buy, as promised.\n\nhttps://martinhowardproperty.co.uk/assets/downloads/before-you-buy-chapter-one.pdf\n\nIt's called Does This Fit Me? It opens with the first property venture my business partner Meirion and I ran: a serviced apartment in Cardiff that looked the part, and a business inside it that didn't suit us.\n\nIf you only do one thing tonight, make it this. Open the buying-brief worksheet and answer it for the next deal you could actually take on.\n\nhttps://martinhowardproperty.co.uk/book/companion/#brief\n\nThere are seven lines: your main goal, your starting approach, your deal money and a separate contingency, the hours you can give each week, the work you'll do and the help you'll need, a setback you could cope with, and your rejection rule.\n\nYour answers stay on that page and aren't sent to me, so print it or save it as a PDF before you close it. Then keep it beside you when you search.\n\nThe line most people leave blank is the rejection rule. Write it anyway. It's the one that protects you when you fall for a house.\n\nIf you gave us your mobile number, I or one of my team will give you a quick call about the book and the property you're looking at. If you'd rather not have the call, reply and say so.\n\nOver the next few weeks I'll send you the practical checks I use on a property and, now and then, a tool, kit or programme of mine that does part of the job. Every email has a way to leave at the bottom.\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 0,
+    "hours": 1,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 1: did the chapter arrive",
+    "body": "Hi {{FIRSTNAME}}, it's Martin Howard. Did Chapter One of Before You Buy arrive OK? Reply with any question about the book or your property. STOP to opt out"
+   }
+  },
+  {
+   "wait": {
+    "days": 0,
+    "hours": 23,
+    "minutes": 0
+   }
+  },
+  {
+   "email": {
+    "name": "Book 2: the ordinary Tuesday test",
+    "subject": "The question we didn't ask in Cardiff",
+    "body": "{{FIRSTNAME}}, when Meirion and I set up our first serviced apartment in Cardiff, we thought hard about the apartment. We didn't think hard enough about the business we'd be running inside it.\n\nWe had started at a difficult time of year. Some weeks, Friday arrived with the weekend still empty. Between bookings came the cleaning, the guest questions, the coffee sachets and the fresh bedding. One guest who was supposed to have a quiet stay held a party and upset the neighbours.\n\nThe property was fine. The job that came with it didn't suit us. So we moved into finding properties for investors instead, and that work suited us better.\n\nI've been involved in more than £30 million of property projects, and that lesson from Cardiff is the one I'd put first. A lovely property doesn't automatically make a lovely business.\n\nSo here's the test I'd run before your next viewing.\n\nPicture an ordinary Tuesday in the business that property creates. Then picture a Friday evening when something goes wrong. Who gets the call? Who can attend? Who makes the decision?\n\nNow write down the first three jobs the purchase would create. For a refurbishment, that might be agreeing the scope, checking prices and arranging access. For a ready-to-let property, it might be checking the condition, arranging management and finding out what has to happen before a tenant moves in.\n\nGive each job a name, a cost and a place in the diary. If those lines stay blank, you've found a gap in your plan. Fix it while the property still belongs to someone else.\n\nI'd like to know what you're looking at. Reply and tell me in a line: what kind of property is it, and what's the first job it would give you?\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 0,
+    "hours": 5,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 2: the promised call",
+    "body": "Hi {{FIRSTNAME}}, Martin Howard Property here. You added your mobile for a quick call about the book. When suits, and what are you looking at? STOP to opt out"
+   }
+  },
+  {
+   "wait": {
+    "days": 0,
+    "hours": 19,
+    "minutes": 0
+   }
+  },
+  {
+   "email": {
+    "name": "Book 3: your walk-away price, before you fall for the house",
+    "subject": "Write your limit before you fall for the house",
+    "body": "{{FIRSTNAME}}, in Chapter One I called it changing your rules because you like the house.\n\nYou set a maximum budget. Then you find a property with \"so much potential\". Suddenly the budget becomes flexible, the contingency gets smaller and the awkward questions can apparently wait.\n\nThe fix isn't exciting, but it works. Write your limits before you fall in love with a listing.\n\nRemember the sum in the chapter. You have £30,000 available after protecting your household reserve. The deposit is £25,000, so the property looks affordable. Add £4,000 of purchase costs and £8,000 of work and the plan needs £37,000. You're £7,000 short before a single delay or surprise repair. Those were made-up figures to show the problem. The mistake is real, and it's usually made on the one property someone has already fallen for.\n\nDoing that sum properly on every property you look at takes time. That's the job Property Predator does. It's my own software, built on the same thinking as the book, and the plan I'd point a reader to is called Hunter. It gives you:\n\nUnlimited appraisals, all 4 strategies. Check every property you view, not only the one you've fallen for.\n\nPredator Verdicts and Auction Mode. A clear read on whether the figures stack up, and help setting your limit before the room gets loud.\n\nMax-offer solver and 3-way valuation. Know your walk-away price before you pick up the phone.\n\nSaved deals, pipeline and PDF reports. Keep your search in one place and take the numbers with you.\n\nHunter is normally £39 a month. As a thank-you for reading, the code READ75 takes 75% off your first month, so it costs £9.75. After that it's £39 a month until you cancel, and you can cancel any time. This link applies the code for you:\n\nhttps://propertypredator.com/app?plan=pro_buyer&promo=READ75&utm_source=mhp-book&utm_medium=email&utm_campaign=before-you-buy\n\nHere's what I'd do with it this week. Run the property you're most excited about, and one you've already dismissed. Take the max-offer figure on the favourite, write it on your buying brief next to your rejection rule, and don't move it at the viewing.\n\nIt gives you figures and information to help you decide. It won't decide for you and it won't find deals for you. It isn't financial, legal, tax or survey advice, and the checks that belong to your surveyor, conveyancer and broker still belong to them.\n\nIf you've already started Hunter, ignore this, and thank you.\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 1,
+    "hours": 3,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 3: buying brief nudge",
+    "body": "Hi {{FIRSTNAME}}, Martin here. Done your buying brief yet? Start with the rejection rule: martinhowardproperty.co.uk/book/companion/#brief STOP to opt out"
+   }
+  },
+  {
+   "wait": {
+    "days": 0,
+    "hours": 21,
+    "minutes": 0
+   }
+  },
+  {
+   "email": {
+    "name": "Book 4: is it worth it for a few properties?",
+    "subject": "Is it worth it if I only look at a few properties?",
+    "body": "{{FIRSTNAME}}, here's a fair question to ask before you pay for anything: is Property Predator worth it if I'm only looking at a few properties?\n\nMy honest answer is that a few properties is when it matters most. When you're only looking at two or three, one of them becomes the favourite quickly, and that's the one you're most likely to talk yourself into. Unlimited appraisals means you can run the ones around it too, and see whether your favourite still looks good beside them.\n\nThree more straight answers.\n\nWill it tell me to buy?\nNo. It gives you figures and a verdict on whether they stack up. The decision stays with you, and so do the checks that belong to your surveyor, conveyancer and broker.\n\nWill it find me a deal?\nNo. Hunter is for appraising properties you've already found. It doesn't include owner look-ups or off-market sourcing.\n\nIs this another subscription I'll forget about?\nThe first month is £9.75 with READ75, then £39 a month until you cancel, and you can cancel any time. If you only want it for the month you're making a decision, that's a perfectly fair way to use it.\n\nIf you'd like to try it, the code is already in this link:\n\nhttps://propertypredator.com/app?plan=pro_buyer&promo=READ75&utm_source=mhp-book&utm_medium=email&utm_campaign=before-you-buy\n\nNot ready to pay for anything yet? That's sensible too. Property Predator has a free Chrome extension, for Chrome on a desktop or laptop, that lets you review supported property listings in your browser. It costs nothing:\n\nhttps://propertypredator.com/extension\n\nEither way, keep your buying brief beside you. A tool is only as useful as the limits you bring to it.\n\nIf you've already signed up, ignore this one.\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 1,
+    "hours": 3,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 4: reader offer is in your inbox",
+    "body": "Hi {{FIRSTNAME}}, Martin here. I've emailed you a reader offer as a thank-you for reading Before You Buy. Any questions on the chapter, just reply. STOP to opt out"
+   }
+  },
+  {
+   "wait": {
+    "days": 1,
+    "hours": 21,
+    "minutes": 0
+   }
+  },
+  {
+   "email": {
+    "name": "Book 5: investigate, negotiate or leave it alone",
+    "subject": "Investigate, negotiate or leave it alone",
+    "body": "{{FIRSTNAME}}, the promise of Before You Buy is simple. Take a property that catches your eye and reach a reasoned first decision: investigate it, negotiate on it, or leave it alone.\n\nMost people only have two settings, yes and maybe. Maybe is where the evenings go.\n\nSo give every property a written decision, including the ones you reject. Write the numbers down, pick one of the three, and say why. \"Too expensive\" isn't a reason. \"Once I include the works and purchase costs, the rent doesn't support my plan at that price\" is a reason, and it's one an agent can do something with.\n\nIf you've never bought an investment property, or you've bought one home with a normal mortgage and nothing since, my First Purchase Kit is built for exactly that stage. It's £47, paid once, and it includes:\n\nThe First Purchase Calculator. Deposit, cash needed and monthly payment, for up to three deals side by side, so the Chapter One sum gets done before you offer.\n\nThe decision sheet. One page per property: go, renegotiate or walk away, and why.\n\n7 lessons, 2 hours in all, with a one-lesson-a-day plan and a task on a real property each day.\n\nA 17-page field guide to print, with a 28-point checklist and 5 questions to take to the professionals.\n\nA worked deal clinic, with the numbers and the decision.\n\nIt's in your members area as soon as you pay, and it doesn't expire. There's a 14-day refund, no questions asked. If you later want the full course, whatever you've paid for kits in the last 90 days comes off it.\n\nhttps://martinhowardproperty.co.uk/kits/property-from-the-beginning/\n\nIf you've already got it, or you're past this stage, ignore this one.\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 2,
+    "hours": 9,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 5: first three jobs",
+    "body": "Hi {{FIRSTNAME}}, Martin here. Chapter One asks: what are the first 3 jobs your purchase would create? Reply with yours for a second view. STOP to opt out"
+   }
+  },
+  {
+   "wait": {
+    "days": 2,
+    "hours": 15,
+    "minutes": 0
+   }
+  },
+  {
+   "email": {
+    "name": "Book 6: what if the work takes three months longer?",
+    "subject": "What if the work takes three months longer?",
+    "body": "{{FIRSTNAME}}, here are three questions from Chapter One I'd ask before every offer.\n\nSuppose the work takes three months longer. Could you keep paying the bills?\n\nSuppose the rent comes in below your estimate. Would ownership still be manageable?\n\nSuppose the refinance releases less money than you hoped. Could you leave more cash in the property?\n\nIf the deal only works when the work finishes on the earliest date, the highest rent is achieved and every pound comes back on refinance, you have very little room to manoeuvre. A delay that's manageable for one buyer can force another into a rushed sale.\n\nYour first deal should leave you able to make the next decision calmly.\n\nPutting real numbers against those questions, for the kind of property you actually want, is what my full course is for. It's called Property Done Properly, and it's for anyone who wants to run one property approach on their own patch without joining a mastermind. You get:\n\n26 modules and 192 lessons, each with a task, across the four ways into property I teach: Refer, Source, Run and Own. Wales first, England second.\n\n23 worked deal clinics with real-shaped numbers, so you see the method tested on a deal before you use it.\n\nThe six calculators, for life, kept current as the rules change.\n\nYour Desk for life: a CRM for your contacts and pipeline, an enquiry page and unlimited deal files.\n\nOne live deal clinic booking a quarter, with your deal on the screen, plus lifetime access and a quarterly re-check of the rules.\n\nIt's £1,497 paid once, or 3 monthly payments of £525 (£1,575 in total). There's a 30-day refund, no questions asked. If you've bought any of my kits in the last 90 days, what you paid comes off.\n\nhttps://martinhowardproperty.co.uk/join/\n\nIf a whole course is more than you need right now, that's fine. The chapter and your buying brief are still the right place to start.\n\nIf you've already joined, ignore this one.\n\nMartin\n\nYou're getting this because you asked for Chapter One of Before You Buy. Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA. Property education, not financial, legal, tax or survey advice.\n\n{{UNSUBSCRIBE}}"
+   }
+  },
+  {
+   "wait": {
+    "days": 3,
+    "hours": 9,
+    "minutes": 0
+   }
+  },
+  {
+   "sms": {
+    "name": "Book text 6: last text, what would make you walk away",
+    "body": "Hi {{FIRSTNAME}}, Martin here. Last text unless you reply: what would make you walk away from the property you're looking at? Happy to talk. STOP to opt out"
+   }
+  }
+ ]
+}
