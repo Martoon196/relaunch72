@@ -41,6 +41,7 @@ interface MhpMountDependencies {
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
+  bookLeads?: NonNullable<MhpMarketingWorkspaceDependencies['bookLeads']> & NonNullable<MhpGrowthRouterDependencies['bookLeads']>;
   emailHealth?: MhpMarketingWorkspaceDependencies['emailHealth'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
@@ -198,8 +199,8 @@ export function createMhpMount(deps: MhpMountDependencies) {
       if (deps.sequences && await handleMhpSequence(req, res, url, { portal, sequences: deps.sequences })) return;
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;
       if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
-        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailHealth: deps.emailHealth, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), whatsappEnabled: Boolean(deps.eventPhone?.whatsappOwner) })) return;
-      if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth,
+        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, bookLeads: deps.bookLeads, emailHealth: deps.emailHealth, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), whatsappEnabled: Boolean(deps.eventPhone?.whatsappOwner) })) return;
+      if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth, ...(deps.bookLeads ? { bookLeads: deps.bookLeads } : {}),
         ...(deps.eventPhone?.reminders?.fromSignup ? { phoneSignup: { fromSignup: deps.eventPhone.reminders.fromSignup.bind(deps.eventPhone.reminders) } } : {}) })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {
         portal, desk: deps.desk, commerce: { billingEnabled: commerce.billingEnabled,

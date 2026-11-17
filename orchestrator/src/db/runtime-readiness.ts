@@ -15,6 +15,7 @@ import { EMAIL_CONNECTION_MIGRATION, EMAIL_CONNECTION_CHECKSUM } from './email-c
 import { EMAIL_PROTECTION_MIGRATION, EMAIL_PROTECTION_CHECKSUM } from './email-protection-schema.js';
 import { EMAIL_ALLOWLIST_MIGRATION, EMAIL_ALLOWLIST_CHECKSUM } from './email-allowlist-schema.js';
 import { AFFILIATE_MIGRATION, AFFILIATE_CHECKSUM } from './affiliate-schema.js';
+import { MHP_BOOK_CRM_MIGRATION, MHP_BOOK_CRM_CHECKSUM } from './mhp-book-crm-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -330,6 +331,12 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[156]?.checksum===EMAIL_ALLOWLIST_CHECKSUM
       && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM
       && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM) applied.delete(AFFILIATE_MIGRATION);
+  // Successor bridge, the same shape again: a build whose bundled migrations end exactly at 158 stays ready after the
+  // exact 159. It helps only a 158-file build that contains this code; the released 158 build (7b5ccf2) does not have it.
+  if (migrations.length===158 && migrations[157]?.filename===AFFILIATE_MIGRATION
+      && migrations[157]?.checksum===AFFILIATE_CHECKSUM
+      && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM
+      && applied.get(MHP_BOOK_CRM_MIGRATION)===MHP_BOOK_CRM_CHECKSUM) applied.delete(MHP_BOOK_CRM_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -429,6 +436,13 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===AFFILIATE_MIGRATION && pending[0]?.checksum===AFFILIATE_CHECKSUM
       && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM
       && applied.get(EMAIL_PROTECTION_MIGRATION)===EMAIL_PROTECTION_CHECKSUM) return;
+  // Retiring the hand-applied book trigger (159) needs the exact Affiliate Studio data layer (158) beneath it. While 159
+  // is pending this build copies book sign-ups into Leads itself and recognises every lead the trigger makes.
+  if (migrations.length===159 && migrations[158]?.filename===MHP_BOOK_CRM_MIGRATION
+      && migrations[157]?.filename===AFFILIATE_MIGRATION && pending.length===1
+      && pending[0]?.filename===MHP_BOOK_CRM_MIGRATION && pending[0]?.checksum===MHP_BOOK_CRM_CHECKSUM
+      && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM
+      && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

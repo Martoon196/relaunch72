@@ -18,6 +18,8 @@ import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js
 import { createMhpMarketingSender, mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index.js';
 import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
+import { MhpBookLeadService } from './book-leads-service.js';
+import { createInboxCrmRunner, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
 import { createMhpOwnerEmailService, mhpOwnerEmailContentRunner, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
 import { PgMhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { createMhpSequenceService, PgMhpSequenceRepository, type MhpSequenceService } from './followup-sequence-service.js';
@@ -53,6 +55,8 @@ export interface MhpRuntime {
   learning: PgMhpLearningService;
   marketingWorkspace: PgMhpMarketingWorkspaceService;
   webinarLeads: MhpWebinarLeadService;
+  /** Book sign-ups into Leads (automatic when the MHP lead owner is configured; owner catch-up otherwise). */
+  bookLeads?: MhpBookLeadService;
   ownerEmail?: MhpOwnerEmailService;
   ownerEmailDispatch?: PgMhpOwnerEmailDispatch;
   sequences?: MhpSequenceService;
@@ -202,6 +206,7 @@ export async function buildMhpRuntime(input: {
   const growth = new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env));
   const emailHealth = input.emailBounces ? new MhpEmailHealth({ bounces: input.emailBounces, growth }) : undefined;
   if (emailHealth) input.emailBounces!.setEffects(emailHealth.workspaceId, emailHealth.effects());
+  const bookLeads = composeMhpBookLeads(env, commandPool, growth);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
   if (vaultKey && (vaultKey.length !== 32 || vaultKey.toString('base64') !== rawVaultKey)) {
@@ -243,6 +248,7 @@ export async function buildMhpRuntime(input: {
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),
       campaign: webinar.campaign, cursorSecret: env.SESSION_SECRET?.trim() ?? '' }),
+    ...(bookLeads ? { bookLeads } : {}),
     marketing,
     async readiness(): Promise<readonly string[]> {
       const blockers: string[] = [];
@@ -264,4 +270,28 @@ export async function buildMhpRuntime(input: {
       return Object.freeze(blockers);
     },
   };
+}
+
+/**
+ * The MHP lead owner is the user the Group HQ inbox bridge and the LeadRelay feed already create MHP enquiries as
+ * (R72_GROUP_HQ_INBOX_SCOPES "mhp" ownerUserId, for exactly the MHP brand workspace). No new setting: when it is absent or
+ * unreadable the automatic copy stays off and the owner's own visit or button press brings book sign-ups in.
+ */
+export function mhpBookLeadOwner(env: NodeJS.ProcessEnv): string | null {
+  try {
+    const scope = loadInboxCrmConfig(env)?.scopes.mhp;
+    return scope && scope.workspaceId === MHP_MARKETING_WORKSPACE_ID ? scope.ownerUserId : null;
+  } catch { return null; }
+}
+
+function composeMhpBookLeads(env: NodeJS.ProcessEnv, commandPool: Pool, growth: PgMhpGrowthService): MhpBookLeadService | undefined {
+  try {
+    const service = new MhpBookLeadService({ transactions: createInboxCrmRunner(commandPool), ownerUserId: mhpBookLeadOwner(env),
+      registrants: token => growth.listRegistrants(token), cursorSecret: env.SESSION_SECRET?.trim() ?? '' });
+    console.info(JSON.stringify({ event: 'mhp.book-leads.readiness', automatic: service.automatic }));
+    return service;
+  } catch {
+    console.warn('mhp book leads: book sign-ups are saved but cannot be copied into Leads on this deployment (configuration incomplete).');
+    return undefined;
+  }
 }

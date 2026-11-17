@@ -1,4 +1,5 @@
 import { bookInterestRegistrants } from './book-interest.js';
+import type { MhpBookLeadService } from './book-leads-service.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -26,6 +27,8 @@ export interface MhpGrowthRouterDependencies {
   kits?: Pick<PgMhpKitService, 'myKits' | 'file' | 'importZip'>;
   /** Single-use applicant payment links (MHP Stripe account). */
   offers?: Pick<PgMhpCommerceService, 'billingEnabled' | 'privateOffers' | 'createPrivateOffer' | 'withdrawPrivateOffer'>;
+  /** Book sign-ups into Leads: started after the sign-up is committed (never awaited), and the owner's catch-up and status. */
+  bookLeads?: Pick<MhpBookLeadService, 'afterCapture' | 'statuses' | 'catchUp'>;
 }
 
 const SITE_ORIGINS = new Set([MHP_SITE_ORIGIN, 'https://www.martinhowardproperty.co.uk']);
@@ -181,6 +184,9 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       const signup = parseMhpSignup(fields);
       if (signup !== 'honeypot') {
         const captured = await deps.growth.capture(signup, source, now);
+        // The sign-up is committed. Copying a book sign-up into Leads is started here and never awaited: it cannot
+        // change this response, its timing or the evidence just saved (afterCapture ignores every other sign-up).
+        try { deps.bookLeads?.afterCapture(signup, captured, now); } catch { /* Logged and retried inside; the visitor is unaffected. */ }
         if (signup.kind === 'webinar' && deps.phoneSignup) {
           // This optional step must never undo or conceal an accepted registration.
           const handoff = await deps.phoneSignup.fromSignup(captured, source, now).catch(() => null);
@@ -269,7 +275,11 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
           'cache-control': 'no-store', 'content-length': String(Buffer.byteLength(csv)), 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff' });
         res.end(csv); return true;
       }
-      send(res, 200, hqRegistrantsPage(registrants, bookOnly)); return true;
+      // Book interest: bring anyone missing into Leads first (bounded), then show who is in Leads now.
+      const leads = bookOnly && deps.bookLeads
+        ? await deps.bookLeads.catchUp(identity, registrants).catch(() => null).then(() => deps.bookLeads!.statuses(identity, registrants)).catch(() => null)
+        : undefined;
+      send(res, 200, hqRegistrantsPage(registrants, bookOnly, leads ?? (bookOnly && deps.bookLeads ? { available: false, byProspect: new Map(), inLeads: 0, total: registrants.length } : undefined))); return true;
     }
     if (path === '/hq/course') {
       if (method === 'GET') {
