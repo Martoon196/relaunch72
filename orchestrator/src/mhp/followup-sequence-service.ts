@@ -18,6 +18,7 @@ import { FlowLocalStore } from '../followup-sequences/local-store.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { simulateFollowupFlow, flowSimulationPreset } from '../followup-sequences/simulation.js';
 import type { FollowupEntryRule } from '../followup-sequences/entry.js';
+import { readMhpWebinarCandidates, MHP_CONFIRM_LIMIT, type MhpAudienceCandidate, type MhpAudienceCandidatePage } from './webinar-audience.js';
 import { legacyFollowupAudience, followupAudienceCanStart, FOLLOWUP_NO_AUDIENCE_RESUME, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience,
   FOLLOWUP_NO_AUDIENCE_LINE, type FollowupAudience, type FollowupAudienceKind } from '../followup-sequences/audience.js';
 import { FollowupSequenceValidationError } from '../followup-sequences/definition.js';
@@ -34,7 +35,7 @@ export const MHP_SEQUENCE_BATCH = 500;
  * (0127 mhp_sequence_snapshot, LIMIT 100). A start is never larger than what the page can check before
  * and after it; the explicit-recipient migration removes this limit.
  */
-export const MHP_SEQUENCE_VISIBLE = 100;
+export const MHP_SEQUENCE_VISIBLE = MHP_CONFIRM_LIMIT;
 /** Held for these reasons, the database refuses a resume (0128 owner_hold_reason newer_draft / approval_or_brand_changed); never offer one. */
 export const MHP_UNRESUMABLE_REASONS: readonly string[] = ['newer_sequence', 'content_changed'];
 export const mhpRunResumable = (run: Pick<MhpSequenceRun, 'state' | 'reason' | 'unknownProofId'>): boolean =>
@@ -64,12 +65,7 @@ export interface MhpEntryAction { action: 'activate' | 'off'; commandId: string;
   confirmed?: boolean }
 export interface MhpEntryActionResult { action: MhpEntryAction['action']; contentItemId: string; contentVersionId: string; ruleId: string;
   state: 'active' | 'off'; expiresAt: string; watermark: string; replayed: boolean }
-/** One registration of the configured webinar, as the existing owner-only lead reader returns it. */
-export interface MhpAudienceCandidate {
-  prospectId: string; email: string; firstName: string | null; label: string | null; registeredAt: string | null;
-  marketingConsent: boolean; unsubscribed: boolean; signupConsentGiven: boolean;
-}
-export interface MhpAudienceCandidatePage { candidates: readonly MhpAudienceCandidate[]; hasMore: boolean; nextAfter: string | null }
+export type { MhpAudienceCandidate, MhpAudienceCandidatePage } from './webinar-audience.js';
 export interface MhpSequenceRepository {
   snapshot(identity: PortalSessionIdentity, campaign: string): Promise<MhpSequenceDatabaseSnapshot>;
   /** Reads who registered for the webinar (25 at a time). Without it nothing can be started, because nobody could be shown. */
@@ -135,17 +131,7 @@ export class PgMhpSequenceRepository implements MhpSequenceRepository {
   async audienceCandidates(identity: PortalSessionIdentity, campaign: string, after: string | null): Promise<MhpAudienceCandidatePage> {
     try {
       // The existing owner-session reader of 0125: the same anchor and consent columns the enrol audience (0126) uses.
-      const result = await this.web.query<{ page: { campaign: string; candidates: MhpAudienceCandidate[]; hasMore: boolean; nextAfter: string | null } }>(
-        'SELECT app_private.mhp_webinar_lead_candidates($1::bytea,$2::text,$3::uuid,$4::integer) AS page', [this.token(identity), campaign, after, 25]);
-      const page = result.rows[0]?.page;
-      if (!page || page.campaign !== campaign || !Array.isArray(page.candidates) || page.candidates.length > 25 || typeof page.hasMore !== 'boolean'
-          || (page.nextAfter !== null && !ANY_UUID.test(page.nextAfter)) || (page.hasMore && page.nextAfter === null)
-          || page.candidates.some(row => !ANY_UUID.test(row.prospectId) || (after !== null && row.prospectId <= after) || typeof row.email !== 'string' || !row.email.includes('@')
-            || (row.firstName !== null && typeof row.firstName !== 'string') || (row.label !== null && typeof row.label !== 'string')
-            || ![row.marketingConsent, row.unsubscribed, row.signupConsentGiven].every(flag => typeof flag === 'boolean'))) throw new Error('Invalid webinar audience page');
-      return { candidates: page.candidates.map(row => ({ prospectId: row.prospectId, email: row.email, firstName: row.firstName, label: row.label,
-        registeredAt: row.registeredAt ?? null, marketingConsent: row.marketingConsent, unsubscribed: row.unsubscribed, signupConsentGiven: row.signupConsentGiven })),
-        hasMore: page.hasMore, nextAfter: page.nextAfter };
+      return await readMhpWebinarCandidates(this.web, this.token(identity), campaign, after);
     } catch (error) { return failure(error); }
   }
   async entryCommand(identity: PortalSessionIdentity, input: MhpEntryAction & { campaign: string; requestId: string }): Promise<MhpEntryActionResult> {

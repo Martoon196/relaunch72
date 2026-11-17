@@ -51,10 +51,12 @@ test('native save redirects to immutable version, preview keeps unsaved fields a
   const f=fixture();const saved=await f.request('POST','/hq/marketing/emails/save',f.draft());assert.equal(saved.status,303);assert.equal(saved.headers.location,`/hq/marketing/emails?item=${ids.item}&version=${ids.version}`);
   const preview=await f.request('POST','/hq/marketing/emails/preview',f.draft({subject:'Changed subject'}));assert.equal(preview.status,200);assert.match(preview.body,/Changed subject/);assert.deepEqual(f.state.calls,['save','preview']);
 });
-test('Publish is a single action with no queue effect; schedule explicitly converts entered UTC dates and reports in-flight limits',async()=>{
-  const f=fixture();const result=await f.request('POST','/hq/marketing/emails/publish',f.saved());assert.equal(result.status,200);assert.match(result.body,/No audience email was scheduled or sent/);assert.deepEqual(f.state.calls,['publish']);
-  const scheduled=await f.request('POST','/hq/marketing/emails/schedule',f.saved({dueAt:'2026-11-01T09:30',expiresAt:'2026-11-02T09:30'}));assert.equal(scheduled.status,200);assert.match(scheduled.body,/1 already being sent were left unchanged/);
-  assert.equal((f.state.input as {dueAt:string}).dueAt,'2026-11-01T09:30:00.000Z');
+test('Publish is a single action with no queue effect; the old one-press schedule is refused',async()=>{
+  const f=fixture();const result=await f.request('POST','/hq/marketing/emails/publish',f.saved());assert.equal(result.status,303);assert.match(result.headers.location!,/#result$/);
+  assert.match((await f.request('GET',result.headers.location!)).body,/Published\. Nobody was emailed/);assert.deepEqual(f.state.calls,['publish']);
+  // The old one-press schedule (no signed confirmation of who gets it) is refused and queues nothing.
+  const scheduled=await f.request('POST','/hq/marketing/emails/schedule',f.saved({dueAt:'2026-11-01T09:30',expiresAt:'2026-11-02T09:30'}));assert.equal(scheduled.status,400);
+  assert.match(scheduled.body,/Back to the email/);assert.deepEqual(f.state.calls,['publish']);
 });
 test('foreign/null Origin, cross-site, old CSRF, forged actor/recipient, duplicate fields and wrong methods fail before action',async()=>{
   const f=fixture();
