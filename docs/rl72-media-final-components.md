@@ -34,3 +34,6 @@ The historical memory JSON receipts remain labelled historical: they measured th
 
 
 Third audit repair semantics supersede the earlier trigger/role/measurement descriptions. See “Third audit corrections” in rl72-native-media-integration.md: column-only trigger WHEN, durable probe backoff, bundled measured font and word wrapping, optional OCR dependency, explicit HEVC refusal, native-only role, workspace source caps and metadata erasure. Whole-command memory is approximately 330 MiB in Claude’s independent measurement; historical renderer-only ~212 MiB receipts are not whole-command memory. No full removal of supplier terminology is claimed for older revisions; the current visible-word regression bans the supplier names themselves.
+
+
+Measured scope correction: exact-code CI run #255 recorded **484,340 KiB (~473 MiB)** for the whole preparation/render command (307.68 seconds), and **215,076 KiB (~210 MiB)** for the nested renderer tree (74.14 seconds). Both stayed under the 1.5 GiB aggregate RSS watchdog. Claude’s earlier ~330 MiB whole-command measurement was on a different environment/revision. Neither the ~212 MiB historical figure nor the ~210 MiB nested figure describes the whole documented command. Missing bundled font assets now fail explicitly rather than allowing machine font fallback.

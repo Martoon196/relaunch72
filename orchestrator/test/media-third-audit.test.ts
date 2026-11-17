@@ -28,7 +28,7 @@ test('owner screens have plain visible words, including populated failure states
  const shell={csrf:'x',applicationName:'RL72',brands:[],creativeAvailable:true,tab:'creative',brand:{id,name:'Example'}} as never;
  const job={id,projectId:id,revision:1,sourceId:id,sourceSha256:'a'.repeat(64),planSha256:'b'.repeat(64),state:'failed' as const,outputId:null,failureReason:'renderer_unavailable',createdAt:'2026-11-17T00:00:00Z',updatedAt:'2026-11-17T00:00:00Z'};
  const pages=[creativeMediaLocalRenderPage(shell,{projects:[],sources:[],probes:[],jobs:[job],outputs:[],newCommand:()=>id,newJob:()=>id}),creativeVideoSourcesPage(shell,[],id),creativeMediaLocalOutputReviewPage(shell,[],[],()=>id),nativeVideoReleaseForm(shell,{jobId:id,contentVersionId:id,outputSha256:'a'.repeat(64),caption:'Example',network:'instagram',scheduledFor:'Tomorrow',authorized:false},id),creativeMediaErasureForm(shell,'source',id)];
- for(const html of pages){const visible=html.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu,'').replace(/<[^>]*>/gu,' ');assert.doesNotMatch(visible,/vizard|shotstack|canonical|provider|workbench|reviewed_private|awaiting_probe|\bclaimed\b|[a-f0-9]{8}-[a-f0-9-]{20}/iu);}
+ for(const html of pages){const visible=html.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu,'').replace(/<[^>]*>/gu,' ');assert.doesNotMatch(visible,/vizard|shotstack|canonical|provider|workbench|technical receipt|asset database|offline renders|reviewed_private|awaiting_probe|\bclaimed\b|[a-f0-9]{8}-[a-f0-9-]{20}/iu);}
  assert.match(pages[0]!,/temporarily unavailable/);assert.match(pages[1]!,/H.264 MP4 up to 1080p/);assert.match(pages[1]!,/HEVC/);
 });
 

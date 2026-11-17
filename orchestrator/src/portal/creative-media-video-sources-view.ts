@@ -7,11 +7,11 @@ const e=(v:unknown):string=>String(v??'').replace(/[&<>"']/gu,c=>({'&':'&amp;','
 export function creativeVideoSourcesPage(shell:Shell,sources:readonly VideoSourceRow[],commandId:string):string {
   const listings=sources.map(s=>'<li><strong>'+e(s.fileName)+'</strong> · '+e(s.mime)
     +' · '+(s.byteLength/1048576).toFixed(2)+' MiB · rights declared: '+e(s.rights)
-    +' · <span class="pill warn">'+e(s.state==='verified_technical'?'Ready to edit':s.state==='rejected'?'Could not read this video':s.state==='retry_pending'?'File unavailable — will retry':s.state==='deleted'?'Deleted':'Checking video')+'</span>'
+    +' · <span class="pill warn">'+e(s.state==='verified_technical'?'Ready to edit':s.state==='rejected'?'Could not read this video':s.state==='retry_pending'?'File unavailable — upload again if needed':s.state==='deleted'?'Deleted':'Checking video')+'</span>'
 
     +'<video controls preload="none" playsinline width="320" src="'+base(shell)+'/sources/'+e(s.id)+'/stream">Private preview unsupported</video>'+creativeMediaErasureForm(shell,'source',s.id)+'</li>').join('');
   const html='<section class="card"><h2>Private video sources</h2>'
-    +'<p>Store owned or licensed footage privately in the same Creative Studio asset database.</p>'
+    +'<p>Upload videos you own or have permission to use. They stay private.</p>'
     +'<p class="notice">A successful upload is not proof of playability, licence validity or publishing permission. '
     +'Uploading does not post your video.</p>'
     +'<p><a href="'+base(shell)+'">Back to Creative Studio</a></p></section>'

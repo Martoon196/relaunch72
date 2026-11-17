@@ -12,8 +12,8 @@ const e=(value:unknown):string=>String(value??'').replace(/[&<>"']/gu,
 
 function decisionForm(shell:Shell,record:PrivateOutputReview,newCommand:()=>string,
  decision:'reviewed_private'|'rejected_private'|'withdrawn_private'):string {
- const approving=decision==='reviewed_private',name=approving?'Record private review':
-  decision==='withdrawn_private'?'Withdraw private review':'Reject this output';
+ const approving=decision==='reviewed_private',name=approving?'Mark as reviewed':
+  decision==='withdrawn_private'?'Undo review':'Needs changes';
  return '<form method="post" action="'+base(shell)+'/local-outputs/review">'
   +csrfField(shell.csrf)
   +'<input type="hidden" name="commandId" value="'+e(newCommand())+'">'
@@ -39,7 +39,7 @@ export function creativeMediaLocalOutputReviewPage(
     durationMs:null,width:null,height:null,
   };
   const technical=r.technicalStatus==='verified_technical'
-   ?'Video technically measured · '+e(r.width)+'×'+e(r.height)
+   ?'Video ready to review · '+e(r.width)+'×'+e(r.height)
       +' · '+e((r.durationMs??0)/1000)+' s'
    :r.technicalStatus==='rejected'?'This video could not be read'
    :'Checking this video';
@@ -55,17 +55,17 @@ export function creativeMediaLocalOutputReviewPage(
    +'<p>'+technical+'</p>'
    +'<p><video controls playsinline preload="none" width="320" src="'+base(shell)
    +'/local-outputs/'+e(output.id)+'/stream">Private video preview</video></p>'
-   +'<p class="small muted">Owner review is private only. It does not certify a licence, '
-   +'approve public distribution or schedule a social post.</p>'
+   +'<p class="small muted">Check that you have rights to use this video, '
+   +'and that its claims and advertising disclosures are correct.</p>'
    +actions+'</details>';
  }).join('');
- return layout(shell,'Video output reviews',STYLE
-  +'<section class="card"><h1>Review exact video outputs</h1>'
-  +'<p>Offline renders have a trusted technical receipt and require an explicit '
-  +'owner review of rights, claims and disclosures.</p>'
-  +'<p class="notice">Private review is NOT a publish button. Distribution requires '
-  +'separate exact-version approval and platform policy checks.</p>'
+ return layout(shell,'Review videos',STYLE
+  +'<section class="card"><h1>Review your videos</h1>'
+  +'<p>Check your finished video before posting. Review the '
+  +'rights, claims and advertising disclosures.</p>'
+  +'<p class="notice">Reviewing a video does not post it. You choose '
+  +'when to publish it.</p>'
   +'<p><a href="'+base(shell)+'/local-renders">Back to videos</a></p></section>'
-  +'<section><h2>Private output records ('+outputs.length+')</h2>'
+  +'<section><h2>Your videos ('+outputs.length+')</h2>'
   +(items||'<p>No local output has been rendered yet.</p>')+'</section>');
 }

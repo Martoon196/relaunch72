@@ -12,7 +12,7 @@ test('private review never offers approval before a measured technical probe',()
  const html=creativeMediaLocalOutputReviewPage(shell,[output],[],()=> '44444444-4444-4444-8444-444444444444');
  assert.match(html,/name="_csrf"/);
  assert.match(html,/Checking this video/);
- assert.doesNotMatch(html,/Record private review/);
+ assert.doesNotMatch(html,/Mark as reviewed/);
  assert.doesNotMatch(html,/publish now|schedule now/i);
 });
 test('reviewed output can be withdrawn but not automatically published',()=>{
@@ -21,9 +21,9 @@ test('reviewed output can be withdrawn but not automatically published',()=>{
   createdAt:'2026-11-15T20:00:00Z',technicalStatus:'verified_technical' as const,
   durationMs:30000,width:1280,height:720};
  const html=creativeMediaLocalOutputReviewPage(shell,[output],[rec],()=> '44444444-4444-4444-8444-444444444444');
- assert.match(html,/Withdraw private review/);
- assert.doesNotMatch(html,/Record private review/);
- assert.match(html,/Private review is NOT a publish button/);
+ assert.match(html,/Undo review/);
+ assert.doesNotMatch(html,/Mark as reviewed/);
+ assert.match(html,/Reviewing a video does not post it/);
 });
 
 test('local output form uses local identity, exact digest, version and fresh owner attestations',()=>{
@@ -34,7 +34,7 @@ test('local output form uses local identity, exact digest, version and fresh own
  assert.match(html,/local-outputs\/22222222-2222-4222-8222-222222222222\/stream/);
  for(const field of ['outputSha256','expectedRevision','rightsConfirmed','claimsConfirmed','disclosureConfirmed'])
   assert.ok(html.includes('name="'+field+'"'));
- assert.match(html,/Record private review/);
+ assert.match(html,/Mark as reviewed/);
  const mismatch=creativeMediaLocalOutputReviewPage(shell,[output],[{...rec,sha256:'f'.repeat(64)}],()=> 'x');
- assert.doesNotMatch(mismatch,/Record private review/);
+ assert.doesNotMatch(mismatch,/Mark as reviewed/);
 });

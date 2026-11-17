@@ -202,6 +202,8 @@ export async function renderLocalVideo(
 async function renderInputFile(inputPath:string,dir:string,sourceSha256:string,checked:VideoEditPlan,measured:VideoProbe,
  measure:(bytes:Buffer)=>Promise<VideoProbe>,opts:{ffmpeg?:string;render?:(binary:string,args:readonly string[])=>Promise<void>}):Promise<LocalRenderOutput>{
  assertLocalRenderCapacity(checked);
+ try{for(const font of ['DejaVuSans.ttf','DejaVuSansMono-Bold.ttf'])if(!(await stat(FONT_ROOT+font)).isFile())throw Error('Font missing');}
+ catch{throw new SeoBlogError(503,'Video caption font is temporarily unavailable. We will retry.');}
  const bitrate=localRenderBitrate(checked);
  const outputPath=join(dir,'candidate.mp4');
     const captionFiles: string[] = [];
