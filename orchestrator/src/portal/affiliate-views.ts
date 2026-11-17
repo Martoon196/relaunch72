@@ -7,6 +7,7 @@
 
 import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
 import type { SavedReport, SavedReportSummary } from '../affiliate/report-store.js';
+import type { TrackingIdReportRow } from '../affiliate/amazon-tracking-report.js';
 import { programmeFor } from '../affiliate/programmes.js';
 import { cleanDisplay, cleanNotes, KIND_LABEL, KIND_LIMITS, type ProductArticleKind } from '../affiliate/article.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -37,8 +38,8 @@ export interface ProductsPageData {
 
 function settingsFields(prefix = ''): string {
   return `<fieldset class="af-first"><legend>Your Amazon UK details (needed once)</legend>
-<p class="af-help">We use these to make every link. If the link you paste already carries your tracking ID, we read it from there.</p>
-<label for="${prefix}tracking">Your tracking ID <span class="af-opt">(ends in -21)</span></label><input id="${prefix}tracking" name="trackingId" autocomplete="off" maxlength="64">
+<p class="af-help">We use these to make every link. Type your tracking ID yourself: we never take it from a link you paste, because a link copied from another page can carry someone else's.</p>
+<label for="${prefix}tracking">Your tracking ID <span class="af-opt">(ends in -21)</span></label><input id="${prefix}tracking" name="trackingId" autocomplete="off" maxlength="64" required>
 <label for="${prefix}site">Which website will carry these links?</label><input id="${prefix}site" name="registeredSite" placeholder="www.example.co.uk" maxlength="300" required>
 <label class="af-tick"><input type="checkbox" name="siteListed" value="1" required> This website is listed in my Amazon UK Associates account.</label>
 <label class="af-tick"><input type="checkbox" name="accountMine" value="1" required> This tracking ID is mine, in my own Amazon UK Associates account.</label></fieldset>`;
@@ -47,7 +48,7 @@ function settingsFields(prefix = ''): string {
 function productForm(b: Brand, shell: Shell, d: ProductsPageData, primary: boolean): string {
   return `<form method="post" action="${e(href(b, 'products'))}" class="af-form">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.commandId)}">
 <label for="af-link">The product's page on Amazon UK</label><input id="af-link" name="link" required maxlength="2048" placeholder="https://www.amazon.co.uk/...">
-<p class="af-help">Paste the full address from your browser. Short links cannot be used.</p>
+<p class="af-help">Paste the full address from your browser. Short links cannot be used. ${d.settings ? `The link is made with your tracking ID <strong>${e(d.settings.trackingId)}</strong>, whatever the address you paste carries.` : 'The link is made with the tracking ID you type below, whatever the address you paste carries.'}</p>
 <label for="af-name">Its name <span class="af-opt">(optional: we suggest one from the address)</span></label><input id="af-name" name="productName" maxlength="200">
 <label for="af-notes">What you know about it <span class="af-opt">(optional)</span></label><textarea id="af-notes" name="notes" rows="3" maxlength="2000"></textarea>
 <label class="af-tick"><input type="checkbox" name="ownerUsed" value="1"> I have used this myself.</label>
@@ -104,15 +105,24 @@ ${s ? `<p>Links use your tracking ID <strong>${e(s.trackingId)}</strong> for <st
 
 const pounds = (minor: number | null) => minor === null ? 'Not shown by Amazon' : `${minor < 0 ? '-' : ''}£${(Math.abs(minor) / 100).toFixed(2)}`;
 const count = (n: number | null) => n === null ? 'Not shown by Amazon' : n.toLocaleString('en-GB');
-const monthName = (iso: string) => { const d = new Date(`${iso}T00:00:00Z`); return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(d) : ''; };
+export const monthName = (iso: string) => { const d = new Date(`${iso}T00:00:00Z`); return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(d) : ''; };
 const dayName = (iso: string) => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(d) : ''; };
 
-/** "What Amazon reported", inside Results. Amazon's own figures only; never a rate, never per article. */
-export function reportsCard(shell: Shell, b: Brand, d: { readonly opened: boolean; readonly reports: readonly SavedReportSummary[]; readonly linkedArticles: number; readonly commandId: string; readonly thisMonth: string }): string {
+/**
+ * "What Amazon reported", inside Results. Amazon's own figures only; never a rate, never per article. The headline is
+ * the saved tracking ID's own row; without it, the figures are said to be for all tracking IDs in the file, and any
+ * cell Amazon did not show makes that figure "Not shown by Amazon", never a partial sum (review S4).
+ */
+export function reportsCard(shell: Shell, b: Brand, d: { readonly opened: boolean; readonly reports: readonly SavedReportSummary[]; readonly linkedArticles: number; readonly commandId: string; readonly thisMonth: string;
+  readonly trackingId?: string | null; readonly rows?: ReadonlyMap<string, readonly TrackingIdReportRow[]> }): string {
   if (!d.opened) return `<section class="af-card" aria-labelledby="af-rep"><h2 id="af-rep" class="ca-h2">What Amazon reported</h2><p>${e(NOT_OPENED)}</p><style>${AFFILIATE_CSS}</style></section>`;
   const line = (r: SavedReportSummary) => {
     const s = r.summary;
-    return `<li><a href="${e(href(b, `results/report/${r.id}`))}">Amazon's report for ${e(monthName(r.reportStart))}</a>, in the file you uploaded on ${e(dayName(r.createdAt))}: Clicks counted by Amazon ${e(count(s.clicksUnknownRows ? null : s.clicksKnown))} · Earnings ${e(pounds(s.knownEarningsMinor))}</li>`;
+    const head = `<a href="${e(href(b, `results/report/${r.id}`))}">Amazon's report for ${e(monthName(r.reportStart))}</a>, in the file you uploaded on ${e(dayName(r.createdAt))}`;
+    const own = d.trackingId ? d.rows?.get(r.id)?.find((x) => !x.isOther && x.trackingId.toLowerCase() === d.trackingId!.toLowerCase()) : undefined;
+    if (own) return `<li>${head}. Your tracking ID <strong>${t(own.trackingId, 120)}</strong>: Clicks counted by Amazon ${e(count(own.clicks))} · Earnings ${e(pounds(own.earningsMinor))}</li>`;
+    const missing = d.trackingId && d.rows?.has(r.id) ? ` Your tracking ID <strong>${t(d.trackingId, 120)}</strong> is not in this file.` : '';
+    return `<li>${head}.${missing} All tracking IDs in this file: Clicks counted by Amazon ${e(count(s.clicksUnknownRows ? null : s.clicksKnown))} · Earnings ${e(pounds(s.unknownEarningsRows ? null : s.knownEarningsMinor))}</li>`;
   };
   return `<section class="af-card" aria-labelledby="af-rep"><h2 id="af-rep" class="ca-h2">What Amazon reported</h2>
 <p>${d.linkedArticles} published ${d.linkedArticles === 1 ? 'article carries' : 'articles carry'} product links.</p>
@@ -120,6 +130,7 @@ ${d.reports.length ? `<ul class="af-reports">${d.reports.map(line).join('')}</ul
 <form method="post" action="${e(href(b, 'results/report'))}" enctype="multipart/form-data" class="af-form">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.commandId)}">
 <label for="af-month">Which month it covers</label><input id="af-month" type="month" name="month" required value="${e(d.thisMonth)}">
 <label for="af-file">The Tracking ID Summary file</label><input id="af-file" type="file" name="file" required accept=".csv,.tsv,.txt,text/csv,text/plain">
+<label class="af-tick"><input type="checkbox" name="sameFiguresConfirmed" value="1"> This file is for the month above, even if its figures match another month's.</label>
 <button type="submit" class="ca-btn-quiet">Add Amazon's report</button></form><style>${AFFILIATE_CSS}</style></section>`;
 }
 

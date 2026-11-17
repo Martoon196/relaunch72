@@ -295,7 +295,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       // Production rules are founder-only: anyone else gets the same answer as an action that does not exist.
       if (brandId && rest.split('/')[0] === 'methods' && !founder) throw new SeoBlogError(404, 'That action was not found.');
       // Affiliate Studio: only in the new look with AFFILIATE_STUDIO on; otherwise these paths answer as before.
-      const affiliatePosting = previewOn && brandId && isAffiliatePost(rest) ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
+      // Only for the business the session is signed in to; any other business answers exactly as with the switch off (review M2).
+      const affiliatePosting = previewOn && brandId && sameWorkspace(identity, brandId) && isAffiliatePost(rest) ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
       if (affiliatePosting && brandId) return await affiliatePost({ res, engine, actor, brandId, rest, stores: affiliatePosting, f, all: (name) => form.fields.getAll(name), file: form.file, ok,
         fail: (location, text) => { const [address, fragment] = location.split('#'); return redirect(res, `${address}?${signedMessage(input.sessionSecret, 'e', text, founder)}${fragment ? `#${fragment}` : ''}`); } });
       return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input, founder);
@@ -486,7 +487,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
     }
     if (rest === 'dna') return send(res, 200, brandDnaPage({ ...shell('setup'), switchTo: 'dna' }, await engine.brandDna(actor, brandId), randomUUID()));
-    const affiliate = previewOn ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
+    // Only for the business the session is signed in to; any other business renders exactly as with the switch off (review M2).
+    const affiliate = previewOn && sameWorkspace(identity, brandId) ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
     if (affiliate && isAffiliateGet(rest)) {
       return send(res, 200, await affiliateGet({ engine, actor, brand, rest, stores: affiliate, shell: (place) => { const s = shell(place === 'articles' ? 'articles' : 'overview'); return { ...s, preview: { ...s.preview!, place } }; } }));
     }
@@ -504,7 +506,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, jobs, extractionCommandId: randomUUID(), publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
     }
     if (tab === 'topics') {
-      const [plans, readiness, jobs, usage] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId),engine.listJobs(actor,brandId),engine.usage(actor,brandId)]);
+      const [listed, readiness, jobs, usage] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId),engine.listJobs(actor,brandId),engine.usage(actor,brandId)]);
+      // A product article's plan is written from Products, never chosen here (review N8).
+      const plans = listed.filter((p) => !p.briefs.some((b) => b.products));
       return send(res, 200, topicsPage(shell('topics'), { plans, readiness, jobs, usage, commandId: randomUUID(), estimatePerArticle: USAGE_ESTIMATES.article }));
     }
     if (tab === 'articles') {
@@ -545,8 +549,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const plan = detail.version ? await engine.publishingPlan(actor, brandId, articleId) : undefined;
       // Product links: checked against the current products only when the owner's own session can read them.
       const links = detail.version?.body.affiliate?.links.length ? await (async () => {
-        const stores = input.service.affiliateFor?.(identity, input.requestId);
-        if (!stores || stores.workspaceId !== brandId) return { status: null, actions: false };
+        const stores = sameWorkspace(identity, brandId) ? input.service.affiliateFor?.(identity, input.requestId) : undefined;
+        if (!stores || stores.workspaceId.toLowerCase() !== brandId.toLowerCase()) return { status: null, actions: false };
         const read = await affiliateReader(stores).read(brandId).catch(() => null);
         return { status: read ? linkStatus(detail.version!.body.affiliate!, read.catalogue, read.settings) : null, actions: previewOn && Boolean(read) };
       })() : undefined;
@@ -592,7 +596,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
       const articleAction = rest.split('/')[2] ?? '';
       const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}`
-        : rest.startsWith('creative/') ? creativeReturnPage(rest) : rest.split('/')[0] || 'overview';
+        : rest.startsWith('creative/') ? creativeReturnPage(rest)
+        // Affiliate Studio's Amazon UK details card lives in Settings: an expired form there goes back to Settings (review S10).
+        : rest === 'affiliate/settings' && input.service.affiliateFor && sameWorkspace(identity, brandId) ? 'publishing' : rest.split('/')[0] || 'overview';
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', error.message, founder)}`);
     }
     const status = known ? error.status : 503;
@@ -619,6 +625,11 @@ async function loadContentArea(engine: SeoBlogEngine, actor: Actor, brandId: str
     engine.readiness(actor, brandId).catch(() => null), engine.usage(actor, brandId).catch(() => null), engine.brandDnaStatus(actor, brandId).catch(() => undefined)]);
   const planList = plans.map((p) => p.plan);
   return { articles, destinations, jobs, briefs: plans.flatMap((p) => p.briefs), plans: planList, now: new Date().toISOString(), fill: { readiness, usage, dna, plans: planList }, resume: { usage, profile: readiness?.profile ?? null, generation: readiness?.generation ?? null } };
+}
+
+/** The business asked for is the one the portal session is signed in to (Affiliate Studio is composed only for that one). */
+function sameWorkspace(identity: { readonly workspaceId: string }, brandId: string | null | undefined): boolean {
+  return Boolean(brandId) && identity.workspaceId.toLowerCase() === brandId!.toLowerCase();
 }
 
 async function contentAreaPage(engine: SeoBlogEngine, actor: Actor, brand: Brand, rest: string, url: URL, shell: (tab: SeoBlogTab) => Shell, loaded: ContentAreaLoaded | null, affiliate?: AffiliateStores): Promise<string | null> {

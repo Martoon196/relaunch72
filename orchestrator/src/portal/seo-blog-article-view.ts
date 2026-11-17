@@ -12,8 +12,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { sha256, USAGE_ESTIMATES, type BrandReadiness } from '../seo-blog/engine.js';
-import { citationNumbers, renderMarkdown } from '../seo-blog/render.js';
-import { disclosureHtml, productLinkHtml } from '../affiliate/render.js';
+import { citationNumbers, firstOfId, renderMarkdown } from '../seo-blog/render.js';
+import { disclosureHtml, productLinkHtml, publicTitle } from '../affiliate/render.js';
+import { AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_PASSED, AFFILIATE_PAGE_UNVERIFIED } from '../affiliate/page-check.js';
 import { cleanDisplay } from '../affiliate/article.js';
 import { putBackOffers, withoutCitations } from '../seo-blog/citation-edit.js';
 import { linkedPromotionFor, promotionPublicationHold } from '../seo-blog/promotions.js';
@@ -461,11 +462,12 @@ function readingColumn(b: Brand, a: Article, body: ArticleBody): string {
   const canonical = a.publishedUrl ?? 'https://example.invalid/';
   const md = (text: string, sub = false) => renderMarkdown(text, cites.number, canonical, sub);
   return [
-    `<h1 class="ap-title">${e(body.title)}</h1>`,
-    // Exactly as readers see it: the disclosure first and each product's link after its part (Affiliate Studio).
+    `<h1 class="ap-title">${e(publicTitle(body.title, body.affiliate))}</h1>`,
+    // As readers see it: the "Ad" label in the title, the disclosure first and each product's button after its part
+    // (Affiliate Studio). Here the buttons are words only: the links work only on the business's own website (review N2).
     disclosureHtml(body.affiliate),
     `<div id="opening">${md(body.intro)}</div>`,
-    ...body.sections.map((s) => `<section class="ap-part" id="part-${e(s.id)}"><h2>${e(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}</section>`),
+    ...body.sections.map((s, i) => `<section class="ap-part" id="part-${e(s.id)}"><h2>${e(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, firstOfId(body.sections, i) ? s.id : '', 'text')}` : ''}</section>`),
     body.faqs.length ? `<section class="ap-part" id="questions"><h2>Frequently asked questions</h2>\n${body.faqs.map((f, i) => `<div id="question-${i + 1}"><h3>${e(f.q)}</h3>\n${md(f.a)}</div>`).join('\n')}</section>` : '',
     `<div id="closing">${md(body.conclusion)}</div>`,
     body.cta ? (safeHttps(body.cta.url) ? `<p><a class="ap-cta" href="${e(body.cta.url)}" rel="noopener">${e(body.cta.label)}</a></p>` : `<p>${e(body.cta.label)}</p>`) : '',
@@ -654,7 +656,9 @@ function whereFold(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: st
   }
   // "Ask me before this goes out": the per-article approval switch (it only matters while automatic publishing is on).
   const asks = a.requiresApproval;
-  parts.push(`<form method="post" action="${base}/approval-flag" class="ap-setting">${csrfField(shell.csrf)}${hidden({ rowVersion: a.rowVersion, required: asks ? '0' : '1' })}<p><strong>Always ask me before this article goes out:</strong> ${asks ? 'Yes' : 'No'} <button type="submit" class="secondary" role="switch" aria-checked="${asks}" aria-label="Always ask me before this article goes out: ${asks ? 'yes. Switch off' : 'no. Switch on'}">${asks ? 'Switch off' : 'Switch on'}</button></p><p class="ap-note">${b.settings.autoPublish
+  // A product article always waits for approval: no switch to offer (review M1).
+  if (v.body.affiliate) parts.push('<p class="ap-setting"><strong>Always ask me before this article goes out:</strong> Yes</p><p class="ap-note">An article about products always waits for your approval.</p>');
+  else parts.push(`<form method="post" action="${base}/approval-flag" class="ap-setting">${csrfField(shell.csrf)}${hidden({ rowVersion: a.rowVersion, required: asks ? '0' : '1' })}<p><strong>Always ask me before this article goes out:</strong> ${asks ? 'Yes' : 'No'} <button type="submit" class="secondary" role="switch" aria-checked="${asks}" aria-label="Always ask me before this article goes out: ${asks ? 'yes. Switch off' : 'no. Switch on'}">${asks ? 'Switch off' : 'Switch on'}</button></p><p class="ap-note">${b.settings.autoPublish
     ? asks ? 'Automatic publishing is on for your business, but this article still waits for your approval.' : 'Automatic publishing is on for your business, so this article goes out at its time without asking you.'
     : 'Automatic publishing is off for your business, so every article waits for your approval anyway. This only matters if you switch automatic publishing on.'}</p></form>`);
   for (const p of d.publications.filter((x) => x.state === 'published')) parts.push(deliveryChecks(shell, p, d.destinations.find((x) => x.id === p.destinationId), base));
@@ -667,7 +671,7 @@ function deliveryChecks(shell: Shell, p: Publication, destination: PublicDestina
   const rows = evidence ? [['The article', evidence.article], ['Your blog page', evidence.index], ...evidence.categories.map((c, i) => [`Topic page ${i + 1}`, c] as const), ['Your site map (for Google)', evidence.sitemap]] as const : [];
   const repair = destination?.websiteCapability?.protocol === 'v2' && destination.websiteCapability.capabilities.repair.sitemap;
   return `<div class="ap-delivery"><h3>Is it showing on your website?</h3>${evidence ? `<ul class="ap-list">${rows.map(([what, check]) => { const at = check.at ? instant(check.at, shell.brand!.timezone) : null; return `<li>${e(what)}: ${e(label(check.state))}${at ? ` <span class="ap-note">(checked ${e(shortWhen(at.date, at.time))})</span>` : ''}${check.state === 'different' && check.detail ? `<br><span class="ap-note">${e(check.detail)}</span>` : ''}</li>`; }).join('')}</ul>` : '<p class="ap-note">We have not checked it yet.</p>'}
-${p.sitemapRepair ? `<p class="ap-note">Site map repair: ${e(p.sitemapRepair.state)}. ${e(p.sitemapRepair.detail)}</p>` : ''}
+${p.sitemapRepair ? `<p class="ap-note">Site map repair: ${e(p.sitemapRepair.state)}. ${e(p.sitemapRepair.detail)}</p>` : ''}${p.affiliateCheck ? `<p class="ap-note">The ad label and paid-link marking: ${e(p.affiliateCheck.state === 'passed' ? AFFILIATE_PAGE_PASSED : p.affiliateCheck.state === 'failed' ? 'missing on the published page.' : 'not checked yet, because the page could not be opened.')}</p>` : ''}
 ${postButton(shell, `${base}/delivery-recheck`, { publicationId: p.id }, 'Check again')}
 ${repair ? `<details class="ap-choice"><summary class="ap-textbutton">Add it to the site map only</summary><form method="post" action="${base}/sitemap-repair">${csrfField(shell.csrf)}${hidden({ publicationId: p.id, commandId: randomUUID() })}<p class="ap-note">This only adds this article to your site map. The article itself is not sent again.</p>${p.sitemapRepair?.uncertain && p.sitemapRepair.state !== 'done' ? '<label class="ap-check"><input type="checkbox" name="acknowledgeUnknown" value="1" required> I have checked the earlier attempt and want to try again.</label>' : ''}<button class="secondary" type="submit">Add to the site map</button></form></details>` : ''}</div>`;
 }
@@ -725,6 +729,16 @@ function bar(inner: string): string {
   return `<div class="ap-bar" role="region" aria-label="What happens next">${inner}</div>`;
 }
 
+/**
+ * Affiliate Studio, after publishing (review M7): when the published page of this product article is missing the ad
+ * label or the paid-link marking, or could not be checked, the owner is told at the top of the article, plainly.
+ */
+function affiliatePageAlert(d: ArticlePageData): string {
+  const latest = d.publications.filter((p) => p.affiliateCheck).sort((x, y) => Date.parse(y.affiliateCheck!.at) - Date.parse(x.affiliateCheck!.at))[0]?.affiliateCheck;
+  if (!latest || latest.state === 'passed') return '';
+  return `<section class="ap-fix" role="alert"><p><strong>${e(latest.state === 'failed' ? AFFILIATE_PAGE_ALERT : AFFILIATE_PAGE_UNVERIFIED)}</strong></p>${latest.problems.length ? `<ul class="ap-list">${latest.problems.map((x) => `<li>${e(x)}</li>`).join('')}</ul>` : ''}</section>`;
+}
+
 /** Product links (Affiliate Studio): each link's full destination, whether it is still current, and how to change it. */
 function productLinksFold(shell: Shell, d: ArticlePageData, v: ArticleVersion, base: string): string {
   const a = v.body.affiliate;
@@ -773,7 +787,7 @@ ${editingColumn(v.body)}
   const state = screenState(shell, d, v, critical);
   const head = bar(`<p class="ap-state">${e(state.sentence)}${state.detail ? ` <span class="ap-note">${e(state.detail)}</span>` : ''}</p><div class="ap-actions">${state.secondary.map((s) => s.html).join('')}${moreMenu(shell, d, v, base)}${state.primary?.html ?? ''}</div>`);
   return layout(shell, v.body.title, `<div class="ap">${head}
-<div class="ap-column">${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}${seoSummaryLine(shell, d, v)}</div>
+<div class="ap-column">${affiliatePageAlert(d)}${simulated}${mustFix(shell, base, v, critical, putBackList(shell, d, v, base).length > 0)}${putBack(shell, d, v, base)}${checkSourcesNote(d, v)}${improvements(shell, base, v, warnings, open.has('improve'))}${seoSummaryLine(shell, d, v)}</div>
 <article class="ap-read">${pictureArea(shell, a, v, base)}
 ${readingColumn(b, a, v.body)}</article>
 <div class="ap-column">${postsSection(shell, d, v, base)}</div>
