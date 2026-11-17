@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
-import { activityPage } from '../src/portal/seo-blog-view.js';
+import { activityPage, topicsPage } from '../src/portal/seo-blog-view.js';
 import { ENGINE_GAP_MESSAGE, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from '../src/seo-blog/engine-stamp.js';
 import { ownerWords, revealsInternals } from '../src/seo-blog/owner-words.js';
 import type { KeywordMetric, KeywordProvider } from '../src/keyword/types.js';
@@ -276,4 +276,15 @@ test('F5: after a numbers Retry has run, a later hold of another kind on the sam
   assert.equal(job.state, 'blocked', 'the hold stays: only an explicit resume clears it');
   assert.equal(tokens(), before, 'nothing was written');
   assert.ok((await e.getBrand(OWNER, brand.id)).settings.programme?.researchHold, 'the hold remains');
+});
+
+test('Notes: during the wait Topics explains the one re-check beside the retry limits, in plain words', async () => {
+  const h = harness(); const kw = flaky(); const e = strictEngine(h, kw, true);
+  const brand = await readyBrand(h, e);
+  await autopilotPlan(h, e, brand);
+  const b = await e.getBrand(OWNER, brand.id);
+  const html = topicsPage({ brand: b, brands: [b], tab: 'topics', csrf: 'x' }, { plans: [], readiness: await e.readiness(OWNER, brand.id), jobs: await e.listJobs(OWNER, brand.id), commandId: randomUUID(), estimatePerArticle: 32000 });
+  assert.match(html, /is checked once more, about half an hour later/);
+  assert.ok(html.includes('We will check once more in about half an hour'), 'the progress line');
+  assert.doesNotMatch(html, /by ourselves/);
 });

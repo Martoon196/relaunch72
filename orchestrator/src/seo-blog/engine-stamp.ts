@@ -76,7 +76,7 @@ export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
  */
 export const NUMBERS_RECHECK_DELAY_MS = 30 * 60_000;
 /** What the owner reads while that one re-check is queued. */
-export const NUMBERS_RECHECK_MESSAGE = 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. We will check once more by ourselves in about half an hour, reusing your saved searches. Nothing has been spent on writing.';
+export const NUMBERS_RECHECK_MESSAGE = 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. We will check once more in about half an hour, reusing your saved searches. There is nothing you need to do. Nothing has been spent on writing.';
 
 /** What the owner reads when asking for a plan while that re-check waits: the waiting task runs now instead. */
 export const NUMBERS_RECHECK_NOW = 'Planning was already waiting to check how many people search for these topics. It is checking now, reusing your saved searches, instead of starting a second plan.';
