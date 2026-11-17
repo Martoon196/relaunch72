@@ -96,7 +96,7 @@ test('review 5, rubbish side: every row is refused the way it says, with and wit
       else assert.equal(x.cap?.kind, outcome, `${name}: ${x.cap?.kind} ${JSON.stringify(x.measures)}`);
     }
   }
-  assert.equal(RB5.RUBBISH5.length, 59);
+  assert.equal(RB5.RUBBISH5.length, 60);
 });
 
 test('KNOWN LIMITS: each passes the gate at its recorded score, and every passing row of every rubbish corpus is listed', () => {
