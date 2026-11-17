@@ -349,3 +349,39 @@ test('a book mobile is kept on its sign-up after the capture; skipped before 015
     assert.deepEqual(calls, []);
   } finally { console.warn = original; }
 });
+
+test('a configured owner who cannot manage the workspace: detected at start-up or first failure, nothing silent, the page tells the owner', async () => {
+  const refusal = Object.assign(new Error('forbidden_scope'), { code: 'forbidden_scope' });
+  const logs: string[] = [];
+  const service = new MhpBookLeadService({ transactions: { run: async () => { throw refusal; } }, registrants: async () => [], ownerUserId: OWNER,
+    cursorSecret: SECRET, log: l => logs.push(l), retryDelaysMs: [10], schedule: () => { throw new Error('no retry for a refused owner'); } });
+  assert.equal(service.mode, 'automatic');
+  assert.equal(await service.probe(), 'owner_cannot_manage');
+  assert.equal(service.automatic, false);
+  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
+  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
+  assert.deepEqual(logs, ['mhp book leads: book sign-ups are saved (with their mobiles) but wait for "Bring book sign-ups into Leads", because the configured MHP lead owner cannot manage the workspace; Book interest says how many are waiting.']);
+  const html = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map([[PROSPECT, { state: 'not_yet' }]]), inLeads: 0, total: 1, mode: 'owner_cannot_manage', waiting: 1 });
+  assert.match(html, /New book sign-ups are not going into Leads automatically \(the configured lead owner cannot manage the MHP marketing workspace\)\.<\/strong> They and their mobiles are saved; 1 is waiting\. One press of "Bring book sign-ups into Leads"/);
+  const none = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map(), inLeads: 0, total: 1, mode: 'no_owner', waiting: 2 });
+  assert.match(none, /\(no lead owner is set for MHP\)[\s\S]*2 are waiting/);
+});
+
+test('with stored book sign-ups the page and CSV show the book mobile and its texts answer beside it, never a webinar number', async () => {
+  const { registrantsCsv } = await import('../src/mhp/growth-view.js');
+  const second = 'b1590000-0000-4000-8000-000000000010', third = 'b1590000-0000-4000-8000-000000000011';
+  const people = [person({ phone: '07700 111111' }), person({ id: second, email: 'b@example.com', phone: '07700 222222' }), person({ id: third, email: 'c@example.com', phone: '07700 333333' })];
+  const leads: MhpBookLeadStatuses = { available: true, inLeads: 0, total: 3, byProspect: new Map(), mode: 'automatic', waiting: 3,
+    book: new Map([[PROSPECT, { mobile: '07700 900159', texts: 'Yes' }], [second, { mobile: null, texts: 'No mobile given' }], [third, { mobile: '07700 900160', texts: 'No, about the book only' }]]) };
+  const html = hqRegistrantsPage(people, true, leads);
+  assert.match(html, /<td>07700 900159<\/td>/);
+  assert.doesNotMatch(html, /07700 111111|07700 222222|07700 333333/, 'mhp_prospects.phone (a webinar number) is not shown as a book mobile');
+  assert.match(html, /<td>Yes · 07700 900159<\/td>/);
+  assert.match(html, /<td>No mobile given<\/td>/);
+  assert.match(html, /<td>No, about the book only · 07700 900160<\/td>/);
+  const csv = registrantsCsv(people, leads).split('\r\n');
+  assert.ok(csv[1]!.endsWith(',Yes · 07700 900159') && csv[1]!.includes(',07700 900159,'));
+  assert.ok(csv[2]!.endsWith(',No mobile given'));
+  assert.ok(csv[3]!.endsWith(',"No, about the book only · 07700 900160"'));
+  assert.doesNotMatch(csv.join('\n'), /07700 111111|07700 222222|07700 333333/);
+});
