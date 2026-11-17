@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CompanyContentExactReview, CompanyContentService, CompanyContentTransactionRunner } from '../../src/company-content-pg/index.js';
 import { createMhpMount } from '../../src/mhp/mount.js';
 import { MhpCommerceError } from '../../src/mhp/commerce-service.js';
-import { MhpSequenceService, type MhpAudienceCandidate, type MhpSequenceActionResult, type MhpSequenceRepository, type MhpSequenceRun, type MhpSequenceLocal } from '../../src/mhp/followup-sequence-service.js';
+import { MhpSequenceService, type MhpBookSwitch, type MhpEligibleRead, type MhpAudienceCandidate, type MhpSequenceActionResult, type MhpSequenceRepository, type MhpSequenceRun, type MhpSequenceLocal } from '../../src/mhp/followup-sequence-service.js';
 import { canonicalFollowupSequence, followupSequenceSha, FOLLOWUP_SEQUENCE_MIME, FOLLOWUP_SEQUENCE_V2_SCHEMA, readCanonicalFollowupSequence } from '../../src/followup-sequences/definition.js';
 import { storedFollowupAudience, type FollowupAudienceKind } from '../../src/followup-sequences/audience.js';
 import type { FollowupEntryRule } from '../../src/followup-sequences/entry.js';
@@ -41,7 +41,14 @@ export interface World {
   batchLimit: number; mode: 'live' | 'test' | 'off'; workspaceSelected: boolean; failNext: { status: number; code?: string } | null;
   /** Runs inside the enrol command before people are chosen: simulates someone signing up in the race window. */
   beforeEnrol: (() => void) | null; now: number; selected: number; savedMetadata: unknown[];
+  /** Release B: whether the database has 0160 (false: the 0160 functions are absent, as at 0159). */
+  db160: boolean;
+  /** Book sign-ups: why each cannot receive a book readers sequence (null: they can). */
+  book: { prospectId: string; email: string; firstName: string | null; reason: null | 'no_consent' | 'unsubscribed' | 'blocked' | 'purchased' }[];
+  switches: MhpBookSwitch[];
 }
+export const bookPerson = (n: number, reason: World['book'][number]['reason'] = null) => ({ prospectId: `5afe7000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+  email: `reader.${n}@example.invalid`, firstName: `Reader ${n}`, reason });
 let runCounter = 100;
 export function makeRun(world: World, n: number, state: FollowupRunState, extra: Partial<MhpSequenceRun> = {}): MhpSequenceRun {
   const c = world.candidates.find(x => x.prospectId === prospect(n)) ?? person(n);
@@ -59,7 +66,8 @@ export function createWorld(): World {
     [seq.bookVersion, { item: seq.book, version: seq.bookVersion, title: 'Before You Buy: chapter one', entry: 'manual', audience: 'none_yet', published: true, latest: true }],
     [seq.otherVersion, { item: seq.other, version: seq.otherVersion, title: 'Old webinar thank-you', entry: 'manual', audience: 'legacy', published: true, latest: true }],
   ]), runs: [], candidates: Array.from({ length: 16 }, (_, i) => person(i + 1)), rules: [], calls: [], commands: [], receipts: new Map(), batchLimit: 500, mode: 'live',
-  workspaceSelected: true, failNext: null, beforeEnrol: null, now: fixtureNow, selected: 0, savedMetadata: [] };
+  workspaceSelected: true, failNext: null, beforeEnrol: null, now: fixtureNow, selected: 0, savedMetadata: [], db160: false,
+  book: [bookPerson(1), bookPerson(2), bookPerson(3, 'no_consent'), bookPerson(4, 'unsubscribed'), bookPerson(5, 'blocked'), bookPerson(6, 'purchased')], switches: [] };
 }
 const eligible = (c: MhpAudienceCandidate) => c.marketingConsent && !c.unsubscribed && c.signupConsentGiven;
 function record(world: World, versionId: string): SequenceRecord {
@@ -67,8 +75,10 @@ function record(world: World, versionId: string): SequenceRecord {
 }
 function canonicalOf(r: SequenceRecord) { return canonicalFollowupSequence(definitionFor(r.title, r.entry)); }
 export function repositoryFor(world: World): MhpSequenceRepository {
+  // eslint-disable-next-line prefer-const
+  let repository: MhpSequenceRepository;
   const authorise = (given: { workspaceId: string }) => { if (!world.workspaceSelected || given.workspaceId !== identity.workspaceId) throw new MhpCommerceError(403, 'Open the MHP marketing workspace first.'); };
-  return {
+  repository = {
     snapshot: async given => { authorise(given); return { brand: emailSnapshot.database.brand, campaign: CAMPAIGN, eligible: world.candidates.filter(eligible).length,
       blocked: world.candidates.length - world.candidates.filter(eligible).length, runs: world.runs.slice(0, 100).map(run => ({ ...run })), runCount: world.runs.length, entryRules: world.rules.map(rule => ({ ...rule })) }; },
     local: async (given, versionId) => {
@@ -115,7 +125,72 @@ export function repositoryFor(world: World): MhpSequenceRepository {
     entryCommand: async (given, input) => { authorise(given); world.calls.push(`entry:${input.action}`); const r = record(world, input.versionId);
       return { action: input.action, contentItemId: r.item, contentVersionId: r.version, ruleId: input.ruleId || seq.other, state: input.action === 'activate' ? 'active' : 'off',
         expiresAt: input.expiresAt || new Date(world.now).toISOString(), watermark: '1', replayed: false }; },
+    // Release B: the 0160 functions, emulated after app_private.mhp_sequence_eligible / start_v2 / resume_v2 / book_entry_*; null when absent (0159).
+    eligible: async (given, versionId) => {
+      authorise(given); if (!world.db160) return null; world.calls.push('eligible');
+      const r = record(world, versionId), inItem = (email: string) => world.runs.filter(run => run.contentItemId === r.item && run.email === email);
+      const zero = { noConsent: 0, unsubscribed: 0, blocked: 0, purchased: 0, alreadyIn: 0, earlierVersion: 0 };
+      if (r.audience === 'book_readers') {
+        const held = { ...zero }, list: MhpEligibleRead['eligible'][number][] = [], already: MhpEligibleRead['alreadyIn'][number][] = [];
+        for (const b of world.book) {
+          const runsIn = inItem(b.email);
+          if (runsIn.length) { held.alreadyIn++; already.push({ prospectId: b.prospectId, email: b.email, firstName: b.firstName, state: runsIn[0]!.state }); continue; }
+          if (b.reason === 'no_consent') held.noConsent++; else if (b.reason === 'unsubscribed') held.unsubscribed++; else if (b.reason === 'blocked') held.blocked++;
+          else if (b.reason === 'purchased') held.purchased++; else list.push({ prospectId: b.prospectId, email: b.email, firstName: b.firstName, label: 'Before You Buy — book interest', signedUpAt: null });
+        }
+        return { audience: 'book_readers', eligible: list, eligibleTotal: list.length, heldBack: held, alreadyIn: already };
+      }
+      if (r.audience !== 'webinar_signups') return { audience: 'none_yet', eligible: [], eligibleTotal: 0, heldBack: zero, alreadyIn: [] };
+      const held = { ...zero, unsubscribed: world.candidates.filter(c => c.unsubscribed).length, noConsent: world.candidates.filter(c => !c.unsubscribed && !eligible(c)).length };
+      const list = world.candidates.filter(eligible).filter(c => {
+        const runsIn = inItem(c.email);
+        if (runsIn.some(run => run.contentVersionId === r.version)) { held.alreadyIn++; return false; }
+        if (runsIn.some(run => ['active', 'paused', 'held'].includes(run.state))) { held.earlierVersion++; return false; }
+        return true;
+      }).map(c => ({ prospectId: c.prospectId, email: c.email, firstName: c.firstName, label: c.label, signedUpAt: null }));
+      return { audience: 'webinar_signups', eligible: list, eligibleTotal: list.length, heldBack: held, alreadyIn: [] };
+    },
+    startV2: async (given, input) => {
+      authorise(given); if (!world.db160) return null; world.calls.push('startV2'); world.commands.push({ action: 'startV2', commandId: input.commandId, runId: input.recipients.join(','), versionId: input.versionId });
+      const key = `startV2:${input.commandId}`, prior = world.receipts.get(key); if (prior) return { ...prior, replayed: true };
+      world.beforeEnrol?.(); world.beforeEnrol = null;
+      const r = record(world, input.versionId), read = (await repository.eligible!(given, input.versionId, input.campaign))!;
+      if (input.recipients.some(id => !read.eligible.some(p => p.prospectId === id))) throw new MhpCommerceError(409, 'This sequence, one of its emails or its approval changed while you were looking at it, so nothing was done. Open the sequence again to see where things stand now.');
+      for (const id of input.recipients) {
+        const p = read.eligible.find(x => x.prospectId === id)!;
+        world.runs.unshift({ id: `5afe3000-0000-4000-8000-${String(++runCounter).padStart(12, '0')}`, contentItemId: r.item, contentVersionId: r.version, email: p.email, firstName: p.firstName,
+          state: 'active', position: 0, dueAt: new Date(world.now).toISOString(), reason: null, createdAt: new Date(world.now).toISOString(), lastAcceptedAt: null, inFlight: false, unknownProofId: null, steps: [] });
+      }
+      const result: MhpSequenceActionResult = { action: 'enrol', contentItemId: r.item, contentVersionId: r.version, changed: input.recipients.length, remaining: 0, blocked: 0, inFlight: 0, replayed: false };
+      world.receipts.set(key, result); return result;
+    },
+    resumeV2: async (given, input) => {
+      authorise(given); if (!world.db160) return null; world.calls.push('resumeV2');
+      const r = record(world, input.versionId);
+      for (const id of input.runIds) { const run = world.runs.find(x => x.id === id); if (!run || run.contentItemId !== r.item || ['newer_sequence', 'content_changed'].includes(run.reason ?? '')) throw new MhpCommerceError(409, 'This sequence, one of its emails or its approval changed while you were looking at it, so nothing was done. Open the sequence again to see where things stand now.'); }
+      let changed = 0; for (const id of input.runIds) { const run = world.runs.find(x => x.id === id)!; if (['paused', 'held'].includes(run.state)) { run.state = 'active'; changed++; } }
+      return { action: 'resume', contentItemId: r.item, contentVersionId: r.version, changed, remaining: 0, blocked: 0, inFlight: 0, replayed: false };
+    },
+    bookEntry: async (given, input) => {
+      authorise(given); if (!world.db160) return null; world.calls.push(`book:${input.action}`);
+      const r = record(world, input.versionId);
+      if (input.action === 'on') {
+        if (r.audience !== 'book_readers') throw new MhpCommerceError(409, 'This sequence, one of its emails or its approval changed while you were looking at it, so nothing was done. Open the sequence again to see where things stand now.');
+        const open = world.switches.find(sw => sw.contentItemId === r.item && sw.state === 'on' && sw.contentVersionId === r.version);
+        if (open) return { action: 'on', contentItemId: r.item, contentVersionId: r.version, switchId: open.id, state: 'on', activatedAt: open.activatedAt, replayed: true };
+        for (const sw of world.switches) if (sw.contentItemId === r.item && sw.state !== 'off') { sw.state = 'off'; sw.disabledAt = new Date(world.now).toISOString(); }
+        const sw: MhpBookSwitch = { id: `5afe8000-0000-4000-8000-${String(world.switches.length + 1).padStart(12, '0')}`, contentItemId: r.item, contentVersionId: r.version, state: 'on',
+          activatedAt: new Date(world.now).toISOString(), disabledAt: null, heldReason: null, lastSweptAt: null, enrolled: 0, skipped: 0 };
+        world.switches.unshift(sw); return { action: 'on', contentItemId: r.item, contentVersionId: r.version, switchId: sw.id, state: 'on', activatedAt: sw.activatedAt, replayed: false };
+      }
+      const sw = world.switches.find(x => x.id === input.switchId && x.contentItemId === r.item);
+      if (!sw) throw new MhpCommerceError(409, 'This sequence, one of its emails or its approval changed while you were looking at it, so nothing was done. Open the sequence again to see where things stand now.');
+      const replayed = sw.state === 'off'; sw.state = 'off'; sw.disabledAt ??= new Date(world.now).toISOString();
+      return { action: 'off', contentItemId: r.item, contentVersionId: r.version, switchId: sw.id, state: 'off', activatedAt: sw.activatedAt, replayed };
+    },
+    bookSwitches: async given => { authorise(given); return world.db160 ? world.switches.map(sw => ({ ...sw })) : null; },
   };
+  return repository;
 }
 export function serviceFor(world: World): MhpSequenceService {
   const reviewOf = (versionId: string): CompanyContentExactReview => {

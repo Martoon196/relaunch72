@@ -328,7 +328,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
     let w = await world(admin);
     try {
       // The build is ready while 0159 is pending (production-shaped database).
-      await assertRuntimeSchemaCurrent(w.web, undefined, {});
+      await assertRuntimeSchemaCurrent(w.web, await prefixDirectory(159), {});
       const sends0 = await sendsDigest(admin);
 
       // The one real lead in production, made by the trigger before the new code: owner unset on the contact, email
@@ -411,7 +411,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
     assert.deepEqual(await rowsDigest(admin), rows);
     w = await world(admin);
     try {
-      await assertRuntimeSchemaCurrent(w.web, undefined, {});
+      await assertRuntimeSchemaCurrent(w.web, await prefixDirectory(159), {});
       const sends0 = await sendsDigest(admin);
       const beforeMartin = (await lead(admin, 'martin-reader@example.com'))!;
       // The trigger-made lead after 0159: recognised, never duplicated; a repeat sign-up with the mobile adds it.
@@ -592,7 +592,7 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
     assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
     const w = await world(admin);
     try {
-      await assertRuntimeSchemaCurrent(w.web, undefined, {});
+      await assertRuntimeSchemaCurrent(w.web, await prefixDirectory(159), {});
       const zoe = await w.signUp(bookSignup('zoe@example.com', null, '07700 900106'));
       assert.equal(zoe.outcome?.outcome, 'created');
       const made = (await lead(admin, 'zoe@example.com'))!;
