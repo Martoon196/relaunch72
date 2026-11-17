@@ -31,7 +31,9 @@ function specifiers(text: string): string[] {
 // Release 2 (screens): only these files may reach src/affiliate. The portal pieces run only with AFFILIATE_STUDIO on;
 // the article engine pieces act only on articles that carry products or product links.
 const WIRED = new Set(['portal/affiliate-service.ts', 'portal/affiliate-routes.ts', 'portal/affiliate-views.ts', 'portal/seo-blog-router.ts', 'portal/seo-blog-service.ts',
-  'portal/seo-blog-article-view.ts', 'seo-blog/engine.ts', 'seo-blog/types.ts', 'seo-blog/generation.ts', 'seo-blog/checks.ts', 'seo-blog/render.ts', 'seo-blog/publishers/content-api.ts']);
+  'portal/seo-blog-article-view.ts', 'seo-blog/engine.ts', 'seo-blog/types.ts', 'seo-blog/generation.ts', 'seo-blog/checks.ts', 'seo-blog/render.ts', 'seo-blog/publishers/content-api.ts',
+  // The "Ad: " title on every outward surface (review M6): the WordPress payload and the static site's blog index.
+  'seo-blog/publishers/wordpress.ts', 'seo-blog/publishers/github-static.ts']);
 
 test('only the wired files import src/affiliate; nothing else outside src/affiliate does', async () => {
   const files = await sources(SRC);

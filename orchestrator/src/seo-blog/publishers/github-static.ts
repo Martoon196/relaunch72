@@ -16,6 +16,7 @@
 import type { Destination } from '../types.js';
 import { SeoBlogError } from '../types.js';
 import { mergeSitemap, readIndexManifest, renderArticlePage, renderIndexPage, upsertIndexEntry, versionMarker } from '../render.js';
+import { publicBody } from '../../affiliate/render.js';
 import { websiteIdentity, websiteSha, type WebsiteCapabilityReceipt, type WebsiteCapabilities } from '../website-target.js';
 import { mergeOwnedSitemap, readServedSitemap } from '../website-delivery.js';
 import {acceptStaticCatalogue,readStaticCatalogue,staticCataloguePath,STATIC_CATALOGUE_MAX_BYTES,type StaticCatalogue} from './static-catalogue.js';
@@ -214,7 +215,7 @@ export class GithubStaticPublisher implements WebsitePublisher {
           ...(input.websiteTarget?{websiteTargetSha:input.websiteTarget.deliverySha,categoryLinks:input.websiteTarget.target.categoryIds.map((id)=>{const c=input.websiteTarget!.target.categories.find((c)=>c.id===id)!;return {label:c.label,url:`${indexUrl}category/${c.slug}/`};})}:{}),
         });
         const entries = upsertIndexEntry(readIndexManifest(indexHtml), {
-          title: input.body.title, url: publicUrl, excerpt: input.body.excerpt, publishedAt: input.publishedAt, articleId: input.articleId,
+          title: publicBody(input.body).title, url: publicUrl, excerpt: publicBody(input.body).excerpt, publishedAt: input.publishedAt, articleId: input.articleId,
           ...(input.websiteTarget?{categories:input.websiteTarget.target.categories.filter((c)=>input.websiteTarget!.target.categoryIds.includes(c.id))}:{}),
         });
         const newIndex = renderIndexPage(entries, { siteName: input.brandName, indexUrl, locale: input.locale, template });

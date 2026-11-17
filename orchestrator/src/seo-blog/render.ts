@@ -9,7 +9,7 @@
  * invented.
  */
 
-import { disclosureHtml, productLinkHtml } from '../affiliate/render.js';
+import { disclosureHtml, productLinkHtml, publicBody } from '../affiliate/render.js';
 import { escapeHtml, escapeXml } from './html.js';
 import type { ArticleBody, ArticleSourceCitation } from './types.js';
 
@@ -31,6 +31,13 @@ export interface RenderContext {
   /** Optional destination template with {{…}} slots; defaults to a neutral, readable layout. */
   readonly template?: string | null;
   readonly noindex?: boolean;
+  /** Product links as words only, without a working link (the portal's preview and HTML copy). Default: live links. */
+  readonly productLinks?: 'live' | 'text';
+}
+
+/** True for the first part with this part's id: a product's link is shown once even if two parts share an id (review N3). */
+export function firstOfId(sections: readonly { readonly id: string }[], index: number): boolean {
+  return sections.findIndex((s) => s.id === sections[index]!.id) === index;
 }
 
 /** Marker embedded in every rendered page; reconciliation reads it back from the public URL. */
@@ -156,7 +163,9 @@ a{color:#0b5cad}img{max-width:100%;height:auto;border-radius:8px}.meta{color:#5b
 </body>
 </html>`;
 
-export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string {
+export function renderArticlePage(stored: ArticleBody, ctx: RenderContext): string {
+  // A product article's outward title, search title, description and summary begin with the "Ad" label (the same body otherwise).
+  const body = publicBody(stored);
   const cites = citationNumbers(body);
   const md = (text: string, subHeadings = false) => renderMarkdown(text, cites.number, ctx.canonicalUrl, subHeadings);
   const dateLabel = new Intl.DateTimeFormat(ctx.locale || 'en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(ctx.publishedAt));
@@ -186,7 +195,7 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     disclosureHtml(body.affiliate),
     body.image.url ? `<figure><img src="${escapeHtml(body.image.url)}" alt="${escapeHtml(body.image.alt)}"${body.image.width ? ` width="${body.image.width}"` : ''}${body.image.height ? ` height="${body.image.height}"` : ''} loading="eager"></figure>` : '',
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}`),
+    ...body.sections.map((s, i) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, firstOfId(body.sections, i) ? s.id : '', ctx.productLinks)}` : ''}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',

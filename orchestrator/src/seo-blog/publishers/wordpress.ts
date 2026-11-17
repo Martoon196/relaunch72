@@ -22,6 +22,7 @@ import { createHash, createHmac } from 'node:crypto';
 import type { Destination } from '../types.js';
 import { SeoBlogError } from '../types.js';
 import { citationNumbers, versionMarker } from '../render.js';
+import { publicBody } from '../../affiliate/render.js';
 import { parseWebsiteCapabilities, websiteOrigin, websiteSha, WORDPRESS_URL_CONTRACT, type WebsiteCapabilityReceipt } from '../website-target.js';
 import { renderArticleFragment } from './content-api.js';
 import {
@@ -156,7 +157,8 @@ export class WordPressPublisher implements WebsitePublisher {
     if (!input.websiteTarget) throw new PublisherRejectedError('Review and save this article’s WordPress target (root and categories) before publishing.');
     assertPublishTarget(input);
     const publicUrl = input.websiteTarget.target.canonicalUrl;
-    const body = input.body;
+    // A product article's titles and summary begin with the "Ad" label; any other article's body is this same object.
+    const body = publicBody(input.body);
     return JSON.stringify({
       contractVersion: 2,
       target: input.websiteTarget.target,

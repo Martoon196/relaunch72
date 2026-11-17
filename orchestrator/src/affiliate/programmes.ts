@@ -244,9 +244,12 @@ const AMAZON_UK: AffiliateProgramme = Object.freeze({
   merchantName: 'Amazon UK',
   linkHosts: Object.freeze([AMAZON_UK_HOST]),
   disclosure: Object.freeze({
+    // Plain words, not "may earn" (the ASA found "may earn an affiliate commission" ambiguous; review M6). The
+    // Associates statement is Amazon's exact required wording and is never changed. The version is unchanged: no
+    // product article has been published with the earlier wording (the feature has never been switched on).
     version: 'amazon_uk.2026-11',
     label: 'Ad.',
-    text: 'This article contains affiliate links. If you buy through them, we may earn a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.',
+    text: 'This article contains affiliate links. We earn a commission if you buy through these links, at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.',
   }),
   rel: 'sponsored nofollow noopener',
   linkLabel: (productName: string) => `See ${productName} on Amazon`,

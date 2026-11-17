@@ -14,8 +14,8 @@
 import { createHash, createHmac } from 'node:crypto';
 import type { Destination } from '../types.js';
 import { SeoBlogError } from '../types.js';
-import { citationNumbers, renderMarkdown, versionMarker } from '../render.js';
-import { disclosureHtml, productLinkHtml } from '../../affiliate/render.js';
+import { citationNumbers, firstOfId, renderMarkdown, versionMarker } from '../render.js';
+import { disclosureHtml, productLinkHtml, publicBody } from '../../affiliate/render.js';
 import { escapeHtml } from '../html.js';
 import { parseWebsiteCapabilities, websiteOrigin, websiteSha, type WebsiteCapabilityReceipt } from '../website-target.js';
 import {
@@ -39,7 +39,7 @@ export function renderArticleFragment(input: PublishInput, canonicalUrl: string)
     // A product article starts with its disclosure, and each product's part ends with its link (rendered by code).
     disclosureHtml(body.affiliate),
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}`),
+    ...body.sections.map((s, i) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, firstOfId(body.sections, i) ? s.id : '')}` : ''}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',
@@ -135,10 +135,11 @@ export class ContentApiPublisher implements WebsitePublisher {
       versionNumber: input.versionNumber,
       marker: versionMarker(input.articleId, input.versionId, input.contentSha),
       slug: input.body.slug,
-      title: input.body.title,
-      seoTitle: input.body.seoTitle,
-      metaDescription: input.body.metaDescription,
-      excerpt: input.body.excerpt,
+      // A product article's titles and summary begin with the "Ad" label (publicBody); any other article is unchanged.
+      title: publicBody(input.body).title,
+      seoTitle: publicBody(input.body).seoTitle,
+      metaDescription: publicBody(input.body).metaDescription,
+      excerpt: publicBody(input.body).excerpt,
       canonicalUrl: publicUrl,
       publishedAt: input.publishedAt,
       author: input.body.author,
