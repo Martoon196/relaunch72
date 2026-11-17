@@ -9,6 +9,7 @@ import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src
 import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src/db/email-protection-schema.js';
 import { EMAIL_ALLOWLIST_CHECKSUM, EMAIL_ALLOWLIST_MIGRATION } from '../../src/db/email-allowlist-schema.js';
 import { AFFILIATE_CHECKSUM, AFFILIATE_MIGRATION } from '../../src/db/affiliate-schema.js';
+import { MHP_BOOK_CRM_CHECKSUM, MHP_BOOK_CRM_MIGRATION } from '../../src/db/mhp-book-crm-schema.js';
 import assert from 'node:assert/strict';
 import { CREATIVE_STUDIO_CHECKSUM } from '../../src/db/creative-studio-schema.js';
 import { createHash } from 'node:crypto';
@@ -174,6 +175,7 @@ const migration155Url = new URL('../../src/db/migrations/0155_email_connections.
 const migration156Url = new URL('../../src/db/migrations/0156_email_sending_protection.sql', import.meta.url);
 const migration157Url = new URL('../../src/db/migrations/0157_email_connect_allowlist.sql', import.meta.url);
 const migration158Url = new URL('../../src/db/migrations/0158_affiliate_studio.sql', import.meta.url);
+const migration159Url = new URL('../../src/db/migrations/0159_mhp_book_crm.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -771,6 +773,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: EMAIL_PROTECTION_MIGRATION, version: 156 },
     { filename: EMAIL_ALLOWLIST_MIGRATION, version: 157 },
     { filename: AFFILIATE_MIGRATION, version: 158 },
+    { filename: MHP_BOOK_CRM_MIGRATION, version: 159 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -925,6 +928,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration156Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration157Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration158Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration159Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -951,6 +955,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(tail.find(m=>m.version===156)?.checksum, EMAIL_PROTECTION_CHECKSUM);
   assert.equal(tail.find(m=>m.version===157)?.checksum, EMAIL_ALLOWLIST_CHECKSUM);
   assert.equal(tail.find(m=>m.version===158)?.checksum, AFFILIATE_CHECKSUM);
+  assert.equal(tail.find(m=>m.version===159)?.checksum, MHP_BOOK_CRM_CHECKSUM);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

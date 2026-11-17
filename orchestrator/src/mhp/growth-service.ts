@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
+import { MHP_BOOK_INTEREST_LABEL, MHP_BOOK_MODULE } from './book-interest.js';
 
 /**
  * Public sign-ups, member stories and the marketing send queue for
@@ -12,6 +13,29 @@ export class MhpGrowthError extends Error {
 export const MHP_SITE_ORIGIN = 'https://martinhowardproperty.co.uk';
 export const MHP_CONSENT_VERSION = 'site-2026-10';
 
+/** The book form's email tick, word for word as the site shows it (CONSENT_FORM=book-2026-11). */
+export const MHP_BOOK_EMAIL_CONSENT_TEXT = "Give me access to Chapter One and email me about Before You Buy, occasional property tips, and offers of Martin Howard Property's training and Property Predator software. I can unsubscribe at any time.";
+/** The book form's optional second tick, word for word (stored as book-2026-11+messages, with the email wording). */
+export const MHP_MESSAGES_CONSENT_TEXT = "Also send me occasional texts and WhatsApp messages from Martin Howard Property with property tips and offers, including Martin's kits, courses, mentoring and his Property Predator software. Reply STOP or unsubscribe at any time.";
+/** Suffix of a consent version that also covers promotional texts and WhatsApp messages. */
+export const MHP_MESSAGES_CONSENT_SUFFIX = '+messages';
+/**
+ * Every consent wording a sign-up may be stamped with: its id is stored as the sign-up's consent_version (the evidence of
+ * exactly what was agreed). site-2026-10 is the wording every form has shown since October 2026 (held on the site; it is
+ * the default whenever a form names nothing). Add a new id here before a form starts sending it; an unknown id is ignored.
+ */
+export const MHP_CONSENT_WORDINGS: Readonly<Record<string, string | null>> = Object.freeze({
+  [MHP_CONSENT_VERSION]: null,
+  'book-2026-11': MHP_BOOK_EMAIL_CONSENT_TEXT,
+  'book-2026-11+messages': `${MHP_BOOK_EMAIL_CONSENT_TEXT} ${MHP_MESSAGES_CONSENT_TEXT}`,
+});
+/** The consent version a sign-up is stored with: its allow-listed wording, else exactly today's default. */
+export const mhpSignupConsentVersion = (signup: Pick<MhpSignup, 'consentVersion'>): string =>
+  signup.consentVersion !== undefined && Object.hasOwn(MHP_CONSENT_WORDINGS, signup.consentVersion) ? signup.consentVersion : MHP_CONSENT_VERSION;
+/** Whether a stored consent version includes promotional texts and WhatsApp messages. */
+export const mhpMessagesConsented = (version: string | null | undefined): boolean =>
+  typeof version === 'string' && version.endsWith(MHP_MESSAGES_CONSENT_SUFFIX) && Object.hasOwn(MHP_CONSENT_WORDINGS, version);
+
 export interface MhpScheduledSend { template: MhpTemplateKey; campaign: string; dueAt: string; expiresAt: string; context: Record<string, string> }
 export type MhpTemplateKey = 'sheet_delivery' | 'webinar_confirm' | 'webinar_24h' | 'webinar_1h' | 'webinar_replay' | 'webinar_replay_plain'
   | 'webinar_followup' | 'webinar_90days' | 'webinar_casestudy' | 'application_received' | 'application_notify';
@@ -23,6 +47,8 @@ export interface MhpSignup {
   kind: 'sheet' | 'webinar' | 'waitlist'; label: string; module: string | null; link: string | null;
   /** Optional mobile number; malformed numbers are dropped rather than refused. */
   phone?: string | null;
+  /** The allow-listed consent wording the form showed (absent: MHP_CONSENT_VERSION, exactly as before). */
+  consentVersion?: string;
 }
 export interface MhpCapturedSignup {
   prospectId: string; queued: number; signupId: string; campaign: string | null; entryEventSequence: string | null;
@@ -53,6 +79,24 @@ export interface MhpApplicationRecord {
 export interface MhpRegistrantRecord {
   id: string; firstName: string | null; email: string; phone: string | null; level: string | null; marketingConsent: boolean; unsubscribed: boolean;
   firstSeenAt: string; lastSignupAt: string; signups: string[]; webinar: boolean; applied: boolean;
+}
+/** One person's latest book sign-up, as 0159's owner read returns it. */
+export interface MhpBookSignupRecord {
+  prospectId: string; signupId: string; signedUpAt: string; consentGiven: boolean; consentVersion: string; phone: string | null; link: string | null;
+  /** The most recent mobile given on any of their book sign-ups, and that sign-up's id and consent version. */
+  lastPhone: string | null; lastPhoneSignupId: string | null; lastPhoneConsentVersion: string | null;
+  firstName: string | null; email: string; marketingConsent: boolean; unsubscribed: boolean;
+}
+const optionalText = (value: unknown, max: number): boolean => value === null || (typeof value === 'string' && value.length >= 1 && value.length <= max);
+function validBookSignup(value: unknown): value is MhpBookSignupRecord {
+  const v = value as Record<string, unknown>;
+  return typeof v === 'object' && v !== null && typeof v.prospectId === 'string' && UUID.test(v.prospectId)
+    && typeof v.signupId === 'string' && UUID.test(v.signupId) && typeof v.signedUpAt === 'string' && Number.isFinite(Date.parse(v.signedUpAt))
+    && typeof v.consentGiven === 'boolean' && typeof v.consentVersion === 'string' && v.consentVersion.length <= 40
+    && optionalText(v.phone, 30) && optionalText(v.link, 500) && optionalText(v.lastPhone, 30)
+    && (v.lastPhoneSignupId === null || (typeof v.lastPhoneSignupId === 'string' && UUID.test(v.lastPhoneSignupId)))
+    && optionalText(v.lastPhoneConsentVersion, 40) && optionalText(v.firstName, 100)
+    && typeof v.email === 'string' && EMAIL.test(v.email) && typeof v.marketingConsent === 'boolean' && typeof v.unsubscribed === 'boolean';
 }
 export interface MhpGrowthSummary {
   prospects: number; unsubscribed: number; signupsToday: number;
@@ -105,7 +149,25 @@ export function parseMhpSignup(fields: URLSearchParams): MhpSignup | 'honeypot' 
   if (!consent && kind !== 'webinar') throw new MhpGrowthError(400, 'Tick the box so we can email you.');
   const rawPhone = (fields.get('PHONE') ?? '').replace(/\s+/g, ' ').trim();
   const phone = /^[0-9 +()-]{6,30}$/.test(rawPhone) && (rawPhone.match(/[0-9]/g) ?? []).length >= 6 ? rawPhone : null;
-  return { email, firstName, level, consent, kind, label, module, link, phone };
+  // The named wordings and the texts/WhatsApp tick belong to the book form only; any other form keeps today's default.
+  const consentVersion = label === MHP_BOOK_INTEREST_LABEL && module === MHP_BOOK_MODULE ? signupConsentVersion(fields, consent, phone) : undefined;
+  return consentVersion === undefined ? { email, firstName, level, consent, kind, label, module, link, phone }
+    : { email, firstName, level, consent, kind, label, module, link, phone, consentVersion };
+}
+
+/**
+ * The wording a form says it showed (CONSENT_FORM), only when allow-listed; anything else is ignored, never an error.
+ * "+messages" is added only when the optional texts/WhatsApp box (OPT_IN_MESSAGES) is ticked, the email box is ticked
+ * (that wording extends it), a usable mobile was given and the combined id is allow-listed. Undefined: as before.
+ */
+function signupConsentVersion(fields: URLSearchParams, consent: boolean, phone: string | null): string | undefined {
+  const form = (fields.get('CONSENT_FORM') ?? '').trim();
+  if (!form || form.includes('+') || !Object.hasOwn(MHP_CONSENT_WORDINGS, form)) return undefined;
+  const ticked = ['1', 'on', 'true'].includes(fields.get('OPT_IN_MESSAGES') ?? '');
+  let mobile = (phone ?? '').replace(/[\s().-]/g, '');
+  if (mobile.startsWith('00')) mobile = `+${mobile.slice(2)}`;
+  const combined = `${form}${MHP_MESSAGES_CONSENT_SUFFIX}`;
+  return ticked && consent && /^\+?\d{7,15}$/.test(mobile) && Object.hasOwn(MHP_CONSENT_WORDINGS, combined) ? combined : form;
 }
 
 export function mhpWebinarConfig(env: NodeJS.ProcessEnv): MhpWebinarConfig {
@@ -294,6 +356,66 @@ export class PgMhpGrowthService {
     }
   }
 
+  /** Whether 0159's book functions answered "missing" recently (a build deployed before the migration): skip, not fail. */
+  private bookFunctionsMissingUntil = 0;
+  private bookPhoneProbedAt = 0;
+  private bookReadProbedAt = 0;
+  /** Upper bound on the awaited keep-phone call; the visitor's answer never waits longer (tests may shorten it). */
+  keepBookPhoneTimeoutMs = 2_000;
+  private bookMissing(error: unknown): boolean {
+    if ((error as { code?: string })?.code !== '42883') return false;
+    this.bookFunctionsMissingUntil = Date.now() + 5 * 60_000;
+    return true;
+  }
+
+  /**
+   * 0159: keep the mobile of a book sign-up just committed, on that sign-up row (never on mhp_prospects.phone). One
+   * statement on the capture login. 'missing' before 0159 is applied (then skipped for five minutes); throws otherwise.
+   */
+  async keepBookPhone(captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, phone: string): Promise<'kept' | 'not_kept' | 'missing'> {
+    // "Missing" is remembered, but a sign-up carrying a mobile asks again at most every 5 seconds, so the first one after
+    // 0159 is applied is kept without a restart and a database without 0159 is not asked on every sign-up.
+    const now = Date.now();
+    if (now < this.bookFunctionsMissingUntil && now - this.bookPhoneProbedAt < 5_000) return 'missing';
+    this.bookPhoneProbedAt = now;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('keep-phone timed out'), { code: 'timeout' })), this.keepBookPhoneTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      const result = await Promise.race([this.commandPool.query<{ kept: boolean }>('SELECT app_private.mhp_book_signup_keep_phone($1::uuid,$2::uuid,$3::text) AS kept',
+        [captured.signupId, captured.prospectId, phone]), timeout]);
+      this.bookFunctionsMissingUntil = 0;
+      return result.rows[0]?.kept === true ? 'kept' : 'not_kept';
+    } catch (error) {
+      if (this.bookMissing(error)) return 'missing';
+      throw error;
+    } finally { if (timer) clearTimeout(timer); }
+  }
+
+  /** Whether the stored book sign-ups (0159) answered last time: the owner page says "mobiles are saved" only then. */
+  get bookMobilesStored(): boolean { return this.bookFunctionsMissingUntil <= Date.now(); }
+
+  /** 0159: the owner's read of book sign-ups (latest book sign-up per person, and the latest mobile given). Null before 0159. */
+  async listBookSignups(token: string): Promise<MhpBookSignupRecord[] | null> {
+    const now = Date.now();
+    if (now < this.bookFunctionsMissingUntil && now - this.bookReadProbedAt < 5_000) return null;
+    this.bookReadProbedAt = now;
+    try {
+      const result = await this.readPool.query<{ signups: unknown }>('SELECT app_private.mhp_book_signups($1) AS signups', [sessionHash(token)]);
+      const rows = result.rows[0]?.signups;
+      if (!Array.isArray(rows) || !rows.every(validBookSignup)) throw new MhpGrowthError(503, 'Book sign-ups could not load.');
+      this.bookFunctionsMissingUntil = 0;
+      return rows as MhpBookSignupRecord[];
+    } catch (error) {
+      if (this.bookMissing(error)) return null;
+      if (error instanceof MhpGrowthError) throw error;
+      if ((error as { code?: string })?.code === '42501') throw new MhpGrowthError(403, 'Owner access is required for HQ.');
+      throw new MhpGrowthError(503, 'Book sign-ups could not load.');
+    }
+  }
+
   async listRegistrants(token: string): Promise<MhpRegistrantRecord[]> {
     try {
       const result = await this.readPool.query<{ registrants: MhpRegistrantRecord[] }>('SELECT app_private.mhp_list_registrants($1) AS registrants', [sessionHash(token)]);
@@ -312,7 +434,7 @@ export class PgMhpGrowthService {
     try {
       const result = await this.commandPool.query<{ outcome: MhpCapturedSignup }>(
         'SELECT app_private.mhp_capture_signup_v3($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) AS outcome',
-        [signup.email, signup.firstName, signup.level, signup.consent, MHP_CONSENT_VERSION, signup.kind, signup.label,
+        [signup.email, signup.firstName, signup.level, signup.consent, mhpSignupConsentVersion(signup), signup.kind, signup.label,
           signup.module, signup.link, sourceHash?.length === 32 ? sourceHash : null, JSON.stringify(schedule), campaign, signup.phone ?? null]);
       const outcome = result.rows[0]?.outcome;
       if (!outcome || !UUID.test(outcome.prospectId) || !UUID.test(outcome.signupId) || outcome.campaign !== campaign

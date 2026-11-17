@@ -135,19 +135,21 @@ test('0158 through the real runner: readiness absent, pending and applied; not o
   const pools: pg.Pool[] = [];
   try {
     await resetDisposable();
-    const all = await discoverMigrations();
+    // The exact 158-file Affiliate Studio release, reconstructed from today's source (0159 is a separate release).
+    const all = (await discoverMigrations()).slice(0, 158);
     assert.equal(all.length, 158);
+    const build158 = await prefixDirectory(158);
     assert.deepEqual([all[157]!.filename, all[157]!.checksum], [AFFILIATE_MIGRATION, AFFILIATE_CHECKSUM]);
     const build157 = await prefixDirectory(157);
     // From empty to 0156: two pending for this build, not ready (the 157-file build admits its own 0157 pending).
     await runMigrations(admin, await prefixDirectory(156));
     let web = await login(admin, 'r72_web', 2);
     pools.push(web);
-    await assert.rejects(assertRuntimeSchemaCurrent(web, undefined, {}), /schema is behind by 2 migration\(s\); first pending: 0157_email_connect_allowlist\.sql/u);
+    await assert.rejects(assertRuntimeSchemaCurrent(web, build158, {}), /schema is behind by 2 migration\(s\); first pending: 0157_email_connect_allowlist\.sql/u);
     await assertRuntimeSchemaCurrent(web, build157, {});
     // To 0157 with the runner: 0158 is absent from the ledger and pending for this build: both builds are ready.
     assert.deepEqual((await runMigrations(admin, build157)).applied, [EMAIL_ALLOWLIST_MIGRATION]);
-    await assertRuntimeSchemaCurrent(web, undefined, {});
+    await assertRuntimeSchemaCurrent(web, build158, {});
     await assertRuntimeSchemaCurrent(web, build157, {});
     assert.equal((await ownerQuery<{ r: string | null }>(admin, "SELECT to_regclass('app.affiliate_products')::text AS r"))[0]!.r, null);
 
@@ -178,13 +180,13 @@ test('0158 through the real runner: readiness absent, pending and applied; not o
         (SELECT count(*) FROM app_private.workspace_table_registry WHERE schema_name='app' AND table_name=ANY($1::text[])) AS registry,
         (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='app' AND t.typname LIKE 'affiliate\\_%') AS types`, [TABLES]))[0]!;
       assert.deepEqual(left, { last: EMAIL_ALLOWLIST_MIGRATION, relations: '0', functions: '0', roles: '0', registry: '0', types: '0' }, label);
-      await assertRuntimeSchemaCurrent(web, undefined, {});
+      await assertRuntimeSchemaCurrent(web, build158, {});
     }
 
     // 0158 by the same runner; a second run is a no-op.
-    const result = await runMigrations(admin);
+    const result = await runMigrations(admin, build158);
     assert.deepEqual(result.applied, [AFFILIATE_MIGRATION]);
-    const again = await runMigrations(admin);
+    const again = await runMigrations(admin, build158);
     assert.deepEqual(again.applied, []);
     assert.equal(again.alreadyApplied.length, 158);
     const ledger = await ownerQuery<{ filename: string; checksum: string }>(admin, 'SELECT filename,checksum FROM app_private.schema_migrations WHERE filename=$1', [AFFILIATE_MIGRATION]);
@@ -193,7 +195,7 @@ test('0158 through the real runner: readiness absent, pending and applied; not o
     // check (no bridge) refuses the unknown ledger row, which is why this build must be everywhere first.
     web = await login(admin, 'r72_web', 2);
     pools.push(web);
-    await assertRuntimeSchemaCurrent(web, undefined, {});
+    await assertRuntimeSchemaCurrent(web, build158, {});
     await assertRuntimeSchemaCurrent(web, build157, {});
     const applied = new Map((await ownerQuery<{ filename: string; checksum: string }>(admin, 'SELECT filename,checksum FROM app_private.schema_migrations')).map(r => [r.filename, r.checksum]));
     assert.throws(() => validateAppliedState(all.slice(0, 157), applied), /migration not present/u);

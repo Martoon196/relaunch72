@@ -953,6 +953,7 @@ async function main(): Promise<void> {
           portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, mail: runtime.mail, desk: runtime.desk,
           marketingWorkspace: runtime.marketingWorkspace,
           webinarLeads: runtime.webinarLeads,
+          ...(runtime.bookLeads ? { bookLeads: runtime.bookLeads } : {}),
           emailHealth: runtime.emailHealth,
           ownerEmail: runtime.ownerEmail,
           sequences: runtime.sequences,

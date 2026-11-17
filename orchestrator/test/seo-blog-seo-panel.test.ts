@@ -16,6 +16,8 @@ import { seoPanelPieces, withoutSeoPanel } from './seo-panel-strip.js';
 import * as LS from './seo-panel-lead-fixtures.js';
 import * as R from './seo-score-review-fixtures.js';
 import * as R2 from './seo-score-review2-fixtures.js';
+import * as R3 from './seo-score-review3-fixtures.js';
+import * as RB4 from './seo-score-review4-rubbish.js';
 import { articleId, BRAND_ID, call, identity, showcase } from './content-area-shell-fixtures.js';
 import { goldenPages, GOLDEN_NOW } from './content-area-shell-golden.js';
 
@@ -307,6 +309,8 @@ test('every cap state: the panel stays read-only, names no supplier, method or m
     ['some repetition', R2.make(R2.GEN.platitude), /Parts of the wording repeat earlier sentences, so the score stays at 70 or below until each part says something new\./],
     ['not sentences', R.wordSalad(), /The text does not read as ordinary sentences: it has very few of the small words/],
     ['stuffing', R2.strongPlusPhrase(16), /The search phrase comes up far too often, so the score stays at 60 or below until it is used naturally\./],
+    ['short items', R3.BULLET_ATTACKS.find(([n]) => n.startsWith('X3b'))![1](), /Much of the article is short list items rather than sentences, so the score stays at 70 or below until more of it is written out in full sentences\./],
+    ['run-on', RB4.RUBBISH4.find(([n]) => /run-on/.test(n))![1](), /Some of the text runs on without a full stop for a very long way, so the score stays at 70 or below until it is written in sentences of a readable length\./],
   ];
   for (const [kind, raw, sentence] of bodies) for (const shell of [fx.shell(), newLook()]) {
     const v = fx.version(3, hostile(raw) as never);
