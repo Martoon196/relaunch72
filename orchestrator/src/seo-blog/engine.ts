@@ -87,7 +87,7 @@ interface PlanExecution {
 }
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
-import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE } from './engine-stamp.js';
+import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from './engine-stamp.js';
 import { supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
@@ -1167,6 +1167,12 @@ export class SeoBlogEngine {
       const source=programmeInputSnapshot(s,authority);
       if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
       const withRun={...current,payload:{...current.payload,programme:run,...(candidatesNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:candidatesNow.primary,...(candidatesNow.secondary.length?{keywordSecondary:candidatesNow.secondary}:{})}:{})}};
+      // A plan was made while this task waited for its one numbers re-check (strict setting): stop here, without
+      // another lookup, model call or plan.
+      if(run.numbersRecheckAt&&!run.modelReceipt&&s.plans.some((p)=>p.createdAt>run!.numbersRecheckAt!)) {
+        const now=this.now();
+        return {job:{...withRun,state:'done',leaseOwner:null,leaseExpiresAt:null,error:null,progress:NUMBERS_RECHECK_SUPERSEDED,updatedAt:now},writeJob:true};
+      }
       if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
@@ -1287,6 +1293,15 @@ export class SeoBlogEngine {
     if(prior) return prior;
     const hold=brand.settings.programme?.researchHold??legacyPlanningHold(jobs,brand.settings.programme?.researchAcknowledgements);
     if(hold && input.resumeHoldId!==hold.logicalRunId) throw new SeoBlogError(409,'Research is held after an earlier outcome. Review the programme status and explicitly resume with a new research intent.');
+    // A plan already waits for its one numbers re-check (strict setting): asking now runs that task now, rather than
+    // starting a second plan beside it.
+    const waiting=jobs.find((j)=>j.kind==='plan'&&j.state==='queued'&&!!programmeRun(j)?.numbersRecheckAt&&!programmeRun(j)?.modelReceipt);
+    if(waiting) {
+      const now=this.now();
+      if(Date.parse(waiting.runAfter)<=Date.parse(now)) return waiting;
+      try { return await this.store.updateJob({...waiting,runAfter:now,progress:NUMBERS_RECHECK_NOW,updatedAt:now}); }
+      catch { return (await this.store.getJob(brandId,waiting.id))??waiting; }
+    }
     const readiness = await this.readinessFor(brand);
     if (!readiness.canPlan) throw new SeoBlogError(409, `Before planning: ${readiness.missing.filter((m) => !m.includes('website for publishing')).join(' ')}`, 'not_ready');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);

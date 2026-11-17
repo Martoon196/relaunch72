@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
-import { ENGINE_GAP_MESSAGE, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE } from '../src/seo-blog/engine-stamp.js';
+import { ENGINE_GAP_MESSAGE, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from '../src/seo-blog/engine-stamp.js';
 import { ownerWords, revealsInternals } from '../src/seo-blog/owner-words.js';
 import type { KeywordMetric, KeywordProvider } from '../src/keyword/types.js';
 import type { Brand } from '../src/seo-blog/types.js';
@@ -48,8 +48,11 @@ async function autopilotPlan(h: Harness, e: SeoBlogEngine, brand: Brand) {
 }
 
 test('N3: the new owner message is plain, neutral and passes the owner-words rule unchanged', () => {
-  assert.equal(ownerWords(NUMBERS_RECHECK_MESSAGE), NUMBERS_RECHECK_MESSAGE);
-  assert.equal(revealsInternals(NUMBERS_RECHECK_MESSAGE), false);
+  for (const m of [NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED]) {
+    assert.equal(ownerWords(m), m);
+    assert.equal(revealsInternals(m), false);
+    assert.doesNotMatch(m, /[–—]|supplier|provider|\bmodel\b|method|engine|Retry/i);
+  }
   assert.doesNotMatch(NUMBERS_RECHECK_MESSAGE, /[–—]|supplier|provider|\bmodel\b|method|engine|Retry/i);
 });
 
@@ -143,4 +146,49 @@ test('N3: with the strict setting off there is no re-check: the autopilot plan g
   assert.equal(job.payload.numbersRetry, undefined);
   h.clock.advance(NUMBERS_RECHECK_DELAY_MS * 4); await e.tick('w');
   assert.equal(kw.calls, 1);
+});
+
+// ─── F3: no second plan while the re-check waits ─────────────────────────────
+
+test('F3: a plan asked for by hand during the 30-minute wait resumes the waiting task: one plan, one planning call (before: 2 and 2)', async () => {
+  const h = harness(); const kw = flaky(); const e = strictEngine(h, kw, true);
+  const brand = await readyBrand(h, e);
+  const waiting = await autopilotPlan(h, e, brand);
+  assert.equal(waiting.state, 'queued');
+  kw.healthy = true;
+  const planCalls = () => h.llm.calls.filter((c) => c === 'SEO_BLOG_PLAN').length;
+  const before = planCalls();
+  const asked = await e.requestPlan(OWNER, brand.id, { commandId: randomUUID() });
+  assert.equal(asked.id, waiting.id, 'the request resumes the waiting task instead of starting another');
+  assert.equal(Date.parse(asked.runAfter) <= Date.parse(h.clock.now()), true, 'now, not in half an hour');
+  h.clock.advance(1000); await e.tick('w');
+  h.clock.advance(NUMBERS_RECHECK_DELAY_MS); await e.tick('w');
+  assert.equal((await planJobs(h, brand.id)).length, 1);
+  assert.equal((await planJobs(h, brand.id))[0]!.state, 'done');
+  assert.equal((await e.listPlans(OWNER, brand.id)).length, 1, 'one plan');
+  assert.equal(planCalls() - before, 1, 'one planning call');
+  assert.equal(kw.calls, 2, 'the one repeated lookup');
+});
+
+test('F3: if a plan was made after the re-check was queued anyway, the re-check completes without planning or spending', async () => {
+  const h = harness(); const kw = flaky(); const e = strictEngine(h, kw, true);
+  const brand = await readyBrand(h, e);
+  const waiting = await autopilotPlan(h, e, brand);
+  // A plan made some other way during the wait (planted as the store would hold it).
+  const plans0 = await e.listPlans(OWNER, brand.id);
+  assert.equal(plans0.length, 0);
+  const store = h.store as unknown as { plans: Map<string, Record<string, unknown>> };
+  h.clock.advance(60_000);
+  store.plans.set('p-other', { id: 'p-other', brandId: brand.id, status: 'proposed', topic: 'Other', moneyPage: null, briefIds: [], sources: [], inputs: { focus: null, excluded: [], sourceArticleUrl: null },
+    profileVersion: 1, inventoryAt: null, generation: { mode: 'simulated', model: 'm', promptVersion: 'p', tokensIn: 0, tokensOut: 0 }, createdAt: h.clock.now(), acceptedAt: null });
+  kw.healthy = true;
+  const spent = research(h, brand.id), calls = h.llm.calls.length;
+  h.clock.advance(NUMBERS_RECHECK_DELAY_MS); await e.tick('w');
+  const job = (await planJobs(h, brand.id)).find((j) => j.id === waiting.id)!;
+  assert.equal(job.state, 'done');
+  assert.match(job.progress, /newer plan/);
+  assert.equal(kw.calls, 1, 'no lookup');
+  assert.equal(research(h, brand.id), spent);
+  assert.equal(h.llm.calls.length, calls, 'no planning call');
+  assert.equal((await e.listPlans(OWNER, brand.id)).length, 1);
 });

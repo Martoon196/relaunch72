@@ -77,6 +77,11 @@ export const NUMBERS_RECHECK_DELAY_MS = 30 * 60_000;
 /** What the owner reads while that one re-check is queued. */
 export const NUMBERS_RECHECK_MESSAGE = 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. We will check once more by ourselves in about half an hour, reusing your saved searches. Nothing has been spent on writing.';
 
+/** What the owner reads when asking for a plan while that re-check waits: the waiting task runs now instead. */
+export const NUMBERS_RECHECK_NOW = 'Planning was already waiting to check how many people search for these topics. It is checking now, reusing your saved searches, instead of starting a second plan.';
+/** What the owner reads when a plan was made while the re-check waited, so the waiting task stopped. */
+export const NUMBERS_RECHECK_SUPERSEDED = 'A newer plan was made while this one was waiting, so this one stopped without planning again. Nothing more was spent.';
+
 /** Thrown when the strict setting stops planning or writing. A 409, so jobs hold (they are not retried automatically). */
 export class EngineIncompleteError extends SeoBlogError {
   constructor(readonly gap: EngineGap) {
