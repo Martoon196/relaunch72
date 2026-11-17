@@ -1,5 +1,5 @@
 import { bookInterestRegistrants } from './book-interest.js';
-import type { MhpBookLeadService } from './book-leads-service.js';
+import { isBookSignup, type MhpBookLeadService } from './book-leads-service.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -18,7 +18,7 @@ import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabi
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
-  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'> & Partial<Pick<PgMhpGrowthService, 'apply' | 'event' | 'listApplications' | 'listRegistrants'>>;
+  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'> & Partial<Pick<PgMhpGrowthService, 'apply' | 'event' | 'listApplications' | 'listRegistrants' | 'keepBookPhone'>>;
   learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse' | 'mergeWithLive'>;
   unsubscribeSecret: string;
   marketingMode: string;
@@ -184,6 +184,15 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       const signup = parseMhpSignup(fields);
       if (signup !== 'honeypot') {
         const captured = await deps.growth.capture(signup, source, now);
+        // 0159: a book sign-up's mobile is kept on that sign-up row (one statement, awaited). Before 0159 the function is
+        // missing and this is skipped; any failure is logged without the number and never changes the answer.
+        if (signup.phone && deps.growth.keepBookPhone && isBookSignup(signup)) {
+          try { await deps.growth.keepBookPhone(captured, signup.phone); }
+          catch (error) {
+            const code = (error as { code?: unknown })?.code;
+            console.warn(`mhp book leads: mobile not kept${typeof code === 'string' ? ` (${code.slice(0, 20)})` : ''}`);
+          }
+        }
         // The sign-up is committed. Copying a book sign-up into Leads is started here and never awaited: it cannot
         // change this response, its timing or the evidence just saved (afterCapture ignores every other sign-up).
         try { deps.bookLeads?.afterCapture(signup, captured, now); } catch { /* Logged and retried inside; the visitor is unaffected. */ }

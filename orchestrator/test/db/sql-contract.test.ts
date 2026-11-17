@@ -175,7 +175,7 @@ const migration155Url = new URL('../../src/db/migrations/0155_email_connections.
 const migration156Url = new URL('../../src/db/migrations/0156_email_sending_protection.sql', import.meta.url);
 const migration157Url = new URL('../../src/db/migrations/0157_email_connect_allowlist.sql', import.meta.url);
 const migration158Url = new URL('../../src/db/migrations/0158_affiliate_studio.sql', import.meta.url);
-const migration159Url = new URL('../../src/db/migrations/0159_mhp_book_crm_retire_trigger.sql', import.meta.url);
+const migration159Url = new URL('../../src/db/migrations/0159_mhp_book_crm.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';

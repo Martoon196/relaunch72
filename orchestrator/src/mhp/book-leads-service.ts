@@ -32,13 +32,13 @@ import type { CreateLeadResult, CrmTransactionRunner, SqlExecutor } from '../crm
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
-import { MHP_BOOK_INTEREST_LABEL } from './book-interest.js';
-import { mhpMessagesConsented, mhpSignupConsentVersion, type MhpCapturedSignup, type MhpRegistrantRecord, type MhpSignup } from './growth-service.js';
+import { MHP_BOOK_INTEREST_LABEL, MHP_BOOK_MODULE } from './book-interest.js';
+import { mhpMessagesConsented, mhpSignupConsentVersion, type MhpBookSignupRecord, type MhpCapturedSignup, type MhpRegistrantRecord, type MhpSignup } from './growth-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 import { createOrReplaySignupLead, newEnquiryStage, readSignupLeadCursor, signSignupLeadCursor, SIGNUP_LEAD_BATCH_SIZE,
   SIGNUP_LEAD_UUID, type SignupLeadAudience } from './signup-leads.js';
 
-export const MHP_BOOK_MODULE = 'book-before-you-buy';
+export { MHP_BOOK_MODULE };
 export const MHP_BOOK_SOURCE = 'mhp:book-before-you-buy';
 export const MHP_BOOK_ENQUIRY_PREFIX = 'Before You Buy book enquiry';
 export const MHP_BOOK_TASK_TITLE = 'Follow up Before You Buy book enquiry';
@@ -72,7 +72,8 @@ export interface MhpBookLeadCandidate {
   module: string | null;
   link: string | null;
   signedUpAt: string;
-  recordedFrom: 'sign-up' | 'owner-list';
+  /** sign-up: this request; sign-up-record: the stored book sign-up (0159); owner-list: registrants only (before 0159). */
+  recordedFrom: 'sign-up' | 'sign-up-record' | 'owner-list';
 }
 
 export type MhpBookLeadOutcome =
@@ -83,10 +84,27 @@ export type MhpBookSkipReason = 'test_address' | 'several_contacts' | 'archived_
 export type MhpBookLeadStatus =
   | { state: 'in_leads'; contactId: string; opportunityId: string | null; stage: string | null; status: string | null; complete: boolean;
       /** Texts/WhatsApp offers from the latest sign-up's stored consent version; null when no version is known yet. */
-      messages: boolean | null }
+      messages: boolean | null;
+      /** The lead's own phone point state for the book mobile, when it holds it. */
+      phoneConsent?: string | null }
   | { state: 'not_yet' }
   | { state: 'needs_you'; reason: MhpBookSkipReason };
-export interface MhpBookLeadStatuses { available: boolean; byProspect: ReadonlyMap<string, MhpBookLeadStatus>; inLeads: number; total: number }
+export interface MhpBookLeadStatuses { available: boolean; byProspect: ReadonlyMap<string, MhpBookLeadStatus>; inLeads: number; total: number;
+  /**
+   * From the stored book sign-ups (0159; absent before it): per prospect, the latest mobile given on a book sign-up and the
+   * "Texts/WhatsApp offers" answer for it, as the page shows them.
+   */
+  book?: ReadonlyMap<string, { mobile: string | null; texts: string }>;
+  /** How new sign-ups reach Leads on this process (see MhpBookLeadMode). */
+  mode?: MhpBookLeadMode;
+  /** Book sign-ups not in Leads yet. */
+  waiting?: number }
+/**
+ * automatic: the configured lead owner (R72_GROUP_HQ_INBOX_SCOPES mhp) copies each sign-up when it is saved.
+ * no_owner: none is configured; owner_cannot_manage: the configured one cannot manage the workspace. In both, sign-ups
+ * (and their mobiles) are saved and wait for the owner's press of "Bring book sign-ups into Leads".
+ */
+export type MhpBookLeadMode = 'automatic' | 'no_owner' | 'owner_cannot_manage';
 
 export interface MhpBookLeadBatch { added: number; alreadyIn: number; completed: number; needYou: number; failed: boolean; processed: number; hasMore: boolean; cursor: string | null }
 
@@ -150,11 +168,35 @@ export function bookCandidateFromCapture(signup: MhpSignup, captured: Pick<MhpCa
     signedUpAt: new Date(now).toISOString(), recordedFrom: 'sign-up' };
 }
 
-/** The candidate for a person in the owner's registrant list (the book filter the Book interest page uses). */
+/**
+ * The candidate for a person in the owner's registrant list, used only before 0159 is applied. Its phone is never used:
+ * mhp_prospects.phone can only be a webinar-given number, never a book mobile.
+ */
 export function bookCandidateFromRegistrant(person: MhpRegistrantRecord): MhpBookLeadCandidate {
-  return { prospectId: person.id, signupId: null, email: normalEmail(person.email), firstName: person.firstName, phone: person.phone,
+  return { prospectId: person.id, signupId: null, email: normalEmail(person.email), firstName: person.firstName, phone: null,
     consentGiven: null, consentVersion: null, messages: null, marketingEmails: person.marketingConsent && !person.unsubscribed,
     label: MHP_BOOK_INTEREST_LABEL, module: MHP_BOOK_MODULE, link: null, signedUpAt: person.lastSignupAt, recordedFrom: 'owner-list' };
+}
+
+/**
+ * The candidate for a stored book sign-up (0159's owner read): the exact evidence of the latest book sign-up, and the
+ * latest mobile given on one with the texts/WhatsApp answer of the sign-up it was given on.
+ */
+export function bookCandidateFromRecord(record: MhpBookSignupRecord): MhpBookLeadCandidate {
+  const phoneVersion = record.lastPhone ? record.lastPhoneConsentVersion : null;
+  return { prospectId: record.prospectId, signupId: record.signupId, email: normalEmail(record.email), firstName: record.firstName,
+    phone: record.lastPhone, consentGiven: record.consentGiven, consentVersion: record.consentVersion,
+    messages: record.lastPhone ? mhpMessagesConsented(phoneVersion) : false,
+    marketingEmails: record.marketingConsent && !record.unsubscribed, label: MHP_BOOK_INTEREST_LABEL, module: MHP_BOOK_MODULE, link: record.link,
+    signedUpAt: record.signedUpAt, recordedFrom: 'sign-up-record' };
+}
+
+/** The same UK mobile written two ways (07… and +447…); other numbers only as the CRM normalises them. */
+export function bookPhoneVariants(number: string): string[] {
+  if (/^07\d{9}$/u.test(number)) return [number, `+44${number.slice(1)}`];
+  if (/^\+447\d{9}$/u.test(number)) return [number, `0${number.slice(3)}`];
+  if (/^447\d{9}$/u.test(number)) return [number, `+${number}`, `0${number.slice(2)}`];
+  return [number];
 }
 
 type Classified =
@@ -209,33 +251,37 @@ async function classify(tx: SqlExecutor, candidate: MhpBookLeadCandidate, actorU
 
 export const bookLeadKey = (prospectId: string): string => `mhp.book.${prospectId}`;
 
-/** Which promotional-message state this projection itself last gave the contact's mobile (custom field mhpBookPhone). */
-async function markPhoneConsent(tx: SqlExecutor, contactId: string, state: 'messages' | 'book_only'): Promise<void> {
-  await tx.query(`/* mhp.book-lead-phone-consent-mark */ UPDATE app.contacts SET custom_fields=custom_fields||jsonb_build_object('mhpBookPhone',$2::text),
-    row_version=row_version+1, updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`, [contactId, state]);
+/**
+ * Which state this projection itself gave a mobile (custom field mhpBookPhones, by normalised number): book_only (no
+ * texts/WhatsApp tick), not_recorded (wording unknown), messages (ticked). Only our own book_only / not_recorded may ever
+ * be upgraded, and only by a later tick.
+ */
+async function markPhone(tx: SqlExecutor, contactId: string, number: string, state: 'messages' | 'book_only' | 'not_recorded'): Promise<void> {
+  await tx.query(`/* mhp.book-lead-phone-mark */ UPDATE app.contacts SET custom_fields=custom_fields||jsonb_build_object('mhpBookPhones',
+      coalesce(custom_fields->'mhpBookPhones','{}'::jsonb)||jsonb_build_object($2::text,$3::text)),
+    row_version=row_version+1, updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`,
+  [contactId, number, state]);
 }
 
 /**
- * A repeat sign-up for a mobile the contact already has. Follows the latest sign-up for upgrades only: "unknown" becomes
- * what the sign-up says; "opted out" becomes "opted in" only when the person has now ticked the texts/WhatsApp box AND
- * that "opted out" was this projection's own "about the book only" AND no suppression (a STOP or an unsubscribe) has
- * ever been recorded for the number. Anything an owner, a STOP or an unsubscribe set is never undone here. Never a
- * downgrade: not ticking again is not a withdrawal.
+ * A repeat sign-up for a mobile this contact already has. The projection never writes "opted out" on a phone point (the
+ * owner's WhatsApp gate reads that as a real opt-out for the number, workspace-wide). Only an "unknown" this projection
+ * set itself becomes "opted in", only when the person has now ticked the texts/WhatsApp box, and only if no suppression
+ * (a STOP or an unsubscribe) was ever recorded for the point. Any state anyone else set is never touched; never a downgrade.
  */
-async function phonePermission(tx: SqlExecutor, pointId: string, contactId: string, fields: Record<string, unknown>, candidate: MhpBookLeadCandidate): Promise<string | null> {
-  if (candidate.messages === null) return null;
+async function phonePermission(tx: SqlExecutor, pointId: string, contactId: string, number: string, fields: Record<string, unknown>,
+  candidate: MhpBookLeadCandidate): Promise<string | null> {
+  const mine = (fields.mhpBookPhones as Record<string, unknown> | undefined)?.[number];
+  if (candidate.messages !== true || (mine !== 'book_only' && mine !== 'not_recorded')) return null;
   const row = (await tx.query<{ consent: string; suppressed: boolean }>(`/* mhp.book-lead-phone-permission */
     SELECT p.consent_status AS consent, EXISTS(SELECT 1 FROM app.communication_suppression_events e WHERE e.workspace_id=p.workspace_id
       AND e.contact_point_id=p.id) AS suppressed
-    FROM app.contact_points p WHERE p.workspace_id=app_private.current_workspace_id() AND p.id=$1::uuid FOR UPDATE OF p`, [pointId])).rows[0];
-  if (!row) return null;
-  const next = row.consent === 'unknown' ? (candidate.messages ? 'opted_in' : 'opted_out')
-    : row.consent === 'opted_out' && candidate.messages && fields.mhpBookPhone === 'book_only' && !row.suppressed ? 'opted_in' : row.consent;
-  if (next === row.consent) return null;
-  await tx.query(`/* mhp.book-lead-phone-permission-set */ UPDATE app.contact_points SET consent_status=$2, row_version=row_version+1,
-    updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`, [pointId, next]);
-  await markPhoneConsent(tx, contactId, next === 'opted_in' ? 'messages' : 'book_only');
-  return next === 'opted_in' ? 'texts and WhatsApp offers yes' : 'texts and WhatsApp about the book only';
+    FROM app.contact_points p WHERE p.workspace_id=app_private.current_workspace_id() AND p.id=$1::uuid AND p.contact_id=$2::uuid FOR UPDATE OF p`, [pointId, contactId])).rows[0];
+  if (!row || row.consent !== 'unknown' || row.suppressed) return null;
+  await tx.query(`/* mhp.book-lead-phone-permission-set */ UPDATE app.contact_points SET consent_status='opted_in', row_version=row_version+1,
+    updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid AND contact_id=$2::uuid`, [pointId, contactId]);
+  await markPhone(tx, contactId, number, 'messages');
+  return 'texts and WhatsApp offers yes';
 }
 
 /**
@@ -251,6 +297,7 @@ export async function readMhpWorkspaceOwner(webPool: Pick<Pool, 'connect'>, iden
 }
 
 class ProjectionChanged extends Error {}
+const refusedOwner = (error: unknown): boolean => (error as { code?: unknown })?.code === 'forbidden_scope';
 
 /**
  * Fill in what is missing on a book lead, inside the caller's locked transaction. Never touches the enquiry's stage,
@@ -267,7 +314,7 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
   if (!('mhpSignup' in contact.fields)) patch.mhpSignup = bookEvidence(candidate);
   // The latest sign-up's consent wording (evidence stays per sign-up in mhp_prospect_signups; this is what Leads shows).
   const latest = contact.fields.mhpBookLatest as { signupId?: unknown } | undefined;
-  if (candidate.recordedFrom === 'sign-up' && candidate.signupId && latest?.signupId !== candidate.signupId) {
+  if (candidate.recordedFrom !== 'owner-list' && candidate.signupId && latest?.signupId !== candidate.signupId) {
     patch.mhpBookLatest = { signupId: candidate.signupId, signedUpAt: candidate.signedUpAt, consentVersion: candidate.consentVersion, messages: candidate.messages };
   }
   const changes: string[] = [];
@@ -285,13 +332,23 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
     FROM app.contact_points p WHERE p.workspace_id=app_private.current_workspace_id() AND p.contact_id=$1::uuid AND p.kind='email'
       AND lower(p.normalized_value)=$2 AND p.deleted_at IS NULL AND p.dedupe_state='normal' FOR UPDATE`, [contactId, candidate.email])).rows[0];
   if (point) {
+    // An email unsubscribe (read from the prospect at a visit or press) is reflected as "opted out" and remembered as ours
+    // (mhpBookEmail); only that one of ours is lifted again when the person ticks the box again. Any other opt-out stays.
+    const ours = contact.fields.mhpBookEmail === 'unsubscribed';
+    const fromList = candidate.recordedFrom !== 'sign-up';
     const consent = point.consent === 'unknown' ? (candidate.marketingEmails ? 'opted_in' : 'opted_out')
-      : point.consent === 'opted_in' && !candidate.marketingEmails && candidate.recordedFrom === 'owner-list' ? 'opted_out' : point.consent;
+      : point.consent === 'opted_in' && !candidate.marketingEmails && fromList ? 'opted_out'
+        : point.consent === 'opted_out' && candidate.marketingEmails && ours ? 'opted_in' : point.consent;
     const primary = point.primary || !point.hasPrimary;
     if (consent !== point.consent || primary !== point.primary) {
       await tx.query(`/* mhp.book-lead-email-permission */ UPDATE app.contact_points SET consent_status=$2, is_primary=$3, row_version=row_version+1,
         updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`, [point.id, consent, primary]);
-      if (consent !== point.consent) changes.push(`marketing emails ${consent === 'opted_in' ? 'yes' : 'no'}`);
+      if (consent !== point.consent) {
+        changes.push(`marketing emails ${consent === 'opted_in' ? 'yes' : 'no'}`);
+        await tx.query(`/* mhp.book-lead-email-mark */ UPDATE app.contacts SET custom_fields=custom_fields||jsonb_build_object('mhpBookEmail',$2::text),
+          row_version=row_version+1, updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`,
+        [contactId, consent === 'opted_out' ? 'unsubscribed' : 'subscribed']);
+      }
     }
   }
   // The mobile is added only as an unverified phone point, and only if no other record already holds that number:
@@ -302,24 +359,28 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
   let phone: 'added' | 'present' | 'other_contact' | 'none' = 'none';
   const number = bookLeadPhone(candidate.phone);
   if (number) {
-    const holder = await repository.findContactPoint('phone', number);
+    // The same UK mobile written as 07… or +447… is one number. A point held by another contact is never attached,
+    // changed or re-pointed.
+    let holder: Awaited<ReturnType<CrmPgRepository['findContactPoint']>> = null;
+    for (const variant of bookPhoneVariants(number)) { holder = await repository.findContactPoint('phone', variant); if (holder) break; }
     if (holder) {
       phone = holder.contactId === contactId ? 'present' : 'other_contact';
       if (phone === 'present') {
-        const decided = await phonePermission(tx, holder.id, contactId, contact.fields, candidate);
+        const decided = await phonePermission(tx, holder.id, contactId, number, contact.fields, candidate);
         if (decided) changes.push(decided);
       }
     } else {
-      // Promotional texts/WhatsApp: "opted in" only with the +messages tick; otherwise "opted out" (contact about the
-      // book only); "unknown" only when the sign-up's wording is not known here (the owner list carries no version).
-      const consentStatus = candidate.messages === true ? 'opted_in' : candidate.messages === false ? 'opted_out' : 'unknown';
+      // Texts/WhatsApp offers: "opted in" only with the +messages tick. Otherwise "unknown" (never "opted out": see
+      // phonePermission); "about the book only" is said in the task, the timeline and mhpBookPhones.
+      const consentStatus = candidate.messages === true ? 'opted_in' : 'unknown';
       const inserted = await repository.insertContactPoint({ id: randomUUID(), contactId, kind: 'phone', label: 'Mobile (unverified)',
         value: candidate.phone!.trim().slice(0, 320), normalizedValue: number,
         isPrimary: !(await repository.hasPrimaryContactPoint(contactId, 'phone')), consentStatus, createdAt: now.toISOString() });
       phone = inserted ? 'added' : 'other_contact';
       if (phone === 'added') {
-        changes.push(`mobile number (unverified; texts and WhatsApp ${consentStatus === 'opted_in' ? 'offers yes' : consentStatus === 'opted_out' ? 'about the book only' : 'not recorded'})`);
-        if (consentStatus !== 'unknown') await markPhoneConsent(tx, contactId, consentStatus === 'opted_in' ? 'messages' : 'book_only');
+        const state = candidate.messages === true ? 'messages' : candidate.messages === false ? 'book_only' : 'not_recorded';
+        changes.push(`mobile number (unverified; texts and WhatsApp ${state === 'messages' ? 'offers yes' : state === 'book_only' ? 'about the book only' : 'not recorded'})`);
+        await markPhone(tx, contactId, number, state);
       }
     }
   }
@@ -339,8 +400,10 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
 export interface MhpBookLeadDependencies {
   /** The CRM command identity's runner that re-checks, in every transaction, that the acting user manages the workspace. */
   transactions: CrmTransactionRunner;
-  /** The owner-only registrant read the Book interest page already uses. */
+  /** The owner-only registrant read the Book interest page already uses (the catch-up's source before 0159). */
   registrants: (sessionToken: string) => Promise<readonly MhpRegistrantRecord[]>;
+  /** 0159's owner read of stored book sign-ups; null (or absent) while 0159 is not applied. */
+  bookSignups?: (sessionToken: string) => Promise<readonly MhpBookSignupRecord[] | null>;
   /**
    * The MHP brand's lead owner by the existing rule: the user the Group HQ inbox bridge and the LeadRelay feed create
    * MHP enquiries as. Null when that is not configured; the workspace owner is then resolved at run time.
@@ -378,8 +441,27 @@ export class MhpBookLeadService {
     this.commands = deps.commands ?? (runner => new CrmCommandService({ transactionRunner: runner }));
   }
 
-  /** Whether a sign-up is copied the moment it is saved (an owner is known), rather than at the next visit. */
-  get automatic(): boolean { return (this.deps.ownerUserId ?? this.resolvedOwner) !== null; }
+  private ownerRefused = false;
+  /** How new sign-ups reach Leads on this process. */
+  get mode(): MhpBookLeadMode { return this.deps.ownerUserId === null ? 'no_owner' : this.ownerRefused ? 'owner_cannot_manage' : 'automatic'; }
+  /** Whether a sign-up is copied the moment it is saved. */
+  get automatic(): boolean { return this.mode === 'automatic'; }
+
+  /** Start-up: whether the configured lead owner can manage the workspace (one read; the runner re-checks every time). */
+  async probe(): Promise<MhpBookLeadMode> {
+    if (this.deps.ownerUserId) {
+      try { await this.deps.transactions.run(this.context(this.deps.ownerUserId), async () => null); this.ownerRefused = false; }
+      catch (error) { if (refusedOwner(error)) this.ownerRefused = true; }
+    }
+    return this.mode;
+  }
+
+  private noteFailure(error: unknown): void {
+    if (refusedOwner(error) && !this.ownerRefused) {
+      this.ownerRefused = true;
+      this.log('mhp book leads: the configured MHP lead owner cannot manage the MHP marketing workspace; book sign-ups (and their mobiles) are saved and wait for "Bring book sign-ups into Leads".');
+    }
+  }
 
   private context(actorUserId: string, requestId = `mhp-book-lead:${randomUUID()}`): DatabaseRequestContext {
     return requestDatabaseContext({ workspaceId: MHP_MARKETING_WORKSPACE_ID, userId: actorUserId, requestId });
@@ -391,7 +473,7 @@ export class MhpBookLeadService {
     if (candidate.email.endsWith('.invalid')) return { outcome: 'skipped', reason: 'test_address' };
     const context = this.context(actorUserId, requestId);
     const { transactions } = this.deps;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       const decided = await transactions.run(context, async tx => {
         await lockPerson(tx, candidate.email);
         const state = await classify(tx, candidate, actorUserId);
@@ -423,7 +505,9 @@ export class MhpBookLeadService {
           opportunityName: `${MHP_BOOK_ENQUIRY_PREFIX} · ${name}`.slice(0, 200), valueMinor: 0, currency: 'GBP',
           task: { title: MHP_BOOK_TASK_TITLE, description: bookTaskDescription(candidate), assigneeUserId: actorUserId, dueAt: bookTaskDue(this.now()) },
         } });
-        return { outcome: created.disposition === 'applied' ? 'created' : 'present', contactId: created.contactId, opportunityId: created.opportunityId, phone };
+        // A replay means another copy (another sign-up, the owner's catch-up, another instance) made this lead first:
+        // go round again so this sign-up's own mobile, tick and evidence are applied by the enrich path.
+        if (created.disposition === 'applied') return { outcome: 'created', contactId: created.contactId, opportunityId: created.opportunityId, phone };
       } catch (error) {
         if (!(error instanceof ProjectionChanged)) throw error;
       }
@@ -437,11 +521,11 @@ export class MhpBookLeadService {
    */
   afterCapture(signup: MhpSignup, captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, now = this.now()): void {
     if (!isBookSignup(signup)) return;
-    const owner = this.deps.ownerUserId ?? this.resolvedOwner;
-    if (!owner) {
+    const owner = this.deps.ownerUserId;
+    if (!owner || this.ownerRefused) {
       if (!this.warnedOff) {
         this.warnedOff = true;
-        this.log('mhp book leads: a book sign-up was saved but not copied into Leads yet, because no MHP lead owner is configured and no owner has opened the marketing pages since this process started; it is brought in at the next owner visit to Book interest or Growth CRM, or with "Bring book sign-ups into Leads".');
+        this.log(`mhp book leads: book sign-ups are saved (with their mobiles) but wait for "Bring book sign-ups into Leads", because ${owner ? 'the configured MHP lead owner cannot manage the workspace' : 'no MHP lead owner is configured'}; Book interest says how many are waiting.`);
       }
       return;
     }
@@ -454,10 +538,11 @@ export class MhpBookLeadService {
           this.log(`mhp book leads: a book sign-up was saved but not copied into Leads (${result.reason}); it is listed for the owner on Book interest.`);
         }
       }, error => {
+        this.noteFailure(error);
         const code = (error as { code?: unknown })?.code;
         const next = delays[index];
         this.log(`mhp book leads: a book sign-up was saved but its lead was not created in Leads${typeof code === 'string' ? ` (${code.slice(0, 40)})` : ''}; ${next !== undefined ? `retrying in ${Math.round(next / 1000)} s` : 'it will be brought in at the owner\'s next visit to Book interest'}.`);
-        if (next !== undefined) schedule(() => attempt(index + 1), next);
+        if (next !== undefined && !this.ownerRefused) schedule(() => attempt(index + 1), next);
       });
     };
     attempt(0);
@@ -465,7 +550,7 @@ export class MhpBookLeadService {
 
   /** Who owns (and creates) book enquiries: the configured lead owner, else the workspace owner resolved now. */
   private async actorFor(identity: PortalSessionIdentity): Promise<string | null> {
-    if (this.deps.ownerUserId) return this.deps.ownerUserId;
+    if (this.deps.ownerUserId && !this.ownerRefused) return this.deps.ownerUserId;
     let owner: string | null = null;
     try { owner = (await this.deps.workspaceOwner?.(identity)) ?? null; }
     catch { this.log('mhp book leads: the MHP marketing workspace owner could not be looked up; book sign-ups were not copied into Leads on this visit.'); return null; }
@@ -477,15 +562,58 @@ export class MhpBookLeadService {
     return owner;
   }
 
-  /** Whether each book registrant is in Leads yet, read as the viewing owner. */
+  /**
+   * The book sign-ups the owner can see: the stored book sign-ups (0159: exact evidence and the book mobile), or before
+   * 0159 the registrant list filtered by label (no phone: mhp_prospects.phone is never a book mobile).
+   */
+  private async people(identity: PortalSessionIdentity, registrants?: readonly MhpRegistrantRecord[]): Promise<{
+    candidates: MhpBookLeadCandidate[]; records: ReadonlyMap<string, MhpBookSignupRecord> | null }> {
+    let records: readonly MhpBookSignupRecord[] | null = null;
+    try { records = (await this.deps.bookSignups?.(identity.sessionToken)) ?? null; }
+    catch { this.log('mhp book leads: the stored book sign-ups could not be read; the registrant list is used instead.'); }
+    if (records) {
+      return { candidates: records.filter(r => SIGNUP_LEAD_UUID.test(r.prospectId)).map(bookCandidateFromRecord),
+        records: new Map(records.map(r => [r.prospectId, r])) };
+    }
+    const list = registrants ?? await this.deps.registrants(identity.sessionToken);
+    return { candidates: list.filter(person => person.signups.includes(MHP_BOOK_INTEREST_LABEL) && SIGNUP_LEAD_UUID.test(person.id)).map(bookCandidateFromRegistrant),
+      records: null };
+  }
+
+  /** Whether each book registrant is in Leads yet, read as the viewing owner; with 0159 also their book mobile and texts answer. */
   async statuses(identity: PortalSessionIdentity, registrants: readonly MhpRegistrantRecord[]): Promise<MhpBookLeadStatuses> {
-    const people = registrants.map(bookCandidateFromRegistrant);
-    const empty = { available: false, byProspect: new Map<string, MhpBookLeadStatus>(), inLeads: 0, total: people.length };
-    if (!people.length) return { ...empty, available: true };
+    const shown = new Set(registrants.map(r => r.id));
+    const known = await this.people(identity, registrants).catch(() => ({ candidates: [] as MhpBookLeadCandidate[], records: null }));
+    // Everyone on the page, with the stored evidence where there is one.
+    const byId = new Map(known.candidates.map(c => [c.prospectId, c]));
+    const people = registrants.map(r => byId.get(r.id) ?? bookCandidateFromRegistrant(r));
+    const result = await this.statusOf(identity, people);
+    if (!known.records) return result;
+    const book = new Map<string, { mobile: string | null; texts: string }>();
+    for (const person of people) {
+      const record = known.records.get(person.prospectId);
+      if (!record || !shown.has(person.prospectId)) continue;
+      const status = result.byProspect.get(person.prospectId);
+      const leadSaysYes = status?.state === 'in_leads' && status.phoneConsent === 'opted_in';
+      const texts = !record.lastPhone ? 'No mobile given'
+        : mhpMessagesConsented(record.lastPhoneConsentVersion) ? 'Yes'
+          : leadSaysYes ? 'Yes (ticked on an earlier sign-up)' : 'No, about the book only';
+      book.set(person.prospectId, { mobile: record.lastPhone, texts });
+    }
+    return { ...result, book };
+  }
+
+  private async statusOf(identity: PortalSessionIdentity, people: readonly MhpBookLeadCandidate[]): Promise<MhpBookLeadStatuses> {
+    const base = { mode: this.mode };
+    const empty = { ...base, available: false, byProspect: new Map<string, MhpBookLeadStatus>(), inLeads: 0, total: people.length };
+    if (!people.length) return { ...empty, available: true, waiting: 0 };
     try {
-      const phones = [...new Set(people.map(p => bookLeadPhone(p.phone)).filter((n): n is string => n !== null))];
-      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null; status: string | null; complete: boolean; version: string | null }>(`/* mhp.book-lead-status */
-        SELECT lower(cp.normalized_value) AS email, coalesce(c.custom_fields->'mhpBookLatest'->>'consentVersion',c.custom_fields->'mhpSignup'->>'consentVersion') AS version, cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted,
+      const phones = [...new Set(people.flatMap(p => { const n = bookLeadPhone(p.phone); return n ? bookPhoneVariants(n) : []; }))];
+      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null;
+          status: string | null; complete: boolean; version: string | null; emailConsent: string; emailMark: string | null }>(`/* mhp.book-lead-status */
+        SELECT lower(cp.normalized_value) AS email, coalesce(c.custom_fields->'mhpBookLatest'->>'consentVersion',c.custom_fields->'mhpSignup'->>'consentVersion') AS version,
+          cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted, cp.consent_status AS "emailConsent",
+          c.custom_fields->>'mhpBookEmail' AS "emailMark",
           c.lifecycle_status AS lifecycle, o.id AS "opportunityId", s.name AS stage, o.status, c.custom_fields ? 'mhpSignup' AS complete,
           EXISTS(SELECT 1 FROM app.activities a WHERE a.workspace_id=cp.workspace_id AND a.contact_id=cp.contact_id AND a.activity_type=$4) AS recorded
         FROM app.contact_points cp JOIN app.contacts c ON c.workspace_id=cp.workspace_id AND c.id=cp.contact_id
@@ -495,13 +623,15 @@ export class MhpBookLeadService {
         LEFT JOIN app.pipeline_stages s ON s.workspace_id=cp.workspace_id AND s.id=o.stage_id
         WHERE cp.workspace_id=app_private.current_workspace_id() AND cp.kind='email' AND cp.deleted_at IS NULL
           AND lower(cp.normalized_value)=ANY($1::text[])`, [people.map(p => p.email), MHP_BOOK_ENQUIRY_PREFIX, MHP_BOOK_TRIGGER_NOTE, MHP_BOOK_ACTIVITY]),
-        // A mobile given at sign-up that no record in Leads holds yet still has to be added (the trigger never added one).
-        held: new Set((await tx.query<{ n: string }>(`/* mhp.book-lead-status-phones */ SELECT normalized_value AS n FROM app.contact_points
-          WHERE workspace_id=app_private.current_workspace_id() AND kind='phone' AND deleted_at IS NULL AND normalized_value=ANY($1::text[])`, [phones])).rows.map(r => r.n)) }));
+        // Which of the book mobiles some record in Leads already holds, by whom and in what state.
+        held: new Map((await tx.query<{ n: string; contactId: string; consent: string }>(`/* mhp.book-lead-status-phones */
+          SELECT normalized_value AS n, contact_id AS "contactId", consent_status AS consent FROM app.contact_points
+          WHERE workspace_id=app_private.current_workspace_id() AND kind='phone' AND deleted_at IS NULL AND normalized_value=ANY($1::text[])`, [phones])).rows
+          .map(r => [r.n, r] as const)) }));
       const byEmail = new Map<string, typeof rows.rows>();
       for (const row of rows.rows) byEmail.set(row.email, [...(byEmail.get(row.email) ?? []), row]);
       const byProspect = new Map<string, MhpBookLeadStatus>();
-      let inLeads = 0;
+      let inLeads = 0, waiting = 0;
       for (const person of people) {
         const found = byEmail.get(person.email) ?? [];
         let status: MhpBookLeadStatus;
@@ -515,16 +645,23 @@ export class MhpBookLeadService {
           else if (row.lifecycle === 'archived') status = { state: 'needs_you', reason: 'archived_contact' };
           else if (row.opportunityId || row.recorded) {
             const number = bookLeadPhone(person.phone);
+            const point = number ? bookPhoneVariants(number).map(v => held.get(v)).find(Boolean) : undefined;
+            // Due again when the mobile is not in Leads yet, or the email permission no longer matches the person
+            // (an unsubscribe since, or a fresh tick after an unsubscribe we recorded).
+            const emailCurrent = !(person.marketingEmails === false && row.emailConsent === 'opted_in')
+              && !(person.marketingEmails === true && row.emailConsent === 'opted_out' && row.emailMark === 'unsubscribed');
             status = { state: 'in_leads', contactId: row.contactId, opportunityId: row.opportunityId, stage: row.stage, status: row.status,
-              complete: (row.complete === true || row.recorded === true) && (number === null || held.has(number)),
-              messages: row.version ? mhpMessagesConsented(row.version) : null };
+              complete: (row.complete === true || row.recorded === true) && (number === null || point !== undefined) && emailCurrent,
+              messages: row.version ? mhpMessagesConsented(row.version) : null,
+              phoneConsent: point && point.contactId === row.contactId ? point.consent : null };
           }
           else status = { state: 'not_yet' };
         }
         if (status.state === 'in_leads') inLeads += 1;
+        if (status.state === 'not_yet') waiting += 1;
         byProspect.set(person.prospectId, status);
       }
-      return { available: true, byProspect, inLeads, total: people.length };
+      return { ...base, available: true, byProspect, inLeads, total: people.length, waiting };
     } catch {
       this.log('mhp book leads: whether book sign-ups are in Leads could not be read; the page says so and nothing was changed.');
       return empty;
@@ -532,18 +669,19 @@ export class MhpBookLeadService {
   }
 
   /**
-   * The catch-up on an owner's visit: anyone not yet in Leads, or in Leads without what the trigger skipped, is brought
-   * in now (bounded). Never throws; the page shows whatever is true afterwards.
+   * The catch-up on an owner's visit: anyone not yet in Leads, or in Leads without their mobile or with an out-of-date
+   * email permission, is brought in now (bounded). Only when the configured lead owner works; otherwise the sign-ups
+   * wait for the button and the page says so. Never throws.
    */
   async catchUp(identity: PortalSessionIdentity, registrants?: readonly MhpRegistrantRecord[], options: { limit?: number; budgetMs?: number } = {}): Promise<{ processed: number; failed: number }> {
+    if (!this.automatic) return { processed: 0, failed: 0 };
     if (this.catchingUp) await this.catchingUp.catch(() => undefined);
     const run = (async () => {
-      const people = (registrants ?? await this.deps.registrants(identity.sessionToken))
-        .filter(person => person.signups.includes(MHP_BOOK_INTEREST_LABEL) && SIGNUP_LEAD_UUID.test(person.id));
-      const statuses = await this.statuses(identity, people);
+      const { candidates } = await this.people(identity, registrants);
+      const statuses = await this.statusOf(identity, candidates);
       if (!statuses.available) return { processed: 0, failed: 0 };
-      const due = people.filter(person => {
-        const status = statuses.byProspect.get(person.id);
+      const due = candidates.filter(person => {
+        const status = statuses.byProspect.get(person.prospectId);
         return status?.state === 'not_yet' || (status?.state === 'in_leads' && !status.complete);
       }).slice(0, options.limit ?? SIGNUP_LEAD_BATCH_SIZE);
       if (!due.length) return { processed: 0, failed: 0 };
@@ -553,8 +691,8 @@ export class MhpBookLeadService {
       let processed = 0, failed = 0;
       for (const person of due) {
         if (this.now() > deadline) break;
-        try { await this.project(actor, bookCandidateFromRegistrant(person)); processed += 1; }
-        catch { failed += 1; }
+        try { await this.project(actor, person); processed += 1; }
+        catch (error) { this.noteFailure(error); failed += 1; }
       }
       if (failed > 0) this.log(`mhp book leads: ${failed} book sign-up(s) could not be copied into Leads on the owner's visit; they are retried at the next visit or button press.`);
       return { processed, failed };
@@ -570,10 +708,9 @@ export class MhpBookLeadService {
   /** The owner's button: up to 25 book sign-ups per press, in prospect order, from a signed cursor. */
   async importBatch(identity: PortalSessionIdentity, requestId: string, cursor: string, now = this.now()): Promise<MhpBookLeadBatch> {
     const after = readSignupLeadCursor(this.deps.cursorSecret, AUDIENCE, identity, cursor, now);
-    const people = [...(await this.deps.registrants(identity.sessionToken))]
-      .filter(person => person.signups.includes(MHP_BOOK_INTEREST_LABEL) && SIGNUP_LEAD_UUID.test(person.id))
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-      .filter(person => after === null || person.id > after);
+    const people = (await this.people(identity)).candidates
+      .sort((a, b) => (a.prospectId < b.prospectId ? -1 : a.prospectId > b.prospectId ? 1 : 0))
+      .filter(person => after === null || person.prospectId > after);
     const page = people.slice(0, SIGNUP_LEAD_BATCH_SIZE);
     const hasMore = people.length > page.length;
     const actor = page.length ? await this.actorFor(identity) : null;
@@ -581,19 +718,20 @@ export class MhpBookLeadService {
     let added = 0, alreadyIn = 0, completed = 0, needYou = 0, last = after;
     for (const person of page) {
       try {
-        const result = await this.project(actor!, bookCandidateFromRegistrant(person), `${requestId}:${person.id}`.slice(0, 128));
+        const result = await this.project(actor!, person, `${requestId}:${person.prospectId}`.slice(0, 128));
         if (result.outcome === 'created') added += 1;
         else if (result.outcome === 'enriched') completed += 1;
         else if (result.outcome === 'present') alreadyIn += 1;
         else if (result.outcome === 'skipped' && result.reason !== 'test_address') needYou += 1;
-        last = person.id;
-      } catch {
+        last = person.prospectId;
+      } catch (error) {
+        this.noteFailure(error);
         this.log('mhp book leads: the owner\'s book sign-up import stopped before one sign-up; pressing the button again continues from there.');
         return { added, alreadyIn, completed, needYou, failed: true, processed: added + alreadyIn + completed + needYou, hasMore: true,
           cursor: signSignupLeadCursor(this.deps.cursorSecret, AUDIENCE, identity, last, now) };
       }
     }
     return { added, alreadyIn, completed, needYou, failed: false, processed: added + alreadyIn + completed + needYou, hasMore,
-      cursor: hasMore ? signSignupLeadCursor(this.deps.cursorSecret, AUDIENCE, identity, page.at(-1)!.id, now) : null };
+      cursor: hasMore ? signSignupLeadCursor(this.deps.cursorSecret, AUDIENCE, identity, page.at(-1)!.prospectId, now) : null };
   }
 }

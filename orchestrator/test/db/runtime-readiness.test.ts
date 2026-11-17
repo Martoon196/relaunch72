@@ -708,10 +708,10 @@ test('book trigger retirement (159) cutover requires the exact applied Affiliate
     return dir;
   };
   const sql=source[158]!.sql;
-  const renamed=await variant('renamed','0159_mhp_book_crm_retire_trigger_v2.sql',sql);
-  await assert.rejects(capable(through158,renamed),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm_retire_trigger_v2\.sql/);
+  const renamed=await variant('renamed','0159_mhp_book_crm_v2.sql',sql);
+  await assert.rejects(capable(through158,renamed),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm_v2\.sql/);
   const altered=await variant('altered',MHP_BOOK_CRM_MIGRATION,sql.replace('SET LOCAL lock_timeout=\'5s\';','SET LOCAL lock_timeout=\'6s\';'));
-  await assert.rejects(capable(through158,altered),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm_retire_trigger\.sql/);
+  await assert.rejects(capable(through158,altered),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm\.sql/);
   const extraByte=await variant('byte',MHP_BOOK_CRM_MIGRATION,sql+' ');
   await assert.rejects(capable(through158,extraByte),/schema is behind by 1/);
   const crlf=await variant('crlf',MHP_BOOK_CRM_MIGRATION,sql.replace(/\n/g,'\r\n'));
@@ -727,7 +727,7 @@ test('Affiliate Studio 158 binary stays ready after the exact book trigger retir
   await check(rows);
   await check([...rows,all[158]!]);
   await assert.rejects(check([...rows,{...all[158]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
-  await assert.rejects(check([...rows,{filename:'0159_mhp_book_crm_retire_trigger_v2.sql',checksum:MHP_BOOK_CRM_CHECKSUM}]),/migration not present/);
+  await assert.rejects(check([...rows,{filename:'0159_mhp_book_crm_v2.sql',checksum:MHP_BOOK_CRM_CHECKSUM}]),/migration not present/);
   await assert.rejects(check([...rows,all[158]!,{filename:'0160_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
   // The bridge needs the exact 0158 underneath it.
   await assert.rejects(check([...rows.slice(0,157),{...rows[157]!,checksum:'0'.repeat(64)},all[158]!]),/checksum changed|migration not present/);

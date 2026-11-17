@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
+import { MHP_BOOK_INTEREST_LABEL, MHP_BOOK_MODULE } from './book-interest.js';
 
 /**
  * Public sign-ups, member stories and the marketing send queue for
@@ -79,6 +80,24 @@ export interface MhpRegistrantRecord {
   id: string; firstName: string | null; email: string; phone: string | null; level: string | null; marketingConsent: boolean; unsubscribed: boolean;
   firstSeenAt: string; lastSignupAt: string; signups: string[]; webinar: boolean; applied: boolean;
 }
+/** One person's latest book sign-up, as 0159's owner read returns it. */
+export interface MhpBookSignupRecord {
+  prospectId: string; signupId: string; signedUpAt: string; consentGiven: boolean; consentVersion: string; phone: string | null; link: string | null;
+  /** The most recent mobile given on any of their book sign-ups, and that sign-up's id and consent version. */
+  lastPhone: string | null; lastPhoneSignupId: string | null; lastPhoneConsentVersion: string | null;
+  firstName: string | null; email: string; marketingConsent: boolean; unsubscribed: boolean;
+}
+const optionalText = (value: unknown, max: number): boolean => value === null || (typeof value === 'string' && value.length >= 1 && value.length <= max);
+function validBookSignup(value: unknown): value is MhpBookSignupRecord {
+  const v = value as Record<string, unknown>;
+  return typeof v === 'object' && v !== null && typeof v.prospectId === 'string' && UUID.test(v.prospectId)
+    && typeof v.signupId === 'string' && UUID.test(v.signupId) && typeof v.signedUpAt === 'string' && Number.isFinite(Date.parse(v.signedUpAt))
+    && typeof v.consentGiven === 'boolean' && typeof v.consentVersion === 'string' && v.consentVersion.length <= 40
+    && optionalText(v.phone, 30) && optionalText(v.link, 500) && optionalText(v.lastPhone, 30)
+    && (v.lastPhoneSignupId === null || (typeof v.lastPhoneSignupId === 'string' && UUID.test(v.lastPhoneSignupId)))
+    && optionalText(v.lastPhoneConsentVersion, 40) && optionalText(v.firstName, 100)
+    && typeof v.email === 'string' && EMAIL.test(v.email) && typeof v.marketingConsent === 'boolean' && typeof v.unsubscribed === 'boolean';
+}
 export interface MhpGrowthSummary {
   prospects: number; unsubscribed: number; signupsToday: number;
   byKind: Record<string, number>; byLabel: { label: string; count: number }[]; byLevel: Record<string, number>;
@@ -130,7 +149,8 @@ export function parseMhpSignup(fields: URLSearchParams): MhpSignup | 'honeypot' 
   if (!consent && kind !== 'webinar') throw new MhpGrowthError(400, 'Tick the box so we can email you.');
   const rawPhone = (fields.get('PHONE') ?? '').replace(/\s+/g, ' ').trim();
   const phone = /^[0-9 +()-]{6,30}$/.test(rawPhone) && (rawPhone.match(/[0-9]/g) ?? []).length >= 6 ? rawPhone : null;
-  const consentVersion = signupConsentVersion(fields, consent, phone);
+  // The named wordings and the texts/WhatsApp tick belong to the book form only; any other form keeps today's default.
+  const consentVersion = label === MHP_BOOK_INTEREST_LABEL && module === MHP_BOOK_MODULE ? signupConsentVersion(fields, consent, phone) : undefined;
   return consentVersion === undefined ? { email, firstName, level, consent, kind, label, module, link, phone }
     : { email, firstName, level, consent, kind, label, module, link, phone, consentVersion };
 }
@@ -333,6 +353,46 @@ export class PgMhpGrowthService {
       if (error instanceof MhpGrowthError) throw error;
       if ((error as { code?: string })?.code === '42501') throw new MhpGrowthError(403, 'Owner access is required for HQ.');
       throw new MhpGrowthError(503, 'Applications could not load.');
+    }
+  }
+
+  /** Whether 0159's book functions answered "missing" recently (a build deployed before the migration): skip, not fail. */
+  private bookFunctionsMissingUntil = 0;
+  private bookMissing(error: unknown): boolean {
+    if ((error as { code?: string })?.code !== '42883') return false;
+    this.bookFunctionsMissingUntil = Date.now() + 5 * 60_000;
+    return true;
+  }
+
+  /**
+   * 0159: keep the mobile of a book sign-up just committed, on that sign-up row (never on mhp_prospects.phone). One
+   * statement on the capture login. 'missing' before 0159 is applied (then skipped for five minutes); throws otherwise.
+   */
+  async keepBookPhone(captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, phone: string): Promise<'kept' | 'not_kept' | 'missing'> {
+    if (Date.now() < this.bookFunctionsMissingUntil) return 'missing';
+    try {
+      const result = await this.commandPool.query<{ kept: boolean }>('SELECT app_private.mhp_book_signup_keep_phone($1::uuid,$2::uuid,$3::text) AS kept',
+        [captured.signupId, captured.prospectId, phone]);
+      return result.rows[0]?.kept === true ? 'kept' : 'not_kept';
+    } catch (error) {
+      if (this.bookMissing(error)) return 'missing';
+      throw error;
+    }
+  }
+
+  /** 0159: the owner's read of book sign-ups (latest book sign-up per person, and the latest mobile given). Null before 0159. */
+  async listBookSignups(token: string): Promise<MhpBookSignupRecord[] | null> {
+    if (Date.now() < this.bookFunctionsMissingUntil) return null;
+    try {
+      const result = await this.readPool.query<{ signups: unknown }>('SELECT app_private.mhp_book_signups($1) AS signups', [sessionHash(token)]);
+      const rows = result.rows[0]?.signups;
+      if (!Array.isArray(rows) || !rows.every(validBookSignup)) throw new MhpGrowthError(503, 'Book sign-ups could not load.');
+      return rows as MhpBookSignupRecord[];
+    } catch (error) {
+      if (this.bookMissing(error)) return null;
+      if (error instanceof MhpGrowthError) throw error;
+      if ((error as { code?: string })?.code === '42501') throw new MhpGrowthError(403, 'Owner access is required for HQ.');
+      throw new MhpGrowthError(503, 'Book sign-ups could not load.');
     }
   }
 

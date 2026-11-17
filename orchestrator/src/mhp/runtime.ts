@@ -288,8 +288,11 @@ function composeMhpBookLeads(env: NodeJS.ProcessEnv, commandPool: Pool, webPool:
   try {
     const service = new MhpBookLeadService({ transactions: createInboxCrmRunner(commandPool), ownerUserId: mhpBookLeadOwner(env),
       workspaceOwner: identity => readMhpWorkspaceOwner(webPool, identity),
-      registrants: token => growth.listRegistrants(token), cursorSecret: env.SESSION_SECRET?.trim() ?? '' });
-    console.info(JSON.stringify({ event: 'mhp.book-leads.readiness', automatic: service.automatic }));
+      registrants: token => growth.listRegistrants(token), bookSignups: token => growth.listBookSignups(token),
+      cursorSecret: env.SESSION_SECRET?.trim() ?? '' });
+    // One line per process start saying which mode it is in (automatic, no_owner or owner_cannot_manage).
+    void service.probe().then(mode => console.info(JSON.stringify({ event: 'mhp.book-leads.readiness', mode, automatic: mode === 'automatic' })),
+      () => console.info(JSON.stringify({ event: 'mhp.book-leads.readiness', mode: service.mode, automatic: service.automatic })));
     return service;
   } catch {
     console.warn('mhp book leads: book sign-ups are saved but cannot be copied into Leads on this deployment (configuration incomplete).');

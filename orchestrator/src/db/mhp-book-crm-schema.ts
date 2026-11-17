@@ -16,5 +16,5 @@
  * build without this gate. If another branch lands first, rename the .sql file, update the filename here, re-pin the
  * checksum and re-run the migration contract and readiness tests.
  */
-export const MHP_BOOK_CRM_MIGRATION = '0159_mhp_book_crm_retire_trigger.sql';
+export const MHP_BOOK_CRM_MIGRATION = '0159_mhp_book_crm.sql';
 export const MHP_BOOK_CRM_CHECKSUM = '653f5ab7bd206d39af6ce0286e4882a2120b6a4b3b27965e6502a22720363fd5';
