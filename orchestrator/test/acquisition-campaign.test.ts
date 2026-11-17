@@ -143,7 +143,7 @@ test('routes and review page: proposal form appears with the pack; review separa
     return { status, headers, body: out };
   };
   const list = await call('GET', base);
-  assert.equal(list.status, 200); assert.match(list.body, /Hook &amp; Close · Acquisition campaign/); assert.match(list.body, /does not publish, schedule, contact anyone or start any advertising spend/);
+  assert.equal(list.status, 200); assert.match(list.body, /<h2>Acquisition campaign<\/h2>/); assert.match(list.body, /does not publish, schedule, contact anyone or start any advertising spend/);
   const created = await call('POST', `${base}/create`, { _csrf: csrf, commandId: randomUUID(), kind: 'acquisition', purpose: 'acquisition', name: 'Spring enquiries', goal: 'Help readers take a calm first step.', objective: 'leads',
     audience: f.profile.audiences[0]!, offerName: '', ctaIndex: '0', channels: ['instagram', 'linkedin'], count: '2', permissionContext: 'Campaign proposal only.', customerMoment: '', consentProcess: '', incentiveTerms: 'None' });
   assert.equal(created.status, 303);

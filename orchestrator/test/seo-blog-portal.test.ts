@@ -235,7 +235,9 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   assert.match(setup.body, /Static website in a GitHub repository/);
   assert.match(setup.body, /Website content API/);
   assert.match(setup.body, /Writing allowance not configured/);
-  assert.match(setup.body, /Used 0 · Monthly ceiling 0 · Remaining 0/);
+  // The raw figures are the founder's Technical detail; the owner reads what it means (neutral words release).
+  assert.match(setup.body, /No writing allowance is set yet, so nothing new is written\./);
+  assert.doesNotMatch(setup.body, /Used 0 · Monthly ceiling 0 · Remaining 0/);
   assert.ok(setup.body.includes(`/b/${brandId}/publishing#writing-budget`));
   // A forged notice is not displayed.
   const forged = await call(service, owner, 'GET', `/portal/seo-blog/b/${brandId}/setup?n=${Buffer.from('Your account is suspended').toString('base64url')}&s=bad`);

@@ -617,5 +617,5 @@ const PAGE_CSS = `
 }
 `;
 
-/** The page styles, shared with the Affiliate Studio screens. */
+/** The page styles, shared with the Keywords place (content-area-keywords.ts) and the Affiliate Studio screens. */
 export const CONTENT_PAGE_CSS = PAGE_CSS;

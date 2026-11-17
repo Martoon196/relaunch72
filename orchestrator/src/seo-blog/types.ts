@@ -340,6 +340,8 @@ export interface WebsiteInventory {
   readonly pages: readonly InventoryPage[];
   readonly notes: readonly string[];
   readonly look?: WebsiteLook;
+  /** The business's keyword list, its cost ledger and call cache (SEO_BLOG_KEYWORD_POOL). Written only through the keyword boundary; a website refresh keeps it. */
+  readonly keywordPool?: import('./keyword-fill.js').InventoryKeywordPool;
 }
 
 // ─── Research ────────────────────────────────────────────────────────────────
@@ -358,6 +360,26 @@ export interface ResearchSource {
   /** Government, regulator, statute, official statistics or the brand's own site. */
   readonly primary: boolean;
   readonly query: string;
+}
+
+/** How search numbers went: measured; asked but none for this phrase; asked and it failed or was skipped; not switched on; not part of this step; planned before stamps existed. */
+export type EngineNumbersState = 'measured' | 'no_data' | 'unavailable' | 'off' | 'not_used' | 'not_recorded';
+/** The writing method: it ran (a receipt exists); the business has none assigned (house standard); assigned but not active; not part of this step. */
+export type EngineMethodState = 'active' | 'not_assigned' | 'inactive' | 'off' | 'not_used';
+/**
+ * Which parts of the engine ran for a plan, a brief or a version. Internal: never shown to a business owner, never part
+ * of an article body or its content hash. Older records have none.
+ */
+export interface EngineStamp {
+  readonly schema: 1;
+  /** Whether the strict setting (SEO_BLOG_REQUIRE_FULL_ENGINE) was on. */
+  readonly strict: boolean;
+  /** Research for the plan behind it; 'not_recorded' for briefs planned before stamps existed. */
+  readonly research: 'live' | 'unconfigured' | 'not_used' | 'not_recorded';
+  readonly numbers: EngineNumbersState;
+  readonly method: EngineMethodState;
+  readonly methodReceiptId: string | null;
+  readonly at: IsoInstant;
 }
 
 export type DemandAssessment =
@@ -411,12 +433,20 @@ export interface ArticleBrief {
   readonly status: BriefStatus;
   readonly suggestedAtUtc: IsoInstant | null;
   readonly articleId: string | null;
+  /** Which parts of the engine ran when this brief was planned (internal). */
+  readonly engine?: EngineStamp;
+  /** The measured search target this brief answers, its secondary phrases and real searched questions (keyword-first planning). */
+  readonly seo?: import('./keyword-planning.js').BriefSeo;
   /** A product article's products, frozen when the owner asked for it (Affiliate Studio). */
   readonly products?: import('../affiliate/article.js').BriefProducts;
 }
 
 export interface TopicPlan {
   readonly programme?: ProgrammeProvenance;
+  /** Which parts of the engine ran for this plan (internal). */
+  readonly engine?: EngineStamp;
+  /** Keyword-first planning only (internal): the output contract used, how many candidates were shown and how many returned ids were stripped. */
+  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number };
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';
@@ -530,6 +560,8 @@ export interface ArticleVersion {
   readonly contentSha: string;
   /** Immutable accompanying drafts. Review is separate from blog approval. */
   readonly promotionPack?: ArticlePromotionPack;
+  /** Which parts of the engine ran for this version (internal; outside the body and its hash). */
+  readonly engine?: EngineStamp;
 }
 
 export type CheckSeverity = 'critical' | 'warning';

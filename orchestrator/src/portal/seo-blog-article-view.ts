@@ -195,17 +195,38 @@ export function writingStatus(b: Brand, article: Pick<Article, 'briefId' | 'edit
   if (plain.cause === 'allowance' && facts?.usage && !b.settings.pauseAll && writingNow && writingAllowanceFits(b, facts.usage) && !writingAllowanceFits(b, facts.usage, writingNow)) {
     return { sentence: 'Other articles are being written first. This one starts when they finish, if there is still enough writing allowance.', retryJobId: null, retryCosts: false, link: null };
   }
-  const cleared = plain.cause === 'allowance' ? (facts?.usage ? writingAllowanceFits(b, facts.usage, writingNow) : false)
-    : plain.cause === 'profile' ? facts?.profile === 'confirmed'
-    : plain.cause === 'paused' ? !b.settings.pauseAll
-    : plain.cause === 'service' ? Boolean(facts?.generation && facts.generation !== 'unavailable') : false;
+  // Every condition the write itself checks, judged on current facts (unknown counts as "not yet").
+  const holds = {
+    paused: !b.settings.pauseAll,
+    profile: facts?.profile === 'confirmed',
+    service: Boolean(facts?.generation && facts.generation !== 'unavailable'),
+    allowance: facts?.usage ? writingAllowanceFits(b, facts.usage, writingNow) : false,
+  };
+  const cleared = plain.cause === 'allowance' || plain.cause === 'profile' || plain.cause === 'paused' || plain.cause === 'service' ? holds[plain.cause] : false;
+  // Its own reason is sorted out, but something else would stop it again: say that instead, and offer no button.
+  if (cleared && !(holds.paused && holds.profile && holds.service && holds.allowance)) {
+    const other = !holds.paused ? 'paused' : !holds.profile ? (facts?.profile ? 'profile' : null) : !holds.service ? (facts?.generation ? 'service' : null) : 'allowance';
+    const next = other ? plainWritingError(OTHER_CAUSE[other]) : null;
+    if (next) return { sentence: `Paused: ${next.reason}`, retryJobId: null, retryCosts: false, link: next.link ? { href: brandUrl(b, next.link.path), label: next.link.label } : null };
+    return { sentence: `Paused: ${plain.reason}`, retryJobId: null, retryCosts: false, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
+  }
   if (cleared) {
     const was = ({ allowance: 'It stopped because the writing allowance ran out. There is enough now.', profile: 'It stopped because your business details needed confirming. They are confirmed now.',
       paused: 'It stopped because writing was paused. Writing is switched back on now.', service: 'It stopped because the writing service was not connected. It is connected now.' } as Record<string, string>)[plain.cause]!;
     return { sentence: was, retryJobId: job.id, retryCosts: true, link: null, retryLabel: 'Write it now' };
   }
-  return { sentence: `Paused: ${plain.reason}`, retryJobId: plain.retry ? job.id : null, retryCosts: plain.retry, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
+  // A write waiting for the allowance starts again by itself (a worker pass once there is room, or the new month), as
+  // long as a whole article can fit in the month's allowance at all and nothing else (a pause, unconfirmed details,
+  // the writing service) would stop it: the automatic restart skips a business in any of those states.
+  const restarts = plain.cause === 'allowance' && holds.paused && holds.profile && holds.service && monthlyCeiling(b.settings, 'model_tokens') >= USAGE_ESTIMATES.article;
+  return { sentence: `Paused: ${plain.reason}${restarts ? ' It starts again by itself when next month’s allowance begins, if not before.' : ''}`, retryJobId: plain.retry ? job.id : null, retryCosts: plain.retry, link: plain.link ? { href: brandUrl(b, plain.link.path), label: plain.link.label } : null };
 }
+
+/** The engine's own message for each other stopping condition, so the same plain wording and link are used. */
+const OTHER_CAUSE: Record<'paused' | 'profile' | 'service' | 'allowance', string> = {
+  paused: 'Draft production is paused by the owner.', profile: 'Confirm the current brand profile before writing.',
+  service: 'The writing model is not configured.', allowance: 'Writing allowance: monthly ceiling reached.',
+};
 
 function plainWritingError(message: string): { reason: string; retry: boolean; cause: 'allowance' | 'profile' | 'paused' | 'service' | 'uncertain' | 'plan' | 'other'; link: { path: string; label: string } | null } {
   if (/allowance/i.test(message)) return { cause: 'allowance', reason: 'waiting for more writing allowance this month.', retry: false, link: { path: 'publishing#writing-budget', label: 'Check the allowance' } };
