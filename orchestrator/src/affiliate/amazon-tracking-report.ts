@@ -91,8 +91,11 @@ function chooseDelimiter(text: string): string {
   return (first.match(/\t/gu) ?? []).length > (first.match(/,/gu) ?? []).length ? '\t' : ',';
 }
 const isUnknown = (s: string): boolean => !s.trim() || /^(?:\u2014|\u2013|-|n\/a|hidden|suppressed|not available)$/iu.test(s.trim());
+// A comma is only ever a thousands separator ("1,204", "1,234.56"); "1,50" or "1,2" is ambiguous and refused, never guessed (review S4).
+const GROUPED = /^-?[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?$/u;
 function numberCell(v: string): number | null {
   if (isUnknown(v)) return null;
+  if (v.includes(',') && !GROUPED.test(v.trim())) throw new AmazonReportError(REPORT_MESSAGES.badCount);
   const value = v.replace(/,/gu, '').trim();
   if (!/^[0-9]{1,15}$/u.test(value)) throw new AmazonReportError(/^[0-9]+$/u.test(value) ? REPORT_MESSAGES.countTooLarge : REPORT_MESSAGES.badCount);
   const n = Number(value);
@@ -105,7 +108,11 @@ function poundsCell(v: string): number | null {
   const accounting = s.startsWith('(') && s.endsWith(')');
   if (accounting) s = s.slice(1, -1);
   if (/[$\u20ac]/u.test(s)) throw new AmazonReportError(REPORT_MESSAGES.foreignCurrency);
-  s = s.replace(/[\u00a3,\u00a0\s]/gu, '');
+  // "(-1.50)" says minus twice: ambiguous, so refused rather than read as plus (review S4).
+  if (accounting && /-/u.test(s)) throw new AmazonReportError(REPORT_MESSAGES.badAmount);
+  s = s.replace(/[\u00a3\u00a0\s]/gu, '');
+  if (s.includes(',') && !GROUPED.test(s)) throw new AmazonReportError(REPORT_MESSAGES.badAmount);
+  s = s.replace(/,/gu, '');
   if (/^-?[0-9]{14,}(?:\.[0-9]{1,2})?$/u.test(s)) throw new AmazonReportError(REPORT_MESSAGES.amountTooLarge);
   if (!/^-?[0-9]+(?:\.[0-9]{1,2})?$/u.test(s)) throw new AmazonReportError(REPORT_MESSAGES.badAmount);
   if (accounting) s = '-' + s;
@@ -117,6 +124,23 @@ function poundsCell(v: string): number | null {
 function column(headers: string[], names: string[]): number {
   return headers.findIndex(h => names.includes(normalise(h)));
 }
+/**
+ * A totals line in any spelling Amazon or a spreadsheet uses ("Total", "Totals:", "Grand Total:", "TOTAL (all IDs)",
+ * "Total for period"), so nothing is counted twice (review S4). A tracking ID never has spaces, a colon or brackets,
+ * so "total-21" is still a tracking ID.
+ */
+function isTotalRow(id: string): boolean {
+  const k = id.toLowerCase().replace(/\([^)]*\)/gu, ' ').replace(/[:.\s]+$/u, '').replace(/\s+/gu, ' ').trim();
+  return /^(?:grand )?(?:total|totals|sum|overall)(?: for (?:the )?(?:period|month|all))?$|^(?:all|all tracking ids|summary)$/u.test(k);
+}
+
+/** Amazon UK tracking IDs only, besides the Others row (review N6): letters, numbers and hyphens, ending in -21. */
+const UK_TRACKING_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,60}-21$/u;
+/** Why this report cannot be kept as an Amazon UK report (a row's tracking ID is not one Amazon UK makes), or null. */
+export function reportTrackingIdProblem(report: Pick<AmazonTrackingIdReport, 'rows'>): string | null {
+  return report.rows.some((r) => !r.isOther && !UK_TRACKING_ID.test(r.trackingId)) ? REPORT_MESSAGES.badTrackingId : null;
+}
+
 // A spreadsheet would run a cell starting with one of these as a formula.
 const FORMULA_START = /^[=+\-@\t\r|%]/u;
 
@@ -140,7 +164,7 @@ export function parseAmazonTrackingReport(text: string): AmazonTrackingIdReport 
   for (const r of rows.slice(headerAt + 1)) {
     const id = (r[idColumn] ?? '').trim();
     if (!id) continue;
-    if (/^(?:total|grand total|totals|all tracking ids|summary)$/iu.test(id)) continue; // never counted twice
+    if (isTotalRow(id)) continue; // never counted twice
     if (id.length > 120 || /[\u0000-\u001f\u007f<>\ufffd]/u.test(id) || FORMULA_START.test(id)) throw new AmazonReportError(REPORT_MESSAGES.badTrackingId);
     output.push(Object.freeze({
       trackingId: id,
