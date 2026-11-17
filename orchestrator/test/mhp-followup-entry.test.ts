@@ -38,9 +38,9 @@ test('expiry is an explicit future UTC calendar time and does not normalise an i
 test('native editor distinguishes saved future intent from an enabled rule and preserves manual entry', () => {
   const future = parseFollowupSequence(automatic);
   const html = mhpSequencePage({ snapshot, detail: { ...detail, definition: future }, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(html, /Future opted-in webinar sign-ups/u); assert.match(html, /saving or publishing does not switch it on/u); assert.match(html, /data-entry-mode/u);
+  assert.match(html, /Future webinar sign-ups, once I switch that on/u); assert.match(html, /Saving or publishing does not switch it on/u); assert.match(html, /data-entry-mode/u);
   const manual = mhpSequencePage({ snapshot, detail, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(manual, /manual start with the current webinar sign-ups/u); assert.match(manual, /Future new sign-ups are not automatically enrolled/u);
+  assert.match(manual, /you start it yourself<\/strong>, after checking the list of people/u); assert.doesNotMatch(manual, /Add new webinar sign-ups automatically/u);
 });
 
 test('published future intent exposes one explicit activation, current rule counters and independent off action', () => {
@@ -50,9 +50,11 @@ test('published future intent exposes one explicit activation, current rule coun
     cursorSequence: '51', cursorSignupId: ids.prospect, cursorAt: '2026-11-01T01:00:00Z', lastSweptAt: '2026-11-01T01:01:00Z', processed: 51, enrolled: 25, skipped: 20, blocked: 6 };
   const html = mhpSequencePage({ snapshot: { ...snapshot, entryAvailable: true, database: { ...snapshot.database, entryRules: [rule] } },
     detail: { ...detail, definition, blockers: [], review: { ...detail.review, approvalStatus: 'approved', approvalStale: false } }, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(html, /action="\/hq\/marketing\/sequences\/entry-activate"/u); assert.match(html, /name="expiresAt" required/u);
-  assert.match(html, /25 enrolled · 20 skipped · 6 blocked · 51 events processed/u); assert.match(html, /Turn off future entry/u);
-  assert.match(html, /does not stop or recall messages in existing runs/u); assert.match(html, /pending events from before the new action are not backfilled/u);
+  // Switching on goes through a confirmation page (a GET form), never a one-press POST.
+  assert.match(html, /<form method="get" action="\/hq\/marketing\/sequences">.*name="confirm" value="entry"/su); assert.match(html, /name="until" required/u);
+  assert.doesNotMatch(html, /action="\/hq\/marketing\/sequences\/entry-activate"/u);
+  assert.match(html, /25 people added automatically · 20 skipped · 6 not allowed/u); assert.match(html, /Switch off automatic sign-ups/u);
+  assert.match(html, /People already in the sequence carry on; pause them if they should stop too/u); assert.match(html, /People who registered before you switch it on are never added this way/u);
 });
 test('native capture uses the trusted server campaign and actual returned signup identity; optional phone stays informational', async () => {
   const config = mhpWebinarConfig({ MHP_WEBINAR_CAMPAIGN: 'server-webinar' }), now = Date.parse('2026-10-31T00:00:00Z');

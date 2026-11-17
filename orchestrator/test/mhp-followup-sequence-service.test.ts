@@ -5,16 +5,20 @@ import type { DatabaseRequestContext } from '../src/db/rls.js';
 import { MhpSequenceService, PgMhpSequenceRepository, type MhpSequenceRepository } from '../src/mhp/followup-sequence-service.js';
 import { MhpCommerceError } from '../src/mhp/commerce-service.js';
 import { canonicalFollowupSequence, readCanonicalFollowupSequence, followupSequenceSha, FOLLOWUP_SEQUENCE_V2_SCHEMA } from '../src/followup-sequences/definition.js';
+import { storedFollowupAudience } from '../src/followup-sequences/audience.js';
 import { ids, identity, tokenHash, now, snapshot as emailSnapshot, review as emailReview, local as emailLocal } from './helpers/mhp-owner-email-fixture.js';
 import { sequenceIds, sequenceDefinition as definition, sequenceSnapshot as snapshot, sequenceDetail as detail } from './helpers/mhp-sequence-fixture.js';
 
 function fixture() {
   const state = { allowed: true, saved: false, refreshReceipt: false, refreshLost: false, saveLost: false, calls: [] as string[], command: null as CreateCompanyContentVersionCommand | null,
-    review: { ...detail.review }, local: { ...detail.local }, status: { ...emailSnapshot.status }, emailApproved: true, emailLatest: true };
+    review: { ...detail.review }, local: { ...detail.local, metadata: { mhpSequence: { audience: storedFollowupAudience('webinar_signups', definition.campaign) } } as Record<string, unknown> },
+    status: { ...emailSnapshot.status }, emailApproved: true, emailLatest: true };
   const context = (value: DatabaseRequestContext) => { assert.equal(value.userId, identity.userId); assert.equal(value.workspaceId, identity.workspaceId); assert.deepEqual(value.portalSessionTokenHash, tokenHash); };
   const repository: MhpSequenceRepository = { snapshot: async () => snapshot.database,
     local: async (_given, version) => version ? state.local : state.saved ? state.local : null,
-    command: async (_given, input) => { state.calls.push(input.action); return { action: input.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, changed: 3, remaining: 0, blocked: 0, inFlight: 0, replayed: false }; } };
+    command: async (_given, input) => { state.calls.push(input.action); return { action: input.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, changed: 3, remaining: 0, blocked: 0, inFlight: 0, replayed: false }; },
+    audienceCandidates: async () => ({ hasMore: false, nextAfter: null, candidates: [1, 2, 3, 4, 5].map(n => ({ prospectId: `ed126000-0000-4000-8000-00000000000${n}`, email: `person-${n}@example.invalid`,
+      firstName: `Person ${n}`, label: 'Synthetic webinar', registeredAt: null, marketingConsent: n !== 4, unsubscribed: n === 5, signupConsentGiven: true })) }) };
   const adapter: Pick<CompanyContentService, 'createVersion' | 'refreshSourceAttestation'> = {
     createVersion: async (given, command) => { context(given); state.command = command; state.calls.push('save'); state.saved = true;
       state.local = { ...state.local, title: command.title, canonicalContent: command.content, contentSha256: followupSequenceSha(command.content), previousVersionId: command.previousVersionId ?? null,
@@ -56,7 +60,8 @@ test('one Publish records real-user source refresh and exact approval; retry has
 });
 test('personal/non-owner, wrong brand/campaign and stale publish fail before mutations', async () => {
   const f = fixture(); await assert.rejects(f.service.save({ ...identity, workspaceId: ids.prospect }, ids.request, input), { status: 403 });
-  f.state.allowed = false; await assert.rejects(f.service.command(identity, ids.request, action), { status: 403 }); f.state.allowed = true;
+  f.state.allowed = false; await assert.rejects(f.service.command(identity, ids.request, { ...action, action: 'pause' }), { status: 403 });
+  await assert.rejects(f.service.startPlan(identity, ids.request, sequenceIds.item, sequenceIds.version), { status: 403 }); f.state.allowed = true;
   for (const change of [{ brand: 'pp' }, { campaign: 'foreign' }]) await assert.rejects(f.service.save(identity, ids.request, { ...input, definition: { ...definition, ...change } }), { status: 400 });
   f.state.review = { ...f.state.review, isLatest: false }; await assert.rejects(f.service.publish(identity, ids.request, sequenceIds.item, sequenceIds.version, ids.command), { status: 409 });
   assert.deepEqual(f.state.calls, []);
@@ -75,15 +80,21 @@ test('old mixed-channel history remains readable when129 marks its legacy email 
 test('Start/resume refuse unavailable delivery while pause/cancel remain usable', async () => {
   const f = fixture(); f.state.status = { ...f.state.status, mode: 'off', providerReady: false };
   await assert.rejects(f.service.command(identity, ids.request, action), { status: 409 });
+  f.state.review = { ...f.state.review, approvalStatus: 'approved' };
+  assert.equal((await f.service.startPlan(identity, ids.request, sequenceIds.item, sequenceIds.version)).refusal?.code, 'not_ready');
   await f.service.command(identity, ids.request, { ...action, action: 'pause' }); await f.service.command(identity, ids.request, { ...action, action: 'cancel' }); assert.deepEqual(f.state.calls, ['pause', 'cancel']);
 });
 test('Start reports unpublished or older selected email versions before any enrolment command', async () => {
   const f = fixture(); f.state.emailApproved = false;
   assert.deepEqual((await f.service.review(identity, ids.request, sequenceIds.item, sequenceIds.version)).blockers, ['email_version_not_ready']);
-  await assert.rejects(f.service.command(identity, ids.request, action), { status: 409 });
+  f.state.review = { ...f.state.review, approvalStatus: 'approved' };
+  assert.equal((await f.service.startPlan(identity, ids.request, sequenceIds.item, sequenceIds.version)).refusal?.code, 'not_ready');
   f.state.emailApproved = true; f.state.emailLatest = false;
-  await assert.rejects(f.service.command(identity, ids.request, action), { status: 409 }); assert.deepEqual(f.state.calls, []);
-  f.state.emailLatest = true; assert.equal((await f.service.command(identity, ids.request, action)).changed, 3);
+  assert.equal((await f.service.startPlan(identity, ids.request, sequenceIds.item, sequenceIds.version)).refusal?.code, 'not_ready'); assert.deepEqual(f.state.calls, []);
+  f.state.emailLatest = true; const plan = await f.service.startPlan(identity, ids.request, sequenceIds.item, sequenceIds.version);
+  assert.equal(plan.ready, true); assert.equal(plan.count, 3);
+  const started = await f.service.start(identity, ids.request, { commandId: ids.command, itemId: sequenceIds.item, versionId: sequenceIds.version, count: plan.count, digest: plan.digest, people: '', confirmed: true });
+  assert.equal(started.kind, 'started'); assert.equal(started.kind === 'started' && started.started, 3); assert.deepEqual(f.state.calls, ['enrol']);
 });
 test('PG boundary hashes real native token, uses server campaign and exact unknown proof only', async () => {
   const calls: { sql: string; args: unknown[] }[] = [];
@@ -104,7 +115,9 @@ test('future entry requires published current intent and current email readiness
   f.state.review = { ...f.state.review, canonicalContent: canonical, contentSha256: sha, approvalStatus: 'approved' };
   f.state.local = { ...f.state.local, canonicalContent: canonical, contentSha256: sha, exact: { ...f.state.local.exact!, canonicalContent: canonical, contentSha256: sha, definition: readCanonicalFollowupSequence(canonical) } };
   f.state.emailLatest = false; await assert.rejects(f.service.entryCommand(identity, ids.request, entry, now), { status: 409 }); assert.deepEqual(f.state.calls, []);
-  f.state.emailLatest = true; assert.equal((await f.service.entryCommand(identity, ids.request, { ...entry, campaign: 'browser-choice' } as any, now)).state, 'active');
+  f.state.emailLatest = true;
+  await assert.rejects(f.service.entryCommand(identity, ids.request, entry, now), { status: 400 }); assert.deepEqual(f.state.calls, []);
+  assert.equal((await f.service.entryCommand(identity, ids.request, { ...entry, confirmed: true, campaign: 'browser-choice' } as any, now)).state, 'active');
   f.state.review = { ...f.state.review, isLatest: false }; f.state.local = { ...f.state.local, valid: false };
   assert.equal((await f.service.entryCommand(identity, ids.request, { ...entry, action: 'off', ruleId: sequenceIds.proof, expiresAt: '' }, now)).state, 'off');
   assert.deepEqual(f.state.calls, ['entry:activate', 'entry:off']);

@@ -190,7 +190,7 @@ export function webinarDate(campaign: string): string | null {
 export interface MhpSequenceSaveInput { commandId: string; contentItemId: string; previousVersionId: string; definition: unknown; inlineMessages?: unknown; audience?: unknown }
 export class MhpSequenceService {
   constructor(private readonly dependencies: {
-    marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; repository: MhpSequenceRepository;
+    marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'> & Partial<Pick<PgMhpMarketingWorkspaceService, 'select'>>; repository: MhpSequenceRepository;
     reader: Pick<CompanyContentService, 'listCatalog' | 'getExactReview'>;
     adapter: Pick<CompanyContentService, 'createVersion' | 'refreshSourceAttestation'>;
     approvals: Pick<CompanyContentService, 'requestApproval' | 'decideApproval'>; adapterTransactions: CompanyContentTransactionRunner;
@@ -373,6 +373,13 @@ export class MhpSequenceService {
     if (!this.dependencies.repository.entryCommand) throw new MhpCommerceError(503, 'Future webinar entry is not connected yet.');
     return this.dependencies.repository.entryCommand(identity, { ...input, campaign: this.dependencies.campaign, requestId });
   }
+  /** Opens the MHP marketing workspace for this session, the same selection the marketing workspace page makes, so an owner can come straight back. */
+  async openWorkspace(identity: PortalSessionIdentity, commandId: string, now = Date.now()): Promise<{ sessionToken: string; expiresAt: string; workspaceId: string }> {
+    if (!this.dependencies.marketingWorkspace.select) throw new MhpCommerceError(503, 'Open the marketing workspace from the Marketing workspace page.');
+    const selected = await this.dependencies.marketingWorkspace.select(identity, 'open', commandId, now);
+    if (selected.workspaceId !== MHP_MARKETING_WORKSPACE_ID) throw new MhpCommerceError(503, 'The marketing workspace did not open. Sign in again.');
+    return selected;
+  }
   /** Who pressing Start would email right now, exactly as the database will choose them, or why it cannot be started. Reads only. */
   async startPlan(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string): Promise<MhpStartPlan> {
     const detail = await this.review(identity, requestId, itemId, versionId);
@@ -526,7 +533,7 @@ export class MhpSequenceService {
     return { runId: input.runId, action: input.action, code: code ?? 'unchanged', before: before.state, after: after?.state ?? null, inFlight: Boolean(result?.inFlight) || Boolean(after?.inFlight) };
   }
 }
-export function createMhpSequenceService(input: { web: Pool; identity: Pool; adapter: Pool; approvals: Pool; marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; emails: MhpOwnerEmailService; campaign: string }): MhpSequenceService {
+export function createMhpSequenceService(input: { web: Pool; identity: Pool; adapter: Pool; approvals: Pool; marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'> & Partial<Pick<PgMhpMarketingWorkspaceService, 'select'>>; emails: MhpOwnerEmailService; campaign: string }): MhpSequenceService {
   const transactions = mhpOwnerEmailContentRunner(input.adapter), webTransactions = mhpOwnerEmailContentRunner(input.web);
   const repository = new PgMhpSequenceRepository(input.web, input.identity), reader = new CompanyContentService({ transactionRunner: webTransactions });
   const adapter = new CompanyContentService({ transactionRunner: transactions }), approvals = new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.approvals) });

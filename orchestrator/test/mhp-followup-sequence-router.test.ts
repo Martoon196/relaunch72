@@ -17,7 +17,7 @@ const BASE = '/hq/marketing/sequences';
 function fixture() {
   const state = { authenticated: true, allowed: true, calls: [] as string[], input: null as unknown, published: false, entryReplay: false };
   const authorise = (given: { sessionToken: string; workspaceId: string }) => { assert.equal(given.sessionToken, token); assert.equal(given.workspaceId, identity.workspaceId); if (!state.allowed) throw new MhpCommerceError(403, 'Open the owner workspace.'); };
-  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command' | 'entryCommand' | 'message' | 'simulate'> = {
+  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command' | 'entryCommand' | 'message' | 'simulate' | 'personAction' | 'startPlan'> = {
     snapshot: async given => { authorise(given); return { ...snapshot, entryAvailable: true }; },
     review: async (given, _request, item, version) => { authorise(given); assert.equal(item, sequenceIds.item); assert.equal(version, sequenceIds.version); return { ...detail, review: { ...detail.review, approvalStatus: state.published ? 'approved' : 'unrequested' } }; },
     preview: async (given, _request, value) => { authorise(given); state.calls.push('preview'); state.input = value; return { definition, timeline: followupTimeline(definition), blockers: [] }; },
@@ -27,6 +27,8 @@ function fixture() {
     save: async (given, _request, value) => { authorise(given); state.calls.push('save'); state.input = value; return { contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, replayed: false }; },
     publish: async given => { authorise(given); state.calls.push('publish'); state.published = true; },
     command: async (given, _request, value) => { authorise(given); state.calls.push(value.action); state.input = value; return { action: value.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, changed: 3, remaining: 2, blocked: 1, inFlight: 1, replayed: false }; },
+    personAction: async (given, _request, value) => { authorise(given); state.calls.push(`person_${value.action}`); state.input = value; return { runId: value.runId, action: value.action, code: 'done', before: 'paused', after: 'active', inFlight: false }; },
+    startPlan: async given => { authorise(given); state.calls.push('plan'); throw new MhpCommerceError(503, 'Sequence controls are temporarily unavailable.'); },
     entryCommand: async (given, _request, value) => { authorise(given); state.calls.push(`entry_${value.action}`); state.input = value; return { action: value.action,
       contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, ruleId: value.ruleId || sequenceIds.proof, state: value.action === 'activate' ? 'active' : 'off',
       expiresAt: value.expiresAt || '2026-11-08T00:00:00.000Z', watermark: '12', replayed: state.entryReplay }; },
@@ -48,7 +50,8 @@ function fixture() {
     const res = { writeHead(status: number, head: Record<string, string> = {}) { result.status = status; Object.assign(result.headers, head); }, setHeader(key: string, value: string) { result.headers[key.toLowerCase()] = value; }, end(body = '') { result.body = body; } } as unknown as ServerResponse;
     await mount.handle(req, res); return result;
   }
-  return { state, request, saved, control, draft };
+  const follow = async (result: { status: number; headers: Record<string, string> }) => { assert.equal(result.status, 303); return request('GET', result.headers.location!); };
+  return { state, request, saved, control, draft, follow };
 }
 test('native marketing entry exposes sequence builder and exact owner page/script/CSP', async () => {
   const f = fixture(); assert.match((await f.request('GET', '/hq/marketing')).body, /Open sequence builder/u);
@@ -82,10 +85,14 @@ test('MHP inline save transport retains expanded bounds while rejecting duplicat
   assert.equal((await f.request('POST', `${BASE}/save`, f.draft({ inlineMessages: '{}' }), { 'content-length': '240001' })).status, 413);
 });
 test('Publish never enrols; Start is explicit and controls preserve exact run/proof acknowledgement', async () => {
-  const f = fixture(); const published = await f.request('POST', `${BASE}/publish`, f.saved()); assert.equal(published.status, 200); assert.match(published.body, /No one was enrolled/u); assert.deepEqual(f.state.calls, ['publish']);
-  const started = await f.request('POST', `${BASE}/enrol`, f.control()); assert.equal(started.status, 200); assert.match(started.body, /3 runs started/u); assert.match(started.body, /1 already being processed/u);
-  const resumed = await f.request('POST', `${BASE}/resume`, f.control({ runId: sequenceIds.run, ackProofId: sequenceIds.proof })); assert.equal(resumed.status, 200);
-  assert.equal((f.state.input as { ackProofId: string }).ackProofId, sequenceIds.proof);
+  const f = fixture(); const published = await f.request('POST', `${BASE}/publish`, f.saved()); assert.equal(published.status, 303); assert.match(published.headers.location!, /#summary$/u);
+  assert.match((await f.follow(published)).body, /Published\. Nobody was emailed/u); assert.deepEqual(f.state.calls, ['publish']);
+  // The old one-press Start is refused in the frame and calls nothing.
+  const started = await f.request('POST', `${BASE}/enrol`, f.control()); assert.equal(started.status, 409); assert.match(started.body, /confirmation step that shows exactly who will receive it/u);
+  assert.match(started.body, /Back to the sequence/u); assert.deepEqual(f.state.calls, ['publish']);
+  const resumed = await f.request('POST', `${BASE}/resume`, f.control({ runId: sequenceIds.run, ackProofId: sequenceIds.proof })); assert.equal(resumed.status, 303);
+  assert.match(resumed.headers.location!, new RegExp(`#run-${sequenceIds.run}$`, 'u'));
+  assert.equal((f.state.input as { ackProofId: string }).ackProofId, sequenceIds.proof); assert.deepEqual(f.state.calls, ['publish', 'person_resume']);
 });
 test('foreign/null origins, cross-site metadata and invalid CSRF reject every mutation before capability access', async () => {
   const f = fixture();
@@ -105,18 +112,22 @@ test('forged actor/destination, duplicate fields, wrong methods, mixed selectors
 test('foreign host, unauthenticated session and non-owner cannot read or mutate native sequence state', async () => {
   const f = fixture(); assert.equal((await f.request('GET', BASE, '', { host: 'hq.propertypredator.com' })).status, 421);
   f.state.authenticated = false; const redirect = await f.request('GET', BASE); assert.equal(redirect.status, 303); assert.equal(redirect.headers.location, '/portal/login');
-  f.state.authenticated = true; f.state.allowed = false; assert.equal((await f.request('GET', BASE)).status, 403); assert.equal((await f.request('POST', `${BASE}/enrol`, f.control())).status, 403); assert.deepEqual(f.state.calls, []);
+  f.state.authenticated = true; f.state.allowed = false; assert.equal((await f.request('GET', BASE)).status, 403); assert.equal((await f.request('POST', `${BASE}/pause`, f.control({ runId: sequenceIds.run }))).status, 403);
+  assert.equal((await f.request('GET', `${BASE}?item=${sequenceIds.item}&version=${sequenceIds.version}&confirm=start`)).status, 403); assert.deepEqual(f.state.calls, []);
 });
 test('native future-entry activation accepts explicit UTC expiry and no browser campaign or identity', async () => {
-  const f = fixture(); const page = await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }));
-  assert.equal(page.status, 200); assert.match(page.body, /Existing registrations were not backfilled/u); assert.deepEqual(f.state.calls, ['entry_activate']);
+  const f = fixture(); const page = await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30', confirm: 'yes' }));
+  assert.equal(page.status, 303); assert.match(page.headers.location!, /#automatic$/u);
+  assert.match((await f.follow(page)).body, /Nobody who registered earlier was added/u); assert.deepEqual(f.state.calls, ['entry_activate']);
   assert.equal((f.state.input as { expiresAt: string }).expiresAt, '2026-11-08T19:30:00.000Z'); assert.equal((f.state.input as { ruleId: string }).ruleId, '');
+  assert.equal((f.state.input as { confirmed: boolean }).confirmed, true);
+  await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' })); assert.equal((f.state.input as { confirmed: boolean }).confirmed, false);
   assert.equal('campaign' in (f.state.input as object), false);
   for (const extra of ['&campaign=forged', '&workspaceId=' + ids.prospect, '&expiresAt=2026-11-09T19%3A30']) assert.equal((await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }) + extra)).status, 400);
 });
 test('turning future entry off invokes only the entry capability and leaves existing runs alone', async () => {
   const f = fixture(); const page = await f.request('POST', `${BASE}/entry-off`, f.saved({ ruleId: sequenceIds.proof }));
-  assert.equal(page.status, 200); assert.match(page.body, /Existing runs were left unchanged/u); assert.deepEqual(f.state.calls, ['entry_off']);
+  assert.equal(page.status, 303); assert.match((await f.follow(page)).body, /People already in the sequence carry on/u); assert.deepEqual(f.state.calls, ['entry_off']);
   assert.equal((f.state.input as { ruleId: string }).ruleId, sequenceIds.proof); assert.equal((f.state.input as { expiresAt: string }).expiresAt, '');
 });
 test('entry Origin/CSRF/method/expiry fences reject before activation or rule-off', async () => {
@@ -131,6 +142,6 @@ test('entry Origin/CSRF/method/expiry fences reject before activation or rule-of
   assert.equal((await f.request('POST', `${BASE}/entry-off`, f.saved({ ruleId: sequenceIds.proof, csrf: 'wrong' }))).status, 403); assert.deepEqual(f.state.calls, []);
 });
 test('a replayed enable result is historical and does not claim that a rule is currently active', async () => {
-  const f = fixture(); f.state.entryReplay = true; const page = await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }));
-  assert.equal(page.status, 200); assert.match(page.body, /current rule status is shown below/u); assert.doesNotMatch(page.body, /can now enter/u);
+  const f = fixture(); f.state.entryReplay = true; const page = await f.follow(await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30', confirm: 'yes' })));
+  assert.equal(page.status, 200); assert.match(page.body, /had already been done earlier; nothing new happened\. The current setting is shown below/u); assert.doesNotMatch(page.body, /Automatic sign-ups are on\./u);
 });

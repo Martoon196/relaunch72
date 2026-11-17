@@ -1,8 +1,11 @@
 import { escapeHtml as e } from '../portal/ui.js';
 import { followupEntryIntent, type FollowupBrand, type FollowupChannel, type FollowupSequenceDefinition } from './definition.js';
 import type { FlowInlineMessage } from './composition.js';
+import type { FollowupAudienceKind } from './audience.js';
 export interface FlowMessageChoice { readonly channel: FollowupChannel; readonly itemId: string; readonly versionId: string; readonly sha256: string; readonly label: string }
-export interface FlowEditorProfile { readonly brand: FollowupBrand; readonly base: '/hq/marketing/sequences' | '/portal/follow-ups'; readonly libraryHref: string | null; readonly futureWebinarEntry: boolean }
+export interface FlowEditorProfile { readonly brand: FollowupBrand; readonly base: '/hq/marketing/sequences' | '/portal/follow-ups'; readonly libraryHref: string | null; readonly futureWebinarEntry: boolean;
+  /** MHP: the plain "Who is this for?" choice, saved with each version. Absent for brands without audiences. */
+  readonly audience?: { readonly value: FollowupAudienceKind } }
 export interface FlowEditorInput {
   readonly profile: FlowEditorProfile; readonly csrf: string; readonly commandId: string; readonly contentItemId: string; readonly previousVersionId: string;
   readonly definition: FollowupSequenceDefinition; readonly choices: readonly FlowMessageChoice[];
@@ -20,7 +23,11 @@ export function renderFlowEditor(input: FlowEditorInput): string {
     <form method="post" action="${profile.base}/save" data-sequence-editor data-initial="${e(JSON.stringify(definition))}" data-emails="${e(JSON.stringify(input.choices.filter(choice => choice.channel === 'email')))}" data-messages="${e(JSON.stringify(input.choices))}" data-message-endpoint="${profile.base}/message">
     ${hidden('csrf', input.csrf)}${hidden('commandId', input.commandId)}${hidden('contentItemId', input.contentItemId)}${hidden('previousVersionId', input.previousVersionId)}${hidden('definition', JSON.stringify(definition))}${hidden('inlineMessages', JSON.stringify(input.inlineMessages ?? {}))}
     <label>Sequence name<input data-field="title" maxlength="180" value="${e(definition.title)}" required></label>
-    ${profile.futureWebinarEntry ? `<label>How people join<select data-entry-mode><option value="manual" ${followupEntryIntent(definition).mode === 'manual' ? 'selected' : ''}>Manual start — current webinar sign-ups</option><option value="webinar_signup" ${followupEntryIntent(definition).mode === 'webinar_signup' ? 'selected' : ''}>Future opted-in webinar sign-ups</option></select></label><p class="note">Choosing future sign-ups saves your intent. Publish this version, then explicitly enable its future-signup rule below. Existing registrations stay on the separate manual Start action.</p>`
+    ${profile.audience ? `<fieldset class="flow-inline"><legend>Who is this for?</legend>
+      <label class="check"><input type="radio" name="audience" value="none_yet" ${profile.audience.value === 'none_yet' ? 'checked' : ''}> No one yet. Save it ready for when its audience is connected (for example, book readers).</label>
+      <label class="check"><input type="radio" name="audience" value="webinar_signups" ${profile.audience.value === 'webinar_signups' ? 'checked' : ''}> People who registered for the current webinar and agreed to emails</label>
+      <p class="note">Saving or publishing never sends anything. Only a sequence for webinar sign-ups can be started, and Start always shows you exactly who will get it first.</p></fieldset>` : ''}
+    ${profile.futureWebinarEntry ? `<label>How people join<select data-entry-mode><option value="manual" ${followupEntryIntent(definition).mode === 'manual' ? 'selected' : ''}>I start it myself, after checking who gets it</option><option value="webinar_signup" ${followupEntryIntent(definition).mode === 'webinar_signup' ? 'selected' : ''}>Future webinar sign-ups, once I switch that on</option></select></label><p class="note">Choosing future sign-ups only saves your plan. Nothing is switched on until you publish this version and confirm it on the sequence page. It only applies to a sequence for webinar sign-ups.</p>`
       : '<p class="notice">Build now; connect and test before starting. You will choose the people to add when PP delivery is connected.</p>'}
     <label>Retry window for each message (hours)<input data-field="expiryHours" type="number" min="1" max="168" value="${definition.expiryHours}" required></label>
     <p class="note">The retry window starts when that message is due. Expired work is shown; it is never silently extended.</p>
@@ -31,5 +38,5 @@ export function renderFlowEditor(input: FlowEditorInput): string {
     <label>Simulation scenario<select name="simulationCase"><option value="happy">Complete planned journey</option><option value="pause">Pause for 15 minutes, then resume</option><option value="reply">Sample reply after the first message</option><option value="booked">Sample booking after the first message</option><option value="purchased">Sample purchase after the first message</option><option value="unsubscribe">Sample unsubscribe after the first message</option><option value="failed">First message fails</option><option value="unknown">First message outcome is unknown</option></select></label>
     <div class="actions"><button formaction="${profile.base}/preview" class="secondary">Preview timeline</button><button formaction="${profile.base}/simulate" class="secondary">Simulate journey</button><button ${detail && !detail.isLatest ? 'disabled' : ''}>Save draft</button></div></form>
     <p class="note">Save keeps a version of your messages and flow. Other flows keep the wording you chose and show when it needs review. Publishing sends nothing and does not connect a sender.</p>
-    ${profile.brand === 'mhp' ? '<p class="note">Saving an edit holds unsent runs on the older sequence. Those runs keep their history; cancel them before a fresh start. A fresh start begins at the first step and can repeat earlier messages.</p>' : ''}</section>`;
+    ${profile.brand === 'mhp' ? '<p class="note">Saving an edit puts people on the older version on hold, with their history kept. A new version starts from its first email and can repeat emails people already had.</p>' : ''}</section>`;
 }

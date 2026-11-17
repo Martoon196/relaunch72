@@ -47,19 +47,23 @@ test('pause, mismatched step, unknown outcome, expired lease, approval and permi
 });
 test('native owner page shows manual entry, safe version controls, actual setup gaps and readable builder', () => {
   const html = mhpSequencePage({ snapshot, detail, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(html, /17px/u); assert.match(html, /manual start with the current webinar sign-ups/u); assert.match(html, /Future new sign-ups are not automatically enrolled/u);
+  assert.match(html, /17px/u); assert.match(html, /you start it yourself<\/strong>, after checking the list of people/u);
   assert.match(html, /data-sequence-editor/u); assert.match(html, /Open|Email library/u); assert.match(html, /Publish this version/u);
-  assert.match(html, /SMS: setup needed · WhatsApp: setup needed/u); assert.match(html, /No message has been handed off|No matching runs yet/u);
+  assert.match(html, /Nobody is in this sequence yet/u); assert.match(html, /Who is this for\?/u);
+  // A draft never offers Start; the landing page states channel readiness in plain words.
+  assert.doesNotMatch(html, /confirm=start|sequences\/enrol|sequences\/start"/u);
+  const landing = mhpSequencePage({ snapshot, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
+  assert.match(landing, /Text messages: setup needed · WhatsApp: setup needed/u);
   assert.doesNotMatch(html, /sourceSystem|api[_-]?key|access[_-]?token/u);
 });
 test('a published sequence has a separate explicit Start and shows blocked mixed channels', () => {
   const published = { ...detail, review: { ...detail.review, approvalStatus: 'approved' as const, approvalStale: false } };
   const html = mhpSequencePage({ snapshot, detail: published, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(html, /action="\/hq\/marketing\/sequences\/enrol"/u); assert.match(html, /Start remaining eligible sign-ups/u);
-  assert.match(html, /not already enrolled in this version/u); assert.match(html, /A new version starts from the first step and can repeat earlier emails/u);
-  assert.match(html, /does not enrol anyone or send a message/u);
+  // Start is a link to the confirmation page, never a form that starts anything.
+  assert.match(html, /href="\/hq\/marketing\/sequences\?item=[^"]+&amp;confirm=start">Start this sequence…<\/a>/u); assert.doesNotMatch(html, /action="\/hq\/marketing\/sequences\/(?:enrol|start)"/u);
+  assert.match(html, /you will see exactly who gets it, and when, before anything is sent/u); assert.match(html, /A new version starts from its first email and can repeat emails/u);
   const blocked = mhpSequencePage({ snapshot, detail: { ...published, blockers: ['whatsapp_not_connected'] }, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(blocked, /<button data-saved-required disabled>Start remaining eligible sign-ups/u); assert.match(blocked, /approved templates/u);
+  assert.doesNotMatch(blocked, /confirm=start/u); assert.match(blocked, /WhatsApp is not set up for Martin Howard Property yet/u);
 });
 test('view escapes names/content references and new draft starts with no fake saved message', () => {
   const malicious = { ...definition, title: '<script>bad</script>' };
@@ -72,6 +76,6 @@ test('old mixed history is displayed with proper-channel review guidance and no 
   const mixed = parseFollowupSequence({ ...definition, steps: [{ ...definition.steps[0]!, kind: 'sms' }] });
   const html = mhpSequencePage({ snapshot, detail: { ...detail, definition: mixed, local: { ...detail.local, valid: false, exact: null },
     blockers: ['email_version_not_ready', 'sms_not_connected'], timeline: followupTimeline(mixed) }, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
-  assert.match(html, /Text message/u); assert.match(html, /proper current local message version for each channel/u);
-  assert.doesNotMatch(html, /action="\/hq\/marketing\/sequences\/enrol"/u);
+  assert.match(html, /Text message/u); assert.match(html, /publish the current wording of each email/u);
+  assert.doesNotMatch(html, /action="\/hq\/marketing\/sequences\/(?:enrol|start)"|confirm=start/u);
 });

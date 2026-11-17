@@ -6,6 +6,7 @@ import { principalAbuseAdmission, sourceAbuseAdmission } from '../portal/abuse.j
 import { parseCookies } from '../server/admin/session.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
+import { mhpLink, mhpOwnerProblemPage, mhpWorkspaceProblem } from './owner-frame.js';
 import { MhpOwnerEmailService, type MhpOwnerEmailSaveInput } from './owner-email-service.js';
 import { mhpOwnerEmailNewDraft, mhpOwnerEmailPage, type MhpOwnerEmailPageInput } from './owner-email-view.js';
 
@@ -112,8 +113,12 @@ export async function handleMhpOwnerEmail(req: IncomingMessage, res: ServerRespo
     const detail = await emails.review(identity, context.requestId, itemId, versionId);
     respond(res, 200, await page({ detail, message }), true);
   } catch (error) {
-    outcome = 'service_error';respond(res, error instanceof MhpCommerceError ? error.status : 503,
-      error instanceof MhpCommerceError ? error.message : 'The email editor is temporarily unavailable.');
+    outcome = 'service_error';
+    const status = error instanceof MhpCommerceError ? error.status : 503;
+    const message = error instanceof MhpCommerceError ? error.message : 'The email editor is temporarily unavailable. Nothing was changed. Try again in a minute.';
+    // In the normal frame with a way back, never a bare text page.
+    respond(res, status, mhpOwnerProblemPage({ heading: mhpWorkspaceProblem(status, message) ? 'Open your marketing workspace' : status === 409 ? 'Nothing was changed' : status >= 500 ? 'Temporarily unavailable' : 'Please try again',
+      message, actions: (mhpWorkspaceProblem(status, message) ? mhpLink('/hq/marketing', 'Open marketing workspace') : '') + mhpLink(BASE, 'Back to the email library', mhpWorkspaceProblem(status, message)) }), true);
   } finally { await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome))); }
   return true;
 }
