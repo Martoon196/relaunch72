@@ -17,7 +17,7 @@ import { MhpBookLeadService, bookLeadPhone, bookTaskDescription, bookTaskDue, is
 import type { CrmTransactionRunner } from '../src/crm-pg/types.js';
 import { hqRegistrantsPage } from '../src/mhp/growth-view.js';
 import { marketingWorkspacePage } from '../src/mhp/marketing-workspace-view.js';
-import { MHP_MARKETING_WORKSPACE_ID } from '../src/mhp/marketing-workspace-service.js';
+import { MHP_MARKETING_WORKSPACE_ID, type MhpMarketingWorkspaceSnapshot } from '../src/mhp/marketing-workspace-service.js';
 
 const SITE = 'https://martinhowardproperty.co.uk', APP = 'https://app.martinhowardproperty.co.uk';
 const TOKEN = 'A'.repeat(43), USER = 'b1590000-0000-4000-8000-000000000001', WS = 'b1590000-0000-4000-8000-000000000002';
@@ -190,7 +190,7 @@ test('Book interest shows who is in Leads with a link, the mobile, a plain count
 });
 
 test('the marketing page puts "Bring book sign-ups into Leads" beside the webinar import, with the CSRF field and an escaped result', () => {
-  const snapshot = { userId: USER, selectedWorkspaceId: MHP_MARKETING_WORKSPACE_ID, personalWorkspaceId: WS, marketingWorkspaceId: MHP_MARKETING_WORKSPACE_ID, marketingSelected: true };
+  const snapshot = { userId: USER, selectedWorkspaceId: MHP_MARKETING_WORKSPACE_ID, personalWorkspaceId: WS, marketingWorkspaceId: MHP_MARKETING_WORKSPACE_ID, marketingSelected: true } as MhpMarketingWorkspaceSnapshot;
   const html = marketingWorkspacePage(snapshot, 'csrf"<x>', USER, { enabled: true, bookLeadsEnabled: true });
   const webinarAt = html.indexOf('action="/hq/marketing/webinar-leads"'), bookAt = html.indexOf('action="/hq/marketing/book-leads"');
   assert.ok(webinarAt > 0 && bookAt > webinarAt, 'next to the webinar button');
@@ -201,7 +201,7 @@ test('the marketing page puts "Bring book sign-ups into Leads" beside the webina
   assert.match(after, /2 added to Leads · 1 completed · 3 already in Leads · 1 need you/);
   assert.match(after, /Bring next book sign-ups into Leads/);
   assert.match(after, /name="cursor" value="abc&quot;def"/);
-  assert.doesNotMatch(marketingWorkspacePage({ ...snapshot, marketingSelected: false, selectedWorkspaceId: WS }, 'c', USER, { enabled: true, bookLeadsEnabled: true }), /book-leads/);
+  assert.doesNotMatch(marketingWorkspacePage({ ...snapshot, marketingSelected: false, selectedWorkspaceId: WS } as MhpMarketingWorkspaceSnapshot, 'c', USER, { enabled: true, bookLeadsEnabled: true }), /book-leads/);
 });
 
 test('the owner button refuses a stale, forged or other-audience cursor before reading anyone', async () => {
