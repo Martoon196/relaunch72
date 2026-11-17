@@ -60,6 +60,11 @@ export async function callJson<T>(llm: LlmClient, input: {
   /** Private stage revision: complete facts with redundant prompt text removed. */
   readonly correctionUser?: string;
   readonly schema: AnySchema;
+  /**
+   * The shape the server accepts, when it is wider than the `schema` shown to the model (for example: fields the
+   * server cleans up itself afterwards). Absent: `schema`. Never changes what is sent.
+   */
+  readonly acceptSchema?: AnySchema;
   readonly maxTokens: number;
   readonly validate?: (value: T) => string[];
   /** Campaign proposals never silently pay for a format-correction call. */
@@ -75,7 +80,7 @@ export async function callJson<T>(llm: LlmClient, input: {
 }): Promise<JsonCallResult<T>> {
   const methodRun = methodRunFor(llm);
   const model = stageModel(input.prompt.header.stage, input.prompt.header.model);
-  const validate = validatorFor(input.schema);
+  const validate = validatorFor(input.acceptSchema ?? input.schema);
   // The latest answer that met the shape and failed only on content. A later answer that fails the shape never hides it,
   // and an answer that never met the shape is never repaired.
   let repairable: { value: T } | null = null;
@@ -409,8 +414,12 @@ export const PLAN_SCHEMA: AnySchema = {
  * Keyword-first planning output contract, version 2 (prompt `seo-blog-plan-v2.md`). Used only when the server offers
  * measured keyword candidates; every other plan keeps `seo-blog-plan.md` and PLAN_SCHEMA unchanged, so plans made
  * with the old version stay reproducible. Each article gains `primary_phrase_id` (a target candidate id or null) and
- * `secondary_phrase_ids` (candidate ids); the schema's enums are the ids the server sent, so an unknown id fails the
- * membership check, and the validator refuses two articles with one target.
+ * `secondary_phrase_ids` (candidate ids); the schema's enums are the ids the server sent.
+ *
+ * This schema is what the planner is shown. The server accepts a plan whose id fields are wrong (an id it did not send,
+ * a secondary-only id as a target, one target twice, the primary repeated as a secondary, a field left out): it
+ * accepts the plan against the original shape (`PLAN_SCHEMA`, which leaves the two id fields open) and strips each bad
+ * id when binding (`bindByIds`). One id slip never costs the plan or a correction call.
  */
 export const PLAN_PROMPT_V2 = 'seo-blog-plan-v2.md';
 export const PLAN_SCHEMA_V2_VERSION = 'seo-blog-plan-schema@2.0.0';
@@ -428,9 +437,9 @@ export function planSchemaWithCandidates(targetIds: readonly string[], allIds: r
 }
 
 export interface PlannedArticle {
-  /** Contract v2 only: the id of the measured candidate this article targets, or null. */
+  /** Contract v2 only: the id of the measured candidate this article targets, or null. Untrusted: any value may arrive; `bindByIds` checks it. */
   readonly primary_phrase_id?: string | null;
-  /** Contract v2 only: ids of candidates used as secondary phrases. */
+  /** Contract v2 only: ids of candidates used as secondary phrases. Untrusted, as above. */
   readonly secondary_phrase_ids?: string[];
   readonly role: 'pillar' | 'supporting';
   readonly slug: string;
@@ -495,6 +504,8 @@ export async function proposeCluster(llm: LlmClient, input: {
   return callJson<PlannedCluster>(llm, {
     prompt: loadPrompt(candidates ? PLAN_PROMPT_V2 : 'seo-blog-plan.md'),
     schema,
+    // Contract v2: a bad id is stripped at binding, never a reason to refuse the plan (the id fields are open here).
+    ...(candidates ? { acceptSchema: PLAN_SCHEMA } : {}),
     maxTokens: 16000,
     ...(methodRunFor(llm)?.structuredPlanning?{correctionUser:[
       `Brand: ${input.brandName}`,
@@ -515,11 +526,6 @@ export async function proposeCluster(llm: LlmClient, input: {
       const all = [v.pillar, ...v.supporting];
       const slugs = new Set(all.map((a) => a.slug));
       if (slugs.size !== all.length) problems.push('slugs must be unique across the cluster');
-      if (candidates) {
-        const targets = all.map((a) => a.primary_phrase_id).filter((id): id is string => typeof id === 'string');
-        if (new Set(targets).size !== targets.length) problems.push('each keyword candidate id may be the primary_phrase_id of one article at most');
-        for (const a of all) if (a.primary_phrase_id && a.secondary_phrase_ids?.includes(a.primary_phrase_id)) problems.push(`${a.slug}: secondary_phrase_ids must not repeat its primary_phrase_id`);
-      }
       for (const a of all) {
         for (const id of a.source_ids) if (!short.has(id)) problems.push(`${a.slug}: unknown source id ${id}`);
         for (const link of a.internal_links) {

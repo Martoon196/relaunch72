@@ -443,8 +443,12 @@ export interface TopicPlan {
   readonly programme?: ProgrammeProvenance;
   /** Which parts of the engine ran for this plan (internal). */
   readonly engine?: EngineStamp;
-  /** Keyword-first planning only (internal): the output contract used, how many candidates were shown and how many returned ids were stripped. */
-  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number };
+  /**
+   * Keyword-first planning only (internal): the output contract used, how many candidates were shown, how many returned
+   * ids were stripped by the id rules, and how many chosen phrases were dropped because they did not fit their brief.
+   * `unfit` is absent on plans made before the fit check.
+   */
+  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number; readonly unfit?: number };
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';

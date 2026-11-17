@@ -13,6 +13,11 @@
  * ever bound by text similarity. A brief with no chosen id is not measured. Every number recorded here comes from the
  * stored list; the model never supplies one.
  *
+ * After binding by id, one deterministic check (`phraseFits`): at least half of the chosen phrase's meaning words must
+ * appear in the brief's question or title, else that choice is dropped and the brief stays unbound (never re-bound to
+ * another phrase). Secondary phrases pass the same check one by one. A brief left unbound carries no secondary phrase,
+ * so it shows no number at all.
+ *
  * Pure: no I/O, no clock.
  */
 
@@ -142,8 +147,11 @@ export function candidatesForPrompt(c: PlanningCandidates): { id: string; phrase
 /** What the planner returned for one brief. */
 export interface ChosenIds {
   readonly key: string;
-  readonly primaryId: string | null | undefined;
-  readonly secondaryIds: readonly string[] | null | undefined;
+  /** As returned by the planner: anything at all (a bad value is stripped, never trusted). */
+  readonly primaryId: unknown;
+  readonly secondaryIds: unknown;
+  /** The brief's own words. When given, every chosen phrase must fit them (`phraseFits`). */
+  readonly text?: { readonly question: string; readonly title: string };
 }
 
 export interface Binding {
@@ -151,35 +159,124 @@ export interface Binding {
   readonly secondary: readonly ShortlistRow[];
 }
 
+/** Why a returned id was not used (internal: logged and counted, never shown to a client). */
+export type DropReason =
+  | 'not_text' | 'unknown_id' | 'not_a_target' | 'target_taken' | 'does_not_fit'
+  | 'not_a_list' | 'is_a_target' | 'duplicate' | 'over_limit' | 'not_measured' | 'brief_unbound';
+export interface DroppedId {
+  readonly key: string;
+  readonly field: 'primary' | 'secondary';
+  /** The id when it is one the server sent; null for anything else (a planner's own text is never logged). */
+  readonly id: string | null;
+  readonly reason: DropReason;
+}
+
+// ─── The fit check ────────────────────────────────────────────────────────────
+
+/** Words that carry no subject: function words, question words and filler (as the duplicate check treats them). */
+const STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'can', 'do', 'does', 'for', 'from', 'how', 'i', 'in', 'is', 'it', 'its', 'my', 'of', 'on', 'or',
+  'our', 'should', 'so', 'than', 'that', 'the', 'their', 'this', 'to', 'uk', 'up', 'vs', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with',
+  'you', 'your', 'guide', 'complete', 'ultimate', 'best', 'need', 'know', 'things', 'about', 'into', 'more', 'most', 'me', 'we', 'us', 'if', 'not', 'no',
+  'was', 'were', 'has', 'have', 'had', 'there', 'these', 'those', 'them', 'they', 'any', 'all', 'get', 'much', 'many', 'near',
+]);
+
 /**
- * Bind each brief by the ids the planner returned, in plan order. Strips any id that was not sent, a target id that
- * is not a target candidate, a target another brief already took, a secondary id equal to any brief's target, and
- * duplicates; at most six secondary phrases. Never looks at the brief's words. `stripped` counts what was removed.
+ * A simple stem for an English word, so a plural and its singular, and the -ing and -ed forms, compare alike:
+ * properties/property, fees/fee, taxes/tax, letting/let, rented/rent, managed/manage, housing/house. Words in other
+ * scripts, and words with digits, are compared exactly.
  */
-export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): { bound: Map<string, Binding>; stripped: number } {
+export function simpleStem(word: string): string {
+  if (!/^[a-z]+$/.test(word)) return word;
+  let w = word;
+  if (w.length > 4 && w.endsWith('ies')) w = `${w.slice(0, -3)}y`;
+  else if (w.length > 4 && /(?:s|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2);
+  else if (w.length > 3 && w.endsWith('s') && !/(?:ss|us|is)$/.test(w)) w = w.slice(0, -1);
+  let suffixed = false;
+  if (w.length > 4 && w.endsWith('ied')) w = `${w.slice(0, -3)}y`;
+  else if (w.length > 5 && w.endsWith('ing')) { w = w.slice(0, -3); suffixed = true; }
+  else if (w.length > 4 && w.endsWith('ed') && !w.endsWith('eed')) { w = w.slice(0, -2); suffixed = true; }
+  // letting → lett → let; stopped → stopp → stop (but not fall, dress, buzz).
+  if (suffixed && w.length > 2 && w.at(-1) === w.at(-2) && !/[aeiouylsz]/.test(w.at(-1)!)) w = w.slice(0, -1);
+  if (w.length > 3 && w.endsWith('e')) w = w.slice(0, -1);
+  return w;
+}
+
+/**
+ * The meaning words of a text, stemmed: any script (letters and digits of every language), lower-cased, Latin accents
+ * removed, stop words and single Latin letters dropped.
+ */
+export function meaningWords(text: string): Set<string> {
+  const words = text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u)
+    .map((w) => w.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'))
+    .filter((w) => w.length > 0 && !STOP_WORDS.has(w) && !/^[a-z]$/.test(w));
+  return new Set(words.map(simpleStem));
+}
+
+/**
+ * The fit check: at least half of the phrase's meaning words appear in the brief's question or title. A phrase with
+ * no meaning word (stop words only) never fits: nothing in it can be checked.
+ */
+export function phraseFits(phrase: string, text: { readonly question: string; readonly title: string }): boolean {
+  const p = meaningWords(phrase);
+  if (p.size === 0) return false;
+  const brief = new Set([...meaningWords(text.question), ...meaningWords(text.title)]);
+  let found = 0;
+  for (const w of p) if (brief.has(w)) found++;
+  return found * 2 >= p.size;
+}
+
+/**
+ * Bind each brief by the ids the planner returned, in plan order. Strips any id that was not sent (or is not text), a
+ * target id that is not a target candidate, a target another brief already took, a secondary id equal to any brief's
+ * target, and duplicates; at most six secondary phrases. Then, when the brief's words are given, a chosen phrase that
+ * does not fit them is dropped (a target that does not fit is not taken, so a later brief that chose it may keep it);
+ * nothing is ever re-bound to another phrase. A brief with no target keeps no secondary phrase.
+ * `stripped` counts ids removed by the id rules, `unfit` choices removed by the fit check; `dropped` lists each.
+ * Never throws, whatever the planner returned.
+ */
+export function bindByIds(briefs: readonly ChosenIds[], c: PlanningCandidates): { bound: Map<string, Binding>; stripped: number; unfit: number; dropped: DroppedId[] } {
   const ids = candidateIds(c);
   const bound = new Map<string, Binding>();
-  let stripped = 0;
+  const dropped: DroppedId[] = [];
+  const known = (id: unknown): string | null => (typeof id === 'string' && ids.has(id) ? id : null);
+  const drop = (key: string, field: DroppedId['field'], id: unknown, reason: DropReason) => { dropped.push({ key, field, id: known(id), reason }); };
   const targets = new Set<string>();
   const primaryOf = new Map<string, ShortlistRow | null>();
   for (const b of briefs) {
-    const id = typeof b.primaryId === 'string' ? b.primaryId : null;
-    const hit = id ? ids.get(id) : undefined;
-    if (id && (!hit || !hit.target || targets.has(id))) { stripped++; primaryOf.set(b.key, null); continue; }
-    if (hit) targets.add(id!);
-    primaryOf.set(b.key, hit ? hit.row : null);
+    primaryOf.set(b.key, null);
+    if (b.primaryId === null || b.primaryId === undefined) continue;
+    if (typeof b.primaryId !== 'string') { drop(b.key, 'primary', b.primaryId, 'not_text'); continue; }
+    const id = b.primaryId;
+    const hit = ids.get(id);
+    if (!hit) { drop(b.key, 'primary', id, 'unknown_id'); continue; }
+    if (!hit.target) { drop(b.key, 'primary', id, 'not_a_target'); continue; }
+    if (targets.has(id)) { drop(b.key, 'primary', id, 'target_taken'); continue; }
+    if (b.text && !phraseFits(hit.row.phrase, b.text)) { drop(b.key, 'primary', id, 'does_not_fit'); continue; }
+    targets.add(id);
+    primaryOf.set(b.key, hit.row);
   }
   for (const b of briefs) {
     const seen = new Set<string>();
     const secondary: ShortlistRow[] = [];
-    for (const id of Array.isArray(b.secondaryIds) ? b.secondaryIds : []) {
-      const hit = typeof id === 'string' ? ids.get(id) : undefined;
-      if (!hit || targets.has(id) || seen.has(id) || secondary.length >= SECONDARY_PER_BRIEF || hit.row.basis !== 'measured') { stripped++; continue; }
+    const primary = primaryOf.get(b.key) ?? null;
+    if (b.secondaryIds !== null && b.secondaryIds !== undefined && !Array.isArray(b.secondaryIds)) drop(b.key, 'secondary', null, 'not_a_list');
+    for (const id of Array.isArray(b.secondaryIds) ? b.secondaryIds as unknown[] : []) {
+      if (typeof id !== 'string') { drop(b.key, 'secondary', id, 'not_text'); continue; }
+      const hit = ids.get(id);
+      if (!hit) { drop(b.key, 'secondary', id, 'unknown_id'); continue; }
+      if (targets.has(id)) { drop(b.key, 'secondary', id, 'is_a_target'); continue; }
+      if (seen.has(id)) { drop(b.key, 'secondary', id, 'duplicate'); continue; }
+      if (hit.row.basis !== 'measured') { drop(b.key, 'secondary', id, 'not_measured'); continue; }
+      if (!primary) { drop(b.key, 'secondary', id, 'brief_unbound'); continue; }
+      if (secondary.length >= SECONDARY_PER_BRIEF) { drop(b.key, 'secondary', id, 'over_limit'); continue; }
+      if (b.text && !phraseFits(hit.row.phrase, b.text)) { drop(b.key, 'secondary', id, 'does_not_fit'); continue; }
       seen.add(id); secondary.push(hit.row);
     }
-    bound.set(b.key, { primary: primaryOf.get(b.key) ?? null, secondary });
+    bound.set(b.key, { primary, secondary });
   }
-  return { bound, stripped };
+  const unfit = dropped.filter((d) => d.reason === 'does_not_fit').length;
+  return { bound, stripped: dropped.length - unfit, unfit, dropped };
 }
 
 /** Every token of the target phrase appears in the question (a strict word rule, not a similarity score). */
