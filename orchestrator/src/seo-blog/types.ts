@@ -360,6 +360,12 @@ export interface ResearchSource {
   /** Government, regulator, statute, official statistics or the brand's own site. */
   readonly primary: boolean;
   readonly query: string;
+  /**
+   * Keyword-first research only (release 8): the page's H2/H3 headings and word count, read from the bytes already
+   * fetched for this source. Bounded (see SEARCH_CAPS). Never sent to a writer as text to copy: headings only, as
+   * topics, through `search-requirements.ts`. Absent on every other source.
+   */
+  readonly outline?: { readonly headings: readonly string[]; readonly words: number };
 }
 
 /** How search numbers went: measured; asked but none for this phrase; asked and it failed or was skipped; not switched on; not part of this step; planned before stamps existed. */
@@ -468,6 +474,8 @@ export interface GenerationRecord {
   readonly promptVersion: string;
   readonly tokensIn: number;
   readonly tokensOut: number;
+  /** Article writing with search requirements only (release 8): which title and description option was kept, and why. Internal. */
+  readonly searchDraft?: import('./search-requirements.js').SearchDraftRecord;
 }
 
 // ─── Articles ────────────────────────────────────────────────────────────────

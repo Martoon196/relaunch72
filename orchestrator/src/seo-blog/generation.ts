@@ -23,6 +23,7 @@ import { cleanProvenance, holdConflictedPrices, nothingVerifiable, priceLineSour
 import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 import { decodePlanningOutput } from './planning-output.js';
 import {decodeArticleOutput} from './article-output.js';
+import { chooseSearchFields, DESCRIPTION_OPTIONS, TITLE_OPTIONS, type SearchRequirements } from './search-requirements.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = new Map<AnySchema, ValidateFunction>();
@@ -555,6 +556,22 @@ export const ARTICLE_SCHEMA: AnySchema = {
   },
 };
 
+/**
+ * Article output contract, version 2 (prompt `seo-blog-article-v2.md`), used only when the brief has a measured target
+ * phrase. The same contract as ARTICLE_SCHEMA plus two small, optional, bounded lists: alternative SEO titles and
+ * meta descriptions for the server to choose among. Optional, so a missing list never rejects a draft (the writer's
+ * main fields are kept); item bounds are loose on purpose, the server's choice applies the real limits.
+ * ARTICLE_SCHEMA itself is unchanged, so every other brief is sent exactly what it always was.
+ */
+export const ARTICLE_PROMPT_V2 = 'seo-blog-article-v2.md';
+export const ARTICLE_SCHEMA_V2: AnySchema = {
+  ...(ARTICLE_SCHEMA as Record<string, unknown>),
+  properties: { ...(ARTICLE_SCHEMA as { properties: Record<string, unknown> }).properties,
+    title_options: { type: 'array', maxItems: TITLE_OPTIONS, items: { type: 'string', maxLength: 200 } },
+    description_options: { type: 'array', maxItems: DESCRIPTION_OPTIONS, items: { type: 'string', maxLength: 300 } },
+  },
+};
+
 export interface WrittenArticle {
   readonly title: string;
   readonly seo_title: string;
@@ -566,6 +583,9 @@ export interface WrittenArticle {
   readonly faqs: { q: string; a: string }[];
   readonly image_alt: string;
   readonly public_source_ids: string[];
+  /** Contract v2 only. */
+  readonly title_options?: string[];
+  readonly description_options?: string[];
 }
 
 const LENGTH_HINT: Record<LengthPreference, string> = {
@@ -584,9 +604,12 @@ export async function writeArticle(llm: LlmClient, input: {
   readonly sources: readonly ResearchSource[];
   readonly linkable: readonly { url: string; title: string | null }[];
   readonly length: LengthPreference;
+  /** Release 8: the brief's bounded search requirements (search-requirements.ts). Absent: the original prompt, contract and request, unchanged. */
+  readonly search?: SearchRequirements | null;
 }): Promise<JsonCallResult<WrittenArticle> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
-  const prompt = loadPrompt('seo-blog-article.md');
+  const search = input.search ?? null;
+  const prompt = loadPrompt(search ? ARTICLE_PROMPT_V2 : 'seo-blog-article.md');
   // A bounded inventory need not contain the already confirmed conversion page.
   // Only this exact approved brief CTA is added; arbitrary brief URLs stay invalid.
   const approvedCta=input.brief.cta&&input.profile.conversionPages.some(p=>p.url===input.brief.cta!.url)?input.brief.cta:null;
@@ -600,6 +623,7 @@ export async function writeArticle(llm: LlmClient, input: {
     role:input.brief.role,working_title:input.brief.workingTitle,target_query:input.brief.targetQuery,
     search_intent:input.brief.searchIntent,related_questions:input.brief.relatedQuestions,angle:input.brief.angle,
     outline:input.brief.outline,key_points:input.brief.keyPoints,call_to_action:input.brief.cta,editorial_format:input.brief.editorialFormat??null,
+    ...(search?{search_requirements:search}:{}),
   });
   const user=[dataBlock('brand_profile',structured?referencedProfile:profileForPrompt(input.profile)),brief,
     ...(structured?[]:[dataBlock('research_sources',researchForPrompt(short))]),
@@ -608,7 +632,7 @@ export async function writeArticle(llm: LlmClient, input: {
   const result = await callJson<WrittenArticle>(llm, {
     prompt,
     system: prompt.body.replace('{{LENGTH}}', LENGTH_HINT[input.length]),
-    schema: ARTICLE_SCHEMA,
+    schema: search ? ARTICLE_SCHEMA_V2 : ARTICLE_SCHEMA,
     maxTokens: 16000,
     user,
     ...(structured?{correctionUser:[dataBlock('brand_profile',referencedProfile),brief,dataBlock('linkable_pages',linkable.map(l=>({url:l.url})))].join('\n\n')}:{}),
@@ -624,7 +648,13 @@ export async function writeArticle(llm: LlmClient, input: {
       return problems;
     },
   });
-  return { ...result, short };
+  if (!search) return { ...result, short };
+  // The server, not the model, picks the Google title and short description: first option that passes, else the main field.
+  const v = result.value;
+  const proseText = [v.title, v.intro, ...v.sections.flatMap((x) => [x.heading, x.body]), v.conclusion, ...v.faqs.flatMap((f) => [f.q, f.a])].join('\n');
+  const chosen = chooseSearchFields({ seoTitle: v.seo_title, metaDescription: v.meta_description, titleOptions: v.title_options, descriptionOptions: v.description_options, proseText, requirements: search });
+  const { title_options: _t, description_options: _d, ...article } = v;
+  return { value: { ...article, seo_title: chosen.seoTitle, meta_description: chosen.metaDescription }, record: { ...result.record, searchDraft: chosen.record }, short };
 }
 
 export async function rewriteSection(llm: LlmClient, input: {

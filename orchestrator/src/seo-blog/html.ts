@@ -166,6 +166,27 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
   };
 }
 
+/**
+ * A research page's outline: the text of its H2 and H3 headings inside the readable region (the same region
+ * `parseHtmlPage` reads text from) and its word count. Bounded: at most `maxHeadings` headings, each kept whole only
+ * when it is at most `maxChars` characters (a longer one is left out, never cut), control characters removed.
+ * Used only for pages research already fetched; it reads the same bytes and fetches nothing.
+ */
+export function pageOutline(html: string, maxHeadings = 12, maxChars = 100): { headings: string[]; words: number } {
+  const bodyHtml = /<body\b[\s\S]*<\/body>/i.exec(html)?.[0] ?? html;
+  const mainHtml = /<(main|article)\b[\s\S]*?<\/\1>/i.exec(bodyHtml)?.[0]
+    ?? bodyHtml.replace(/<(nav|header|footer)\b[\s\S]*?<\/\1>/gi, ' ');
+  const headings: string[] = [];
+  const headingRe = /<h([23])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi;
+  let hm: RegExpExecArray | null;
+  while ((hm = headingRe.exec(mainHtml)) !== null && headings.length < maxHeadings) {
+    const text = stripTags(hm[2] ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim();
+    if (text && text.length <= maxChars && !headings.includes(text)) headings.push(text);
+  }
+  const words = Math.min(200_000, (stripTags(mainHtml).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length);
+  return { headings, words };
+}
+
 function validDate(value: string | null): string | null {
   if (!value) return null;
   const t = Date.parse(value);

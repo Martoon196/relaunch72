@@ -10,7 +10,8 @@
 
 import { randomUUID } from 'node:crypto';
 import {gunzipSync,inflateSync,brotliDecompressSync} from 'node:zlib';
-import { parseHtmlPage } from './html.js';
+import { pageOutline, parseHtmlPage } from './html.js';
+import { SEARCH_CAPS } from './search-requirements.js';
 import { topicTokens } from './dedupe.js';
 import { sameSite } from './inventory.js';
 import type { FetchTransport } from './safe-fetch.js';
@@ -262,6 +263,11 @@ export async function researchQueries(input: {
   readonly maxSources?: number;
   readonly keywordProvider?: KeywordProvider | null;
   readonly excludeHosts?: readonly string[];
+  /**
+   * Keyword-first research only: also keep each read page's H2/H3 headings and word count, from the bytes already
+   * fetched (no extra fetch, no supplier change). Off: sources are exactly as before.
+   */
+  readonly captureOutlines?: boolean;
 }): Promise<ResearchBundle> {
   if (input.search.mode !== 'live') throw new ResearchUnavailableError();
   const perQuery = input.perQuery ?? 4;
@@ -324,6 +330,8 @@ export async function researchQueries(input: {
           provider: input.search.id,
           primary: isPrimarySource(key, input.brandWebsite),
           query,
+          ...(input.captureOutlines && parsed && sources.filter((x) => x.outline).length < SEARCH_CAPS.outlinePages
+            ? { outline: pageOutline(rawText.replace(/\u0000/gu, ' '), SEARCH_CAPS.outlineHeadings, SEARCH_CAPS.outlineHeadingChars) } : {}),
         });
         kept++;
       } catch (error) {

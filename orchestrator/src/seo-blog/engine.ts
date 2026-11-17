@@ -91,6 +91,7 @@ import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
 import type { KeywordChoices } from './keyword-store-shape.js';
 import { bindByIds, briefSeo, candidateIds, candidatesForPrompt, planningCandidates, type PlanningCandidates, type ShortlistRow } from './keyword-planning.js';
+import { hasSearchTarget, searchRequirements, topResultPages } from './search-requirements.js';
 import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllowanceMessage, fillAttempts, fillCalls, FILL_MESSAGE, isKeywordFillJob, KEYWORD_FILL_CALLS, paidCallsNeeded, poolInMarket, readablePool, readKeywordPool, rebuiltPool, runFillCall, storedPool, uncertainLookups, withCachedCall, withCost, type FillAttempt, type FillCall, type KeywordPoolRead } from './keyword-fill.js';
 
 /** Search-number answers that stand in for a skipped or failed request (they carry no rows). */
@@ -1312,6 +1313,8 @@ export class SeoBlogEngine {
     let research = execution?.research ?? await researchQueries({
       queries: seeds, search: execution?.search??this.deps.search, transport: this.deps.transport,
       locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: execution ? execution.metrics??null : this.deps.keywords ?? null,
+      // Keyword-first only: keep the headings and word counts of the pages it reads (for the writer's search requirements).
+      ...(shortlist.length ? { captureOutlines: true } : {}),
     });
     // A skipped or failed numbers request answers with no rows; record it as unavailable, not as "no data".
     if (!execution?.research && execution?.numbersUnavailable?.() && research.numbers !== 'off') research = { ...research, numbers: 'unavailable' };
@@ -1575,9 +1578,15 @@ export class SeoBlogEngine {
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
     const sources = await this.sourcesForBrief(brandId, brief);
     const linkable = await this.linkable(brandId);
+    // A brief with a measured target phrase is written to the search standard (prompt v2); every other brief is sent
+    // exactly as before, with no `search` input at all.
+    const search = hasSearchTarget(brief)
+      ? searchRequirements({ brief, pages: topResultPages((await this.store.getPlan(brandId, brief.planId))?.sources ?? [], brief.seo!.primary.phrase),
+        length: brand.settings.lengthPreference, linkable, exclusions: profile.exclusions })
+      : null;
     let written;
     try {
-      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
+      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference, ...(search ? { search } : {}) });
     } catch (error) {
       await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: (error as Error).message.slice(0, 300) }).catch(() => undefined);
       throw error;

@@ -25,7 +25,7 @@ export interface CheckContext {
 }
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const PROMISE = /(?<!\b(?:no|not|never|without|cannot|can't|isn't)\s(?:a\s)?)\b(guarantee[sd]?|risk[- ]free|no[- ]risk|can't lose|cannot lose|you will (?:make|earn|double|profit)|will double|100% (?:safe|certain|success)|instant (?:profit|returns)|passive income for life|rank (?:#?1|first) on google)\b/i;
+export const PROMISE = /(?<!\b(?:no|not|never|without|cannot|can't|isn't)\s(?:a\s)?)\b(guarantee[sd]?|risk[- ]free|no[- ]risk|can't lose|cannot lose|you will (?:make|earn|double|profit)|will double|100% (?:safe|certain|success)|instant (?:profit|returns)|passive income for life|rank (?:#?1|first) on google)\b/i;
 const REGULATORY = /\b(tax|stamp duty|sdlt|lbtt|land transaction tax|capital gains|income tax|vat|hmrc|fca|regulat\w*|legislation|statut\w*|licen[cs]\w*|planning permission|permitted development|article 4|renters'? rights|section 21|section 8|deposit protection|epc|minimum energy|mortgage rates?|interest rates?|base rate|act \d{4})\b/i;
 const ASSERTIVE = /\b(must|required|requirement|illegal|unlawful|legal(?:ly)?|allowed|exempt|liable|penalt\w*|fine[sd]?|banned|mandatory|from \d{1,2} \w+ \d{4}|as of \d{4})\b/i;
 const PROOF = /\b(case stud(?:y|ies)|testimonials?|our clients (?:have|achieved|made)|award[- ]winning|trusted by|rated \d|\d+ (?:happy|satisfied) (?:clients|customers|investors)|five[- ]star|5[- ]star)\b/i;
