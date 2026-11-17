@@ -28,12 +28,19 @@ import { contentAreaLayout, contentAreaTopLayout, type ContentAreaPreview } from
 import { DEMAND_UNAVAILABLE, ownerActivityWords, ownerWords, researchWords } from '../seo-blog/owner-words.js';
 import { articlesPerMonth, founderView, technicalDetail, writingLeft, writingUnitsDetail } from './owner-detail.js';
 import type { ResearchDiagnostic } from '../seo-blog/programme.js';
+import { demandSentence, measuredDemand } from './brief-demand.js';
 
 export const SEO_BLOG_BASE = '/portal/seo-blog';
 /** The month a demand figure was measured ("measured, Oct 2026"); never who measured it. */
 function measuredMonth(at: string): string {
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? 'measured' : `measured, ${d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })}`;
+}
+/** The Demand cell: a measured number always names the phrase it was measured for (`6,600 searches a month for "landlord tax"`). */
+function demandCell(brief: ArticleBrief): string {
+  const d = measuredDemand(brief);
+  if (!d) return brief.demand.kind === 'measured' ? '<span class="muted">Measured, no number on record</span>' : '<span class="muted">Qualitative</span>';
+  return `<span style="overflow-wrap:anywhere">Measured: ${e(demandSentence(d))}${d.retrievedAt ? ` (${e(measuredMonth(d.retrievedAt))})` : ''}</span>`;
 }
 /** The founder's raw research diagnostic: the stored wording, the status code, the task reference. Nothing for a client. */
 function diagnosticDetail(shell: Shell, d: ResearchDiagnostic): string {
@@ -312,7 +319,7 @@ ${plan.status === 'proposed' ? `<form method="post" action="${url(b, `plans/${pl
 <form method="post" action="${url(b, 'generate')}">${csrfField(shell.csrf)}<table><thead><tr><th><span class="muted">Select</span></th><th>Article</th><th>Why it fits</th><th>Demand</th><th>Overlap</th><th>Suggested</th><th></th></tr></thead><tbody>
 ${briefs.map((x) => `<tr><td>${['planned', 'accepted'].includes(x.status) ? `<input type="checkbox" name="brief" value="${e(x.id)}" aria-label="Select ${e(x.workingTitle)}">` : ''}</td>
 <td><strong>${e(x.workingTitle)}</strong><br><span class="pill">${x.role === 'pillar' ? 'Pillar' : 'Supporting'}</span> <span class="muted">${e(x.searchIntent)} · “${e(x.targetQuery)}”</span><details><summary>Angle and outline</summary><p>${e(x.angle)}</p><ol>${x.outline.map((o) => `<li>${e(o)}</li>`).join('')}</ol><p class="muted">Sources: ${x.sourceIds.map((id) => { const s = plan.sources.find((y) => y.id === id); return s ? `<a href="${e(s.url)}" rel="noopener">${e(s.title)}</a>` : ''; }).filter(Boolean).join(', ') || 'none'}</p></details></td>
-<td>${e(x.whyFit)}</td><td>${x.demand.kind === 'measured' ? `Measured: ${x.demand.volume ?? '—'} searches/month (${e(measuredMonth(x.demand.retrievedAt))})` : '<span class="muted">Qualitative</span>'}</td>
+<td>${e(x.whyFit)}</td><td>${demandCell(x)}</td>
 <td>${x.duplicate.verdict === 'distinct' ? '<span class="pill ok">Distinct</span>' : `<span class="pill warn">${e({ new_angle: 'Overlap', update_existing: 'Update existing page', skip: 'Duplicate', distinct: '' }[x.duplicate.verdict])}</span><br><small>${e(x.duplicate.advice)}</small>`}</td>
 <td>${x.suggestedAtUtc ? e(utcToLocal(x.suggestedAtUtc, b.timezone).date) : '<span class="muted">—</span>'}</td>
 <td>${e(x.status)}${['planned', 'accepted', 'postponed', 'omitted'].includes(x.status) ? ` <button class="secondary" type="submit" formaction="${url(b, `briefs/${x.id}/${x.status === 'omitted' || x.status === 'postponed' ? 'planned' : 'omitted'}`)}">${x.status === 'omitted' || x.status === 'postponed' ? 'Restore' : 'Omit'}</button>` : ''}</td></tr>`).join('')}
