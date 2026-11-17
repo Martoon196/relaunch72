@@ -315,3 +315,23 @@ test('N1 through the engine: valid ids on the wrong articles are left unbound (n
   assert.equal(briefs.find((b) => b.slug === 'returning-a-tenancy-deposit')!.seo!.primary.phrase, 'return tenancy deposit', 'a fitting choice stays bound');
   assert.equal(plan.keywordPlanning!.unfit, 3);
 });
+
+// ─── F6: the operator log line is bounded ────────────────────────────────────
+
+test('F6: 20,000 junk ids make one short log line: counts, a count per reason and at most 40 capped entries', async () => {
+  const h = harness(now);
+  const e = new SeoBlogEngine({ store: h.store, llm: h.llm, search: h.search, transport: h.web, publishers: new Map(), vault: h.vault, now: h.clock.now, batchLimit: 20, keywordResearch: new NoCallKeywords() });
+  const brand = await readyBrand(h, e);
+  setPool(h, brand.id, pool(DEPOSITS.map(([p, n], i) => row(p, n, i))));
+  rewritePlanIds(h, (a, i) => { a.secondary_phrase_ids = Array.from({ length: i === 0 ? 20_000 : 3 }, (_, k) => `K${1000 + k}`); });
+  const { value: { plan }, lines } = await captureInfo(() => planOnce(h, e, brand.id));
+  const logged = lines.filter((l) => l.includes('seo_blog.keyword_ids_dropped'));
+  assert.equal(logged.length, 1);
+  assert.ok(logged[0]!.length < 8_000, `the line is ${logged[0]!.length} characters (it was about 1.9 MB)`);
+  const event = JSON.parse(logged[0]!) as { total: number; stripped: number; byReason: Record<string, number>; dropped: unknown[]; omitted: number };
+  assert.equal(event.dropped.length, 40);
+  assert.equal(event.total, Object.values(event.byReason).reduce((n, x) => n + x, 0));
+  assert.equal(event.omitted, event.total - 40);
+  assert.equal(event.byReason.unknown_id, 20_018);
+  assert.equal(event.stripped, plan.keywordPlanning!.stripped);
+});

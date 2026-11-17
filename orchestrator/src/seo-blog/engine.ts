@@ -99,6 +99,19 @@ import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllo
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
 const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
 /** Of those, the answers that stand in for a request skipped because the research allowance was too small. */
+/** At most this many dropped-id entries in the operator log line. */
+export const DROP_LOG_ENTRIES = 40;
+/** The operator log line for ids dropped at binding: counts, a count per reason, and the first 40 entries, capped. */
+export function keywordDropLog(input: { brandId: string; planId: string; candidates: number; binding: { stripped: number; unfit: number; withdrawn: number; dropped: readonly { key: string; field: string; id: string | null; reason: string }[] } }): string {
+  const cap = (v: string | null, n: number) => (v === null ? null : v.slice(0, n));
+  const byReason: Record<string, number> = {};
+  for (const d of input.binding.dropped) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+  return JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId: input.brandId, planId: input.planId, candidates: input.candidates,
+    stripped: input.binding.stripped, unfit: input.binding.unfit, withdrawn: input.binding.withdrawn, total: input.binding.dropped.length, byReason,
+    dropped: input.binding.dropped.slice(0, DROP_LOG_ENTRIES).map((d) => ({ brief: cap(d.key, 80), field: cap(d.field, 12), id: cap(d.id, 12), reason: cap(d.reason, 24) })),
+    ...(input.binding.dropped.length > DROP_LOG_ENTRIES ? { omitted: input.binding.dropped.length - DROP_LOG_ENTRIES } : {}) });
+}
+
 /**
  * A planning task held (strict setting) after a search-numbers lookup whose outcome is unknown: it is never bought
  * again for that task, so Retry cannot help; a fresh plan from Topics can.
@@ -1407,8 +1420,8 @@ export class SeoBlogEngine {
     const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids,
       text: { question: item.target_query, title: item.working_title } })), candidates) : null;
     // Internal only: an operator log line, never an activity line or any client-visible text.
-    if (binding?.dropped.length) console.info(JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId, planId, candidates: ids?.size ?? 0, stripped: binding.stripped, unfit: binding.unfit, withdrawn: binding.withdrawn,
-      dropped: binding.dropped.map((d) => ({ brief: d.key, field: d.field, id: d.id, reason: d.reason })) }));
+    // Bounded: the counts, a count per reason, and at most the first 40 entries, each field length-capped.
+    if (binding?.dropped.length) console.info(keywordDropLog({ brandId, planId, candidates: ids?.size ?? 0, binding }));
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
       let slug = item.slug;
