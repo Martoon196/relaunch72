@@ -152,6 +152,12 @@ const INSTRUCTION_LIKE: readonly RegExp[] = [
   /\b(?:do not|don't|never) (?:follow|obey) (?:the |your |any |these )?(?:rules|instructions|guidelines|prompt|system)\b/i,
   /\b(?:print|output|reveal|repeat|summari[sz]e) (?:your|the) (?:prompt|instructions|system prompt|guidelines)(?:\s*$|\s+(?:to|for) the reader)|\brepeat everything above\b/i,
   /\{\{|\}\}|\$\{/,
+  // Directions to the writer about what the article must say or do (not a reader's how-to).
+  /^(?:say|state|claim|conclude)\s+(?:that|it|this)\b/i,
+  /^(?:tell|remind|point|direct|refer|send)\s+(?:the |your |all )?readers?\b/i,
+  /^(?:[Rr]ecommend|[Pp]raise|[Pp]romote|[Ee]ndorse)\s+(?:\p{Lu}|us\b|our\b)/u,
+  /^(?:finish|end|close|sign off) with (?:their|our|a link|the (?:phone|link|number))\b/i,
+  /\bby name\b|\b(?:before|after|whatever) you write\b|\bthe reader wants\b|\bstop writing\b/i,
 ];
 
 /**
@@ -175,9 +181,13 @@ export function cleanPhrase(raw: unknown, max: number, excluded: readonly unknow
  * Entities decoded (twice at most, so a double-encoded one cannot hide) with invisible characters removed before and
  * after, so "Ig&#8203;nore" reads as "Ignore" and "pro&shy;tection" as "protection".
  */
+const PUNCTUATION_ENTITIES: Record<string, string> = { period: '.', commat: '@', colon: ':', sol: '/', bsol: '\\', num: '#', lowbar: '_', hyphen: '-', dash: '-', excl: '!', quest: '?', semi: ';', comma: ',', lpar: '(', rpar: ')', lsqb: '[', rsqb: ']', lcub: '{', rcub: '}', dollar: '$', percnt: '%', plus: '+', equals: '=', ast: '*', midast: '*', verbar: '|', vert: '|', grave: '`', Hat: '^', tilde: '~' };
 function decodeVisible(raw: string): string {
   let s = stripInvisible(raw.normalize('NFKC'));
-  for (let i = 0; i < 2 && /&(?:#x[0-9a-f]+|#\d+|[a-z]+);/i.test(s); i++) s = stripInvisible(decodeEntities(s.replace(/&(?:shy|zwj|zwnj|lrm|rlm);/gi, '')).normalize('NFKC'));
+  for (let i = 0; i < 2 && /&(?:#x[0-9a-f]+|#\d+|[a-z]+);/i.test(s); i++) {
+    s = s.replace(/&(?:shy|zwj|zwnj|lrm|rlm);/gi, '').replace(/&([a-z]+);/gi, (m, name: string) => PUNCTUATION_ENTITIES[name] ?? PUNCTUATION_ENTITIES[name.toLowerCase()] ?? m);
+    s = stripInvisible(decodeEntities(s).normalize('NFKC'));
+  }
   return s;
 }
 
@@ -187,8 +197,9 @@ export function cleanSearchText(raw: unknown, max: number, excluded: readonly un
   const decoded = decodeVisible(raw);
   const folded = decoded.normalize('NFKD').replace(/\p{M}/gu, '');
   const hostile = (s: string) => ADDRESS_LIKE.some((re) => re.test(s)) || INSTRUCTION_LIKE.some((re) => re.test(s));
-  // A role marker on any line, before lines are joined.
-  if (folded.split(/[\r\n]+/).some((line) => hostile(line.replace(/\s+/gu, ' ').trim())) || hostile(folded.replace(/\s+/gu, ' '))) return null;
+  // A role marker on any line, before lines are joined (split on the raw text: cleaning turns line breaks into spaces).
+  const lines = raw.split(/[\r\n\u2028\u2029\u0085\v\f]+/).map((l) => decodeVisible(l).normalize('NFKD').replace(/\p{M}/gu, '').replace(/\s+/gu, ' ').trim());
+  if (lines.some((line) => hostile(line)) || hostile(folded.replace(/\s+/gu, ' '))) return null;
   // A word mixing Latin with Cyrillic or Greek letters is a look-alike spelling.
   if (folded.split(/[^\p{L}]+/u).some((w) => /\p{Script=Latin}/u.test(w) && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(w))) return null;
   const text = tidy(decoded);
@@ -197,21 +208,25 @@ export function cleanSearchText(raw: unknown, max: number, excluded: readonly un
   return text;
 }
 
-/** Page furniture, not a topic. */
-const FURNITURE = /^(?:related(?: posts| articles| guides| reading)?|further reading|sources|references|share(?: this(?: article| post)?)?|follow us|subscribe|newsletter|sign up|join (?:us|our)|comments?|leave a (?:reply|comment)|about (?:the )?(?:author|us)|who we are|meet the team|our (?:team|story|services|fees|prices|verdict)|contact(?: us)?|get in touch|speak to (?:an? )?(?:expert|adviser|advisor)|book (?:a|your) (?:call|consultation|viewing)|get (?:a|your) (?:free )?(?:quote|valuation)|request a (?:quote|callback)|table of contents|contents|menu|navigation|search|footer|categories|tags|popular(?: posts)?|recent posts|latest (?:news|posts|articles)|you (?:may|might) also like|more from|download|cookies?|cookie (?:policy|settings|preferences)|privacy(?: policy)?|we value your privacy|manage (?:consent|preferences|cookies)|your privacy|consent|terms(?: and conditions| of use)?|summary|key takeaways|conclusion|final thoughts|in conclusion|introduction|faqs?|frequently asked questions|q ?& ?a|testimonials?|reviews?|what our clients say|why choose us)\b/i;
+/** Page furniture, not a topic: the whole heading (a heading that only starts with "Menu" or "Search" is kept). */
+const FURNITURE = /^(?:related(?: posts| articles| guides| reading)?|further reading|sources|references|share(?: this(?: article| post)?)?|follow us|subscribe|newsletter|sign up|join (?:us|our)|comments?|leave a (?:reply|comment)|about (?:the )?(?:author|us)|who we are|meet the team|our (?:team|story|services|fees|prices|verdict)|contact(?: us)?|get in touch|speak to (?:an? )?(?:expert|adviser|advisor)|book (?:a|your) (?:call|consultation|viewing)|get (?:a|your) (?:free )?(?:quote|valuation)|request a (?:quote|callback)|table of contents|contents|menu|navigation|search|footer|categories|tags|popular(?: posts)?|recent posts|latest (?:news|posts|articles)|you (?:may|might) also like|more from|download|cookies?|cookie (?:policy|settings|preferences)|privacy(?: policy)?|we value your privacy|manage (?:(?:consent|cookie|privacy) )?(?:consent|preferences|settings|cookies)|your privacy|consent|terms(?: and conditions| of use)?|summary|key takeaways|conclusion|final thoughts|in conclusion|introduction|faqs?|frequently asked questions|q ?& ?a|testimonials?|reviews?|what our clients say|why choose us)(?:\s+(?:us|now|today|here|below|for (?:free|updates|more)|to (?:our|the|my) (?:newsletter|blog|updates|mailing list)|on (?:social media|\p{L}+(?: and \p{L}+)?)|this (?:article|post|page|guide)|with (?:friends|a friend)))?\s*[:.!?]*$/iu;
 const PHONE = /(?:\+?\d[\d\s().-]{7,}\d)/;
 const MONEY = /[£$€¥]\s?\d|\b\d[\d,.]*\s?(?:p|pence|pounds?|dollars?|euros?|gbp|usd|eur|k)\b/i;
 const PERCENT = /\d\s?%|\bper ?cent\b|\bpercent\b/i;
 const RATING = /\b[0-5](?:\.\d)?\s*(?:\/\s*5|stars?|out of (?:5|five))\b|★|☆|\bfive[- ]star\b|\brated\b/i;
 /** A claim about a business: praise, blame, ranking or a recommendation. */
-const CLAIM = /\b(?:scams?|fraud|rip[- ]?off|cowboys?|avoid|beats?|best|cheapest|top|leading|number one|#1|recommend(?:ed|s)?|award|trusted|guarantee[sd]?|unbeatable|official partner)\b/i;
+const CLAIM = /\b(?:scams?|fraud(?:ulent|sters?)?|rip[- ]?offs?|cowboys?|crooks?|steals?|stole|lies|liars?|cheats?|avoid|beats?|best|cheapest|top|leading|number one|#1|recommend(?:ed|s)?|award|trusted|guarantee[sd]?|unbeatable|official partner)\b/i;
+/** A name: an acronym or a camel-case word anywhere ("DPS", "OpenRent"), or a capitalised word after the first. */
+const NAMEISH = /(?:^|[\s(])(?:\p{Lu}{2,}\b|\p{Lu}\p{Ll}+\p{Lu}\p{L}*)|\s\p{Lu}\p{Ll}/u;
+/** A health claim or a claim that a rule does not apply: never a topic to cover from page headings. */
+const RISKY_CLAIM = /\b(?:cures?|cured|heals?|treats? (?:asthma|cancer|anxiety|depression)|exempt from|no longer (?:need|needs|required|applies|apply)|(?:do|does) not need to (?:protect|register|pay|comply)|loophole)\b/i;
 /** Two or more capitalised words together that are not the heading's first word: a business or product name. */
 const NAME_RUN = /(?:^|\s)\S+\s+(?:\p{Lu}[\p{L}&'-]+\s+)*\p{Lu}[\p{L}&'-]+\s+\p{Lu}[\p{L}&'-]+/u;
 
 /** Why a heading is not a topic the writer should be told about (furniture, contact, price, rating or a claim). */
 export function notATopic(h: string): boolean {
   return FURNITURE.test(h) || PHONE.test(h) || MONEY.test(h) || PERCENT.test(h) || RATING.test(h) || PROMISE.test(h) || PROOF.test(h)
-    || (CLAIM.test(h) && (NAME_RUN.test(h) || /\b(?:we|our|us)\b/i.test(h))) || /\b(?:we|our|us)\b/i.test(h) && /\b(?:offer|charge|fees?|prices?|team|clients?|service)\b/i.test(h);
+    || RISKY_CLAIM.test(h) || (CLAIM.test(h) && (NAME_RUN.test(h) || NAMEISH.test(h) || /\b(?:we|our|us)\b/i.test(h))) || /\b(?:we|our|us)\b/i.test(h) && /\b(?:offer|charge|fees?|prices?|team|clients?|service)\b/i.test(h);
 }
 
 /** The registrable part of a host ("www.news.example.co.uk" gives "example.co.uk"), for counting different sites. */
@@ -354,7 +369,8 @@ export function searchRequirements(input: {
     const near = (x: string) => topicSimilarity(x, primary) >= 0.6;
     const natural_variants = dedupe([...phrases([seo.primary.parent]), ...secondaryAll.filter(near)], [primary]).slice(0, limits.variants);
     const secondary_phrases = secondaryAll.filter((x) => !near(x) && !natural_variants.includes(x)).slice(0, limits.secondary);
-    const questions_to_answer = dedupe(list(seo.questions).map((q) => cleanSearchText(textOf(q, 'text'), SEARCH_CAPS.questionChars, ex)).filter((x): x is string => Boolean(x))).slice(0, limits.questions);
+    // A question carrying a phone number is never something a searcher asked: drop it.
+    const questions_to_answer = dedupe(list(seo.questions).map((q) => cleanSearchText(textOf(q, 'text'), SEARCH_CAPS.questionChars, ex)).filter((x): x is string => Boolean(x) && !PHONE.test(x!))).slice(0, limits.questions);
     const pages = (Array.isArray(input.pages) ? input.pages : []).slice(0, SEARCH_CAPS.outlinePages);
     const linkable = new Set((Array.isArray(input.linkable) ? input.linkable : []).map((l) => l?.url));
     const internal_links = dedupe(list(input.brief.internalLinks).filter((l): l is string => typeof l === 'string' && /^https:\/\/[^\s<>"]+$/.test(l) && l.length <= SEARCH_CAPS.linkChars && linkable.has(l))).slice(0, SEARCH_CAPS.links);
@@ -424,6 +440,9 @@ const DANGLING = /(?:\b(?:and|or|the|a|an|of|to|for|with|in|on|your|our|at|by|fr
 const NUMBER_WORDS = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|dozen|percent|per cent|half|quarter|double|triple)\b/gi;
 const NEGATED_RULE = /\b(?:not|no longer|never|isn'?t|aren'?t|don'?t|doesn'?t|exempt from|no need)\b.{0,25}\b(?:required|need(?:ed)?|must|apply|applies|legal|allowed|protect(?:ed)?)\b/i;
 const MARKER = /\[src:[^\]]*\]/g;
+/** Everyday words a Title Case title capitalises; never a business name on their own. */
+const TITLE_CASE_WORDS = new Set(['A', 'An', 'The', 'And', 'Or', 'But', 'For', 'Of', 'To', 'In', 'On', 'At', 'By', 'With', 'From', 'Into', 'About', 'Vs', 'Your', 'You', 'Our', 'Their', 'Its', 'It',
+  'What', 'When', 'Where', 'Why', 'How', 'Who', 'Which', 'Is', 'Are', 'Do', 'Does', 'Can', 'Should', 'Must', 'Need', 'Needs', 'Will', 'Guide', 'Explained', 'Plain', 'Complete', 'Simple', 'Rules', 'Steps', 'Checklist', 'Know']);
 
 const norm = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 const wordSet = (s: string) => new Set(stripInvisible(s).normalize('NFKC').toLowerCase().replace(/[’']s\b/g, '').split(/[^\p{L}\p{N}]+/u).filter(Boolean));
@@ -466,16 +485,20 @@ export function optionProblems(raw: unknown, kind: 'title' | 'description', ctx:
   if (NEGATED_RULE.test(text) && !norm(prose).includes(norm(NEGATED_RULE.exec(text)![0]))) add('unsupported_claim');
   const assertive = ASSERTIVE.exec(text)?.[0];
   if (assertive && !proseWords.has(assertive.toLowerCase())) add('unsupported_claim');
-  // " | Name" or " - Name" at the end: only the business's own name.
-  const suffix = /\s(?:[|·•]|[-–—]{1,2})\s+([^|·•–—]{1,60})$/.exec(text)?.[1];
-  if (suffix && norm(suffix) !== brand) add('brand_suffix');
-  // A capitalised word that is not the start of the text or of a clause must be one the article or the brand uses: no competitor or company names.
-  const brandWords = wordSet(ctx.brandName ?? '');
+  // " | Name" at the end, or " - Name" where every word is capitalised (a name, not a subtitle such as " - what to do"):
+  // only the business's own name.
+  const piped = /\s[|·•]\s*([^|·•]{1,60})$/.exec(text)?.[1];
+  const dashed = /\s[-–—]{1,2}\s+([^|·•–—]{1,60})$/.exec(text)?.[1];
+  const named = (x: string) => x.trim().split(/\s+/).every((w) => /^[\p{Lu}\p{N}&]/u.test(w));
+  if ((piped && norm(piped) !== brand) || (dashed && named(dashed) && norm(dashed) !== brand)) add('brand_suffix');
+  // A capitalised word that is not the start of the text or of a clause must be one the article, the phrase or the brand
+  // uses: no competitor or company names.
+  const brandWords = new Set([...wordSet(ctx.brandName ?? ''), ...wordSet(ctx.phrase)]);
   const tokens = text.split(/\s+/);
   tokens.forEach((t, i) => {
     const start = i === 0 || /[:.?|–—-]$/.test(tokens[i - 1]!);
     const w = t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/[’']s$/u, '');
-    if (!start && /\p{Lu}/u.test(w) && !proseWords.has(w.toLowerCase()) && !brandWords.has(w.toLowerCase())) add('unknown_name');
+    if (!start && /\p{Lu}/u.test(w) && !proseWords.has(w.toLowerCase()) && !brandWords.has(w.toLowerCase()) && !TITLE_CASE_WORDS.has(w)) add('unknown_name');
   });
   if (kind === 'title' && (ctx.takenTitles ?? []).some((t) => typeof t === 'string' && norm(t) === norm(text))) add('duplicate');
   return problems;

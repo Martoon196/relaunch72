@@ -206,6 +206,30 @@ test('method-wrapped writing with requirements fits its bounded request and reco
   assert.ok(JSON.stringify((req.outputSchema as { properties: { article: { properties: object } } }).properties.article.properties).includes('title_options'));
 });
 
+test('B1 method-wrapped: a fault in the options lists never rejects the article (one model call, writer\'s own fields kept)', async () => {
+  for (const [name, fault] of [['four titles', ['a', 'b', 'c', 'd']], ['null', null], ['a non-string', [7, { x: 1 }]], ['a 201-character option', ['x'.repeat(201)]], ['missing', undefined]] as const) {
+    const f = fixtureBrand(), store = new MemoryMethodStore(), model = new UpgradeFixtureModel();
+    store.snapshots.set(f.brand.id, upgradeSnapshot(f.brand.id, ['production-core', 'blog-writing', 'visual-briefing']));
+    let hit = 0;
+    model.mutate = (result, request) => {
+      if (request.meta?.stage !== 'SEO_BLOG_ARTICLE') return;
+      hit++;
+      const a = result.article && typeof result.article === 'object' ? result.article : result;
+      assert.ok('seo_title' in a, 'the article object itself');
+      if (fault === undefined) { delete a.title_options; delete a.description_options; } else { a.title_options = fault; a.description_options = fault; }
+    };
+    const brief: ArticleBrief = { ...f.brief, seo: seo({ primary: { ...seo().primary, phrase: 'household maintenance checks' }, secondary: [], questions: [] }) };
+    const search = searchRequirements({ brief, pages: [], length: 'concise', linkable: [], exclusions: f.profile.exclusions })!;
+    const llm = await new MethodController(store, true).prepare(model, { ...f, stage: 'blog', stages: ['blog', 'visual-brief'], assetRef: 'article:' + f.brief.id, sources: ['S1', 'fixture-source'], baselineTokens: 32000,
+      evidence: { research: f.sources, editorialFormat: { formatId: 'checklist', rationale: 'Checks suit this practical question.' } } });
+    const plain = await writeArticle(llm, { ...f, brief, linkable: [], length: 'concise', search });
+    assert.equal(hit, 1, `${name}: the fault was sent`);
+    assert.equal(model.requests.filter((r) => r.meta?.stage === 'SEO_BLOG_ARTICLE').length, 1, `${name}: one model call`);
+    assert.equal(plain.record.searchDraft?.title?.chosen, 'model', `${name}: the writer's own title`);
+    assert.ok(!('title_options' in plain.value) && !('description_options' in plain.value), `${name}: the lists never reach the article`);
+  }
+});
+
 // ─── Choosing the title and description ──────────────────────────────────────
 
 test('title and description: the writer\'s own field is kept when it passes; otherwise the first valid option; phrase, length, cut-off, clickbait and new figures are checked', () => {
