@@ -447,6 +447,8 @@ export interface TopicPlan {
   readonly engine?: EngineStamp;
   /** Keyword-first planning only (internal): the output contract used, how many candidates were shown and how many returned ids were stripped. */
   readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number };
+  /** A product article's plan only: when its research ran, even if it found nothing (so it is never bought again). */
+  readonly productResearchAt?: IsoInstant;
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';
@@ -746,6 +748,8 @@ export interface PolicySnapshot {
 }
 
 export interface Publication {
+  /** A product article only (Affiliate Studio): the latest after-publishing check of the ad label and paid-link marking. */
+  readonly affiliateCheck?: import('../affiliate/page-check.js').AffiliatePageCheck;
   /** Once latched by independent verification, immutable; null means legacy first instant is unavailable. */
   readonly firstVerifiedAt?: IsoInstant | null;
   readonly mediaRelease?: import('./media-publication.js').PublicationMediaRelease;
