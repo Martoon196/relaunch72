@@ -18,7 +18,7 @@ import { FlowLocalStore } from '../followup-sequences/local-store.js';
 import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { simulateFollowupFlow, flowSimulationPreset } from '../followup-sequences/simulation.js';
 import type { FollowupEntryRule } from '../followup-sequences/entry.js';
-import { classifyLegacyFollowupAudience, followupAudienceCanStart, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience,
+import { legacyFollowupAudience, followupAudienceCanStart, FOLLOWUP_NO_AUDIENCE_RESUME, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience,
   FOLLOWUP_NO_AUDIENCE_LINE, type FollowupAudience, type FollowupAudienceKind } from '../followup-sequences/audience.js';
 import { FollowupSequenceValidationError } from '../followup-sequences/definition.js';
 
@@ -29,6 +29,16 @@ const ANY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 const OPEN_STATES: readonly FollowupRunState[] = ['active', 'paused', 'held'];
 /** The database enrols, pauses or resumes at most this many people per command. */
 export const MHP_SEQUENCE_BATCH = 500;
+/**
+ * The snapshot this page reads holds the 100 most recent people across all sequences of the webinar
+ * (0127 mhp_sequence_snapshot, LIMIT 100). A start is never larger than what the page can check before
+ * and after it; the explicit-recipient migration removes this limit.
+ */
+export const MHP_SEQUENCE_VISIBLE = 100;
+/** Held for these reasons, the database refuses a resume (0128 owner_hold_reason newer_draft / approval_or_brand_changed); never offer one. */
+export const MHP_UNRESUMABLE_REASONS: readonly string[] = ['newer_sequence', 'content_changed'];
+export const mhpRunResumable = (run: Pick<MhpSequenceRun, 'state' | 'reason' | 'unknownProofId'>): boolean =>
+  (run.state === 'paused' || run.state === 'held') && !run.unknownProofId && !MHP_UNRESUMABLE_REASONS.includes(run.reason ?? '');
 export interface MhpSequenceRun {
   id: string; contentItemId: string; contentVersionId: string; email: string; firstName: string | null;
   state: FollowupRunState; position: number; dueAt: string; reason: string | null; createdAt: string;
@@ -156,10 +166,8 @@ export interface MhpStartRefusal { code: 'older_version' | 'no_audience' | 'not_
 export interface MhpStartPlan {
   ready: boolean; refusal: MhpStartRefusal | null; itemId: string; versionId: string; title: string; audience: FollowupAudience; campaign: string;
   webinar: { label: string | null; date: string | null };
-  /** Exactly who the next Start would email, in the database's own order, at most one batch of 500. */
+  /** Exactly who the next Start would email, in the database's own order, never more than MHP_SEQUENCE_VISIBLE. */
   recipients: readonly MhpStartRecipient[]; count: number; digest: string;
-  /** Eligible people beyond this batch; they need their own confirmation afterwards. */
-  later: number;
   heldBack: { noConsent: number; unsubscribed: number; alreadyIn: number; earlierVersion: number };
   messages: readonly { number: number; channel: string; subject: string | null; waitMinutes: number; offsetMinutes: number }[];
   mode: string;
@@ -168,12 +176,16 @@ export interface MhpStartInput { commandId: string; itemId: string; versionId: s
   /** Last 8 hex characters of each confirmed person's id, used only to explain a difference. */
   people: string; confirmed: boolean }
 export type MhpStartResult =
-  | { kind: 'started'; started: number; expected: number; replayed: boolean; unexpected: number; unexpectedPaused: number; inFlight: number; later: number; firstWaitMinutes: number }
+  | { kind: 'started'; started: number; expected: number; replayed: boolean; unexpected: number; unexpectedPaused: number; inFlight: number; firstWaitMinutes: number;
+      /** Confirmed people another tab had already started, and confirmed people who could no longer receive it. */
+      startedElsewhere: number; notEligible: number;
+      /** The added people could not all be seen, so everyone active in the sequence was paused instead. */
+      pausedEveryone: boolean }
   | { kind: 'already_started'; count: number }
   | { kind: 'changed'; plan: MhpStartPlan; previousCount: number; added: readonly MhpStartRecipient[]; removed: readonly MhpStartRecipient[] };
-export interface MhpBulkResult { kind: 'bulk'; action: 'pause' | 'resume'; changed: number; remaining: number; blocked: number; inFlight: number; replayed: boolean; batches: number }
+export interface MhpBulkResult { kind: 'bulk'; action: 'pause' | 'resume' | 'stop'; changed: number; remaining: number; blocked: number; inFlight: number; replayed: boolean; batches: number }
 export interface MhpResumePlan { ready: boolean; refusal: string | null; itemId: string; versionId: string; title: string; people: readonly MhpSequenceRun[]; needsCheck: number; digest: string }
-export interface MhpPersonOutcome { runId: string; action: MhpSequenceAction['action']; code: 'done' | 'already' | 'used' | 'blocked' | 'not_ready' | 'unchanged' | 'gone';
+export interface MhpPersonOutcome { runId: string; action: MhpSequenceAction['action']; code: 'done' | 'already' | 'used' | 'blocked' | 'not_ready' | 'unchanged' | 'gone' | 'no_audience' | 'newer_version';
   before: FollowupRunState | null; after: FollowupRunState | null; inFlight: boolean }
 export function startDigest(itemId: string, versionId: string, prospectIds: readonly string[]): string {
   return createHash('sha256').update(['mhp.sequence-start/v1', itemId, versionId, ...prospectIds].join('\n')).digest('hex');
@@ -244,17 +256,9 @@ export class MhpSequenceService {
         }
       } catch (error) { if ((error instanceof MhpCommerceError || error instanceof FlowWorkspaceError) && [404, 409].includes(error.status)) blockers.add('email_version_not_ready'); else throw error; }
     }
-    const audience = await this.audienceOf(identity, itemId, local.metadata);
+    // Only an explicit, valid choice saved with this version counts. Anything else is "none yet", whatever people it has.
+    const audience = readStoredFollowupAudience(local.metadata) ?? legacyFollowupAudience();
     return { review, local, definition, blockers: [...blockers], timeline: followupTimeline(definition), audience, subjects, ...(this.dependencies.messages ? { messages } : {}) };
-  }
-  /** The saved audience of a version, or, for a version saved before audiences existed, the cautious classification. */
-  private async audienceOf(identity: PortalSessionIdentity, itemId: string, metadata: unknown, database?: MhpSequenceDatabaseSnapshot): Promise<FollowupAudience> {
-    const stored = readStoredFollowupAudience(metadata);
-    if (stored) return stored;
-    const snapshot = database ?? await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
-    return classifyLegacyFollowupAudience({ campaign: this.dependencies.campaign,
-      hasRuns: snapshot.campaign === this.dependencies.campaign && snapshot.runs.some(run => run.contentItemId === itemId),
-      hasEntryRule: snapshot.campaign === this.dependencies.campaign && (snapshot.entryRules ?? []).some(rule => rule.contentItemId === itemId) });
   }
   async preview(identity: PortalSessionIdentity, requestId: string, value: unknown, inlineMessages?: unknown) {
     await this.context(identity, requestId); const composition = inlineMessages === undefined ? null : parseFlowComposition(value, inlineMessages), definition = this.checked(composition?.definition ?? value);
@@ -353,6 +357,8 @@ export class MhpSequenceService {
     // Starting is only ever the confirmed path below (start), bound to the exact people the owner saw.
     if (input.action === 'enrol') throw new MhpCommerceError(409, MHP_START_NEEDS_CONFIRMATION);
     const detail = await this.review(identity, requestId, input.itemId, input.versionId);
+    // Resuming restarts sending, so it needs the same audience as starting. Pause, stop and remove are always allowed.
+    if (input.action === 'resume' && !followupAudienceCanStart(detail.audience, this.dependencies.campaign)) throw new MhpCommerceError(409, FOLLOWUP_NO_AUDIENCE_RESUME);
     if (input.action === 'resume' && detail.blockers.length) throw new MhpCommerceError(409, MHP_SEQUENCE_NOT_READY);
     return this.dependencies.repository.command(identity, { ...input, campaign: this.dependencies.campaign, requestId });
   }
@@ -390,7 +396,7 @@ export class MhpSequenceService {
     const messages = detail.timeline.map((step, index) => ({ number: index + 1, channel: step.step.kind, subject: detail.subjects?.[step.step.contentVersionId] ?? null,
       waitMinutes: step.waitMinutes, offsetMinutes: step.earliestOffsetMinutes }));
     const base = { itemId, versionId, title: detail.definition.title, audience: detail.audience, campaign, webinar: { label: null as string | null, date: webinarDate(campaign) },
-      recipients: [] as MhpStartRecipient[], count: 0, digest: '', later: 0, heldBack: { noConsent: 0, unsubscribed: 0, alreadyIn: 0, earlierVersion: 0 },
+      recipients: [] as MhpStartRecipient[], count: 0, digest: '', heldBack: { noConsent: 0, unsubscribed: 0, alreadyIn: 0, earlierVersion: 0 },
       messages, mode: this.dependencies.emails.status.mode };
     const refuse = (code: MhpStartRefusal['code'], message: string, extra: Partial<MhpStartPlan> = {}): MhpStartPlan => ({ ...base, ...extra, ready: false, refusal: { code, message } });
     if (!detail.review.isLatest) return refuse('older_version', 'This is an older version of the sequence. Open the latest version to start it.');
@@ -402,7 +408,7 @@ export class MhpSequenceService {
     const reader = this.dependencies.repository.audienceCandidates?.bind(this.dependencies.repository);
     if (!reader) return refuse('list_unavailable', 'The list of people who would receive this cannot be shown here yet, so the sequence cannot be started.');
     // Every person the page knows about must be the whole story, or exclusions could be wrong.
-    if (database.runs.length < database.runCount) return refuse('too_many', 'This webinar already has more people in sequences than this page can list, so it cannot be started safely from here. Nothing was started.');
+    if (database.runs.length < database.runCount) return refuse('too_many', `This webinar already has more people in sequences (${database.runCount}) than this page can safely check, so it cannot be started from here. Nothing was started.`);
     const candidates: MhpAudienceCandidate[] = []; let after: string | null = null;
     for (let page = 0; ; page++) {
       if (page >= 400) return refuse('too_many', 'There are too many sign-ups to list on one page, so this cannot be started from here. Nothing was started.');
@@ -421,8 +427,9 @@ export class MhpSequenceService {
     const webinar = { label: [...labels.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null, date: base.webinar.date };
     if (eligible.length !== database.eligible) return refuse('list_changed', 'The list of people changed while it was being read. Nothing was started. Open this page again to see the current list.', { webinar, heldBack });
     const pending = eligible.filter(c => !inThisVersion.has(key(c.email)) && !inEarlier.has(key(c.email))).sort((a, b) => a.prospectId < b.prospectId ? -1 : a.prospectId > b.prospectId ? 1 : 0);
-    const batch = pending.slice(0, MHP_SEQUENCE_BATCH).map(c => ({ prospectId: c.prospectId, firstName: c.firstName, email: c.email }));
-    const result = { webinar, heldBack, recipients: batch, count: batch.length, digest: startDigest(itemId, versionId, batch.map(r => r.prospectId)), later: pending.length - batch.length };
+    if (pending.length > MHP_SEQUENCE_VISIBLE) return refuse('too_many', `This list is longer than this page can safely check (${pending.length} people). Nothing was started.`, { webinar, heldBack });
+    const batch = pending.map(c => ({ prospectId: c.prospectId, firstName: c.firstName, email: c.email }));
+    const result = { webinar, heldBack, recipients: batch, count: batch.length, digest: startDigest(itemId, versionId, batch.map(r => r.prospectId)) };
     if (!batch.length) return refuse('nobody', heldBack.alreadyIn ? 'Everyone who can receive this sequence is already in it. Nobody new would be emailed.' : 'Nobody can receive this sequence right now: nobody who registered has agreed to emails or is not already in it.', result);
     return { ...base, ...result, ready: true, refusal: null };
   }
@@ -431,7 +438,7 @@ export class MhpSequenceService {
    * call and refuses, starting nothing, unless that is exactly the list the owner confirmed.
    */
   async start(identity: PortalSessionIdentity, requestId: string, input: MhpStartInput): Promise<MhpStartResult> {
-    if (!uuid(input.commandId) || !uuid(input.itemId) || !uuid(input.versionId) || !Number.isSafeInteger(input.count) || input.count < 1 || input.count > MHP_SEQUENCE_BATCH
+    if (!uuid(input.commandId) || !uuid(input.itemId) || !uuid(input.versionId) || !Number.isSafeInteger(input.count) || input.count < 1 || input.count > MHP_SEQUENCE_VISIBLE
         || !/^[a-f0-9]{64}$/u.test(input.digest) || !/^(?:[a-f0-9]{8})*$/u.test(input.people)) throw new MhpCommerceError(400, 'Open the sequence and press Start again.');
     if (!input.confirmed) throw new MhpCommerceError(400, 'Tick the box to confirm who will receive this, then press the button again.');
     const detail = await this.review(identity, requestId, input.itemId, input.versionId);
@@ -451,18 +458,34 @@ export class MhpSequenceService {
     const result = await this.dependencies.repository.command(identity, { action: 'enrol', commandId: input.commandId, itemId: input.itemId, versionId: input.versionId,
       runId: '', ackProofId: '', campaign: this.dependencies.campaign, requestId });
     // Narrow race: someone who became eligible between the check above and the database call is started too.
-    // Pause anyone new who was not on the confirmed list before any later step; their first email may already be on its way.
+    // Pause anyone new who was not on the confirmed list; their first email may already be on its way.
     const after = await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
-    const known = new Set(before.runs.map(run => run.id)), listed = new Set(plan.recipients.map(person => person.email.trim().toLowerCase()));
-    const extra = after.runs.filter(run => run.contentVersionId === input.versionId && !known.has(run.id) && !listed.has(run.email.trim().toLowerCase()) && run.state === 'active');
-    let paused = 0;
-    for (const [index, run] of extra.entries()) {
+    const key = (email: string) => email.trim().toLowerCase();
+    const known = new Set(before.runs.map(run => run.id)), listed = new Set(plan.recipients.map(person => key(person.email)));
+    const fresh = after.runs.filter(run => run.contentVersionId === input.versionId && !known.has(run.id));
+    const inVersion = new Set(after.runs.filter(run => run.contentVersionId === input.versionId).map(run => key(run.email)));
+    const extra = fresh.filter(run => !listed.has(key(run.email)));
+    // The page sees the 100 most recent people. If the start created more new people than the page can now see,
+    // the unexpected ones cannot be told apart: pause everyone active in this sequence instead, and say so.
+    const allVisible = after.runs.length >= after.runCount || fresh.length >= result.changed;
+    const unexpected = Math.max(extra.length, result.changed - plan.count);
+    let paused = 0, pausedEveryone = false;
+    if (unexpected > 0 && !allVisible) {
+      const all = await this.bulk(identity, requestId, 'pause', { commandId: flowCommandUuid(input.commandId, 'extra-all'), itemId: input.itemId, versionId: input.versionId });
+      paused = all.changed; pausedEveryone = true;
+    } else for (const [index, run] of extra.filter(run => run.state === 'active').entries()) {
       const outcome = await this.dependencies.repository.command(identity, { action: 'pause', commandId: flowCommandUuid(input.commandId, `extra-${index}`), itemId: input.itemId,
         versionId: input.versionId, runId: run.id, ackProofId: '', campaign: this.dependencies.campaign, requestId });
       paused += outcome.changed;
     }
-    return { kind: 'started', started: result.changed, expected: plan.count, replayed: result.replayed, unexpected: Math.max(extra.length, result.changed - plan.count),
-      unexpectedPaused: paused, inFlight: result.inFlight, later: plan.later, firstWaitMinutes: plan.messages[0]?.waitMinutes ?? 0 };
+    // Confirmed people not started by this press: another tab got there first, or they can no longer receive it.
+    // Counted, not guessed per person: the snapshot does not say which press created a run.
+    const listedInVersion = plan.recipients.filter(person => inVersion.has(key(person.email))).length;
+    const startedByThisPress = Math.max(0, result.changed - unexpected);
+    const startedElsewhere = result.replayed ? 0 : Math.max(0, listedInVersion - startedByThisPress);
+    const notEligible = result.replayed ? 0 : Math.max(0, plan.count - listedInVersion);
+    return { kind: 'started', started: result.changed, expected: plan.count, replayed: result.replayed, unexpected, unexpectedPaused: paused, pausedEveryone,
+      inFlight: result.inFlight, firstWaitMinutes: plan.messages[0]?.waitMinutes ?? 0, startedElsewhere, notEligible };
   }
   private async knownPeople(identity: PortalSessionIdentity, plan: MhpStartPlan, shortIds: ReadonlySet<string>): Promise<MhpStartRecipient[]> {
     if (!shortIds.size) return [];
@@ -483,14 +506,19 @@ export class MhpSequenceService {
   async pauseAll(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
     return this.bulk(identity, requestId, 'pause', input);
   }
+  /** Stops every active, paused or held person in this sequence. Final: they are never sent anything more from it. Always allowed. */
+  async stopAll(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
+    return this.bulk(identity, requestId, 'stop', input);
+  }
   /** Who "Resume everyone" would resume, bound to their exact ids. Reads only. */
   async resumePlan(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string): Promise<MhpResumePlan> {
     const detail = await this.review(identity, requestId, itemId, versionId);
     const database = await this.dependencies.repository.snapshot(identity, this.dependencies.campaign);
     const waiting = database.runs.filter(run => run.contentItemId === itemId && (run.state === 'paused' || run.state === 'held'));
-    const people = waiting.filter(run => !run.unknownProofId).sort((a, b) => a.id < b.id ? -1 : 1);
+    const people = waiting.filter(mhpRunResumable).sort((a, b) => a.id < b.id ? -1 : 1);
     const base = { itemId, versionId, title: detail.definition.title, people, needsCheck: waiting.length - people.length, digest: resumeDigest(itemId, people.map(run => run.id)) };
-    if (database.runs.length < database.runCount) return { ...base, ready: false, refusal: 'This webinar has more people in sequences than this page can list, so resume people one at a time from their cards.' };
+    if (!followupAudienceCanStart(detail.audience, this.dependencies.campaign)) return { ...base, people: [], ready: false, refusal: FOLLOWUP_NO_AUDIENCE_RESUME };
+    if (database.runs.length < database.runCount) return { ...base, ready: false, refusal: 'This webinar has more people in sequences than this page can safely check, so resume people one at a time from their cards.' };
     if (detail.blockers.length) return { ...base, ready: false, refusal: MHP_SEQUENCE_NOT_READY };
     if (!people.length) return { ...base, ready: false, refusal: 'Nobody in this sequence is paused.' };
     return { ...base, ready: true, refusal: null };
@@ -498,11 +526,11 @@ export class MhpSequenceService {
   async resumeAll(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; itemId: string; versionId: string; count: number; digest: string }): Promise<MhpBulkResult | { kind: 'changed'; plan: MhpResumePlan; previousCount: number }> {
     if (!Number.isSafeInteger(input.count) || input.count < 1 || !/^[a-f0-9]{64}$/u.test(input.digest)) throw new MhpCommerceError(400, 'Open the sequence and press Resume everyone again.');
     const plan = await this.resumePlan(identity, requestId, input.itemId, input.versionId);
-    if (!plan.ready && plan.people.length) throw new MhpCommerceError(409, plan.refusal!);
+    if (!plan.ready && (plan.people.length || plan.refusal === FOLLOWUP_NO_AUDIENCE_RESUME)) throw new MhpCommerceError(409, plan.refusal!);
     if (plan.people.length !== input.count || plan.digest !== input.digest) return { kind: 'changed', plan, previousCount: input.count };
     return this.bulk(identity, requestId, 'resume', input);
   }
-  private async bulk(identity: PortalSessionIdentity, requestId: string, action: 'pause' | 'resume', input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
+  private async bulk(identity: PortalSessionIdentity, requestId: string, action: 'pause' | 'resume' | 'stop', input: { commandId: string; itemId: string; versionId: string }): Promise<MhpBulkResult> {
     if (!uuid(input.commandId) || !uuid(input.itemId) || !uuid(input.versionId)) throw new MhpCommerceError(400, 'Open the sequence and try again.');
     const total = { kind: 'bulk' as const, action, changed: 0, remaining: 0, blocked: 0, inFlight: 0, replayed: false, batches: 0 };
     for (let batch = 0; batch < 20; batch++) {
@@ -520,11 +548,14 @@ export class MhpSequenceService {
     if (input.action === 'enrol' || !uuid(input.runId)) throw new MhpCommerceError(400, 'Open the sequence and use the button on the person\'s card.');
     const before = (await this.dependencies.repository.snapshot(identity, this.dependencies.campaign)).runs.find(run => run.id === input.runId && run.contentItemId === input.itemId);
     if (!before) return { runId: input.runId, action: input.action, code: 'gone', before: null, after: null, inFlight: false };
+    // A person on hold because a newer version exists cannot be resumed by the database; say so instead of trying.
+    if (input.action === 'resume' && MHP_UNRESUMABLE_REASONS.includes(before.reason ?? '') && !input.ackProofId)
+      return { runId: input.runId, action: input.action, code: 'newer_version', before: before.state, after: before.state, inFlight: before.inFlight };
     let result: MhpSequenceActionResult | null = null, code: MhpPersonOutcome['code'] | null = null;
     try { result = await this.command(identity, requestId, input); }
     catch (error) {
       if (!(error instanceof MhpCommerceError) || error.status !== 409) throw error;
-      code = error.message === MHP_SEQUENCE_NOT_READY ? 'not_ready' : 'unchanged';
+      code = error.message === MHP_SEQUENCE_NOT_READY ? 'not_ready' : error.message === FOLLOWUP_NO_AUDIENCE_RESUME ? 'no_audience' : 'unchanged';
     }
     const after = (await this.dependencies.repository.snapshot(identity, this.dependencies.campaign)).runs.find(run => run.id === input.runId) ?? null;
     const target: FollowupRunState = input.action === 'pause' ? 'paused' : input.action === 'resume' ? 'active' : input.action === 'stop' ? 'stopped' : 'cancelled';

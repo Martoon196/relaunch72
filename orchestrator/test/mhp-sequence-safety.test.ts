@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage } from 'node:http';
 import { BASE, CAMPAIGN, client, createWorld, csrf, makeRun, page, person, prospect, runId, seq, serviceFor, visibleText, type World } from './helpers/mhp-sequence-safety-fixture.js';
 import { identity, ids } from './helpers/mhp-owner-email-fixture.js';
-import { classifyLegacyFollowupAudience, followupAudienceCanStart, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience, FOLLOWUP_NO_AUDIENCE_LINE } from '../src/followup-sequences/audience.js';
+import { legacyFollowupAudience, followupAudienceCanStart, FOLLOWUP_NO_AUDIENCE_RESUME, parseFollowupAudienceChoice, readStoredFollowupAudience, storedFollowupAudience, FOLLOWUP_NO_AUDIENCE_LINE } from '../src/followup-sequences/audience.js';
 import { readNativeFlowForm } from '../src/followup-sequences/http.js';
 import { createFollowupTools } from '../src/operator/followup-tools.js';
 import { startDigest } from '../src/mhp/followup-sequence-service.js';
@@ -23,10 +23,11 @@ test('audience: a choice is explicit, a missing one is "none yet", malformed sto
   assert.deepEqual(readStoredFollowupAudience({ mhpSequence: { audience: storedFollowupAudience('webinar_signups', CAMPAIGN) } }), { kind: 'webinar_signups', campaign: CAMPAIGN, origin: 'chosen' });
   for (const bad of [{ kind: 'webinar_signups' }, { schema: 'mhp.followup-sequence-audience/v1', kind: 'everyone', campaign: null }, { schema: 'mhp.followup-sequence-audience/v1', kind: 'webinar_signups', campaign: null }, 'webinar'])
     assert.deepEqual(readStoredFollowupAudience({ mhpSequence: { audience: bad } }), { kind: 'none_yet', campaign: null, origin: 'unreadable' });
-  assert.equal(classifyLegacyFollowupAudience({ hasRuns: true, hasEntryRule: false, campaign: CAMPAIGN }).kind, 'webinar_signups');
-  assert.equal(classifyLegacyFollowupAudience({ hasRuns: false, hasEntryRule: true, campaign: CAMPAIGN }).kind, 'webinar_signups');
-  assert.equal(classifyLegacyFollowupAudience({ hasRuns: false, hasEntryRule: false, campaign: CAMPAIGN }).kind, 'none_yet');
+  // No legacy inference: a version without a valid saved choice is "none yet", whatever people or rules it has.
+  assert.deepEqual(legacyFollowupAudience(), { kind: 'none_yet', campaign: null, origin: 'legacy_none' });
   assert.equal(followupAudienceCanStart({ kind: 'webinar_signups', campaign: 'webinar-2026-10-01', origin: 'chosen' }, CAMPAIGN), false);
+  assert.equal(followupAudienceCanStart({ kind: 'webinar_signups', campaign: CAMPAIGN, origin: 'legacy_none' }, CAMPAIGN), false);
+  assert.equal(followupAudienceCanStart({ kind: 'webinar_signups', campaign: CAMPAIGN, origin: 'chosen' }, CAMPAIGN), true);
 });
 
 test('a "none yet" sequence shows no Start, only the plain line, and cannot be started even by a forged or server-issued POST', async () => {
@@ -109,7 +110,7 @@ test('someone who signs up in the race window is paused straight away and the ow
   const fields = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); fields.set('confirm', 'yes');
   world.beforeEnrol = () => { world.candidates.push(person(18)); };
   const landed = visibleText((await c.follow(await c.post(`${BASE}/start`, fields))).body);
-  assert.match(landed, /1 person signed up in the moment you pressed Start and were added by the system\. They have been paused straight away/u);
+  assert.match(landed, /Started for 16 people\. Their first email is going now\. 1 person not on your list was added to this sequence at the same moment \(a new sign-up, or the automatic sign-up rule\)\. They have been paused straight away/u);
   const extra = world.runs.find(run => run.email === person(18).email)!; assert.equal(extra.state, 'paused');
   assert.equal(world.runs.filter(run => run.state === 'active').length, 16);
 });
@@ -122,29 +123,152 @@ test('a confirmation older than 30 minutes is shown again with the current list,
   assert.deepEqual(world.calls.filter(call => call === 'enrol'), []);
 });
 
-test('a legacy sequence that already has webinar people is still startable through the confirmation; one without is not', async () => {
+/** The production shape: a sequence saved before this release, started by the old one-press button with webinar people, all then paused, and new sign-ups since. */
+function bookIncident() {
   const world = createWorld(), c = client(world);
-  const before = await c.service.startPlan(identity, ids.request, seq.other, seq.otherVersion);
-  assert.equal(before.audience.origin, 'legacy_none'); assert.equal(before.refusal?.code, 'no_audience');
-  world.runs.push(makeRun(world, 1, 'completed', { contentItemId: seq.other, contentVersionId: seq.otherVersion }));
+  for (let n = 1; n <= 14; n++) world.runs.push(makeRun(world, n, 'paused', { id: runId(n), contentItemId: seq.other, contentVersionId: seq.otherVersion }));
+  world.candidates.push(person(17), person(18));
+  return { world, c };
+}
+test('M1: a pre-release sequence with paused webinar people is "none yet": no Start, no Resume, only Stop', async () => {
+  const { world, c } = bookIncident();
+  const html = (await c.request('GET', page(seq.other, seq.otherVersion))).body, text = visibleText(html);
+  assert.match(text, /Who it is for: No one yet\. This sequence has no audience that can be started\. /u); assert.doesNotMatch(text, /started\.\./u);
+  assert.match(text, /This sequence has no audience yet\. The 14 people in it are paused and will not be sent anything\. You can stop them, but not restart them here\./u);
+  assert.match(text, /Stop everyone \(14\)/u);
+  assert.doesNotMatch(html, /confirm=start|confirm=resume-all|Resume this person|Resume everyone|Start this sequence/u);
+  // The editor never turns that into a webinar choice.
+  assert.match(html, /name="audience" value="none_yet" checked/u); assert.doesNotMatch(html, /value="webinar_signups" checked/u);
   const plan = await c.service.startPlan(identity, ids.request, seq.other, seq.otherVersion);
-  assert.equal(plan.audience.origin, 'legacy_runs'); assert.equal(plan.ready, true); assert.equal(plan.count, 15);
-  const fields = c.formFields((await c.request('GET', page(seq.other, seq.otherVersion, '&confirm=start'))).body, `${BASE}/start`); fields.set('confirm', 'yes');
-  assert.match(visibleText((await c.follow(await c.post(`${BASE}/start`, fields))).body), /Started for 15 people/u);
-  // An entry rule also counts as having been used with the webinar.
-  const ruled = createWorld(); ruled.rules.push({ id: seq.book, contentItemId: seq.other, contentVersionId: seq.otherVersion, state: 'off', activatedAt: new Date(ruled.now).toISOString(),
-    expiresAt: new Date(ruled.now).toISOString(), heldReason: null, cursorSequence: '0', cursorSignupId: null, cursorAt: null, lastSweptAt: null, processed: 0, enrolled: 0, skipped: 0, blocked: 0 });
-  assert.equal((await client(ruled).service.startPlan(identity, ids.request, seq.other, seq.otherVersion)).audience.origin, 'legacy_entry_rule');
+  assert.equal(plan.audience.origin, 'legacy_none'); assert.equal(plan.refusal?.code, 'no_audience'); assert.equal(plan.recipients.length, 0);
+  assert.equal((await c.service.resumePlan(identity, ids.request, seq.other, seq.otherVersion)).ready, false);
+  const confirm = await c.request('GET', page(seq.other, seq.otherVersion, '&confirm=resume-all'));
+  assert.doesNotMatch(confirm.body, /action="\/hq\/marketing\/sequences\/resume-all"/u); assert.match(visibleText(confirm.body), /nobody in it can be restarted here/u);
+  assert.deepEqual(world.calls.filter(call => ['enrol', 'resume'].includes(call)), []);
 });
-
-test('more than 500 eligible: the confirmation names the first 500 in the database\'s own order and says the rest need another', async () => {
-  const world = createWorld(), c = client(world); world.candidates = Array.from({ length: 520 }, (_, i) => person(i + 1));
+test('M1: every route to start or resume the pre-release sequence is refused at the server, even forged', async () => {
+  const { world, c } = bookIncident(), base = { commandId: ids.command, itemId: seq.other, versionId: seq.otherVersion };
+  await assert.rejects(c.service.start(identity, ids.request, { ...base, count: 2, digest: startDigest(seq.other, seq.otherVersion, [prospect(17), prospect(18)]), people: '', confirmed: true }), { status: 409 });
+  await assert.rejects(c.service.command(identity, ids.request, { ...base, action: 'resume', runId: runId(1), ackProofId: '' }), { status: 409, message: FOLLOWUP_NO_AUDIENCE_RESUME });
+  await assert.rejects(c.service.command(identity, ids.request, { ...base, action: 'resume', runId: '', ackProofId: '' }), { status: 409, message: FOLLOWUP_NO_AUDIENCE_RESUME });
+  await assert.rejects(c.service.resumeAll(identity, ids.request, { ...base, count: 14, digest: 'a'.repeat(64) }), { status: 409 });
+  assert.equal((await c.service.personAction(identity, ids.request, { ...base, action: 'resume', runId: runId(1), ackProofId: '' })).code, 'no_audience');
+  await assert.rejects(c.service.entryCommand(identity, ids.request, { action: 'activate', ...base, ruleId: '', expiresAt: new Date(world.now + 86_400_000).toISOString(), confirmed: true }, world.now), { status: 409 });
+  // Through the browser routes: old per-person resume form, old everyone resume form, forged start, forged resume-all.
+  const resumeOne = await c.post(`${BASE}/resume`, new URLSearchParams({ csrf: csrf(), ...base, runId: runId(1), ackProofId: '' }));
+  assert.equal(resumeOne.status, 303);
+  assert.match(visibleText((await c.follow(resumeOne)).body), /was not restarted: this sequence has no audience yet/u);
+  assert.equal((await c.post(`${BASE}/resume`, new URLSearchParams({ csrf: csrf(), ...base, commandId: '5afe9000-0000-4000-8000-0000000000e1', runId: '', ackProofId: '' }))).status, 409);
+  assert.equal((await c.post(`${BASE}/start`, new URLSearchParams({ csrf: csrf(), ...base, count: '2', digest: 'a'.repeat(64), people: '', issued: String(world.now), sig: 'f'.repeat(64), confirm: 'yes' }))).status, 400);
+  assert.equal((await c.post(`${BASE}/resume-all`, new URLSearchParams({ csrf: csrf(), ...base, count: '14', digest: 'a'.repeat(64), issued: String(world.now), sig: 'f'.repeat(64), confirm: 'yes' }))).status, 400);
+  assert.ok(world.runs.filter(run => run.contentItemId === seq.other).every(run => run.state === 'paused'));
+  assert.deepEqual(world.calls.filter(call => ['enrol', 'resume'].includes(call)), []);
+});
+test('M1: "Stop everyone" has a short, final confirmation and stops only that sequence', async () => {
+  const { world, c } = bookIncident(); world.runs.push(makeRun(world, 15, 'active'));
+  const confirm = await c.request('GET', page(seq.other, seq.otherVersion, '&confirm=stop-all'));
+  assert.match(visibleText(confirm.body), /Stop all 14 people in this sequence\? Stopping is final: nothing more from this sequence will ever be sent to them, and they cannot be restarted\./u);
+  const done = await c.post(`${BASE}/stop-all`, c.formFields(confirm.body, `${BASE}/stop-all`)); assert.equal(done.status, 303);
+  assert.match(visibleText((await c.follow(done)).body), /Stopped 14 people\. Nothing more from this sequence will ever be sent to them\./u);
+  assert.ok(world.runs.filter(run => run.contentItemId === seq.other).every(run => run.state === 'stopped'));
+  assert.equal(world.runs.find(run => run.id === runId(15))!.state, 'active');
+});
+test('M1: a none-yet sequence with people still active says so and offers pause and stop, never restart', async () => {
+  const world = createWorld(), c = client(world);
+  world.runs.push(makeRun(world, 1, 'active', { contentItemId: seq.other, contentVersionId: seq.otherVersion }), makeRun(world, 2, 'paused', { id: runId(2), contentItemId: seq.other, contentVersionId: seq.otherVersion }));
+  const text = visibleText((await c.request('GET', page(seq.other, seq.otherVersion))).body);
+  assert.match(text, /1 person in it is still active and will be sent its next emails unless you pause or stop them\./u);
+  assert.match(text, /Pause everyone \(1\)/u); assert.match(text, /Stop everyone \(2\)/u); assert.doesNotMatch(text, /Resume/u);
+});
+test('S1: a start is never larger than the page can check (100), and the old "more afterwards" promise is gone', async () => {
+  const world = createWorld(), c = client(world); world.candidates = Array.from({ length: 101 }, (_, i) => person(i + 1));
   const plan = await c.service.startPlan(identity, ids.request, seq.item, seq.version);
-  assert.equal(plan.count, 500); assert.equal(plan.later, 20); assert.equal(plan.recipients[0]!.prospectId, prospect(1)); assert.equal(plan.recipients.at(-1)!.prospectId, prospect(500));
+  assert.equal(plan.ready, false); assert.equal(plan.refusal?.message, 'This list is longer than this page can safely check (101 people). Nothing was started.');
   const body = visibleText((await c.request('GET', START(world))).body);
-  assert.match(body, /You are about to email 500 people/u); assert.match(body, /20 more people can be started afterwards with a second confirmation/u);
+  assert.match(body, /This list is longer than this page can safely check \(101 people\)\. Nothing was started\./u); assert.doesNotMatch(body, /afterwards|second confirmation/u);
+  world.candidates.pop(); assert.equal((await c.service.startPlan(identity, ids.request, seq.item, seq.version)).count, 100);
 });
-
+test('S1: when the start adds people the page cannot see, everyone active in the sequence is paused and the owner is told the truth', async () => {
+  const world = createWorld(), c = client(world); world.candidates = Array.from({ length: 100 }, (_, i) => person(i + 1));
+  const fields = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); fields.set('confirm', 'yes');
+  world.beforeEnrol = () => { world.candidates.push(person(150)); };
+  const landed = visibleText((await c.follow(await c.post(`${BASE}/start`, fields))).body);
+  assert.equal(world.runs.length, 101); assert.ok(world.runs.every(run => run.state === 'paused'), 'nobody can be left active unseen');
+  assert.match(landed, /1 person not on your list was added to this sequence at the same moment \(a new sign-up, or the automatic sign-up rule\), and this page could not see exactly who\. To be safe, everyone active in this sequence has been paused \(101\)/u);
+  assert.match(landed, /At least 0 active, 100 paused/u);
+});
+test('S1: counts say "at least" when the page cannot see everyone', async () => {
+  const world = createWorld(), c = client(world);
+  for (let n = 1; n <= 120; n++) world.runs.push(makeRun(world, n, 'paused', { id: runId(n), email: `p.${n}@example.invalid` }));
+  const text = visibleText((await c.request('GET', page(seq.item, seq.version))).body);
+  assert.match(text, /At least 0 active, 100 paused, 0 finished, 0 stopped/u); assert.match(text, /\(120 in total\), so these numbers are minimums/u);
+  assert.doesNotMatch(text, /Resume everyone/u);
+});
+test('S2: a result note shows only on its own sequence, only while fresh, and never after a later action', async () => {
+  const world = createWorld(), c = client(world); withPeople(world, { 1: 'active', 2: 'active' });
+  const fields = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); fields.set('confirm', 'yes');
+  const started = await c.post(`${BASE}/start`, fields); const location = started.headers.location!, cookie = started.headers['set-cookie']!;
+  assert.match(cookie, /^mhp_owner_note=[A-Za-z0-9_-]{12}; Path=\/hq\/marketing; HttpOnly; Secure; SameSite=Strict/u);
+  const jar = (value: string) => ({ cookie: `__Host-mhp_session=${identity.sessionToken}; ${value.split(';')[0]}` });
+  assert.match(visibleText((await c.request('GET', location, '', jar(cookie))).body), /Started for 14 people/u);
+  // The same signed note on another sequence's address is not shown.
+  const query = location.slice(location.indexOf('&note='), location.indexOf('#'));
+  assert.doesNotMatch(visibleText((await c.request('GET', page(seq.book, seq.bookVersion, query), '', jar(cookie))).body), /Started for/u);
+  // After a later action (pause everyone), going back or reloading the start result does not show it.
+  const confirm = await c.request('GET', page(seq.item, seq.version, '&confirm=pause-all'));
+  const paused = await c.post(`${BASE}/pause-all`, c.formFields(confirm.body, `${BASE}/pause-all`));
+  assert.doesNotMatch(visibleText((await c.request('GET', location, '', jar(paused.headers['set-cookie']!))).body), /Started for/u);
+  assert.match(visibleText((await c.request('GET', paused.headers.location!, '', jar(paused.headers['set-cookie']!))).body), /Paused 16 people/u);
+  // Older than a few minutes: not shown.
+  world.now += 6 * 60_000;
+  assert.doesNotMatch(visibleText((await c.request('GET', paused.headers.location!, '', jar(paused.headers['set-cookie']!))).body), /Paused 16 people/u);
+});
+test('S3: people on hold because of a newer version are not offered a resume, not counted, and told why in neutral styling', async () => {
+  const world = createWorld(), c = client(world); withPeople(world, { 1: 'paused', 2: 'paused' });
+  world.runs[0]!.state = 'held'; world.runs[0]!.reason = 'newer_sequence';
+  const html = (await c.request('GET', page(seq.item, seq.version))).body;
+  const card = html.match(new RegExp(`<li class="person" id="run-${runId(1)}"[\\s\\S]*?</li>`, 'u'))![0];
+  assert.doesNotMatch(card, /Resume this person/u); assert.match(visibleText(card), /They cannot be resumed in this version\./u);
+  assert.match(visibleText(html), /Resume everyone \(1\)/u);
+  const plan = await c.service.resumePlan(identity, ids.request, seq.item, seq.version); assert.deepEqual(plan.people.map(run => run.id), [runId(2)]);
+  const reply = await c.post(`${BASE}/resume`, new URLSearchParams({ csrf: csrf(), commandId: '5afe9000-0000-4000-8000-0000000000e2', itemId: seq.item, versionId: seq.version, runId: runId(1), ackProofId: '' }));
+  const after = (await c.follow(reply)).body;
+  assert.match(after, /<p class="notice" role="status">Alice was not restarted: they are on hold because you saved a newer version/u);
+  assert.deepEqual(world.calls.filter(call => call === 'resume'), []);
+});
+test('notes: names list has no inner scroll box, not-found goes to the list, plain words, no double full stops, start button after a start', async () => {
+  const world = createWorld(), c = client(world);
+  const confirm = (await c.request('GET', START(world))).body;
+  assert.doesNotMatch(confirm, /max-height:420px|overflow-y:auto/u); assert.doesNotMatch(confirm, /Showing all/u);
+  world.candidates = Array.from({ length: 40 }, (_, i) => person(i + 1));
+  assert.match(visibleText((await c.request('GET', START(world))).body), /Showing all 40, in the order they will be started\./u);
+  const missing = await c.request('GET', page(seq.item, '5afe0000-0000-4000-8000-0000000000ff'));
+  assert.equal(missing.status, 404); assert.match(missing.body, /href="\/hq\/marketing\/sequences">Back to follow-up sequences/u); assert.doesNotMatch(missing.body, /Back to the sequence/u);
+  for (const path of [page(seq.item, seq.version), page(seq.book, seq.bookVersion), `${BASE}?new=1`, START(world)]) {
+    const text = visibleText((await c.request('GET', path)).body);
+    assert.doesNotMatch(text, /\.\.(?!\.)|native flow|local library|exact versions/u, path);
+  }
+  const fields = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); fields.set('confirm', 'yes');
+  const landed = (await c.follow(await c.post(`${BASE}/start`, fields))).body;
+  assert.doesNotMatch(landed, /Start this sequence…/u); assert.match(landed, /class="button secondary"[^>]*>Check for anyone new…/u);
+  const unreadable = await c.request('POST', `${BASE}/pause`, 'x=1', { 'content-type': 'text/plain' });
+  assert.doesNotMatch(unreadable.body, /native/u); assert.match(unreadable.body, /This form could not be read/u);
+});
+test('notes: two tabs pressing the same start: the second says the truth', async () => {
+  const world = createWorld(), c = client(world);
+  const first = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); first.set('confirm', 'yes');
+  const second = c.formFields((await c.request('GET', START(world))).body, `${BASE}/start`); second.set('confirm', 'yes');
+  // Tab one's enrol commits between tab two's recount and tab two's database call.
+  const repository = (c.service as unknown as { dependencies: { repository: { command: (...args: any[]) => Promise<any> } } }).dependencies.repository;
+  const original = repository.command; let raced = false;
+  repository.command = async (...args: any[]) => {
+    if (!raced && args[1].action === 'enrol' && args[1].commandId === second.get('commandId')) { raced = true; await original(args[0], { ...args[1], commandId: first.get('commandId') }); }
+    return original(...args);
+  };
+  const landed = visibleText((await c.follow(await c.post(`${BASE}/start`, second))).body);
+  assert.match(landed, /These people had already been started from another tab\. Nothing new was sent\./u); assert.doesNotMatch(landed, /Started for 0/u); assert.doesNotMatch(landed, /unsubscribed/u);
+  assert.equal(world.runs.length, 16);
+});
 test('the page refuses to start when it cannot see everyone already in a sequence', async () => {
   const world = createWorld(), c = client(world);
   for (let n = 1; n <= 101; n++) world.runs.push(makeRun(world, n, 'completed', { id: runId(n), contentItemId: seq.other, contentVersionId: seq.otherVersion, email: `old.${n}@example.invalid` }));

@@ -17,9 +17,10 @@ import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
 import { FlowDraftValidationError } from '../followup-sequences/channel-drafts.js';
 import { mhpLink, mhpOwnerProblemPage, mhpWorkspaceProblem } from './owner-frame.js';
 import { escapeHtml } from '../portal/ui.js';
+import { readMhpNote, signMhpNote } from './owner-notes.js';
 
 const BASE = '/hq/marketing/sequences';
-const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'start', 'pause', 'resume', 'cancel', 'stop', 'pause-all', 'resume-all', 'entry-activate', 'entry-off', 'open-workspace'] as const;
+const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'start', 'pause', 'resume', 'cancel', 'stop', 'pause-all', 'stop-all', 'resume-all', 'entry-activate', 'entry-off', 'open-workspace'] as const;
 const PATHS = new Set([BASE, `${BASE}/editor.js`, `${BASE}/message`, ...ACTIONS.map(action => `${BASE}/${action}`)]);
 const DRAFT = ['csrf', 'commandId', 'contentItemId', 'previousVersionId', 'definition'];
 const SAVED = ['csrf', 'commandId', 'itemId', 'versionId'];
@@ -47,22 +48,12 @@ const form = (req: IncomingMessage, keys: readonly string[], optional: readonly 
 const uuid = (value: string | null | undefined): value is string => typeof value === 'string' && FOLLOWUP_SEQUENCE_UUID.test(value);
 const mac = (secret: string, parts: readonly string[]) => createHmac('sha256', secret).update(parts.join('\n')).digest('hex');
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-/** Signs a note to this session, so a crafted link cannot show the owner a false "Paused". */
-function noteQuery(secret: string, session: string, note: MhpSequenceNote): string {
-  const value = Buffer.from(JSON.stringify(note)).toString('base64url');
-  return `&note=${value}&sig=${mac(secret, ['mhp.sequence.note/v1', session, value]).slice(0, 32)}`;
-}
-function readNote(secret: string, session: string, value: string | null, sig: string | null): MhpSequenceNote | undefined {
-  if (!value || !sig || value.length > 600 || !same(sig, mac(secret, ['mhp.sequence.note/v1', session, value]).slice(0, 32))) return undefined;
-  try { const note = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as MhpSequenceNote; return note && typeof note === 'object' && typeof note.c === 'string' ? note : undefined; }
-  catch { return undefined; }
-}
 const startSignature = (secret: string, session: string, f: Record<string, string>) =>
   mac(secret, ['mhp.sequence.start/v1', session, f.commandId!, f.itemId!, f.versionId!, f.count!, f.digest!, f.people!, f.issued!]);
 const resumeSignature = (secret: string, session: string, f: Record<string, string>) =>
   mac(secret, ['mhp.sequence.resume-all/v1', session, f.commandId!, f.itemId!, f.versionId!, f.count!, f.digest!, f.issued!]);
 type Sequences = Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'>
-  & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate' | 'startPlan' | 'start' | 'pauseAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace'>>;
+  & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate' | 'startPlan' | 'start' | 'pauseAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace' | 'stopAll'>>;
 
 export async function handleMhpSequence(req: IncomingMessage, res: ServerResponse, url: URL, deps: { portal: PostgresPortalDeps; sequences: Sequences }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (!PATHS.has(path)) return false;
@@ -90,8 +81,10 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     csrf = portalCsrfToken(portal.sessionSecret, token);
     const page = async (extra: Partial<MhpSequencePageInput> = {}) => mhpSequencePage({ snapshot: await sequences.snapshot(identity, context.requestId),
       csrf, commandId: randomUUID(), returnCommandId: randomUUID(), now, ...extra });
-    const back = (itemId: string, versionId: string, note: MhpSequenceNote, anchor = '') =>
-      redirect(res, `${sequenceHref(itemId, versionId, noteQuery(portal.sessionSecret, token, note))}${anchor}`);
+    const back = (itemId: string, versionId: string, note: MhpSequenceNote, anchor = '') => {
+      const signed = signMhpNote(portal.sessionSecret, token, 'sequences', { itemId, versionId }, now, note);
+      redirect(res, `${sequenceHref(itemId, versionId, signed.query)}${anchor}`, signed.cookie);
+    };
     if (path === `${BASE}/editor.js`) {
       if (url.search !== '') throw new MhpCommerceError(400, 'Use the sequence editor script.');
       respond(res, 200, MHP_SEQUENCE_EDITOR_SCRIPT, 'text/javascript; charset=utf-8'); return true;
@@ -106,7 +99,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       const allowed = ['new', 'item', 'version', 'confirm', 'until', 'note', 'sig'];
       if ([...url.searchParams.keys()].some(key => !allowed.includes(key) || url.searchParams.getAll(key).length !== 1)) throw new MhpCommerceError(400, 'That link to a sequence is not complete. Open the sequence from your saved sequences.');
       const item = url.searchParams.get('item'), version = url.searchParams.get('version'), fresh = url.searchParams.get('new'), confirm = url.searchParams.get('confirm'), until = url.searchParams.get('until');
-      if (Boolean(item) !== Boolean(version) || (fresh !== null && fresh !== '1') || (fresh && item) || (confirm !== null && (!item || !['start', 'pause-all', 'resume-all', 'entry'].includes(confirm)))
+      if (Boolean(item) !== Boolean(version) || (fresh !== null && fresh !== '1') || (fresh && item) || (confirm !== null && (!item || !['start', 'pause-all', 'stop-all', 'resume-all', 'entry'].includes(confirm)))
           || ((confirm === 'entry') !== (until !== null))) throw new MhpCommerceError(400, 'That link to a sequence is not complete. Open the sequence from your saved sequences.');
       if (item && version) {
         if (confirm === 'start') {
@@ -114,9 +107,12 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
           const commandId = randomUUID(), plan = await sequences.startPlan(identity, context.requestId, item, version);
           html(res, 200, mhpSequenceStartConfirmPage({ csrf, plan, commandId, token: startToken(portal.sessionSecret, token, commandId, plan, now) })); return true;
         }
-        if (confirm === 'pause-all') {
+        if (confirm === 'pause-all' || confirm === 'stop-all') {
           const [snapshot, detail] = await Promise.all([sequences.snapshot(identity, context.requestId), sequences.review(identity, context.requestId, item, version)]);
-          html(res, 200, mhpSequencePauseAllPage({ csrf, commandId: randomUUID(), detail, active: snapshot.database.runs.filter(run => run.contentItemId === item && run.state === 'active').length })); return true;
+          const mine = snapshot.database.runs.filter(run => run.contentItemId === item);
+          html(res, 200, mhpSequencePauseAllPage({ csrf, commandId: randomUUID(), detail, kind: confirm === 'stop-all' ? 'stop' : 'pause',
+            count: mine.filter(run => confirm === 'stop-all' ? ['active', 'paused', 'held'].includes(run.state) : run.state === 'active').length,
+            atLeast: snapshot.database.runs.length < snapshot.database.runCount })); return true;
         }
         if (confirm === 'resume-all') {
           if (!sequences.resumePlan) throw new MhpCommerceError(503, MHP_SEQUENCE_UNAVAILABLE);
@@ -133,13 +129,14 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       }
       const snapshot = await sequences.snapshot(identity, context.requestId);
       html(res, 200, mhpSequencePage({ snapshot, csrf, commandId: randomUUID(), returnCommandId: randomUUID(), now,
-        note: readNote(portal.sessionSecret, token, url.searchParams.get('note'), url.searchParams.get('sig')),
+        note: readMhpNote<MhpSequenceNote>(portal.sessionSecret, token, 'sequences', { value: url.searchParams.get('note'), sig: url.searchParams.get('sig'),
+          cookie: req.headers.cookie, itemId: item, versionId: version, now }),
         detail: item && version ? await sequences.review(identity, context.requestId, item, version) : undefined,
         draft: fresh ? mhpSequenceNewDraft(snapshot.database.campaign, randomUUID()) : undefined })); return true;
     }
     if (url.search !== '' || req.headers.origin !== MHP_AUTH_ORIGIN || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new MhpCommerceError(403, 'This page was out of date. Open the sequence again and try once more.');
     const action = path.slice(BASE.length + 1) as typeof ACTIONS[number], editing = action === 'save' || action === 'preview' || action === 'simulate';
-    const keys = editing ? DRAFT : action === 'publish' || action === 'pause-all' ? SAVED : action === 'start' ? START : action === 'resume-all' ? RESUME_ALL
+    const keys = editing ? DRAFT : action === 'publish' || action === 'pause-all' || action === 'stop-all' ? SAVED : action === 'start' ? START : action === 'resume-all' ? RESUME_ALL
       : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : action === 'open-workspace' ? OPEN_WORKSPACE : CONTROL;
     const fields = await form(req, keys, editing ? ['audience'] : ['start', 'resume-all', 'entry-activate'].includes(action) ? ['confirm'] : []), field = (key: string) => fields.get(key) ?? '';
     // Only for the way back from an error: validated ids, never trusted for an action.
@@ -194,13 +191,18 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       const result = await sequences.start(identity, context.requestId, { commandId, itemId, versionId, count: Number(f.count), digest: f.digest!, people: f.people!, confirmed: true });
       if (result.kind === 'changed') { again(result.plan, undefined, { previousCount: result.previousCount, added: result.added, removed: result.removed }); return true; }
       if (result.kind === 'already_started') { back(itemId, versionId, { c: 'a', n: result.count }, '#result'); return true; }
-      back(itemId, versionId, { c: 's', n: result.started, e: result.expected, x: result.unexpected, y: result.unexpectedPaused, l: result.later, w: result.firstWaitMinutes,
-        r: result.replayed ? 1 : 0, f: result.inFlight }, '#result'); return true;
+      back(itemId, versionId, { c: 's', n: result.started, e: result.expected, x: result.unexpected, y: result.unexpectedPaused, z: result.pausedEveryone ? 1 : 0,
+        o: result.startedElsewhere, q: result.notEligible, w: result.firstWaitMinutes, r: result.replayed ? 1 : 0, f: result.inFlight }, '#result'); return true;
     }
     if (action === 'pause-all') {
       if (!sequences.pauseAll) throw new MhpCommerceError(503, MHP_SEQUENCE_UNAVAILABLE);
       const result = await sequences.pauseAll(identity, context.requestId, { commandId, itemId, versionId });
       back(itemId, versionId, { c: 'b', a: 'pause', n: result.changed, m: result.remaining, k: result.blocked, f: result.inFlight, r: result.replayed ? 1 : 0 }, '#result'); return true;
+    }
+    if (action === 'stop-all') {
+      if (!sequences.stopAll) throw new MhpCommerceError(503, MHP_SEQUENCE_UNAVAILABLE);
+      const result = await sequences.stopAll(identity, context.requestId, { commandId, itemId, versionId });
+      back(itemId, versionId, { c: 'b', a: 'stop', n: result.changed, m: result.remaining, k: result.blocked, f: result.inFlight, r: result.replayed ? 1 : 0 }, '#result'); return true;
     }
     if (action === 'resume-all') {
       if (!sequences.resumeAll || !sequences.resumePlan) throw new MhpCommerceError(503, MHP_SEQUENCE_UNAVAILABLE);
@@ -257,6 +259,8 @@ function resumeToken(secret: string, session: string, commandId: string, plan: A
 }
 /** Every error from this area, in the normal frame, with the plain message and a way back. */
 function problemPage(status: number, message: string, place: { itemId: string; versionId: string } | null, csrf: string): string {
+  // A sequence that was not found is not a place to go back to: offer the list instead.
+  if (status === 404) place = null;
   const backTo = place ? sequenceHref(place.itemId, place.versionId) : BASE;
   const backButton = mhpLink(backTo, place ? 'Back to the sequence' : 'Back to follow-up sequences', mhpWorkspaceProblem(status, message));
   if (mhpWorkspaceProblem(status, message)) {

@@ -14,8 +14,8 @@ import { FollowupSequenceValidationError } from './definition.js';
 export const FOLLOWUP_AUDIENCE_KINDS = ['webinar_signups', 'none_yet'] as const;
 export type FollowupAudienceKind = typeof FOLLOWUP_AUDIENCE_KINDS[number];
 export const MHP_SEQUENCE_AUDIENCE_SCHEMA = 'mhp.followup-sequence-audience/v1' as const;
-/** How the audience of a version was decided: chosen when saved, or classified for an older version saved before audiences existed. */
-export type FollowupAudienceOrigin = 'chosen' | 'legacy_runs' | 'legacy_entry_rule' | 'legacy_none' | 'unreadable';
+/** How the audience of a version was decided: chosen when saved; anything else (saved before audiences, or unreadable) is "none yet". */
+export type FollowupAudienceOrigin = 'chosen' | 'legacy_none' | 'unreadable';
 export interface FollowupAudience { readonly kind: FollowupAudienceKind; readonly campaign: string | null; readonly origin: FollowupAudienceOrigin }
 export interface StoredFollowupAudience { readonly schema: typeof MHP_SEQUENCE_AUDIENCE_SCHEMA; readonly kind: FollowupAudienceKind; readonly campaign: string | null }
 
@@ -48,17 +48,17 @@ export function readStoredFollowupAudience(metadata: unknown): FollowupAudience 
   return Object.freeze({ kind: value.kind as FollowupAudienceKind, campaign: value.campaign as string | null, origin: 'chosen' });
 }
 /**
- * A version saved before audiences existed is for the webinar sign-ups ONLY when this
- * sequence has already been used with them: it has people in it, or a future-signup
- * rule, for the configured webinar campaign. Otherwise it has no audience yet.
+ * A version saved before audiences existed, or one without a valid saved audience, is for no one yet,
+ * whatever people or rules it has. Having people in it proves nothing: the book sequence that caused the
+ * incident has webinar people in it precisely because it was started for the wrong audience. A sequence
+ * becomes startable only when the owner saves a version and chooses "People who registered for the webinar".
  */
-export function classifyLegacyFollowupAudience(input: { hasRuns: boolean; hasEntryRule: boolean; campaign: string }): FollowupAudience {
-  if (input.hasRuns) return Object.freeze({ kind: 'webinar_signups', campaign: input.campaign, origin: 'legacy_runs' });
-  if (input.hasEntryRule) return Object.freeze({ kind: 'webinar_signups', campaign: input.campaign, origin: 'legacy_entry_rule' });
+export function legacyFollowupAudience(): FollowupAudience {
   return Object.freeze({ kind: 'none_yet', campaign: null, origin: 'legacy_none' });
 }
 /** The only audience the database can enrol today: opted-in sign-ups of the configured webinar campaign. */
 export function followupAudienceCanStart(audience: FollowupAudience, configuredCampaign: string): boolean {
-  return audience.kind === 'webinar_signups' && audience.campaign === configuredCampaign && CAMPAIGN.test(configuredCampaign);
+  return audience.origin === 'chosen' && audience.kind === 'webinar_signups' && audience.campaign === configuredCampaign && CAMPAIGN.test(configuredCampaign);
 }
 export const FOLLOWUP_NO_AUDIENCE_LINE = 'This sequence has no audience yet, so it cannot be started. It is saved and approved, ready for when its audience is connected.';
+export const FOLLOWUP_NO_AUDIENCE_RESUME = 'This sequence has no audience yet, so nobody in it can be restarted here. You can stop them.';
