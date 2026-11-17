@@ -518,6 +518,8 @@ interface Blocks {
   readonly stretches: number[];
   /** Words that are only a list's numbering ("1.", "a)"): not words of the article. */
   readonly marks: number;
+  /** Of those, the numbering of very short items (under FRAGMENT_WORDS words), which leaves the length with them. */
+  readonly tinyMarks: number;
 }
 const blockMemo = new Map<string, Blocks>();
 /**
@@ -530,7 +532,7 @@ function blocks(markdown: string): Blocks {
   if (hit) return hit;
   if (blockMemo.size > 5_000) blockMemo.clear();
   const paras: string[] = [], items: string[] = [], heads: string[] = [], stretches: number[] = [];
-  let run: string[] = [], stretch = 0, marks = 0;
+  let run: string[] = [], stretch = 0, marks = 0, tinyMarks = 0;
   const flush = () => {
     if (run.length >= 2 && run.every((l) => words(l).length < STEP_WORDS)) items.push(...run);
     else if (run.length) paras.push(run.join(' '));
@@ -544,13 +546,18 @@ function blocks(markdown: string): Blocks {
     if (!line) { flush(); continue; }
     if (line.startsWith('|')) { flush(); const row = line.replace(/\|/g, ' ').trim(); if (/[\p{L}\p{N}]/u.test(row)) items.push(row); continue; }
     const mark = LIST_MARK.exec(line);
-    if (mark) { flush(); marks += words(mark[0]).length; items.push(line.slice(mark[0].length)); continue; }
+    if (mark) {
+      flush();
+      const item = line.slice(mark[0].length), k = words(mark[0]).length;
+      marks += k; if (words(item).length < FRAGMENT_WORDS) tinyMarks += k;
+      items.push(item); continue;
+    }
     line = line.replace(/^(?:>\s?)+/, '').trim();
     if (line) run.push(line); else flush();
   }
   flush();
   stretches.push(stretch);
-  const out = { paras, items, heads, stretches, marks };
+  const out = { paras, items, heads, stretches, marks, tinyMarks };
   blockMemo.set(markdown, out);
   return out;
 }
@@ -942,7 +949,7 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
       for (const x of ss) { const k = words(x).length; const asProse = ss.length > 1 && k < FRAGMENT_WORDS; items.push(x); inItem.push(asProse); if (asProse) short += k; }
       if (short) split.push({ t: words(it), short });
     }
-    return { prose, items, inItem, split, whole: parsed.items, heads: parsed.heads, stretches: parsed.stretches, marks: parsed.marks };
+    return { prose, items, inItem, split, whole: parsed.items, heads: parsed.heads, stretches: parsed.stretches, marks: parsed.marks, tinyMarks: parsed.tinyMarks };
   });
   const proseSentences = blockSentences.flatMap((b) => b.prose);
   const blockItems = blockSentences.flatMap((b) => b.whole);
@@ -966,13 +973,15 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   // headings per thousand words, vocabulary, small words) is taken without them, or at the worse of with and without.
   const tinyOf = (b: { whole: readonly string[]; heads: readonly string[] }) => [...b.whole, ...b.heads].map((x) => wordsOf(x).length).filter((k) => k < FRAGMENT_WORDS);
   const tinyWords = blockSentences.reduce((a, b) => a + tinyOf(b).reduce((x, y) => x + y, 0), 0);
-  const leanCount = Math.max(0, wordCount - tinyWords);
+  const leanCount = Math.max(0, wordCount - tinyWords - blockSentences.reduce((a, b) => a + b.tinyMarks, 0));
   // A list's numbering ("1.", "a)") is not a word of the article, so it never dilutes the phrase's share.
   const shareBase = Math.max(0, wordCount - blockSentences.reduce((a, b) => a + b.marks + [...b.whole, ...b.heads].map((x) => wordsOf(x).length).filter((k) => k < STEP_WORDS).reduce((x, y) => x + y, 0), 0));
   const leanUnits = units.filter((u) => u.list < 0 || u.t.length >= FRAGMENT_WORDS);
   const leanWords = [...headings.flatMap(words), ...leanUnits.flatMap((u) => u.t)];
   const vocab = Math.min(vocabulary(allWords), tinyWords ? vocabulary(leanWords) : 1);
-  const smallWords = Math.min(functionShare(readingOrder), functionShare(leanUnits.map((u) => u.t))) * 100;
+  // The small words are also read over the prose and the items of STEP_WORDS words or more only, and the lower share
+  // counts: list items of a few words, however written, can never make text that is not sentences read as sentences.
+  const smallWords = Math.min(functionShare(readingOrder), functionShare(leanUnits.map((u) => u.t)), functionShare(units.filter((u) => u.list < 0 || u.t.length >= STEP_WORDS).map((u) => u.t))) * 100;
 
   // ── Search: the search phrase ──
   let stuffedShare = 0, phraseShare = 0, altUses = 0, phraseHeadings = 0;
