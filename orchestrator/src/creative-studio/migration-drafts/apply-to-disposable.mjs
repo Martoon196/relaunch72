@@ -29,12 +29,16 @@ const draftFiles=[
   "media-retention.sql",
   "native-video-jit.sql",
   "native-video-planner.sql",
-  "native-video-call-trigger.sql"
+  "native-video-call-trigger.sql",
+  "media-metadata-erasure.sql"
 ];
 
-const client=new pg.Client({connectionString:DATABASE});
+const migrationUrl=new URL(DATABASE);migrationUrl.username='ci_migrator';migrationUrl.password='ci-owner-test-only';
+const client=new pg.Client({connectionString:migrationUrl.toString()});
 await client.connect();
 try{
+ const who=(await client.query('SELECT current_user,rolsuper FROM pg_roles WHERE rolname=current_user')).rows[0];
+ if(who.rolsuper)throw new Error('Draft proof must use a non-superuser migrator');
  for(const name of draftFiles){
   const sql=await readFile(new URL('./'+name,import.meta.url),'utf8');
   if(!sql.trim())throw new Error('Empty media schema draft');

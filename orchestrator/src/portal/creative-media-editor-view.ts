@@ -17,12 +17,12 @@ export function creativeMediaEditorPage(shell:Shell,sources:readonly VideoSource
   +(p?'<input type="hidden" name="source" value="'+e(p.sourceId+':'+p.sourceSha256)+'">':select)
   +'<input type="hidden" name="planJson" value="'+e(JSON.stringify(p?.plan??blank))+'">'
   +'<button type="submit">Save new private timeline version</button></form>';
- const items=projects.map(p=>'<details class="card"><summary>Timeline '+e(p.id.slice(0,8))
+ const items=projects.map(p=>'<details class="card"><summary>Timeline'
   +' · version '+p.revision+' · '+e(p.plan.canvas)+'</summary>'+form(p)+'</details>').join('');
  const editorStyle='<style>.rl72-cut-editor{padding:14px;border:1px solid var(--line);border-radius:10px;margin:12px 0}.rl72-cut-settings,.rl72-cut-range,.rl72-cut-actions,.rl72-cut-tools{display:flex;flex-wrap:wrap;gap:8px}.rl72-cut-clip{margin:10px 0;min-width:220px}.rl72-cut-editor label{display:grid;gap:4px;min-width:140px}.rl72-cut-editor label input{min-width:90px}.rl72-cut-editor video{max-width:100%;margin:8px 0}.rl72-cut-editor output{display:block;margin:8px 0}</style>';
  return layout(shell,'Video timeline editor',STYLE+editorStyle
   +'<section class="card"><h1>Video timeline editor</h1>'
-  +'<p>Trim source clips, reorder scenes, caption and select output format. Each save is a new private, immutable revision.</p>'
+  +'<p>Videos can be up to five minutes long; each clip lasts 1–120 seconds. Captions support Latin letters, numbers and punctuation, without emoji. Words wrap automatically. The #ad label is always shown. Each save keeps a new version.</p>'
   +'<p class="notice">Saving is not rendering or approval. No external provider, affiliate promotion or social post is triggered.</p>'
   +'<p><a href="'+base(shell)+'">Back to Creative Studio</a> · <a href="'+base(shell)+'/sources">Video sources</a></p></section>'
   +(sources.length?'<section class="card"><h2>New timeline</h2>'+form()+'</section>':

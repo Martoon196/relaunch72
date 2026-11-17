@@ -60,7 +60,7 @@ test('interactive editor builds real input/select/textarea controls and safely i
  const tags=created.map(v=>v.tag);
  assert.ok(tags.filter(t=>t==='input').length>=3);
  assert.ok(tags.filter(t=>t==='select').length>=3);
- assert.ok(tags.filter(t=>t==='textarea').length>=2);
+ assert.ok(tags.filter(t=>t==='textarea').length>=1);
  assert.ok(!tags.includes('number')&&!tags.includes('text'));
  assert.ok(created.some(v=>v.tag==='input'&&v.type==='number'));
  assert.ok(created.some(v=>v.tag==='input'&&v.type==='text'));

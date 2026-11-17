@@ -1,7 +1,7 @@
 -- PRIVATE DRAFT. Exact local media source adapter; canonical proof schema/window.
 SET LOCAL ROLE r72_owner;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_native_version_current(p_workspace uuid,p_version uuid,p_fresh boolean)
 RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE v app.company_content_versions;o app.creative_media_local_render_outputs;r app.creative_media_local_output_reviews;m jsonb;
@@ -51,7 +51,7 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_native_version_current(uuid,uuid,boolean),app_private.creative_media_native_post_current(uuid,uuid,boolean) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_native_version_current(uuid,uuid,boolean),app_private.creative_media_native_post_current(uuid,uuid,boolean) TO r72_public_social_definer,r72_creative_studio_definer;
-RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_public_social_definer;
 SET LOCAL ROLE r72_public_social_definer;
 CREATE FUNCTION app_private.creative_media_attest_due_native(p_workspace uuid)

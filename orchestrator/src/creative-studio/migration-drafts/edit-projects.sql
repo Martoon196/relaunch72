@@ -55,7 +55,7 @@ BEGIN
    'sourceId',p.source_id,'sourceSha256',p.source_sha256,'plan',p.plan,
    'planSha256',p.plan_sha256,'createdAt',p.created_at) ORDER BY p.created_at DESC)
    FROM (SELECT DISTINCT ON (id) * FROM app.creative_media_edit_projects
-    WHERE workspace_id=p_workspace ORDER BY id,revision DESC) p),'[]'::jsonb);
+    WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=creative_media_edit_projects.source_id) ORDER BY id,revision DESC) p),'[]'::jsonb);
  END IF;
  IF p_action NOT IN('get','save') OR p_input IS NULL OR jsonb_typeof(p_input)<>'object'
    OR octet_length(p_input::text)>16000 THEN
@@ -66,7 +66,7 @@ BEGIN
  IF p_action='get' THEN
   SELECT * INTO old FROM app.creative_media_edit_projects
    WHERE workspace_id=p_workspace AND id=project_id ORDER BY revision DESC LIMIT 1;
-  IF old.id IS NULL THEN RETURN 'null'::jsonb; END IF;
+  IF old.id IS NULL OR EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=old.source_id) THEN RETURN 'null'::jsonb; END IF;
   RETURN jsonb_build_object('id',old.id,'revision',old.revision,
    'sourceId',old.source_id,'sourceSha256',old.source_sha256,
    'plan',old.plan,'planSha256',old.plan_sha256,'createdAt',old.created_at);

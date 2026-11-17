@@ -26,5 +26,5 @@ test('source page is signed-in CSRF form and promises no external effects',async
   assert.match(html,/multipart\/form-data/);
   assert.match(html,/rightsConfirmed/);
   assert.match(html,/not proof of playability/);
-  assert.doesNotMatch(html,/shotstack\.io|vizard\.ai/);
+  assert.doesNotMatch(html,/shotstack|vizard/);
 });

@@ -34,7 +34,7 @@ export function creativeMediaLocalRenderPage(shell:Shell, model:{
   return '<details class="card"><summary><strong>'+e(source?.fileName??'Video source')
    +'</strong> · '+e(p.plan.canvas)+' · v'+e(p.revision)
    +' · '+duration.toFixed(1)+' s</summary>'
-   +'<p>Private MP4 exports have a 20 MB limit. Captions show a maximum four wrapped lines; longer captions are shortened. The #ad label stays on its own line.</p>'
+   +'<p>Private MP4 exports have a 20 MB limit. Captions show a maximum six wrapped lines; longer captions are shortened. The #ad label stays on its own line.</p>'
    +'<form method="post" action="'+path+'/local-renders">'
    +csrfField(shell.csrf)
    +'<input type="hidden" name="commandId" value="'+e(model.newCommand())+'">'
@@ -45,30 +45,30 @@ export function creativeMediaLocalRenderPage(shell:Shell, model:{
    +'<input type="hidden" name="planSha256" value="'+e(p.planSha256)+'">'
    +'<label><input type="checkbox" name="rightsConfirmed" value="1" required>'
    +' I confirm I own this source or hold the necessary licence to render this exact version.</label>'
-   +'<button type="submit">Queue private local render — no paid video service</button>'
+   +'<button type="submit">Create private video</button>'
    +'</form></details>';
  };
- const jobs=model.jobs.map(j=>'<li><strong>'+e(j.state)+'</strong> · '+e(j.id.slice(0,8))
+ const jobs=model.jobs.map(j=>'<li><strong>'+e(({queued:'Waiting',claimed:'Creating video',completed:'Ready',failed:'Could not create video'})[j.state])+'</strong>'
    +' · saved plan v'+e(j.revision)+' · '
-   +e(j.createdAt.slice(0,16))+'</li>').join('');
- const outputs=model.outputs.map(o=>'<li><strong>Private MP4 '+e(o.id.slice(0,8))+'</strong>'
+   +e(j.createdAt.slice(0,16))+(j.failureReason?'<p>'+e(({source_changed:'The source was deleted or changed. Choose another video.',render_failed:'The video could not be created. Retrying if possible.',renderer_unavailable:'Video processing is temporarily unavailable. We will retry.',output_invalid:'The finished video could not be checked. Try a different edit.',tool_limit:'This video exceeded a processing or storage limit. Shorten the edit or free some space.'} as Record<string,string>)[j.failureReason]??'The video could not be created. Try again.')+'</p>':'')+'</li>').join('');
+ const outputs=model.outputs.map(o=>'<li><strong>Private video</strong>'
    +' · '+e(o.width)+'×'+e(o.height)+' · '
    +(o.durationMs/1000).toFixed(1)+'s'
    +'<p><video controls playsinline preload="none" width="320" src="'+path
    +'/local-outputs/'+e(o.id)+'/stream">Private review preview only</video></p>'
    +'<p class="small muted">Private render'
-   +'. Canonical approval required.</p>'+creativeMediaErasureForm(shell,'local_output',o.id)+'</li>').join('');
- const intro='<section class="card"><h1>Offline native video renders</h1>'
-  +'<p>Use an independently probed private video and your saved edit plan.'
-  +' Exports are limited to 20 MB; timelines that cannot fit are rejected before encoding. The trusted worker will trim clips, preserve audio, add captions and export a new private MP4.'
-  +' No external Vizard or Shotstack call is needed.</p>'
-  +'<p class="notice">Draft workspace only. Rendering is not social publishing, affiliate compliance,'
-  +' merchant approval or proof of a video licence. This screen is not connected to the live portal.</p>'
+   +'. Review and approve before posting.</p>'+creativeMediaErasureForm(shell,'local_output',o.id)+'</li>').join('');
+ const intro='<section class="card"><h1>Create a video</h1>'
+  +'<p>Choose a checked video and your saved edit.'
+  +' Videos can be up to five minutes long, with a 20 MB download limit. Quality adjusts to fit. We trim clips, preserve audio and add your captions.'
+  +'</p>'
+  +'<p class="notice">Creating a video does not post it. Check your rights, factual claims,'
+  +' and advertising disclosures before posting.</p>'
   +'<p><a href="'+path+'/edits">Edit timeline</a> · <a href="'+path+'/sources">Private sources</a></p></section>';
  const content='<section><h2>Ready to render ('+eligible.length+')</h2>'
    +(eligible.map(item).join('')||'<p>Verify and save an eligible source timeline first.</p>')
    +'</section><section class="card"><h2>Private render jobs ('+model.jobs.length+')</h2>'
    +'<ul>'+jobs+'</ul></section><section class="card"><h2>Private outputs ('
    +model.outputs.length+')</h2><ul>'+outputs+'</ul></section>';
- return layout(shell,'Offline video renders',STYLE+intro+content);
+ return layout(shell,'Create a video',STYLE+intro+content);
 }

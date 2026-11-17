@@ -30,6 +30,7 @@ export interface LocalRenderJobRow {
  readonly id:string;readonly projectId:string;readonly revision:number;
  readonly sourceId:string;readonly sourceSha256:string;readonly planSha256:string;
  readonly state:LocalRenderJobState;readonly outputId:string|null;
+ readonly failureReason?:string|null;
  readonly createdAt:string;readonly updatedAt:string;
 }
 export interface LocalRenderOutputRow {
@@ -58,10 +59,11 @@ export class PgLocalRenderOwner {
        [workspaceId,this.sessionHash,action,JSON.stringify(body)])).rows[0]!.value);
   }catch(e){
    const code=(e as {code?:string}).code;
-   if(code==='54000')throw new SeoBlogError(429,'Media render queue or storage capacity reached');
+   if(code==='54000')throw new SeoBlogError(429,'Your video queue or storage is full. Delete unused files or wait for a video to finish.');
    if(code==='42501')throw new SeoBlogError(403,'Owner workspace or source rights could not be confirmed');
    if(code==='40001'||code==='23505')throw new SeoBlogError(409,'Local render command or timeline changed');
-   if(code==='55000')throw new SeoBlogError(409,'Exact latest timeline and independently measured source required');
+   if(code==='55000')throw new SeoBlogError(409,typeof (e as Error).message==='string'?(e as Error).message:'Choose the latest edit and a checked video.');
+   if(code==='22023'&&/Clips must|five minutes/.test((e as Error).message))throw new SeoBlogError(400,(e as Error).message);
    if(code==='22023'||code==='22P02'||code==='23514')
     throw new SeoBlogError(400,'Invalid source, rights or saved timeline revision');
    throw e;

@@ -5,6 +5,7 @@ import {SeoBlogError} from '../seo-blog/types.js';
 import {checkedEditId} from './media-edit-plan.js';
 export type OfflineMediaWork={kind:'probe'|'render-local';id:string};
 export interface MediaDispatchPorts {
+ deferProbe?:(workspaceId:string,id:string)=>Promise<void>;
  pending:(workspaceId:string,limit:number)=>Promise<OfflineMediaWork[]>;
  probe:(workspaceId:string,id:string)=>Promise<unknown>;
  render:(workspaceId:string,id:string)=>Promise<{state:string}>;
@@ -29,12 +30,13 @@ export async function runOfflineMediaTick(workspace:string,ports:MediaDispatchPo
    else result=await ports.render(ws,job.id);
    const state=(result as {state?:string}|null)?.state;
    receipts.push({id:job.id,kind:job.kind,state:state==='reconciliation_required'?'reconciliation_required':state==='failed'?'held':'completed'});
-  }catch{receipts.push({id:job.id,kind:job.kind,state:'held'});}
+  }catch{if(job.kind==='probe'&&ports.deferProbe)await ports.deferProbe(ws,job.id);receipts.push({id:job.id,kind:job.kind,state:'held'});}
  }
  return receipts;
 }
 export class PgOfflineMediaDiscovery {
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly requestId:string){}
+ deferProbe(workspaceId:string,id:string){return withTransaction(this.pool,{actorKind:'worker',workspaceId:checkedEditId(workspaceId),requestId:this.requestId},async t=>{await t.query('SELECT app_private.creative_media_probe_defer($1,$2)',[workspaceId,checkedEditId(id)]);});}
  pending(workspaceId:string,limit:number):Promise<OfflineMediaWork[]>{
   const ws=checkedEditId(workspaceId);
   if(!Number.isInteger(limit)||limit<1||limit>10)throw new SeoBlogError(400,'Bounded worker batch required');

@@ -18,5 +18,4 @@ export async function runMediaService(ports:{workspaces:(after:string|null)=>Pro
 export class PgMediaServiceDiscovery{
  constructor(private readonly pool:Pick<Pool,'connect'>,private readonly requestId:string){}
  workspaces(after:string|null){return withTransaction(this.pool,{actorKind:'worker',workspaceId:'00000000-0000-4000-8000-000000000000',requestId:this.requestId},async t=>(await t.query<{workspace_id:string}>('SELECT * FROM app_private.creative_media_worker_workspaces($1)',[after])).rows.map(x=>x.workspace_id));}
- clickRetention(){return withTransaction(this.pool,{actorKind:'worker',workspaceId:'00000000-0000-4000-8000-000000000000',requestId:this.requestId},async t=>{await t.query('SELECT app_private.creative_media_click_retention()');});}
 }

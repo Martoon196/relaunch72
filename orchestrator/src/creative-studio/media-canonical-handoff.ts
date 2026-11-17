@@ -11,12 +11,12 @@ export interface LocalVideoManifest {
  sourceSha256:string;planSha256:string;byteLength:number;durationMs:number;width:number;height:number;
  audioPresent:boolean;storageKey:string;reviewRevision:number;reviewedAt:string;reviewedBy:string;brandSha256:string;
 }
-export interface LocalVideoHandoffInput {workspaceId:string;outputId:string;outputSha256:string;reviewRevision:number;commandId:string;title:string;caption:string;platform:'instagram'|'facebook'|'youtube'|'tiktok'|'linkedin'}
+export interface LocalVideoHandoffInput {workspaceId:string;outputId:string;outputSha256:string;reviewRevision:number;commandId:string;title:string;caption:string;platform:'instagram'|'linkedin'}
 const sha=(x:string)=>createHash('sha256').update(x).digest('hex');
 export function localVideoDraftCommand(input:LocalVideoHandoffInput,manifest:LocalVideoManifest,now=new Date()):CreateCompanyContentVersionCommand{
  for(const id of [input.workspaceId,input.outputId,input.commandId])checkedEditId(id);
  if(input.workspaceId!==manifest.workspaceId||input.outputId!==manifest.outputId||input.outputSha256!==manifest.sha256||input.reviewRevision!==manifest.reviewRevision
-  ||!['instagram','facebook','youtube','tiktok','linkedin'].includes(input.platform)
+  ||!['instagram','linkedin'].includes(input.platform)
   ||typeof input.title!=='string'||!input.title.trim()||input.title.length>160||/[<>\x00-\x1f]/u.test(input.title)
   ||typeof input.caption!=='string'||!input.caption.trim()||input.caption.length>2000||/[<>\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(input.caption))throw new SeoBlogError(400,'Exact reviewed video, caption and intended platform required');
  const reviewed=Date.parse(manifest.reviewedAt),age=now.getTime()-reviewed;

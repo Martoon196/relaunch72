@@ -55,6 +55,10 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
  const admin=new pg.Pool({connectionString:raw,max:3});
  const userUri=new URL(uri);
  userUri.username='r72_content_command';userUri.password='local-methods-test-only';
+ await admin.query("ALTER ROLE r72_worker PASSWORD 'local-worker-test-only'");
+ const workerUrl=new URL(uri);workerUrl.username='r72_worker';workerUrl.password='local-worker-test-only';
+ const workerPool=new pg.Pool({connectionString:workerUrl.toString(),max:3});
+ assert.equal((await workerPool.query('SELECT current_user')).rows[0].current_user,'r72_worker');
  const content=new pg.Pool({connectionString:userUri.toString(),max:4});
  const temp=await mkdtemp(join(tmpdir(),'rl72-pg-local-video-smoke-'));
  async function seed(kind:'home'|'b2b'){
@@ -86,7 +90,7 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
     '-hide_banner','-loglevel','error','-nostdin','-y',
     '-f','lavfi','-i','testsrc2=size=320x180:rate=30',
     '-f','lavfi','-i','sine=frequency=440:sample_rate=44100',
-    '-t','3.0','-c:v','libx264','-preset','ultrafast','-crf','33',
+    '-t','4.0','-c:v','libx264','-preset','ultrafast','-crf','33',
     '-c:a','aac','-b:a','64k',inputPath],{encoding:'utf8',timeout:20000});
   assert.equal(made.status,0,made.stderr.slice(0,500));
   const bytes=await readFile(inputPath);
@@ -97,7 +101,7 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
   const editor=new PgMediaEditStore(content,a.principal);
   const plan:VideoEditPlan={canvas:'portrait',disclosure:'#ad',
    clips:[{startMs:0,endMs:1000,caption:'Private clip test',transition:'cut',speed:1},
-    {startMs:1250,endMs:2250,caption:'Another scene',transition:'fade',speed:2}]};
+    {startMs:1250,endMs:3250,caption:'Another scene',transition:'fade',speed:2}]};
   const projectId=randomUUID();
   const save=await editor.save({
    workspaceId:a.brand.id,projectId,commandId:randomUUID(),expectedRevision:0,
@@ -110,11 +114,11 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
   };
   await t.test('cannot queue unprobed source or impersonate owner',async()=>{
    await assert.rejects(a.owner.enqueue(enqueue),/probe|measured|timeline/iu);
-   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights|measured source/iu);
+   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights|measured source|timeline/iu);
    await assert.rejects(content.query('SELECT * FROM app.creative_media_local_render_jobs'),/permission denied/iu);
   });
   await t.test('trusted worker measures actual source file, owner queues exact latest timeline',async()=>{
-   const measured=await new PgVideoSourceProbeWorker(admin,'local-source-probe').run(a.brand.id,upload.id);
+   const measured=await new PgVideoSourceProbeWorker(workerPool,'local-source-probe').run(a.brand.id,upload.id);
    assert.equal(measured.status,'verified_technical');
    const original=await ffprobeFromBytes(bytes);
    assert.equal(original.status,'verified_technical');
@@ -127,7 +131,7 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
    await assert.rejects(b.owner.list(a.brand.id),/session|owner|workspace/iu);
   });
   await t.test('real FFmpeg job produces private H264 MP4, never a paid provider receipt',async()=>{
-   const worker=new PgLocalRenderWorker(admin,'local-render-pg-smoke',env);
+   const worker=new PgLocalRenderWorker(workerPool,'local-render-pg-smoke',env);
    const finished=await runQueuedLocalRender(a.brand.id,jobId,{
     ledger:worker,renderer:renderLocalVideo,
    });
@@ -180,10 +184,12 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
     await isolated.query('BEGIN');const textJob=randomUUID();
     const columns=(await isolated.query("SELECT attname FROM pg_attribute WHERE attrelid='app.property_predator_owned_social_jobs'::regclass AND attnum>0 AND NOT attisdropped AND attgenerated='' ORDER BY attnum")).rows.map(r=>'"'+String(r.attname).replaceAll('"','""')+'"').join(',');
     await isolated.query(`INSERT INTO app.property_predator_owned_social_jobs(${columns}) SELECT ${columns.split(',').map(c=>'copy.'+c).join(',')} FROM app.property_predator_owned_social_jobs j CROSS JOIN LATERAL jsonb_populate_record(NULL::app.property_predator_owned_social_jobs,to_jsonb(j)||jsonb_build_object('id',$3::text,'idempotency_key_sha256',('\\x'||encode(public.digest($3::text,'sha256'),'hex')),'state','leased','lease_version',1,'lease_attempt_kind','publish','lease_expires_at',clock_timestamp()+interval '90 seconds')) copy WHERE j.workspace_id=$1 AND j.id=$2`,[a.brand.id,positive.jobId,textJob]);
-    await isolated.query('REVOKE EXECUTE ON FUNCTION app_private.current_workspace_id(),app_private.current_actor_kind() FROM r72_media_job_definer');
+    await isolated.query('REVOKE EXECUTE ON FUNCTION app_private.creative_media_job_has_native_video(uuid,uuid) FROM r72_owned_social_definer,r72_owned_social_worker_command');
     await isolated.query("SELECT set_config('app.workspace_id',$1,true),set_config('app.actor_kind','worker',true)",[a.brand.id]);
     await isolated.query('SET LOCAL ROLE r72_owned_social_definer');
     assert.equal((await isolated.query("UPDATE app.property_predator_owned_social_jobs SET state='calling' WHERE workspace_id=$1 AND id=$2 RETURNING state",[a.brand.id,textJob])).rows[0].state,'calling','text job bypasses media guard even with media context grants revoked');
+    for(const state of ['failed','queued','cancelled'])assert.equal((await isolated.query('UPDATE app.property_predator_owned_social_jobs SET state=$3,lease_expires_at=NULL,lease_attempt_kind=NULL WHERE workspace_id=$1 AND id=$2 RETURNING state',[a.brand.id,textJob,state])).rows[0].state,state);
+    console.log('R1 reproduction PASS: classifier EXECUTE revoked, text calling/fail/requeue/cancel unaffected');
    }finally{await isolated.query('ROLLBACK');isolated.release();}
 
    await assert.rejects(new PgNativeVideoPlanner(adapter,planning,zernio,b.principal,flags).plan({...firstRequest,workspaceId:b.brand.id,commandId:randomUUID()}),/approved|owner|workspace/iu);
@@ -216,5 +222,5 @@ test('native planner → three-day elapsed PostgreSQL clock → JIT proof → re
    const held=(await admin.query('SELECT state,current_proof_id FROM app.public_social_revalidation_jobs WHERE workspace_id=$1 AND intent_id=$2',[a.brand.id,future.intentId])).rows[0];assert.equal(held.state,'cancelled');assert.equal(held.current_proof_id,null);
    console.log(JSON.stringify({nativeCalendarProof:{daysElapsed:3,plannerCreated:true,originalAttestationsExpired:true,proofTtlMinutes:15,triggerFired:true,withdrawalBlocked:true,expiryBlocked:true,erasedFutureCancelled:true,scopeDenied:true,replicationRoleBypass:false,providerCalls:0}}));
   }finally{await offset('+0');for(const pool of extra)await pool.end();}
- }finally{await rm(temp,{recursive:true,force:true});await admin.end();await content.end();}
+ }finally{await rm(temp,{recursive:true,force:true});await workerPool.end();await admin.end();await content.end();}
 });

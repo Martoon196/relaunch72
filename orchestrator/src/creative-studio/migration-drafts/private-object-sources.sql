@@ -70,8 +70,8 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_object_upload(uuid,bytea,text,uuid,jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_object_upload(uuid,bytea,text,uuid,jsonb) TO r72_content_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_object_source_worker(p_workspace uuid,p_source uuid)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
@@ -80,14 +80,14 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_object_source_worker(uuid,uuid) TO r72_worker;
-RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
 -- Explicit scoped housekeeping for expired/cancelled staging and orphaned assembly.
 SET LOCAL ROLE r72_owner;
 ALTER TABLE app.creative_media_object_uploads ADD COLUMN last_cleanup_at timestamptz;
-CREATE POLICY creative_media_object_uploads_cleanup ON app.creative_media_object_uploads FOR ALL TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
-GRANT SELECT,UPDATE ON app.creative_media_object_uploads TO r72_media_job_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+CREATE POLICY creative_media_object_uploads_cleanup ON app.creative_media_object_uploads FOR ALL TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
+GRANT SELECT,UPDATE ON app.creative_media_object_uploads TO r72_native_video_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_object_cleanup(p_workspace uuid,p_limit integer)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE u app.creative_media_object_uploads;result jsonb:='[]'::jsonb;
@@ -112,4 +112,4 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_object_cleanup(uuid,integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_object_cleanup(uuid,integer) TO r72_worker;
-RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;

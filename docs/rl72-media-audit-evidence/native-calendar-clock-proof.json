@@ -13,8 +13,8 @@
   "postgresVersion": "18.7",
   "elapsedClock": "libfaketime in disposable postgres process only; normal Node clock",
   "canonicalMigrationsApplied": 158,
-  "mediaDraftsApplied": 16,
-  "localExistingMediaTestsPassed": 13,
+  "mediaDraftsApplied": 17,
+  "localExistingMediaTestsPassed": 16,
   "nativeCalendarTestsPassed": 4,
   "skipped": 0,
   "canonicalFunctionsReplaced": false,
@@ -22,5 +22,19 @@
   "paidProviderTablesPresent": false,
   "manuallyInsertedSocialJobsForPlannerProof": false,
   "separateRolledBackTextJobIsolationFixture": true,
-  "nonVideoCallingWithMediaContextGrantsRevoked": true
+  "nonVideoCallingWithMediaContextGrantsRevoked": true,
+  "nonSuperuserMigrator": true,
+  "legacyMediaRoleDifferentCreator": true,
+  "workerRole": "r72_worker",
+  "classifierExecuteRevoked": true,
+  "nonVideoTransitionsUnaffected": [
+    "calling",
+    "failed",
+    "queued",
+    "cancelled"
+  ],
+  "probeStarvationReproductionPassed": true,
+  "sourceCountCap": 50,
+  "sourceByteCap": 200000000,
+  "metadataErasure": true
 }

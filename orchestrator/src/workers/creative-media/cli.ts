@@ -1,9 +1,9 @@
 /**
  * Default-off supervised offline service and diagnostic commands.
  * Usage:
- *   npm --prefix orchestrator run media:worker -- serve
- *   npm --prefix orchestrator run media:worker -- probe <workspace-uuid> <source-uuid>
- *   npm --prefix orchestrator run media:worker -- render-local <workspace-uuid> <job-uuid>
+ *   node --import tsx orchestrator/src/workers/creative-media/cli.ts serve
+ *   node --import tsx orchestrator/src/workers/creative-media/cli.ts probe <workspace-uuid> <source-uuid>
+ *   node --import tsx orchestrator/src/workers/creative-media/cli.ts render-local <workspace-uuid> <job-uuid>
  * Default OFF. Service discovers bounded workspace UUID batches and enters each
  * tenant scope. It polls offline work and cleanup; never retries paid calls.
  */
@@ -42,13 +42,14 @@ async function main():Promise<void>{
       const discovery=new PgMediaServiceDiscovery(pool,requestId);
       try{await runMediaService({workspaces:after=>discovery.workspaces(after),clickRetention:async()=>{},
        cleanup:async ws=>{if(process.env.RL72_MEDIA_NATIVE_CALENDAR_ENABLED==='true')await new PgNativeVideoJitWorker(pool,requestId).attest(ws);await new PgMediaRetentionWorker(pool,requestId,files).sweep(ws);if(files)await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(ws,10);},
-       tick:ws=>runOfflineMediaTick(ws,{pending:(w,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(w,n),probe:probeSource,render:(w,id)=>runQueuedLocalRender(w,id,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer})},{limit:1,signal:controller.signal}),
+       tick:ws=>runOfflineMediaTick(ws,{deferProbe:(w,id)=>new PgOfflineMediaDiscovery(pool,requestId).deferProbe(w,id),pending:(w,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(w,n),probe:probeSource,render:(w,id)=>runQueuedLocalRender(w,id,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer})},{limit:1,signal:controller.signal}),
        onError:()=>console.error('Offline media batch held; retrying after bounded delay')},{signal:controller.signal});}
       finally{process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}return;
     }
     if(action==='cleanup-objects'){if(!files)throw new Error('Private object storage unavailable');console.log('private object cleanup:',await new PgPrivateObjectCleanupWorker(pool,requestId,files).sweep(workspaceId!));return;}
     if(action==='tick'){
       const receipts=await runOfflineMediaTick(workspaceId!,{
+        deferProbe:(ws,id)=>new PgOfflineMediaDiscovery(pool,requestId).deferProbe(ws,id),
         pending:(ws,n)=>new PgOfflineMediaDiscovery(pool,requestId).pending(ws,n),
         probe:(ws,record)=>probeSource(ws,record),
         render:(ws,record)=>runQueuedLocalRender(ws,record,{ledger:new PgLocalRenderWorker(pool,requestId),renderer:renderLocalVideo,objectRenderer}),

@@ -22,7 +22,7 @@ test('owner view only offers exact-digest private render when technical source p
  assert.match(html,/name="rightsConfirmed"/);
  assert.match(html,/name="_csrf"/);
  assert.match(html,/name="planSha256"/);
- assert.match(html,/Queue private local render/);
+ assert.match(html,/Create private video/);
  assert.doesNotMatch(html,/<script>alert\(1\)<\/script>/);
  assert.match(html,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
  assert.doesNotMatch(html,/Publish now|Send to social account/i);
@@ -31,5 +31,5 @@ test('unchecked source technical state blocks render controls, never overrides S
  const html=creativeMediaLocalRenderPage(shell,{
   ...model,probes:[{sourceId:file.id,status:'rejected'}]} as never);
  assert.match(html,/Ready to render \(0\)/);
- assert.doesNotMatch(html,/Queue private local render/);
+ assert.doesNotMatch(html,/Create private video/);
 });

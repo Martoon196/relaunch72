@@ -13,7 +13,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
-import {PgOfflineMediaDiscovery} from '../../src/creative-studio/media-worker-dispatch.js';
+import {PgOfflineMediaDiscovery,runOfflineMediaTick} from '../../src/creative-studio/media-worker-dispatch.js';
 import {PgLocalVideoCanonicalHandoff} from '../../src/creative-studio/media-canonical-handoff.js';
 import {PrivateMediaFiles,LARGE_MEDIA_PART_BYTES} from '../../src/creative-studio/media-private-files.js';
 import {PgPrivateObjectSources,PgPrivateObjectProbeWorker,PgPrivateObjectCleanupWorker} from '../../src/creative-studio/media-object-sources.js';
@@ -50,6 +50,10 @@ test('real native render starts from exact owned, independently probed source an
  const admin=new pg.Pool({connectionString:raw,max:3});
  const userUri=new URL(uri);
  userUri.username='r72_content_command';userUri.password='local-methods-test-only';
+ await admin.query("ALTER ROLE r72_worker PASSWORD 'local-worker-test-only'");
+ const workerUrl=new URL(uri);workerUrl.username='r72_worker';workerUrl.password='local-worker-test-only';
+ const workerPool=new pg.Pool({connectionString:workerUrl.toString(),max:3});
+ assert.equal((await workerPool.query('SELECT current_user')).rows[0].current_user,'r72_worker');
  const content=new pg.Pool({connectionString:userUri.toString(),max:4});
  const temp=await mkdtemp(join(tmpdir(),'rl72-pg-local-video-smoke-'));
  async function seed(kind:'home'|'b2b'){
@@ -81,7 +85,7 @@ test('real native render starts from exact owned, independently probed source an
     '-hide_banner','-loglevel','error','-nostdin','-y',
     '-f','lavfi','-i','testsrc2=size=320x180:rate=30',
     '-f','lavfi','-i','sine=frequency=440:sample_rate=44100',
-    '-t','3.0','-c:v','libx264','-preset','ultrafast','-crf','33',
+    '-t','4.0','-c:v','libx264','-preset','ultrafast','-crf','33',
     '-c:a','aac','-b:a','64k',inputPath],{encoding:'utf8',timeout:20000});
   assert.equal(made.status,0,made.stderr.slice(0,500));
   const bytes=await readFile(inputPath);
@@ -92,7 +96,7 @@ test('real native render starts from exact owned, independently probed source an
   const editor=new PgMediaEditStore(content,a.principal);
   const plan:VideoEditPlan={canvas:'portrait',disclosure:'#ad',
    clips:[{startMs:0,endMs:1000,caption:'Private clip test',transition:'cut',speed:1},
-    {startMs:1250,endMs:2250,caption:'Another scene',transition:'fade',speed:2}]};
+    {startMs:1250,endMs:3250,caption:'Another scene',transition:'fade',speed:2}]};
   const projectId=randomUUID();
   const save=await editor.save({
    workspaceId:a.brand.id,projectId,commandId:randomUUID(),expectedRevision:0,
@@ -105,11 +109,11 @@ test('real native render starts from exact owned, independently probed source an
   };
   await t.test('cannot queue unprobed source or impersonate owner',async()=>{
    await assert.rejects(a.owner.enqueue(enqueue),/probe|measured|timeline/iu);
-   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights|measured source/iu);
+   await assert.rejects(b.owner.enqueue({...enqueue,workspaceId:b.brand.id}),/owner|session|workspace|probe|rights|measured source|timeline/iu);
    await assert.rejects(content.query('SELECT * FROM app.creative_media_local_render_jobs'),/permission denied/iu);
   });
   await t.test('trusted worker measures actual source file, owner queues exact latest timeline',async()=>{
-   const measured=await new PgVideoSourceProbeWorker(admin,'local-source-probe').run(a.brand.id,upload.id);
+   const measured=await new PgVideoSourceProbeWorker(workerPool,'local-source-probe').run(a.brand.id,upload.id);
    assert.equal(measured.status,'verified_technical');
    const original=await ffprobeFromBytes(bytes);
    assert.equal(original.status,'verified_technical');
@@ -122,7 +126,7 @@ test('real native render starts from exact owned, independently probed source an
    await assert.rejects(b.owner.list(a.brand.id),/session|owner|workspace/iu);
   });
   await t.test('real FFmpeg job produces private H264 MP4, never a paid provider receipt',async()=>{
-   const worker=new PgLocalRenderWorker(admin,'local-render-pg-smoke',env);
+   const worker=new PgLocalRenderWorker(workerPool,'local-render-pg-smoke',env);
    const finished=await runQueuedLocalRender(a.brand.id,jobId,{
     ledger:worker,renderer:renderLocalVideo,
    });
@@ -200,17 +204,17 @@ test('real native render starts from exact owned, independently probed source an
    for(let i=0;i<Math.ceil(large.length/LARGE_MEDIA_PART_BYTES);i++)await sources.part(a.brand.id,sourceId,i,large.subarray(i*LARGE_MEDIA_PART_BYTES,(i+1)*LARGE_MEDIA_PART_BYTES));
    const finished=await sources.complete(a.brand.id,sourceId);assert.equal(finished.state,'completed');assert.equal((await sources.complete(a.brand.id,sourceId)).state,'completed');
    await assert.rejects(crossed.source(b.brand.id,sourceId),/unavailable/iu);
-   const probed=await new PgPrivateObjectProbeWorker(admin,'large-source-proof',files,flags).run(a.brand.id,sourceId);assert.equal(probed?.status,'verified_technical');
+   const probed=await new PgPrivateObjectProbeWorker(workerPool,'large-source-proof',files,flags).run(a.brand.id,sourceId);assert.equal(probed?.status,'verified_technical');
    const project=randomUUID(),objectPlan={...plan,clips:[{startMs:0,endMs:1000,caption:'Actual large source',transition:'cut' as const,speed:1 as const}]};
    await new PgMediaEditStore(content,a.principal).save({workspaceId:a.brand.id,projectId:project,commandId:randomUUID(),expectedRevision:0,sourceId,sourceSha256:sha(large),plan:objectPlan});
    const queuedId=randomUUID();await a.owner.enqueue({workspaceId:a.brand.id,projectId:project,revision:1,jobId:queuedId,commandId:randomUUID(),sourceSha256:sha(large),planSha256:videoEditDigest(objectPlan),rightsConfirmed:true});
-   const result=await runQueuedLocalRender(a.brand.id,queuedId,{ledger:new PgLocalRenderWorker(admin,'large-render-proof',flags),renderer:renderLocalVideo,objectRenderer:(object,probe,edit)=>renderLocalVideoFile(files,object,probe,edit)});
+   const result=await runQueuedLocalRender(a.brand.id,queuedId,{ledger:new PgLocalRenderWorker(workerPool,'large-render-proof',flags),renderer:renderLocalVideo,objectRenderer:(object,probe,edit)=>renderLocalVideoFile(files,object,probe,edit)});
    assert.equal(result.state,'completed');assert.ok(result.outputId);assert.equal((await a.owner.load(a.brand.id,result.outputId!)).mime,'video/mp4');
    // Simulate a crash after catalogue commit but before staging unlink.
    await files.putPart(a.brand.id,sourceId,0,large.length,large.subarray(0,LARGE_MEDIA_PART_BYTES));
    const expired=randomUUID();await sources.begin(a.brand.id,expired,metadata);await sources.part(a.brand.id,expired,0,large.subarray(0,LARGE_MEDIA_PART_BYTES));
    await admin.query("UPDATE app.creative_media_object_uploads SET expires_at=now()-interval '1 second' WHERE workspace_id=$1 AND id=$2",[a.brand.id,expired]);
-   const cleaned=await new PgPrivateObjectCleanupWorker(admin,'object-cleanup-proof',files,flags).sweep(a.brand.id);assert.ok(cleaned.some(x=>x.sourceId===expired&&x.state==='cleaned'));
+   const cleaned=await new PgPrivateObjectCleanupWorker(workerPool,'object-cleanup-proof',files,flags).sweep(a.brand.id);assert.ok(cleaned.some(x=>x.sourceId===expired&&x.state==='cleaned'));
    assert.deepEqual(await files.parts(a.brand.id,sourceId,large.length),[]);await files.verify(finished);
    assert.equal((await sources.source(a.brand.id,sourceId)).sha256,sha(large),'housekeeping must preserve completed canonical objects');
   });
@@ -250,14 +254,14 @@ test('real native render starts from exact owned, independently probed source an
    const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!,staleJob=randomUUID();
    await a.owner.enqueue({...enqueue,jobId:staleJob,commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
    await editor.save({workspaceId:a.brand.id,projectId,commandId:randomUUID(),expectedRevision:current.revision,sourceId:upload.id,sourceSha256:upload.sha256,plan:{...current.plan,clips:current.plan.clips.map((clip,index)=>({...clip,caption:clip.caption+(index===0?' changed':'' )}))}});
-   await assert.rejects(new PgLocalRenderWorker(admin,'stale-proof',env).claim(a.brand.id,staleJob),/unavailable/iu);
+   await assert.rejects(new PgLocalRenderWorker(workerPool,'stale-proof',env).claim(a.brand.id,staleJob),/unavailable/iu);
    assert.equal((await admin.query('SELECT state FROM app.creative_media_local_render_jobs WHERE workspace_id=$1 AND id=$2',[a.brand.id,staleJob])).rows[0].state,'failed');
-   assert.equal((await new PgOfflineMediaDiscovery(admin,'stale-discovery').pending(a.brand.id,10)).some(x=>x.id===staleJob),false);
+   assert.equal((await new PgOfflineMediaDiscovery(workerPool,'stale-discovery').pending(a.brand.id,10)).some(x=>x.id===staleJob),false);
   });
   await t.test('offline leases heartbeat, fence expired attempts and stop retrying after three claims',async()=>{
    const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!;
    const retryJob=randomUUID();await a.owner.enqueue({...enqueue,jobId:retryJob,commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
-   const ledger=new PgLocalRenderWorker(admin,'heartbeat-proof',env),discovery=new PgOfflineMediaDiscovery(admin,'retry-proof');
+   const ledger=new PgLocalRenderWorker(workerPool,'heartbeat-proof',env),discovery=new PgOfflineMediaDiscovery(workerPool,'retry-proof');
    let first:string|undefined;
    for(let attempt=1;attempt<=3;attempt++){
     const claim=await ledger.claim(a.brand.id,retryJob);first??=claim.claimToken;
@@ -271,23 +275,56 @@ test('real native render starts from exact owned, independently probed source an
    }
    const final=(await admin.query('SELECT state,attempts FROM app.creative_media_local_render_jobs WHERE workspace_id=$1 AND id=$2',[a.brand.id,retryJob])).rows[0];assert.deepEqual(final,{state:'failed',attempts:3});
   });
+  await t.test('R8 SQL admission rejects subsecond and beyond-source trims before creating a job',async()=>{
+   for(const endMs of [500,9000]){
+    const project=randomUUID(),invalid={...plan,clips:[{...plan.clips[0]!,endMs}]},digest=sha(Buffer.from(JSON.stringify(invalid)));
+    await admin.query('INSERT INTO app.creative_media_edit_projects(workspace_id,id,revision,source_id,source_sha256,plan,plan_sha256,created_by) VALUES($1,$2,1,$3,$4,$5,$6,$7)',[a.brand.id,project,upload.id,upload.sha256,JSON.stringify(invalid),digest,a.principal.userId]);
+    await assert.rejects(a.owner.enqueue({...enqueue,projectId:project,revision:1,jobId:randomUUID(),commandId:randomUUID(),planSha256:digest}),/at least one second|within the uploaded video/iu);
+   }
+  });
   await t.test('the SQL queue cap rejects a twenty-first outstanding render',async()=>{
    const current=(await editor.list(a.brand.id)).find(x=>x.id===projectId)!;
    const request=()=>({...enqueue,jobId:randomUUID(),commandId:randomUUID(),revision:current.revision,planSha256:current.planSha256});
    for(let n=0;n<20;n++)await a.owner.enqueue(request());
    await assert.rejects(a.owner.enqueue(request()),/cap|storage/iu);
   });
+  await t.test('R2 missing disk source backs off and newer small source is probed on the next tick',async()=>{
+   const missing=randomUUID(),digest='a'.repeat(64),ws=b.brand.id;
+   await admin.query("INSERT INTO app.creative_media_source_videos(workspace_id,id,command_id,storage_kind,object_key,file_name,sha256,byte_length,mime,rights,owner_user_id) VALUES($1,$2,$2,'private_object',$3,'unreachable.mp4',$4,25000000,'video/mp4','owned',$5)",[ws,missing,ws+'/'+missing+'/'+digest+'.mp4',digest,b.principal.userId]);
+   const healthy=await new PgCreativeVideoSources(content,b.principal).upload({workspaceId:ws,commandId:randomUUID(),fileName:'healthy.mp4',rights:'owned',rightsConfirmed:true,evidenceSha256:null,bytes});
+   const files=new PrivateMediaFiles(join(temp,'unreachable-disk')),flags={...env,RL72_MEDIA_PRIVATE_FILES_ENABLED:'true',RL72_MEDIA_DISPATCH_ENABLED:'true'},discovery=new PgOfflineMediaDiscovery(workerPool,'R2-reproduction');
+   const seen:string[]=[];
+   for(let tick=0;tick<4;tick++)await runOfflineMediaTick(ws,{pending:(w,n)=>discovery.pending(w,n),deferProbe:(w,id)=>discovery.deferProbe(w,id),probe:async(w,id)=>{seen.push(id);return await new PgPrivateObjectProbeWorker(workerPool,'R2-object',files,flags).run(w,id)??new PgVideoSourceProbeWorker(workerPool,'R2-small').run(w,id);},render:async()=>{throw Error('Unexpected render');}},{env:flags,limit:1});
+   assert.deepEqual(seen,[missing,healthy.id]);
+   assert.equal((await admin.query('SELECT attempts,retry_at>clock_timestamp() waiting FROM app.creative_media_probe_retries WHERE workspace_id=$1 AND source_id=$2',[ws,missing])).rows[0].waiting,true);
+   assert.equal((await admin.query('SELECT status FROM app.creative_media_video_probes WHERE workspace_id=$1 AND source_id=$2',[ws,healthy.id])).rows[0].status,'verified_technical');
+   console.log('R2 reproduction PASS: unreachable large file deferred; healthy upload probed by second tick');
+  });
   await t.test('owner erasure blocks reads immediately, removes stored bytes and isolates tenants',async()=>{
    const flags={...env,RL72_MEDIA_RETENTION_ENABLED:'true'};
    const owner=new PgMediaErasureOwner(content,a.principal,flags),cross=new PgMediaErasureOwner(content,b.principal,flags);
    await assert.rejects(cross.erase(b.brand.id,'source',upload.id),/unavailable|owner/iu);
    const erasedOutput=(await a.owner.outputs(a.brand.id)).find(o=>o.jobId===jobId)!;
+   const latest=(await editor.list(a.brand.id)).find(p=>p.id===projectId)!;
    await owner.erase(a.brand.id,'source',upload.id);
+   await assert.rejects(a.owner.enqueue({...enqueue,revision:latest.revision,planSha256:latest.planSha256,jobId:randomUUID(),commandId:randomUUID()}),/deleted/iu);
    await assert.rejects(a.owner.load(a.brand.id,erasedOutput.id),/unavailable/iu);
-   await new PgMediaRetentionWorker(admin,'erasure-test',null).sweep(a.brand.id);
+   await new PgMediaRetentionWorker(workerPool,'erasure-test',null).sweep(a.brand.id);
    const counts=await admin.query("SELECT octet_length(b.bytes) n FROM app.creative_media_source_videos s JOIN app.seo_blog_blobs b ON b.workspace_id=s.workspace_id AND b.id=s.blob_id WHERE s.workspace_id=$1 AND s.id=$2",[a.brand.id,upload.id]);
    assert.equal(counts.rows[0].n,1);
+   assert.equal((await admin.query('SELECT file_name FROM app.creative_media_source_videos WHERE workspace_id=$1 AND id=$2',[a.brand.id,upload.id])).rows[0].file_name,'Deleted video');
+   assert.equal((await admin.query("SELECT count(*)::int n FROM app.creative_media_edit_projects WHERE workspace_id=$1 AND source_id=$2 AND plan<>'{\"erased\":true}'::jsonb",[a.brand.id,upload.id])).rows[0].n,0);
    assert.equal((await admin.query('SELECT count(*)::int n FROM app.creative_media_erasures WHERE workspace_id=$1 AND erased_at IS NOT NULL',[a.brand.id])).rows[0].n>=2,true);
+  });
+  await t.test('R7 database sources have workspace count and byte caps with safe replay',async()=>{
+   const countBrand=await seed('home'),store=new PgCreativeVideoSources(content,countBrand.principal);
+   const request=()=>({workspaceId:countBrand.brand.id,commandId:randomUUID(),fileName:'capacity.mp4',rights:'owned' as const,rightsConfirmed:true,evidenceSha256:null,bytes});
+   const first=request();await store.upload(first);for(let n=1;n<50;n++)await store.upload(request());
+   assert.equal((await store.upload(first)).replayed,true);await assert.rejects(store.upload(request()),/library is full/iu);
+   const byteBrand=await seed('b2b'),byteStore=new PgCreativeVideoSources(content,byteBrand.principal),big=Buffer.alloc(20000000);bytes.copy(big);
+   const bigRequest=()=>({...request(),workspaceId:byteBrand.brand.id,bytes:big});
+   for(let n=0;n<10;n++)await byteStore.upload(bigRequest());
+   await assert.rejects(byteStore.upload({...bigRequest(),bytes}),/library is full/iu);
   });
   await t.test('automatic retention advances beyond its first batch without a per-workspace manual command',async()=>{
    const ids:string[]=[];
@@ -297,7 +334,7 @@ test('real native render starts from exact owned, independently probed source an
      INSERT INTO app.creative_media_source_videos(workspace_id,id,command_id,blob_id,file_name,sha256,byte_length,mime,rights,owner_user_id,created_at)
      SELECT $1,$3,$3,blob.id,'retention.mp4',encode(public.digest($2::bytea,'sha256'),'hex'),octet_length($2::bytea),'video/mp4','owned',$4,clock_timestamp()-interval '31 days' FROM blob`,[a.brand.id,bytes,id,a.principal.userId]);
    }
-   const janitor=new PgMediaRetentionWorker(admin,'automatic-retention-proof',null);
+   const janitor=new PgMediaRetentionWorker(workerPool,'automatic-retention-proof',null);
    await janitor.sweep(a.brand.id);
    assert.equal((await admin.query("SELECT count(*)::int n FROM app.creative_media_erasures WHERE workspace_id=$1 AND id=ANY($2::uuid[])",[a.brand.id,ids])).rows[0].n,0,'default retains owner library indefinitely');
    await new PgMediaErasureOwner(content,a.principal,{...env,RL72_MEDIA_RETENTION_ENABLED:'true'}).setRetention(a.brand.id,30,true);
@@ -306,6 +343,6 @@ test('real native render starts from exact owned, independently probed source an
   });
  }finally{
   await rm(temp,{recursive:true,force:true});
-  await admin.end();await content.end();
+  await workerPool.end();await admin.end();await content.end();
  }
 });

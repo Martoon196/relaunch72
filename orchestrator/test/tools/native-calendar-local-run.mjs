@@ -17,7 +17,7 @@ try{
  if(!admin)throw Error('Disposable PG failed to start: '+dir);
  await admin.query('CREATE DATABASE relaunch72_test');await admin.end();
  const env={...process.env,RL72_METHODS_PG_TEST_URL:url,RELAUNCH72_DATABASE_INTEGRATION:'explicit-disposable-run',RL72_MEDIA_CLOCK_FILE:clock};
- for(const args of [['--import','tsx','scripts/rl72-boosters-pg-bootstrap.mjs'],['orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs'],['--import','tsx','--test','orchestrator/test/db/creative-media-local-render-pg.integration.test.ts'],['--import','tsx','--test','orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts']]){
-  const result=spawnSync(process.execPath,args,{env,stdio:'inherit'});if(result.status!==0)throw Error('Disposable step failed: '+args.join(' '));
+ for(const args of [['--import','tsx','scripts/rl72-boosters-pg-bootstrap.mjs'],['orchestrator/test/tools/prepare-native-draft-proof.mjs'],['orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs'],['bash','orchestrator/test/tools/repro-native-probe-starvation.sh'],['bash','orchestrator/test/tools/repro-native-trigger-grant.sh']]){
+  const result=spawnSync(args[0]==='bash'?'bash':process.execPath,args[0]==='bash'?args.slice(1):args,{env,stdio:'inherit'});if(result.status!==0)throw Error('Disposable step failed: '+args.join(' '));
  }
 }finally{server.kill('SIGTERM');await new Promise(r=>{server.once('close',r);setTimeout(()=>{server.kill('SIGKILL');r();},3000).unref();});await log.close();console.log('Disposable clock evidence directory:',dir);}

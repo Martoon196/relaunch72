@@ -61,7 +61,7 @@ BEGIN
     RETURN coalesce((SELECT jsonb_agg(jsonb_build_object(
       'id',s.id,'fileName',s.file_name,'sha256',s.sha256,'byteLength',s.byte_length,
       'mime',s.mime,'rights',s.rights,'evidenceSha256',s.evidence_sha256,
-      'state',s.state,'createdAt',s.created_at,'storageKind',s.storage_kind) ORDER BY s.created_at DESC)
+      'state',CASE WHEN EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=s.workspace_id AND e.kind='source' AND e.id=s.id) THEN 'deleted' WHEN EXISTS(SELECT 1 FROM app.creative_media_video_probes p WHERE p.workspace_id=s.workspace_id AND p.source_id=s.id) THEN (SELECT p.status FROM app.creative_media_video_probes p WHERE p.workspace_id=s.workspace_id AND p.source_id=s.id) WHEN EXISTS(SELECT 1 FROM app.creative_media_probe_retries r WHERE r.workspace_id=s.workspace_id AND r.source_id=s.id) THEN 'retry_pending' ELSE coalesce((SELECT p.status FROM app.creative_media_video_probes p WHERE p.workspace_id=s.workspace_id AND p.source_id=s.id),s.state) END,'createdAt',s.created_at,'storageKind',s.storage_kind) ORDER BY s.created_at DESC)
       FROM app.creative_media_source_videos s WHERE s.workspace_id=p_workspace),'[]'::jsonb);
   END IF;
   IF p_action<>'upload' OR p_command IS NULL OR p_meta IS NULL OR p_bytes IS NULL
@@ -95,6 +95,7 @@ BEGIN
     RETURN jsonb_build_object('id',source.id,'sha256',source.sha256,
       'replayed',true,'state',source.state);
   END IF;
+  IF (SELECT count(*) FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND storage_kind='pg_blob' AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=s.id AND e.erased_at IS NOT NULL))>=50 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_source_videos s WHERE workspace_id=p_workspace AND storage_kind='pg_blob' AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=s.id AND e.erased_at IS NOT NULL))+octet_length(p_bytes)>200000000 THEN RAISE EXCEPTION 'Your video library is full (50 uploads or 200 MB). Delete unused sources before uploading.' USING ERRCODE='54000'; END IF;
   blob:=gen_random_uuid();
   INSERT INTO app.seo_blog_blobs(workspace_id,id,mime,bytes,sha256)
     VALUES(p_workspace,blob,mime,p_bytes,public.digest(p_bytes,'sha256'));

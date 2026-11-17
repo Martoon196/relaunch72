@@ -41,16 +41,16 @@ export function creativeMediaLocalOutputReviewPage(
   const technical=r.technicalStatus==='verified_technical'
    ?'Video technically measured · '+e(r.width)+'×'+e(r.height)
       +' · '+e((r.durationMs??0)/1000)+' s'
-   :r.technicalStatus==='rejected'?'Technical probe rejected this video'
-   :'Awaiting technical measurement by a trusted worker';
+   :r.technicalStatus==='rejected'?'This video could not be read'
+   :'Checking this video';
   const actions=r.decision==='reviewed_private'
    ?decisionForm(shell,r,newCommand,'withdrawn_private')
    :'<div class="stack">'
       +(r.technicalStatus==='verified_technical'
          ?decisionForm(shell,r,newCommand,'reviewed_private'):'')
       +decisionForm(shell,r,newCommand,'rejected_private')+'</div>';
-  return '<details class="card"><summary>Output '+e(output.id.slice(0,8))
-   +' · <span class="pill warn">'+e(r.decision??'unreviewed')+'</span></summary>'
+  return '<details class="card"><summary>Video'
+   +' · <span class="pill warn">'+e(r.decision==='reviewed_private'?'Reviewed':r.decision==='rejected_private'?'Needs changes':r.decision==='withdrawn_private'?'Review withdrawn':'Needs review')+'</span></summary>'
 
    +'<p>'+technical+'</p>'
    +'<p><video controls playsinline preload="none" width="320" src="'+base(shell)
@@ -65,7 +65,7 @@ export function creativeMediaLocalOutputReviewPage(
   +'owner review of rights, claims and disclosures.</p>'
   +'<p class="notice">Private review is NOT a publish button. Distribution requires '
   +'separate exact-version approval and platform policy checks.</p>'
-  +'<p><a href="'+base(shell)+'/workbench">Back to media workbench</a></p></section>'
+  +'<p><a href="'+base(shell)+'/local-renders">Back to videos</a></p></section>'
   +'<section><h2>Private output records ('+outputs.length+')</h2>'
   +(items||'<p>No local output has been rendered yet.</p>')+'</section>');
 }

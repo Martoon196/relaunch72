@@ -9,7 +9,7 @@ import {renderLocalVideo,assertLocalRenderCapacity} from '../src/creative-studio
 import {ffprobeFromBytes} from '../src/creative-studio/media-source-probe.js';
 const caption=('A long caption must never hide the advertising disclosure. ').repeat(5).slice(0,240);
 const run=(bin:string,args:string[])=>{const r=spawnSync(bin,args,{encoding:'utf8',timeout:120000});assert.equal(r.status,0,r.stderr);return r.stdout;};
-test('a 240-character caption leaves #ad readable in rendered safe area for every canvas',{timeout:180000},async()=>{
+test('a 240-character caption leaves #ad readable in rendered safe area for every canvas',{timeout:180000,skip:spawnSync('tesseract',['--version']).status!==0?'Tesseract is not installed':false},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'rl72-visible-ad-'));
  try{
   const input=join(dir,'input.mp4');run('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=navy:s=320x180:r=30','-t','2','-c:v','libx264','-threads','1',input]);
@@ -25,6 +25,6 @@ test('a 240-character caption leaves #ad readable in rendered safe area for ever
   }
  }finally{await rm(dir,{recursive:true,force:true});}
 });
-test('oversized timeline fails before probing or encoding',()=>{
- assert.throws(()=>assertLocalRenderCapacity({canvas:'portrait',disclosure:'#ad',clips:Array.from({length:3},()=>({startMs:0,endMs:100000,speed:1,transition:'cut' as const,caption:''}))}),/20 MB/);
+test('five-minute timelines receive a fitting bitrate before encoding',()=>{
+ assert.ok(assertLocalRenderCapacity({canvas:'portrait',disclosure:'#ad',clips:Array.from({length:3},()=>({startMs:0,endMs:100000,speed:1,transition:'cut' as const,caption:''}))})<20_000_000);
 });

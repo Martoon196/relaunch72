@@ -59,8 +59,7 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
  const format=makeControl(details,'Output format','select',edit.canvas,
   value=>{edit.canvas=value;sync();summarise();},
   [['portrait','Portrait 9:16'],['square','Square 1:1'],['landscape','Landscape 16:9']]);
- const disclose=makeControl(details,'Required on-screen #ad disclosure','textarea',edit.disclosure,
-  value=>{edit.disclosure=value;sync();},[]);
+ const disclose=node('span','Advertising label: #ad is always shown');details.append(disclose);edit.disclosure='#ad';
  const timeline=node('div');timeline.className='rl72-cut-clips';
  timeline.setAttribute('role','group');timeline.setAttribute('aria-label','Clip sequence');root.append(timeline);
  const toolbar=node('div');toolbar.className='rl72-cut-tools';root.append(toolbar);
@@ -94,7 +93,7 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
    button(actions,'Split at playhead',()=>{
     const at=Math.round(Number(preview.currentTime)*1000);
     if(edit.clips.length>=12||!Number.isSafeInteger(at)
-      ||(at-clip.startMs)/clip.speed<500||(clip.endMs-at)/clip.speed<500){
+      ||(at-clip.startMs)/clip.speed<1000||(clip.endMs-at)/clip.speed<1000){
      status.textContent='Place the playhead inside this clip with at least half a second on each side.';return;
     }
     edit.clips.splice(i,1,{...clip,endMs:at},{...clip,startMs:at});redraw();
@@ -104,11 +103,11 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
    });
    button(actions,'Use playhead as start',()=>{
     const at=Math.round(Number(preview.currentTime)*1000);
-    if(Number.isSafeInteger(at)&&at>=0&&(clip.endMs-at)/clip.speed>=500){clip.startMs=at;redraw();}
+    if(Number.isSafeInteger(at)&&at>=0&&(clip.endMs-at)/clip.speed>=1000){clip.startMs=at;redraw();}
    });
    button(actions,'Use playhead as end',()=>{
     const at=Math.round(Number(preview.currentTime)*1000);
-    if(Number.isSafeInteger(at)&&(at-clip.startMs)/clip.speed>=500){clip.endMs=at;redraw();}
+    if(Number.isSafeInteger(at)&&(at-clip.startMs)/clip.speed>=1000){clip.endMs=at;redraw();}
    });
    button(actions,'Preview clip',()=>{
     const sec=Math.max(0,Number(clip.startMs)||0)/1000;
@@ -145,15 +144,16 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
  });
  form.addEventListener('submit',event=>{
   const seconds=edit.clips.reduce((n,c)=>n+(Number(c.endMs)-Number(c.startMs))/Number(c.speed),0)/1000;
+  if(edit.clips.some(c=>!/^[\\x20-\\x7e\\u00a0-\\u024f\\u2010-\\u2027\\u20ac]*$/u.test(c.caption))){event.preventDefault();status.textContent='Use Latin letters, numbers and punctuation. Emoji and other scripts are not supported yet.';return;}
   const invalid=edit.clips.length<1||edit.clips.length>12||!Number.isFinite(seconds)||seconds>300
    ||edit.clips.some(c=>!Number.isSafeInteger(c.startMs)||!Number.isSafeInteger(c.endMs)
-    ||c.startMs<0||c.endMs<=c.startMs||c.endMs>36000000||c.caption.length>240
-    ||!Number.isFinite((c.endMs-c.startMs)/c.speed)||(c.endMs-c.startMs)/c.speed<500
+    ||c.startMs<0||c.endMs<=c.startMs||c.endMs>36000000||Array.from(c.caption).length>240
+    ||!Number.isFinite((c.endMs-c.startMs)/c.speed)||(c.endMs-c.startMs)/c.speed<1000
     ||(c.endMs-c.startMs)/c.speed>120000||![0,0.25,0.5,1].includes(c.volume??1)
     ||![0.5,1,2].includes(c.speed)||!['cut','fade'].includes(c.transition));
   if(invalid){
    event.preventDefault();
-   status.textContent='Check timing and speed; the output must be no longer than five minutes.';
+   status.textContent='Each clip must last 1–120 seconds. The complete video can be up to five minutes.';
    status.focus();
   }else sync();
  });

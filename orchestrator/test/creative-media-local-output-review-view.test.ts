@@ -11,7 +11,7 @@ const output={id:'22222222-2222-4222-8222-222222222222',
 test('private review never offers approval before a measured technical probe',()=>{
  const html=creativeMediaLocalOutputReviewPage(shell,[output],[],()=> '44444444-4444-4444-8444-444444444444');
  assert.match(html,/name="_csrf"/);
- assert.match(html,/Awaiting technical measurement/);
+ assert.match(html,/Checking this video/);
  assert.doesNotMatch(html,/Record private review/);
  assert.doesNotMatch(html,/publish now|schedule now/i);
 });

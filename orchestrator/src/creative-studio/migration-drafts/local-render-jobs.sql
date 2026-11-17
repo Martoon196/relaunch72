@@ -65,23 +65,23 @@ BEGIN
   EXECUTE format('REVOKE ALL ON app.%I FROM PUBLIC,r72_web,r72_content_command,r72_worker',t);
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_owner USING(true) WITH CHECK(true)',t||'_owner',t);
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_studio',t);
-  EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_worker',t);
+  EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_worker',t);
   INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column)
    VALUES('app',t,'workspace_id');
  END LOOP;
 END $tables$;
 GRANT SELECT,INSERT ON app.creative_media_local_render_jobs TO r72_creative_studio_definer;
 GRANT SELECT ON app.creative_media_local_render_outputs TO r72_creative_studio_definer;
-GRANT SELECT,UPDATE ON app.creative_media_local_render_jobs TO r72_media_job_definer;
-GRANT SELECT,INSERT ON app.creative_media_local_render_outputs TO r72_media_job_definer;
+GRANT SELECT,UPDATE ON app.creative_media_local_render_jobs TO r72_native_video_definer;
+GRANT SELECT,INSERT ON app.creative_media_local_render_outputs TO r72_native_video_definer;
 GRANT SELECT ON app.creative_media_video_probes TO r72_creative_studio_definer;
-GRANT SELECT ON app.creative_media_edit_projects TO r72_media_job_definer;
+GRANT SELECT ON app.creative_media_edit_projects TO r72_native_video_definer;
 CREATE POLICY creative_media_edit_projects_worker_read ON app.creative_media_edit_projects
- FOR SELECT TO r72_media_job_definer
+ FOR SELECT TO r72_native_video_definer
  USING(workspace_id=app_private.current_workspace_id());
-GRANT SELECT ON app.creative_media_source_videos TO r72_media_job_definer;
-GRANT SELECT,INSERT ON app.seo_blog_blobs TO r72_media_job_definer;
-CREATE POLICY native_video_output_blob_insert ON app.seo_blog_blobs FOR INSERT TO r72_media_job_definer WITH CHECK(workspace_id=app_private.current_workspace_id() AND mime='video/mp4' AND octet_length(bytes) BETWEEN 1024 AND 20000000 AND sha256=public.digest(bytes,'sha256'));
+GRANT SELECT ON app.creative_media_source_videos TO r72_native_video_definer;
+GRANT SELECT,INSERT ON app.seo_blog_blobs TO r72_native_video_definer;
+CREATE POLICY native_video_output_blob_insert ON app.seo_blog_blobs FOR INSERT TO r72_native_video_definer WITH CHECK(workspace_id=app_private.current_workspace_id() AND mime='video/mp4' AND octet_length(bytes) BETWEEN 1024 AND 20000000 AND sha256=public.digest(bytes,'sha256'));
 CREATE TRIGGER creative_media_local_render_outputs_immutable
  BEFORE UPDATE OR DELETE ON app.creative_media_local_render_outputs
  FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
@@ -104,7 +104,7 @@ BEGIN
   RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('id',j.id,'projectId',j.project_id,
    'revision',j.revision,'state',j.state,'sourceId',j.source_id,
    'sourceSha256',j.source_sha256,'planSha256',j.plan_sha256,
-   'outputId',j.output_id,'createdAt',j.created_at,'updatedAt',j.updated_at)
+   'outputId',j.output_id,'failureReason',j.error_code,'createdAt',j.created_at,'updatedAt',j.updated_at)
    ORDER BY j.created_at DESC)
    FROM app.creative_media_local_render_jobs j
    WHERE j.workspace_id=p_workspace),'[]'::jsonb);
@@ -150,7 +150,6 @@ BEGIN
  IF project.source_sha256 IS DISTINCT FROM p_input->>'sourceSha256'
   OR project.plan_sha256 IS DISTINCT FROM p_input->>'planSha256' THEN
   RAISE EXCEPTION 'Approved source and plan SHA changed' USING ERRCODE='40001'; END IF;
- IF (SELECT sum(((c->>'endMs')::numeric-(c->>'startMs')::numeric)/(c->>'speed')::numeric) FROM jsonb_array_elements(project.plan->'clips') c)/1000*72000*1.08+262144>=20000000 THEN RAISE EXCEPTION 'Shorten the timeline: private MP4 exports have a 20 MB limit' USING ERRCODE='54000'; END IF;
  SELECT * INTO source FROM app.creative_media_source_videos
   WHERE workspace_id=p_workspace AND id=project.source_id;
  IF source.id IS NULL OR source.sha256 IS DISTINCT FROM project.source_sha256
@@ -161,6 +160,9 @@ BEGIN
    WHERE probe.workspace_id=p_workspace AND probe.source_id=source.id
     AND probe.source_sha256=source.sha256 AND probe.status='verified_technical') THEN
   RAISE EXCEPTION 'Independent source video probe must pass first' USING ERRCODE='55000'; END IF;
+ IF EXISTS(SELECT 1 FROM app.creative_media_erasures WHERE workspace_id=p_workspace AND kind='source' AND id=source.id) THEN RAISE EXCEPTION 'This source was deleted. Choose another video.' USING ERRCODE='55000'; END IF;
+ IF (SELECT sum(((c->>'endMs')::numeric-(c->>'startMs')::numeric)/(c->>'speed')::numeric) FROM jsonb_array_elements(project.plan->'clips') c)>300000 THEN RAISE EXCEPTION 'Videos can be up to five minutes long.' USING ERRCODE='22023'; END IF;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(project.plan->'clips') c WHERE (c->>'endMs')::bigint>(SELECT duration_ms FROM app.creative_media_video_probes WHERE workspace_id=p_workspace AND source_id=source.id) OR ((c->>'endMs')::numeric-(c->>'startMs')::numeric)/(c->>'speed')::numeric<1000) THEN RAISE EXCEPTION 'Clips must last at least one second and stay within the uploaded video.' USING ERRCODE='22023'; END IF;
  IF (SELECT count(*) FROM app.creative_media_local_render_jobs WHERE workspace_id=p_workspace AND state IN('queued','claimed'))>=20 OR (SELECT coalesce(sum(byte_length),0) FROM app.creative_media_local_render_outputs o WHERE workspace_id=p_workspace AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='local_output' AND e.id=o.id AND e.erased_at IS NOT NULL))>=200000000 THEN RAISE EXCEPTION 'Media queue or output storage cap reached' USING ERRCODE='54000'; END IF;
  INSERT INTO app.creative_media_local_render_jobs(workspace_id,id,command_id,
    project_id,revision,source_id,source_sha256,plan_sha256,requested_by)
@@ -191,8 +193,8 @@ GRANT EXECUTE ON FUNCTION app_private.creative_media_local_render_owner(uuid,byt
  app_private.creative_media_local_render_bytes(uuid,bytea,uuid) TO r72_content_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_local_render_claim(
  p_workspace uuid,p_job uuid
 ) RETURNS TABLE(claim_token uuid,plan jsonb,plan_sha256 text,
@@ -331,4 +333,4 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_render_heartbeat(uuid,uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_render_heartbeat(uuid,uuid,uuid) TO r72_worker;
 RESET ROLE;SET LOCAL ROLE r72_owner;
-REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;

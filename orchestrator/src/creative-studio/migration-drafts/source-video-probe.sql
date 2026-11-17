@@ -28,28 +28,28 @@ REVOKE ALL ON app.creative_media_video_probes FROM PUBLIC,r72_web,r72_worker,r72
 CREATE POLICY creative_media_video_probes_owner ON app.creative_media_video_probes
   FOR ALL TO r72_owner USING(true) WITH CHECK(true);
 CREATE POLICY creative_media_video_probes_worker ON app.creative_media_video_probes
-  FOR ALL TO r72_media_job_definer
+  FOR ALL TO r72_native_video_definer
   USING(workspace_id=app_private.current_workspace_id())
   WITH CHECK(workspace_id=app_private.current_workspace_id());
 CREATE POLICY creative_media_video_probes_studio_read ON app.creative_media_video_probes
   FOR SELECT TO r72_creative_studio_definer
   USING(workspace_id=app_private.current_workspace_id());
-GRANT SELECT,INSERT ON app.creative_media_video_probes TO r72_media_job_definer;
+GRANT SELECT,INSERT ON app.creative_media_video_probes TO r72_native_video_definer;
 GRANT SELECT ON app.creative_media_video_probes TO r72_creative_studio_definer;
-GRANT SELECT ON app.creative_media_source_videos,app.seo_blog_blobs TO r72_media_job_definer;
+GRANT SELECT ON app.creative_media_source_videos,app.seo_blog_blobs TO r72_native_video_definer;
 CREATE POLICY creative_media_video_sources_worker_read ON app.creative_media_source_videos
-  FOR SELECT TO r72_media_job_definer
+  FOR SELECT TO r72_native_video_definer
   USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_blobs_media_job_read ON app.seo_blog_blobs
-  FOR SELECT TO r72_media_job_definer
+  FOR SELECT TO r72_native_video_definer
   USING(workspace_id=app_private.current_workspace_id());
 CREATE TRIGGER creative_media_video_probes_immutable
  BEFORE UPDATE OR DELETE ON app.creative_media_video_probes
  FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column)
  VALUES('app','creative_media_video_probes','workspace_id');
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_video_probe_source(p_workspace uuid,p_source uuid)
 RETURNS TABLE(mime text,source_sha256 text,raw_bytes bytea)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
@@ -121,7 +121,7 @@ GRANT EXECUTE ON FUNCTION app_private.creative_media_video_probe_source(uuid,uui
  app_private.creative_media_video_probe_record(uuid,uuid,text,jsonb) TO r72_worker;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
-REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 CREATE FUNCTION app_private.creative_media_video_probe_owner_list(p_workspace uuid,p_session bytea)

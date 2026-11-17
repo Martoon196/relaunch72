@@ -8,6 +8,7 @@
  * tagged data blocks; the prompts treat it as data, never instructions.
  */
 
+import { PRODUCT_RULES, productArticleProblems, productsForWriter } from '../affiliate/article.js';
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import { stageModel } from '../config.js';
 import { methodRunFor, inheritMethodRun } from './method-packs.js';
@@ -169,7 +170,9 @@ export function dataBlock(tag: string, value: unknown): string {
   return `<${tag}>\n${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, 'gi'), '[removed tag]')}\n</${tag}>`;
 }
 
-export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: ArticlePromotionPack['posts'] }>> {
+export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfile, withLinks: ArticleBody): Promise<JsonCallResult<{ posts: ArticlePromotionPack['posts'] }>> {
+  // Product links never reach social copy.
+  const { affiliate: _links, ...article } = withLinks;
   return callJson(llm, {
     prompt: loadPrompt('seo-blog-social.md'), maxTokens: 2400,
     user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article)].join('\n\n'),
@@ -191,7 +194,8 @@ export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfi
 export class CampaignGenerationRejectedError extends SeoBlogError {
   constructor(readonly record: GenerationRecord) { super(422,'The social copy response was incomplete after one attempt. Labelled article-text drafts were retained.','campaign_generation_rejected'); }
 }
-export async function writeArticleCampaignPromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: readonly CampaignDraft[] }>> {
+export async function writeArticleCampaignPromotions(llm: LlmClient, profile: BrandProfile, withLinks: ArticleBody): Promise<JsonCallResult<{ posts: readonly CampaignDraft[] }>> {
+  const { affiliate: _links, ...article } = withLinks;
   const prompt=loadPrompt('seo-blog-social.md');
   let knownRecord:GenerationRecord|null=null;
   const capture:LlmClient={mode:llm.mode,complete:async(request)=>{
@@ -585,6 +589,7 @@ export async function writeArticle(llm: LlmClient, input: {
   readonly linkable: readonly { url: string; title: string | null }[];
   readonly length: LengthPreference;
 }): Promise<JsonCallResult<WrittenArticle> & { readonly short: Map<string, ResearchSource> }> {
+  const products = input.brief.products ?? null;
   const short = shortSourceIds(input.sources);
   const prompt = loadPrompt('seo-blog-article.md');
   // A bounded inventory need not contain the already confirmed conversion page.
@@ -604,10 +609,12 @@ export async function writeArticle(llm: LlmClient, input: {
   const user=[dataBlock('brand_profile',structured?referencedProfile:profileForPrompt(input.profile)),brief,
     ...(structured?[]:[dataBlock('research_sources',researchForPrompt(short))]),
     dataBlock('linkable_pages',linkable),
+    // A product article: the products (names and the owner's own words only) and their rules, added in code.
+    ...(products?[dataBlock('products',productsForWriter(products))]:[]),
   ].join('\n\n');
   const result = await callJson<WrittenArticle>(llm, {
     prompt,
-    system: prompt.body.replace('{{LENGTH}}', LENGTH_HINT[input.length]),
+    system: prompt.body.replace('{{LENGTH}}', LENGTH_HINT[input.length])+(products?`\n\n${PRODUCT_RULES}`:''),
     schema: ARTICLE_SCHEMA,
     maxTokens: 16000,
     user,
@@ -621,6 +628,7 @@ export async function writeArticle(llm: LlmClient, input: {
       if (/<\s*[a-z!\/]/i.test(text)) problems.push('HTML is not allowed inside bodies');
       const unknownPublicIds=v.public_source_ids.filter(id=>!short.has(id));
       if(unknownPublicIds.length)problems.push(`unknown public source id(s) ${JSON.stringify(unknownPublicIds)}; use supplied shortIds ${JSON.stringify([...short.keys()])}, not durable UUIDs`);
+      if(products)problems.push(...productArticleProblems(v,products));
       return problems;
     },
   });

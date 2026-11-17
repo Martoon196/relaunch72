@@ -16,6 +16,7 @@ with zipfile.ZipFile(archive) as z:
 PY
 ffmpeg -hide_banner -loglevel error -nostdin -ss 60 -i /tmp/rl72-render-evidence/tears-of-steel-hd.mov -t 180 -vf pad=1920:1080:0:140 -c:v libx264 -preset medium -crf 23 -threads 1 -c:a aac -b:a 96k -movflags +faststart -y /tmp/rl72-render-evidence/real-live-action-180s-1080p.mp4
 ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=width,height,nb_read_frames,avg_frame_rate -of json /tmp/rl72-render-evidence/real-live-action-180s-1080p.mp4 > /tmp/rl72-render-evidence/real-frames.json
+cp -R orchestrator/src/creative-studio/assets /tmp/rl72-render-evidence/
 node_modules/.bin/esbuild orchestrator/test/tools/media-memory-render.ts --bundle --platform=node --format=cjs --outfile=/tmp/rl72-render-evidence/render.cjs
 RL72_MEDIA_MEMORY_SOURCE=/tmp/rl72-render-evidence/real-live-action-180s-1080p.mp4 RL72_MEDIA_MEMORY_INPUT_DESCRIPTION='Tears of Steel (Blender CC-BY 3.0), continuous original 60-240 seconds; 1920x800 picture letterboxed to 1920x1080, 24 fps, AAC audio. No upscale, looping or byte padding.' python3 orchestrator/test/tools/media-memory-measure.py
 python3 - <<'PY'

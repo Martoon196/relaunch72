@@ -48,13 +48,14 @@ jobs:
         env:
           RL72_MEDIA_BROWSER_TESTS: "true"
         working-directory: orchestrator
-        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-visible-disclosure.test.ts test/media-native-calendar.test.ts test/media-service.test.ts test/media-completion.test.ts test/media-suite.test.ts test/media-editor-browser.test.ts test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts    test/media-local-render.test.ts test/media-local-render-pg-store.test.ts test/creative-media-local-render-view.test.ts  test/media-local-output-review.test.ts test/creative-media-local-output-review-view.test.ts test/media-output-worker-command.test.ts  test/media-edit-plan.test.ts test/media-cut-editor.test.ts       test/affiliate-direct-link.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
+        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-third-audit.test.ts test/media-visible-disclosure.test.ts test/media-native-calendar.test.ts test/media-service.test.ts test/media-completion.test.ts test/media-suite.test.ts test/media-editor-browser.test.ts test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts    test/media-local-render.test.ts test/media-local-render-pg-store.test.ts test/creative-media-local-render-view.test.ts  test/media-local-output-review.test.ts test/creative-media-local-output-review-view.test.ts test/media-output-worker-command.test.ts  test/media-edit-plan.test.ts test/media-cut-editor.test.ts       test/affiliate-direct-link.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
       - name: Bootstrap canonical migrations plus media drafts in disposable localhost PG
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: |
           node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+          node orchestrator/test/tools/prepare-native-draft-proof.mjs
           node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
       - name: Check tenant, owner session and exact approval in real PG
         working-directory: orchestrator
@@ -62,6 +63,8 @@ jobs:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts   test/db/creative-media-local-render-pg.integration.test.ts
+      - name: Full suite with Tesseract absent from PATH
+        run: node orchestrator/test/tools/run-without-tesseract.mjs
       - name: Full canonical npm test suite (all email protections, bounded test concurrency)
         run: npm --prefix orchestrator test -- --test-concurrency=2
   native-calendar-clock:
@@ -123,10 +126,11 @@ jobs:
       - name: Bootstrap canonical schema and private media drafts
         run: |
           node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+          node orchestrator/test/tools/prepare-native-draft-proof.mjs
           node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
       - name: Prove planner to native video calling after three elapsed days
         env:
           RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
         run: node --import tsx --test orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts
       - name: Measure continuous live-action 1080p under aggregate memory limit
-        run: sh orchestrator/test/tools/media-real-footage-memory.sh
+        run: python3 orchestrator/test/tools/media-memory-measure.py --whole-command

@@ -10,7 +10,7 @@ export type VideoSourceRights='owned'|'licensed';
 export interface VideoSourceRow {
   id:string;fileName:string;sha256:string;byteLength:number;mime:'video/mp4'|'video/webm';
   storageKind?:'pg_blob'|'private_object';
-  rights:VideoSourceRights;evidenceSha256:string|null;state:'awaiting_probe';createdAt:string;
+  rights:VideoSourceRights;evidenceSha256:string|null;state:'awaiting_probe'|'verified_technical'|'rejected'|'retry_pending'|'deleted';createdAt:string;
 }
 /** Only a container signature check. A decoder, rights audit and duration probe remain mandatory. */
 export function examineVideoUpload(bytes:Buffer,fileName:string,rights:VideoSourceRights,evidenceSha256:string|null,confirmed:boolean){
@@ -25,7 +25,7 @@ export function examineVideoUpload(bytes:Buffer,fileName:string,rights:VideoSour
   const mp4=/\.mp4$/iu.test(fileName)&&bytes.toString('ascii',4,8)==='ftyp'
     &&bytes.readUInt32BE(0)>=16&&bytes.readUInt32BE(0)<=bytes.length;
   const webm=/\.webm$/iu.test(fileName)&&bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]));
-  if(!mp4&&!webm)throw new SeoBlogError(400,'MP4 or WebM container signature and extension must match');
+  if(!mp4)throw new SeoBlogError(400,'Upload an H.264 MP4 up to 1080p. HEVC and WebM are not supported.');
   return {fileName:fileName.trim(),mime:(mp4?'video/mp4':'video/webm') as 'video/mp4'|'video/webm',
     sha256:createHash('sha256').update(bytes).digest('hex')};
 }
@@ -76,7 +76,7 @@ export class PgCreativeVideoSources {
     }
   }
   upload(input:{workspaceId:string;commandId:string;bytes:Buffer;fileName:string;rights:VideoSourceRights;
-    evidenceSha256:string|null;rightsConfirmed:boolean}):Promise<{id:string;sha256:string;replayed:boolean;state:'awaiting_probe'}>{
+    evidenceSha256:string|null;rightsConfirmed:boolean}):Promise<{id:string;sha256:string;replayed:boolean;state:'awaiting_probe'|'verified_technical'|'rejected'|'retry_pending'|'deleted'}>{
     if(!UUID.test(input.commandId))throw new SeoBlogError(400,'Invalid upload command');
     const meta=examineVideoUpload(input.bytes,input.fileName,input.rights,input.evidenceSha256,input.rightsConfirmed);
     return this.command(input.workspaceId,'upload',input.commandId,{...meta,

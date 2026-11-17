@@ -5,12 +5,12 @@ ALTER TABLE app.creative_media_retention_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.creative_media_retention_settings FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON app.creative_media_retention_settings FROM PUBLIC,r72_web,r72_worker,r72_content_command;
 CREATE POLICY media_retention_settings_owner ON app.creative_media_retention_settings FOR ALL TO r72_owner USING(true) WITH CHECK(true);
-CREATE POLICY media_retention_settings_worker ON app.creative_media_retention_settings FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id());
-GRANT SELECT ON app.creative_media_retention_settings TO r72_media_job_definer;
+CREATE POLICY media_retention_settings_worker ON app.creative_media_retention_settings FOR SELECT TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id());
+GRANT SELECT ON app.creative_media_retention_settings TO r72_native_video_definer;
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app','creative_media_retention_settings','workspace_id');
 -- Missing row or NULL means retain indefinitely; operator must record the owner's explicit retention choice.
-GRANT SELECT,UPDATE ON app.seo_blog_blobs TO r72_media_job_definer;
-CREATE POLICY media_payload_erase ON app.seo_blog_blobs FOR UPDATE TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
+GRANT SELECT,UPDATE ON app.seo_blog_blobs TO r72_native_video_definer;
+CREATE POLICY media_payload_erase ON app.seo_blog_blobs FOR UPDATE TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id());
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 CREATE FUNCTION app_private.creative_media_erase_owner(p_workspace uuid,p_session bytea,p_kind text,p_id uuid)
@@ -32,8 +32,8 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_erase_owner(uuid,bytea,text,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_erase_owner(uuid,bytea,text,uuid) TO r72_content_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_retention(p_workspace uuid,p_ack_kind text DEFAULT NULL,p_ack_id uuid DEFAULT NULL)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE retention_days integer; erasure_rec app.creative_media_erasures;blob uuid;s app.creative_media_source_videos;result jsonb:='[]'::jsonb;
@@ -41,6 +41,9 @@ BEGIN
  IF app_private.current_actor_kind() IS DISTINCT FROM 'worker' OR app_private.current_workspace_id() IS DISTINCT FROM p_workspace THEN RAISE EXCEPTION 'Scoped worker required' USING ERRCODE='42501'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('rl72-media-lifecycle:'||p_workspace::text,0));
  SELECT source_output_days INTO retention_days FROM app.creative_media_retention_settings WHERE workspace_id=p_workspace;
+ UPDATE app.creative_media_source_videos erased_source SET file_name='Deleted video' WHERE erased_source.workspace_id=p_workspace AND erased_source.file_name<>'Deleted video' AND EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=erased_source.id);
+ UPDATE app.creative_media_edit_projects p SET plan='{"erased":true}'::jsonb WHERE p.workspace_id=p_workspace AND p.plan<>'{"erased":true}'::jsonb AND EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=p.source_id);
+ UPDATE app.creative_media_object_uploads u SET metadata='{"erased":true}'::jsonb WHERE u.workspace_id=p_workspace AND u.metadata<>'{"erased":true}'::jsonb AND EXISTS(SELECT 1 FROM app.creative_media_erasures e WHERE e.workspace_id=p_workspace AND e.kind='source' AND e.id=u.id);
  IF p_ack_id IS NOT NULL THEN UPDATE app.creative_media_erasures SET erased_at=clock_timestamp() WHERE workspace_id=p_workspace AND id=p_ack_id AND kind=p_ack_kind;RETURN '[]'::jsonb;END IF;
  INSERT INTO app.creative_media_erasures(workspace_id,id,kind,reason) SELECT p_workspace,id,'source','retention' FROM app.creative_media_source_videos candidate WHERE workspace_id=p_workspace AND retention_days IS NOT NULL AND created_at<clock_timestamp()-make_interval(days=>retention_days) AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures existing WHERE existing.workspace_id=p_workspace AND existing.kind='source' AND existing.id=candidate.id) ORDER BY created_at LIMIT 3 ON CONFLICT DO NOTHING;
  INSERT INTO app.creative_media_erasures(workspace_id,id,kind,reason) SELECT p_workspace,id,'local_output','retention' FROM app.creative_media_local_render_outputs candidate WHERE workspace_id=p_workspace AND retention_days IS NOT NULL AND created_at<clock_timestamp()-make_interval(days=>retention_days) AND NOT EXISTS(SELECT 1 FROM app.creative_media_erasures existing WHERE existing.workspace_id=p_workspace AND existing.kind='local_output' AND existing.id=candidate.id) ORDER BY created_at LIMIT 3 ON CONFLICT DO NOTHING;
@@ -63,7 +66,7 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_retention(uuid,text,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_retention(uuid,text,uuid) TO r72_worker;
-RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
 -- Narrow global discovery, only UUIDs; worker still enters each workspace scope.
 CREATE FUNCTION app_private.creative_media_worker_workspaces(p_after uuid)
 RETURNS TABLE(workspace_id uuid) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$

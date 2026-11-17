@@ -20,8 +20,8 @@ CREATE TABLE app.creative_media_native_call_checks(workspace_id uuid NOT NULL,jo
 ALTER TABLE app.creative_media_native_call_checks ENABLE ROW LEVEL SECURITY;ALTER TABLE app.creative_media_native_call_checks FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON app.creative_media_native_call_checks FROM PUBLIC,r72_worker,r72_web,r72_content_command,r72_owned_social_worker_command;
 CREATE POLICY native_call_checks_owner ON app.creative_media_native_call_checks FOR ALL TO r72_owner USING(true) WITH CHECK(true);
-CREATE POLICY native_call_checks_worker ON app.creative_media_native_call_checks FOR INSERT TO r72_media_job_definer WITH CHECK(workspace_id=app_private.current_workspace_id());
-GRANT INSERT ON app.creative_media_native_call_checks TO r72_media_job_definer;
+CREATE POLICY native_call_checks_worker ON app.creative_media_native_call_checks FOR INSERT TO r72_native_video_definer WITH CHECK(workspace_id=app_private.current_workspace_id());
+GRANT INSERT ON app.creative_media_native_call_checks TO r72_native_video_definer;
 CREATE TRIGGER native_call_checks_immutable BEFORE UPDATE OR DELETE ON app.creative_media_native_call_checks FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only();
 INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app','creative_media_native_call_checks','workspace_id');
 DO $t$ DECLARE t text; BEGIN
@@ -30,22 +30,22 @@ DO $t$ DECLARE t text; BEGIN
   EXECUTE format('REVOKE ALL ON app.%I FROM PUBLIC,r72_web,r72_worker,r72_content_command,r72_owned_social_worker_command',t);
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_owner USING(true) WITH CHECK(true)',t||'_owner',t);
   EXECUTE format('CREATE POLICY %I ON app.%I FOR ALL TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id()) WITH CHECK(workspace_id=app_private.current_workspace_id())',t||'_studio',t);
-  EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id())',t||'_worker',t);
-  EXECUTE format('GRANT SELECT,INSERT ON app.%I TO r72_creative_studio_definer',t);EXECUTE format('GRANT SELECT ON app.%I TO r72_media_job_definer',t);
+  EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id())',t||'_worker',t);
+  EXECUTE format('GRANT SELECT,INSERT ON app.%I TO r72_creative_studio_definer',t);EXECUTE format('GRANT SELECT ON app.%I TO r72_native_video_definer',t);
   EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION app_private.seo_blog_append_only()',t||'_immutable',t);
   INSERT INTO app_private.workspace_table_registry(schema_name,table_name,workspace_column) VALUES('app',t,'workspace_id');
  END LOOP;
  FOREACH t IN ARRAY ARRAY['company_content_versions','company_content_source_attestations','company_content_approval_requests','company_content_approval_decisions','property_predator_owned_social_jobs','property_predator_owned_social_job_media','creative_media_local_output_reviews'] LOOP
-  EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_media_job_definer,r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id())',t||'_native_video_read',t);
-  EXECUTE format('GRANT SELECT ON app.%I TO r72_media_job_definer,r72_creative_studio_definer',t);
+  EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_native_video_definer,r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id())',t||'_native_video_read',t);
+  EXECUTE format('GRANT SELECT ON app.%I TO r72_native_video_definer,r72_creative_studio_definer',t);
  END LOOP;
 END $t$;
-GRANT SELECT ON app.public_social_revalidation_jobs,app.public_social_revalidation_proof_media TO r72_media_job_definer;
-CREATE POLICY native_video_revalidation_read ON app.public_social_revalidation_jobs FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id());
-CREATE POLICY native_video_proof_media_read ON app.public_social_revalidation_proof_media FOR SELECT TO r72_media_job_definer USING(workspace_id=app_private.current_workspace_id());
-GRANT EXECUTE ON FUNCTION app_private.seo_blog_brand(uuid) TO r72_media_job_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT SELECT ON app.public_social_revalidation_jobs,app.public_social_revalidation_proof_media TO r72_native_video_definer;
+CREATE POLICY native_video_revalidation_read ON app.public_social_revalidation_jobs FOR SELECT TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id());
+CREATE POLICY native_video_proof_media_read ON app.public_social_revalidation_proof_media FOR SELECT TO r72_native_video_definer USING(workspace_id=app_private.current_workspace_id());
+GRANT EXECUTE ON FUNCTION app_private.seo_blog_brand(uuid) TO r72_native_video_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_video_ready(p_workspace uuid,p_job uuid,p_version uuid,p_require_release boolean)
 RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE v app.company_content_versions; o app.creative_media_local_render_outputs;r app.creative_media_local_output_reviews; manifest jsonb; grant_rec app.creative_media_video_releases;job_copy text;
@@ -91,22 +91,12 @@ BEGIN
   JOIN app.seo_blog_blobs b ON b.workspace_id=o.workspace_id AND b.id=o.blob_id
   WHERE v.workspace_id=p_workspace AND v.id=p_version AND o.sha256=encode(public.digest(b.bytes,'sha256'),'hex') AND o.byte_length=octet_length(b.bytes);
 END $f$;
-CREATE FUNCTION app_private.creative_media_video_call_guard() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE media record;
-BEGIN
- IF NEW.state='calling' AND OLD.state IS DISTINCT FROM 'calling' THEN
-  FOR media IN SELECT v.id FROM app.property_predator_owned_social_job_media m JOIN app.company_content_versions v ON v.workspace_id=m.workspace_id AND v.id=m.content_version_id WHERE m.workspace_id=NEW.workspace_id AND m.job_id=NEW.id AND v.source_system='relaunch72.private-video' LOOP
-   IF NOT app_private.creative_media_video_ready(NEW.workspace_id,NEW.id,media.id,true) THEN RAISE EXCEPTION 'Native video release withdrawn or stale' USING ERRCODE='55000'; END IF;
-   INSERT INTO app.creative_media_native_call_checks(workspace_id,job_id,content_version_id) VALUES(NEW.workspace_id,NEW.id,media.id) ON CONFLICT DO NOTHING;
-  END LOOP;
- END IF;RETURN NEW;
-END $f$;
-REVOKE ALL ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boolean),app_private.creative_media_video_release_bytes(uuid,uuid,uuid),app_private.creative_media_video_call_guard() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boolean) TO r72_creative_studio_definer;
+REVOKE ALL ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boolean),app_private.creative_media_video_release_bytes(uuid,uuid,uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_media_video_ready(uuid,uuid,uuid,boolean) TO r72_creative_studio_definer,r72_owner;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_release_bytes(uuid,uuid,uuid) TO r72_owned_social_worker_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;
 -- The independently granted, narrowly filtered calling trigger is installed last.
-REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 CREATE FUNCTION app_private.creative_media_video_release_owner(p_workspace uuid,p_session bytea,p_input jsonb)
@@ -129,8 +119,8 @@ END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_video_release_owner(uuid,bytea,jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_release_owner(uuid,bytea,jsonb) TO r72_content_command;
 RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;
-GRANT CREATE ON SCHEMA app_private TO r72_media_job_definer;
-SET LOCAL ROLE r72_media_job_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_native_video_definer;
+SET LOCAL ROLE r72_native_video_definer;
 CREATE FUNCTION app_private.creative_media_video_release_by_key(p_workspace uuid,p_job uuid,p_key text,p_sha text)
 RETURNS TABLE(sha256 text,raw_bytes bytea) LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE version_id uuid;
@@ -143,4 +133,4 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION app_private.creative_media_video_release_by_key(uuid,uuid,text,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.creative_media_video_release_by_key(uuid,uuid,text,text) TO r72_owned_social_worker_command;
-RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_media_job_definer;
+RESET ROLE;SET LOCAL ROLE r72_owner;REVOKE CREATE ON SCHEMA app_private FROM r72_native_video_definer;
