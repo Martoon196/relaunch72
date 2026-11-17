@@ -63,8 +63,11 @@ jobs:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts   test/db/creative-media-local-render-pg.integration.test.ts
-      - name: Full suite with Tesseract absent from PATH
-        run: node orchestrator/test/tools/run-without-tesseract.mjs
+      - name: Full suite on a machine without Tesseract
+        run: |
+          sudo apt-get remove -y -qq tesseract-ocr
+          if command -v tesseract; then echo "OCR executable must be absent"; exit 1; fi
+          node orchestrator/test/tools/run-without-tesseract.mjs
       - name: Full canonical npm test suite (all email protections, bounded test concurrency)
         run: npm --prefix orchestrator test -- --test-concurrency=2
   native-calendar-clock:
