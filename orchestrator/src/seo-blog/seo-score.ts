@@ -71,15 +71,19 @@
  * - an open must-fix issue from the quality checks, or one found on an earlier version when they have not run on this
  *   one: at most 59;
  * - heavy repetition (over 25% of sentences and list items repeat an earlier one word for word or with a word or two
- *   changed, or over 25% of the article's five-word runs came earlier, or a very small vocabulary): at most 40. Every
- *   list item counts here however short, and a list's items are read as one run of words, so a short list pasted
- *   again is a repeat;
+ *   changed, or over 25% of the article's five-word runs came earlier, or a very small vocabulary): at most 40. A
+ *   short list item counts when it is a repeat (a pasted list of three-word bullets is one), never otherwise, so
+ *   different short items cannot dilute the measure; a short sentence of prose is never a repeat ("Yes.");
  * - text that is not built of sentences (under 28% of its words are the small joining words such as "the", "of",
  *   "is"; ordinary prose is 40% to 55%): at most 40;
- * - a stuffed search phrase (its uses, in every close form and every place, take over 3.5% of the words; good
- *   articles measure 0% to 2.1%): at most 60; over 2.5% the gate refuses, though the score is only marked down a little;
- * - much of the article in short list items (over 40% of its words are in items of under 10 words; good articles
- *   measure 0% to 8%, a recipe-style how-to about 30%): at most 70;
+ * - a stuffed search phrase (six uses or more, in every close form and every place, taking over 3.5% of the words;
+ *   good articles measure 0% to 2.3%): at most 60. Over 2.5% the gate refuses, though the score is only marked down a
+ *   little. Four uses are never too many, and a sub-heading or question that asks a question on record never counts;
+ * - much of the article in short list items (over 12% of its words in items of up to three words, or over 60% in
+ *   items of four to nine words, each measured on a sliding weight; good articles measure up to 6% and 28%, a
+ *   thorough checklist post about 45% of the second kind): at most 70;
+ * - run-on text (over 20% of the prose words in "sentences" of over 50 words: keyword lines run together; good
+ *   articles measure 0%, one quoting a regulation 6%): at most 70;
  * - some repetition (over 10% by either measure above): at most 70.
  * Length alone never caps: padding is caught as repetition, and a long guide that stays useful is fine.
  *
@@ -93,8 +97,16 @@
  * The title, description and opening want the phrase as searched; elsewhere close forms count as uses too: -ing and
  * -ed forms and the main words in another order ("appraising property deals"). The phrase counts towards "enough"
  * only inside a real sentence, but every occurrence anywhere counts towards "too often" (text, list items, table cells,
- * link text, sub-headings, answers, and the picture description when it says the phrase twice or more). Invisible
- * characters are dropped and Cyrillic or Greek look-alike letters read as Latin, so neither can hide a use or a repeat.
+ * link text, sub-headings and sub-headings inside the text, answers, and the picture description or page title when
+ * either says it twice or more). A noun made from the verb counts too ("property deal appraisal").
+ *
+ * What it reads: list items with any marker ("- ", "* ", "+ ", "• ", "– ", "1.", "a)"), table rows, and runs of two or
+ * more short lines with no marker are list items; blockquote markers are taken off. Characters a reader cannot see
+ * (zero-width and joining characters, variation selectors, the Hangul filler), accents and combining marks are taken
+ * off, and the commonest look-alike letters of other alphabets (Cyrillic, Greek, Armenian, the dotless i, the Latin
+ * alpha) read as Latin inside English text. That covers the disguises a writer could use by accident or that are
+ * listed in the tests; it is not a full confusables table, and a determined disguise in another alphabet can still
+ * hide a word. Russian, Ukrainian and Greek words on their own are left as they are.
  */
 
 import type { ArticleBody, ArticleBrief, CheckIssue } from './types.js';
@@ -150,7 +162,7 @@ export interface SeoScoreContext {
 export interface SeoPartTotal { readonly part: SeoPart; readonly label: string; readonly points: number; readonly weight: number }
 /** Why the score is held down: an open must-fix, checks that ran on an earlier version (or not at all, as a target),
  * heavy repetition, text that is not sentences, much of the article in short list items, or a stuffed phrase. */
-export type SeoCapKind = 'must-fix' | 'stale-checks' | 'not-checked' | 'repetition' | 'not-sentences' | 'short-items' | 'stuffing';
+export type SeoCapKind = 'must-fix' | 'stale-checks' | 'not-checked' | 'repetition' | 'not-sentences' | 'short-items' | 'run-on' | 'stuffing';
 export interface SeoCap { readonly kind: SeoCapKind; readonly limit: number; readonly reason: string }
 
 export interface SeoScore {
@@ -176,7 +188,7 @@ export interface SeoScore {
   /** Share of different words in a moving window (0 to 1); low means the same few words again and again. */
   readonly vocabulary: number;
   /** What the repetition, sentence and stuffing measures found (percentages of the article), for tests and tuning. */
-  readonly measures: { readonly repeatedSentences: number; readonly repeatedWording: number; readonly joiningWords: number; readonly phraseShare: number; readonly shortItems: number };
+  readonly measures: { readonly repeatedSentences: number; readonly repeatedWording: number; readonly joiningWords: number; readonly phraseShare: number; readonly shortItems: number; readonly stepItems: number; readonly runOn: number };
 }
 
 export const SEO_WEIGHTS = {
@@ -247,6 +259,12 @@ const RUNS_CAP = 25;
  */
 export const PHRASE_HIGH = 2.5;
 const PHRASE_STUFFED = 3.5;
+/** Up to this many uses are never too many, however short the page. */
+const PHRASE_FREE_USES = 4;
+/** Below this many uses the phrase is never called stuffed, whatever its share. */
+const PHRASE_STUFFED_USES = 6;
+/** A one-word phrase is weighed as if it had this many words (see the use check). */
+const PHRASE_ONE_WORD = 1.5;
 const ALT_REPEATS_PHRASE = 'The picture description uses the search phrase more than once.';
 /** A part (sub-heading and its text) needs at least this many words. */
 const PART_MIN_WORDS = 40;
@@ -276,11 +294,26 @@ const VOCAB_CAP = 0.5;
 /** Ordinary sentences are about 40% to 55% small joining words; under this percentage the text is capped. */
 const SENTENCE_WORDS_CAP = 28;
 /**
- * Words in short list items (under STEP_WORDS words), as a share of the article's sentences and items: above this the
- * reading checks cannot pass and the score is capped at SOME_REPETITION_CAP. Good articles measure 0% to 8%; a
- * recipe-style how-to with a tools list and short steps measures about 30%.
+ * Two measures of how much of the article is short list items, as a share of the words in its sentences, items and
+ * sub-headings inside the text. Each counts an item's words by a weight that falls away with its length, so padding an
+ * item by a word or two never jumps it out of the measure:
+ * - very short items (keyword bullets, "- flats in York"): items of up to three words count in full, four words half,
+ *   five a quarter. Above TINY_ITEMS_CAP the score is capped. Good articles measure 0% to 6% (the recipe-style how-to's
+ *   tools list); keyword bullets 15% and up.
+ * - step-sized items ("Clean the oven, shelves and door glass"): four to nine words count in full, then a sixth less for
+ *   each word up to fourteen. Above STEP_ITEMS_CAP the score is capped. Good articles measure 0% to 28%, a thorough
+ *   checklist post about 45%; bullets of filler in place of writing 70% and up.
  */
-const SHORT_ITEMS_CAP = 40;
+const tinyWeight = (n: number) => (n <= 3 ? 1 : n === 4 ? 0.5 : n === 5 ? 0.25 : 0);
+const stepWeight = (n: number) => (n < 4 ? 0 : n < STEP_WORDS ? 1 : n < 15 ? (15 - n) / 6 : 0);
+const TINY_ITEMS_CAP = 12;
+/** What to do while much of the article is short list items: the other reading advice does not apply then. */
+const LIST_HEAVY_TODO = 'Write more of the article as full sentences that explain things, and keep lists for steps and short items.';
+/** A "sentence" of over RUN_ON_WORDS words is a run-on; over RUN_ON_CAP% of the prose words in run-ons caps the score.
+ * Good articles measure 0%, the article quoting a regulation 6%; keyword lines joined into one paragraph 60% and up. */
+const RUN_ON_WORDS = 50;
+const RUN_ON_CAP = 20;
+const STEP_ITEMS_CAP = 60;
 
 // ─── Words ───────────────────────────────────────────────────────────────────
 
@@ -292,32 +325,49 @@ const STOP = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'for', 'to', 'in', 'o
 /** Markdown and citation markers out; link labels kept, their addresses dropped. */
 function readable(markdown: string): string {
   return markdown
-    .replace(/[ \t]*\[src:[A-Za-z0-9-]{1,64}\]/g, ' ')
+    .replace(/(?<![ \t])[ \t]*\[src:[A-Za-z0-9-]{1,64}\]/g, ' ')
     .replace(/\[([^\]\n]{0,200})\]\((?:[^\s)]{0,500})\)/g, '$1')
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/\*\*|__|[*_`]/g, '');
 }
 
 /**
- * Cyrillic and Greek letters drawn like Latin ones ("а" for "a", "ο" for "o"). A word made only of these and Latin
- * letters is read as the Latin word it looks like, so a look-alike letter cannot hide a repeat or the phrase. A word
- * with any other letter of its own script (ordinary Russian or Greek) is left as it is.
+ * Letters of other alphabets drawn like Latin ones: Cyrillic ("а" for "a"), Greek ("ο" for "o"), Armenian ("օ"), and the
+ * Latin dotless i and alpha ("ı", "ɑ"). Accents and combining marks are taken off first, so "ό" is "ο" and "ӧ" is "о".
  */
-const LOOK_ALIKE: Readonly<Record<string, string>> = { 'а': 'a', 'в': 'b', 'е': 'e', 'ё': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'ї': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'һ': 'h', 'ӏ': 'l', 'ԛ': 'q', 'ԝ': 'w', 'к': 'k', 'м': 'm', 'н': 'h', 'т': 't', 'п': 'n', 'г': 'r',
-  'α': 'a', 'β': 'b', 'ε': 'e', 'η': 'n', 'ι': 'i', 'κ': 'k', 'ν': 'v', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'χ': 'x', 'ϲ': 'c', 'ϳ': 'j', 'ω': 'w' };
-const foldLookAlike = (w: string) => (/[^\x00-\x7f]/.test(w) && [...w].every((c) => c < '\x80' || c in LOOK_ALIKE) ? [...w].map((c) => LOOK_ALIKE[c] ?? c).join('') : w);
+const LOOK_ALIKE: Readonly<Record<string, string>> = { 'а': 'a', 'в': 'b', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'һ': 'h', 'ӏ': 'l', 'ԛ': 'q', 'ԝ': 'w', 'к': 'k', 'м': 'm', 'н': 'h', 'т': 't', 'п': 'n', 'г': 'r',
+  'α': 'a', 'β': 'b', 'ε': 'e', 'η': 'n', 'ι': 'i', 'κ': 'k', 'ν': 'v', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'χ': 'x', 'ϲ': 'c', 'ϳ': 'j', 'ω': 'w',
+  'օ': 'o', 'ս': 'u', 'հ': 'h', 'ո': 'n', 'ց': 'g', 'ı': 'i', 'ɑ': 'a', 'ɡ': 'g', 'ɩ': 'i', 'ʏ': 'y', 'ᴠ': 'v', 'ᴡ': 'w' };
+const isLatin = (w: string) => /^[a-z0-9']+$/.test(w);
+/** Every letter Latin or a look-alike: "mixed" when it has a Latin letter too, "alike" when it has none. */
+const alikeKind = (w: string): 'mixed' | 'alike' | null => ([...w].every((c) => c < '\x80' || c in LOOK_ALIKE) ? (/[a-z]/.test(w) ? 'mixed' : 'alike') : null);
+const fold = (w: string) => [...w].map((c) => LOOK_ALIKE[c] ?? c).join('');
+/** Combining marks over letters (accents, the combining low line): taken off, so they cannot change or split a word. */
+const MARKS = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/g;
 
 /**
  * Lower-case words: letters and numbers, with an apostrophe allowed inside a word (curly or straight, the same).
- * Invisible characters (zero-width spaces and joiners, soft hyphens, byte-order marks) are dropped first, so they
- * cannot split a word the reader sees whole.
+ * Characters a reader cannot see (zero-width spaces and joiners, soft hyphens, variation selectors, the combining
+ * grapheme joiner, the Hangul filler) and accents are dropped first, so they cannot split or disguise a word the reader
+ * sees whole. A word that mixes Latin letters with look-alikes from another alphabet is read as Latin; a word made only
+ * of look-alikes is read as Latin when the words beside it are Latin, so a whole word spelt in Cyrillic inside English
+ * is caught, but Russian, Ukrainian or Greek text is left as it is.
  */
 export function words(text: string): string[] {
   const out: string[] = [];
   const wide = /[^\x00-\x7f]/.test(text);
-  const s = (wide ? text.replace(/\p{Cf}/gu, '').normalize('NFKC') : text).toLowerCase().replace(/[‘’ʼ`´]/g, "'");
-  for (const m of s.matchAll(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu)) out.push(wide ? foldLookAlike(m[0]) : m[0]);
-  return out;
+  const s = (wide ? text.replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}\u3164\uffa0]/gu, '').normalize('NFKD').replace(MARKS, '').normalize('NFC') : text).toLowerCase().replace(/[‘’ʼ`´]/g, "'");
+  for (const m of s.matchAll(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu)) out.push(m[0]);
+  if (!wide) return out;
+  const kinds = out.map((w) => (isLatin(w) ? 'latin' : alikeKind(w)));
+  const latinSide = (i: number) => kinds[i] === 'latin' || kinds[i] === 'mixed';
+  return out.map((w, i) => {
+    const k = kinds[i];
+    if (k === 'mixed') return fold(w);
+    if (k !== 'alike') return w;
+    const sides = [i - 1, i + 1].filter((j) => j >= 0 && j < out.length);
+    return sides.length && sides.every((j) => latinSide(j) || kinds[j] === 'alike') && sides.some(latinSide) ? fold(w) : w;
+  });
 }
 
 /** Plurals ending in -es whose singular ends in -us or a single -s ("buses" and "bus", "gases" and "gas"). */
@@ -342,7 +392,8 @@ export function stem(word: string): string {
 /**
  * Close forms of one word, for counting how often the phrase is used: its stem, and the stem without an -ing or -ed
  * ending or a silent final e ("appraise", "appraising" and "appraised" share "apprais"; "bleeding" and "bleed" share
- * "bleed"; "stopped" and "stop" share "stop"). Two words are close forms when they share a key.
+ * "bleed"; "stopped" and "stop" share "stop"), and a noun made from the verb ("appraisal", "approval", "valuation").
+ * Two words are close forms when they share a key.
  */
 const closeMemo = new Map<string, readonly string[]>();
 export function closeKeys(word: string): readonly string[] {
@@ -362,6 +413,9 @@ function closeKeysOf(word: string): readonly string[] {
   else if (s.length > 4 && s.endsWith('ied')) base = `${s.slice(0, -3)}y`;
   else if (s.length > 4 && s.endsWith('ed') && !s.endsWith('eed')) base = s.slice(0, -2);
   if (base !== s) { add(base); if (/([b-df-hj-np-tv-z])\1$/.test(base) && !/(?:ll|ss|zz|ff)$/.test(base)) add(base.slice(0, -1)); }
+  // A noun made from the verb: "appraisal" and "appraise", "approval" and "approve", "valuation" and "value".
+  if (s.length >= 7 && /[sv]al$/.test(s)) add(s.slice(0, -2));
+  if (s.length > 8 && s.endsWith('ation')) add(s.slice(0, -5));
   for (const k of [...keys]) if (k.length > 3 && k.endsWith('e')) add(k.slice(0, -1));
   return [...keys];
 }
@@ -446,26 +500,59 @@ function matchTokens(t: readonly string[], p: Phrase): { kind: Match; at: number
 const match = (text: string, p: Phrase) => matchTokens(stems(words(text)), p);
 const better = (a: Match, b: Match): Match => (a === 'exact' || b === 'exact' ? 'exact' : a === 'loose' || b === 'loose' ? 'loose' : 'none');
 
-const isListLine = (line: string) => /^[-*]\s+/.test(line) || /^\d{1,3}[.)]\s+/.test(line);
-
-/** Paragraphs as the renderer builds them: runs of non-list lines between blank lines (body headings end a run). */
-function paragraphs(markdown: string): string[] {
-  const out: string[] = [];
-  let run: string[] = [];
-  const flush = () => { if (run.length) out.push(run.join(' ')); run = []; };
+/** A list marker: "- ", "* ", "+ ", "• ", "– ", "— ", "1. ", "1) ", "a) ", "a. " (bullets the page may show run together too). */
+const LIST_MARK = /^(?:[-*+•–—]|\d{1,3}[.)]|[a-z][.)])\s+/;
+/** A short line: under STEP_WORDS words. Two or more short lines in a row, with any marker or none, are list items. */
+const STEP_WORDS = 10;
+interface Blocks {
+  /** Paragraphs of prose (runs of lines between blank lines, list items, tables and headings). */
+  readonly paras: string[];
+  /** List items, table rows and runs of short lines, one per item. */
+  readonly items: string[];
+  /** Sub-headings inside the text ("### "). */
+  readonly heads: string[];
+  /** Words between sub-headings inside the text, in order (the text with no sub-heading is one stretch). */
+  readonly stretches: number[];
+}
+const blockMemo = new Map<string, Blocks>();
+/**
+ * The text of one block (the opening, a part, an answer, the closing) as the page shows it: paragraphs, list items and
+ * sub-headings. A table row is an item; blockquote markers are taken off; a run of two or more short lines with no
+ * list marker (or a marker the page does not treat as a list) is a list of items, not one long sentence.
+ */
+function blocks(markdown: string): Blocks {
+  const hit = blockMemo.get(markdown);
+  if (hit) return hit;
+  if (blockMemo.size > 5_000) blockMemo.clear();
+  const paras: string[] = [], items: string[] = [], heads: string[] = [], stretches: number[] = [];
+  let run: string[] = [], stretch = 0;
+  const flush = () => {
+    if (run.length >= 2 && run.every((l) => words(l).length < STEP_WORDS)) items.push(...run);
+    else if (run.length) paras.push(run.join(' '));
+    run = [];
+  };
   for (const raw of markdown.replace(/\r\n?/g, '\n').split('\n')) {
-    const line = raw.trim();
-    if (!line || isListLine(line) || /^#{1,6}\s+/.test(line)) { flush(); continue; }
-    run.push(line);
+    let line = raw.trim();
+    const head = /^#{1,6}\s+(.*)$/.exec(line);
+    if (head) { flush(); heads.push(head[1]!); stretches.push(stretch); stretch = 0; continue; }
+    stretch += words(line).length;
+    if (!line) { flush(); continue; }
+    if (line.startsWith('|')) { flush(); const row = line.replace(/\|/g, ' ').trim(); if (/[\p{L}\p{N}]/u.test(row)) items.push(row); continue; }
+    const mark = LIST_MARK.exec(line);
+    if (mark) { flush(); items.push(line.slice(mark[0].length)); continue; }
+    line = line.replace(/^(?:>\s?)+/, '').trim();
+    if (line) run.push(line); else flush();
   }
   flush();
+  stretches.push(stretch);
+  const out = { paras, items, heads, stretches };
+  blockMemo.set(markdown, out);
   return out;
 }
-
+/** Paragraphs as the renderer builds them (see blocks). */
+const paragraphs = (markdown: string) => blocks(markdown).paras;
 /** Each list item's text (lists are read as one sentence per item). */
-function listItems(markdown: string): string[] {
-  return markdown.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(isListLine).map((l) => l.replace(/^(?:[-*]|\d{1,3}[.)])\s+/, ''));
-}
+const listItems = (markdown: string) => blocks(markdown).items;
 
 /** Never the end of a sentence. */
 const NEVER_END = /\b(?:e\.g|i\.e|mr|mrs|ms|dr|st|vs|cf)\.$/i;
@@ -622,10 +709,13 @@ function vocabulary(ws: readonly string[]): number {
   return total / windows;
 }
 
-/** A sentence, or a list item's sentence, in reading order. `list` is the block's list number for items, or -1. */
-interface Unit { readonly t: readonly string[]; readonly list: number }
+/**
+ * A sentence, a list item's sentence or a sub-heading inside the text, in reading order. `block` is the block it is in
+ * (the opening, a part, an answer, the closing); `list` numbers the list it belongs to, or is -1 for prose.
+ */
+interface Unit { readonly t: readonly string[]; readonly list: number; readonly block: number }
 interface Repetition {
-  /** Sentences of FRAGMENT_WORDS words or more, and every list item whatever its length (the ones that can repeat). */
+  /** Sentences of FRAGMENT_WORDS words or more, list items of that length, and shorter items that repeat. */
   readonly counted: number;
   /** Of those, the ones that repeat an earlier one word for word, or nearly (one or two words changed). */
   readonly repeats: number;
@@ -635,19 +725,44 @@ interface Repetition {
   /** Share (0 to 1) of the whole text's runs of REPEAT_RUN words that already came earlier in the article. */
   readonly repeatedRuns: number;
 }
+/** A short sentence of this many words or fewer is a near repeat when it matches an earlier one in all but one word. */
+const SHORT_TEMPLATE = { min: 5, max: NEAR_REPEAT_WORDS - 1 } as const;
+/** A list item may come back in this many parts in all before it counts as a repeat ("Mop the floor" in each room). */
+const SHARED_ITEM_PARTS = 4;
 /**
  * Repetition over the whole article, list items included: a sentence repeats when it matches an earlier one word for
  * word, or when most of its runs of three words already came earlier (an earlier sentence with one or two words
- * swapped); and the share of all runs of REPEAT_RUN words that came earlier in the article.
+ * swapped), or, for a sentence of five to seven words, when an earlier one matches it in all but one word (rotating
+ * templates); and the share of all runs of REPEAT_RUN words that came earlier in the article.
  *
- * Every list item counts as a possible repeat, however short: a word-for-word repeat of a three-word bullet is still a
- * repeat, and an honest list rarely says the same item twice. The items of one list are read as one run of words for
- * the runs of REPEAT_RUN words, so a list of short items pasted again is seen as repeated wording, not as items too
- * short to compare. Different short items make different runs, so an honest list adds nothing to the measure.
+ * Prose is measured as it always was: a sentence of under FRAGMENT_WORDS words is never a repeat ("Yes." opening many
+ * answers). List items:
+ * - an item of FRAGMENT_WORDS words or more is measured like a sentence, one by one;
+ * - a shorter item enters the measure only when it repeats (its third time: "Cost" as a pro and a con is ordinary), so
+ *   different short items can never dilute it;
+ * - the items of one list are also read as one run of words, so a pasted list of short items is repeated wording; those
+ *   runs enter the measure only when they repeat, for the same reason;
+ * - an item that comes back in other parts (a job every room shares) is not a repeat until its fifth part, as long as
+ *   such items are no more than half of their list; a pasted list is all of its list, so it always counts.
  */
 function repetition(units: readonly Unit[]): Repetition {
+  // Which list items come back from other parts, and how many of each list's items do.
+  const firstBlocks = new Map<string, Set<number>>();
+  const comesBack = units.map((u) => {
+    if (u.list < 0 || !u.t.length) return false;
+    const key = u.t.join(' ');
+    const at = firstBlocks.get(key) ?? new Set<number>();
+    const back = at.size > 0 && !at.has(u.block) && at.size < SHARED_ITEM_PARTS;
+    at.add(u.block); firstBlocks.set(key, at);
+    return back;
+  });
+  const perList = new Map<number, { items: number; back: number }>();
+  units.forEach((u, i) => { if (u.list < 0) return; const c = perList.get(u.list) ?? { items: 0, back: 0 }; c.items++; if (comesBack[i]) c.back++; perList.set(u.list, c); });
+  const shared = units.map((u, i) => comesBack[i]! && (perList.get(u.list)!.back * 2 <= perList.get(u.list)!.items));
+
   const seen = new Map<string, number>();
   const tri = new Set<string>();
+  const masked = new Set<string>();
   const runs = new Set<string>();
   let counted = 0, repeats = 0, exactRepeats = 0, repeatWords = 0, runTotal = 0, runRepeated = 0;
   const countRuns = (t: readonly string[]) => {
@@ -657,30 +772,47 @@ function repetition(units: readonly Unit[]): Repetition {
       if (runs.has(k)) runRepeated++; else runs.add(k);
     }
   };
-  let stream: string[] = [], streamList = -1;
-  const flush = () => { countRuns(stream); stream = []; streamList = -1; };
-  for (const { t, list } of units) {
-    if (list < 0 || list !== streamList) flush();
-    if (list < 0) countRuns(t); else { streamList = list; stream.push(...t); }
+  // A list as one run of words: owner > 0 is a word of an item already measured on its own, owner 0 a word of a shared
+  // item, owner < 0 a word of a short item.
+  let stream: string[] = [], owner: number[] = [], streamList = -1, item = 0;
+  const flush = () => {
+    for (let i = 0; i + REPEAT_RUN <= stream.length; i++) {
+      const own = owner.slice(i, i + REPEAT_RUN);
+      if (own[0]! > 0 && own[0] === own[REPEAT_RUN - 1]) continue;
+      if (own.every((o) => o === 0)) continue;
+      const k = stream.slice(i, i + REPEAT_RUN).join(' ');
+      if (runs.has(k)) { runTotal++; runRepeated++; } else runs.add(k);
+    }
+    stream = []; owner = []; streamList = -1;
+  };
+  units.forEach(({ t, list }, ui) => {
+    if (list !== streamList) flush();
+    const isItem = list >= 0, free = shared[ui]!;
+    const short = t.length < FRAGMENT_WORDS;
+    if (!isItem) countRuns(t);
+    else {
+      streamList = list; item++;
+      const own = t.length >= REPEAT_RUN && !free;
+      if (own) countRuns(t);
+      for (const w of t) { stream.push(w); owner.push(free ? 0 : own ? item : -item); }
+    }
     const grams: string[] = [];
     for (let i = 0; i + 3 <= t.length; i++) grams.push(t.slice(i, i + 3).join(' '));
-    if (t.length > 0) {
+    const keys = !isItem && t.length >= SHORT_TEMPLATE.min && t.length <= SHORT_TEMPLATE.max ? t.map((_, i) => t.map((w, j) => (j === i ? '*' : w)).join(' ')) : [];
+    if (t.length > 0 && !free) {
       const key = t.join(' ');
       const times = seen.get(key) ?? 0;
-      seen.set(key, times + 1);
-      const short = t.length < FRAGMENT_WORDS;
-      // A very short sentence or item said twice is ordinary ("Cost" as a pro and a con, "Yes." opening two answers);
-      // from its third time it is a repeat. A short sentence of prose is counted only then, so honest prose full of
-      // short sentences is measured exactly as before; every list item is counted.
-      const exact = short ? times >= 2 : times >= 1;
-      const near = !short && times === 0 && t.length >= NEAR_REPEAT_WORDS && grams.filter((g) => tri.has(g)).length * 3 >= grams.length * 2;
-      if (!short || list >= 0 || exact) {
+      const exact = short ? isItem && times >= 2 : times >= 1;
+      const near = !short && times === 0 && ((t.length >= NEAR_REPEAT_WORDS && grams.filter((g) => tri.has(g)).length * 3 >= grams.length * 2) || keys.some((k) => masked.has(k)));
+      if (!short || exact) {
         counted++;
         if (exact || near) { repeats++; repeatWords += t.length; if (exact) exactRepeats++; }
       }
     }
+    if (t.length > 0) { const key = t.join(' '); seen.set(key, (seen.get(key) ?? 0) + 1); }
     for (const g of grams) tri.add(g);
-  }
+    for (const k of keys) masked.add(k);
+  });
   flush();
   return { counted, repeats, exactRepeats, repeatWords, repeatedRuns: runTotal ? runRepeated / runTotal : 0 };
 }
@@ -721,7 +853,8 @@ function titleWithoutName(title: string): string {
   return m && words(m[2]!).length <= 6 ? m[1]! : title;
 }
 
-export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick<ArticleBrief, 'relatedQuestions' | 'searchIntent'>> | null | undefined, body: ArticleBody, context: SeoScoreContext = {}): SeoScore {
+export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick<ArticleBrief, 'relatedQuestions' | 'searchIntent'>> | null | undefined, body: ArticleBody, contextIn: SeoScoreContext | null = {}): SeoScore {
+  const context: SeoScoreContext = contextIn && typeof contextIn === 'object' ? contextIn : {};
   const rawPhrase = typeof brief?.targetQuery === 'string' ? brief.targetQuery.replace(/\s+/g, ' ').trim() : '';
   const p = phraseOf(rawPhrase);
   const hasPhrase = p.raw.length > 0;
@@ -755,9 +888,14 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const keysOf = (ws: readonly string[]) => ws.map(closeKeys);
   const covers = (need: readonly (readonly string[])[], have: readonly (readonly string[])[]) => need.filter((n) => have.some((h) => closeEq(n, h))).length;
   /** A heading that asks one of the questions on record (most of its meaning words). */
+  const askedMemo = new Map<string, boolean>();
   const asksQuestion = (heading: string) => {
+    const hit = askedMemo.get(heading);
+    if (hit !== undefined) return hit;
     const h = keysOf(words(heading));
-    return relatedNeeds.some((need) => need.length > 0 && covers(need, h) * 4 >= need.length * 3);
+    const asks = relatedNeeds.some((need) => need.length > 0 && covers(need, h) * 4 >= need.length * 3);
+    askedMemo.set(heading, asks);
+    return asks;
   };
 
   // Sentences, block by block (the opening, each part, each answer, the closing paragraph), so a phrase split across a
@@ -765,11 +903,15 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const sentenceWords = new Map<string, string[]>();
   const wordsOf = (x: string) => { let w = sentenceWords.get(x); if (!w) { w = words(x); sentenceWords.set(x, w); } return w; };
   const blockSentences = bodies.map((t) => {
-    const prose = paragraphs(readable(t)).flatMap(sentences);
-    const items = listItems(readable(t)).flatMap(sentences);
-    return { prose, items };
+    const parsed = blocks(readable(t));
+    const prose = parsed.paras.flatMap(sentences);
+    // A short sentence inside a longer item ("Stir well." ending a step) is read like a short sentence of prose.
+    const items: string[] = [], inItem: boolean[] = [];
+    for (const it of parsed.items) { const ss = sentences(it); for (const x of ss) { items.push(x); inItem.push(ss.length > 1 && words(x).length < FRAGMENT_WORDS); } }
+    return { prose, items, inItem, whole: parsed.items, heads: parsed.heads, stretches: parsed.stretches };
   });
   const proseSentences = blockSentences.flatMap((b) => b.prose);
+  const blockItems = blockSentences.flatMap((b) => b.whole);
   const itemSentences = blockSentences.flatMap((b) => b.items);
   const allSentences = [...proseSentences, ...itemSentences];
   const tokens = allSentences.map(wordsOf);
@@ -778,13 +920,22 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const np = proseSentences.length;
 
   // Repetition over the whole article, in reading order, list items included.
-  const units: Unit[] = blockSentences.flatMap((b, i) => [...b.prose.map((s) => ({ t: wordsOf(s), list: -1 })), ...b.items.map((s) => ({ t: wordsOf(s), list: i }))]);
+  // Sub-headings inside the text are read as a list of their block (two lists per block: items, then sub-headings).
+  const units: Unit[] = blockSentences.flatMap((b, i) => [...b.prose.map((s) => ({ t: wordsOf(s), list: -1, block: i })), ...b.items.map((s, k) => ({ t: wordsOf(s), list: b.inItem[k] ? -1 : 2 * i, block: i })), ...b.heads.map((s) => ({ t: wordsOf(s), list: 2 * i + 1, block: i }))]);
   const readingOrder = units.map((u) => u.t);
   const rep = repetition(units);
   const dupShare = rep.counted ? (rep.repeats * 100) / rep.counted : 0;
   const repeatedRuns = rep.repeatedRuns * 100;
-  const vocab = vocabulary(allWords);
-  const smallWords = functionShare(readingOrder) * 100;
+  // Very short list items and sub-headings inside the text (under FRAGMENT_WORDS words) can never make an article look
+  // better: every measure that more words could flatter (length, the phrase's share, sentence length, parts long enough,
+  // headings per thousand words, vocabulary, small words) is taken without them, or at the worse of with and without.
+  const tinyOf = (b: { whole: readonly string[]; heads: readonly string[] }) => [...b.whole, ...b.heads].map((x) => wordsOf(x).length).filter((k) => k < FRAGMENT_WORDS);
+  const tinyWords = blockSentences.reduce((a, b) => a + tinyOf(b).reduce((x, y) => x + y, 0), 0);
+  const leanCount = Math.max(0, wordCount - tinyWords);
+  const leanUnits = units.filter((u) => u.list < 0 || u.t.length >= FRAGMENT_WORDS);
+  const leanWords = [...headings.flatMap(words), ...leanUnits.flatMap((u) => u.t)];
+  const vocab = Math.min(vocabulary(allWords), tinyWords ? vocabulary(leanWords) : 1);
+  const smallWords = Math.min(functionShare(readingOrder), functionShare(leanUnits.map((u) => u.t))) * 100;
 
   // ── Search: the search phrase ──
   let stuffedShare = 0, phraseShare = 0, altUses = 0;
@@ -882,21 +1033,30 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
         } else fragmentOnly += close;
       }
     });
-    for (const x of headings) all += closeAt(keysOf(words(x)), needKeys, p.s.length + 5).length;
-    // A picture description describes one picture: the phrase said twice or more there is stuffing, and every use counts.
-    altUses = closeAt(keysOf(words(str(body?.image && typeof body.image === 'object' ? body.image.alt : ''))), needKeys, p.s.length + 5).length;
+    // Sub-headings, questions and sub-headings inside the text count, except one that asks a question on record: that
+    // is what the questions check asks for, so it is never held against the article.
+    const usesIn = (text: string) => closeAt(keysOf(words(text)), needKeys, p.s.length + 5).length;
+    for (const x of [...headings, ...blockSentences.flatMap((b) => b.heads)]) if (!asksQuestion(x)) all += usesIn(x);
+    // A picture description describes one picture, and the page title is one line: the phrase said twice or more in
+    // either is stuffing, and then every use there counts.
+    altUses = usesIn(str(body?.image && typeof body.image === 'object' ? body.image.alt : ''));
     if (altUses >= 2) all += altUses;
-    // Three uses are never too many, however short the text.
-    // Rounded once, so the check, the cap, the reported measure and the gate always agree.
-    const share = wordCount && all > 3 ? Math.round((all * p.need.length * 1000) / wordCount) / 10 : 0;
-    stuffedShare = share > PHRASE_STUFFED ? share : 0;
+    const titleUses = usesIn(str(body?.title));
+    if (titleUses >= 2) all += titleUses;
+    // Four uses are never too many, however short the text (the opening, a sub-heading, the text and the closing).
+    // A one-word phrase is counted as if it had PHRASE_ONE_WORD words: it is easy to say often, so it may be said
+    // less often than a longer phrase. Rounded once, so the check, the cap, the measure and the gate always agree.
+    const weight = Math.max(p.need.length, PHRASE_ONE_WORD);
+    const share = leanCount && all > PHRASE_FREE_USES ? Math.round((all * weight * 1000) / leanCount) / 10 : 0;
+    const stuffed = share > PHRASE_STUFFED && all >= PHRASE_STUFFED_USES;
+    stuffedShare = stuffed ? share : 0;
     phraseShare = share;
     const spread = usedIn.size >= 2;
-    const useResult: SeoCheckResult = share > PHRASE_STUFFED ? 'fail' : realExact >= 1 && realClose >= 2 && spread && share <= PHRASE_HIGH ? 'pass' : realClose >= 1 ? 'partly' : 'fail';
+    const useResult: SeoCheckResult = stuffed ? 'fail' : realExact >= 1 && realClose >= 2 && spread && share <= PHRASE_HIGH ? 'pass' : realClose >= 1 ? 'partly' : 'fail';
     add('phrase.use', 'phrase', 'The search phrase is used a sensible number of times', SEO_WEIGHTS.phraseUse, useResult,
-      realClose === 0 ? (share > PHRASE_STUFFED ? `The phrase comes up ${plural(all, 'time', 'times')} in ${plural(wordCount, 'word', 'words')}, mostly on its own. That is too many: it reads as stuffed.` : fragmentOnly ? 'The phrase only appears on its own, never inside a sentence.' : 'The article does not use the phrase at all.')
-        : `The phrase, or a close form of it, comes up ${plural(Math.max(all, realClose), 'time', 'times')} in ${plural(wordCount, 'word', 'words')}${realExact ? '' : ', but never exactly as it is searched'}.${share > PHRASE_STUFFED ? ' That is too many: it reads as stuffed.' : share > PHRASE_HIGH ? ' That is a little high.' : realClose >= 2 && !spread ? ' All the uses are in one part.' : ''}`,
-      share > PHRASE_HIGH ? 'Use the phrase a lot less. Say it naturally once or twice, and use other words for the same idea.' : realExact === 0 ? `Use the exact phrase ${quote(P)} once inside a sentence, and its natural variations elsewhere.` : realClose <= 1 ? 'Use the phrase, or a natural variation of it, once more in another part of the article.' : 'Spread the phrase out: use it, or a natural variation of it, in another part of the article too.', 'text');
+      realClose === 0 ? (stuffed ? `The phrase comes up ${plural(all, 'time', 'times')} in ${plural(wordCount, 'word', 'words')}, mostly on its own. That is too many: it reads as stuffed.` : fragmentOnly ? 'The phrase only appears on its own, never inside a sentence.' : 'The article does not use the phrase at all.')
+        : `The phrase, or a close form of it, comes up ${plural(Math.max(all, realClose), 'time', 'times')} in ${plural(wordCount, 'word', 'words')}${realExact ? '' : ', but never exactly as it is searched'}.${stuffed ? ' That is too many: it reads as stuffed.' : share > PHRASE_HIGH ? ' That is a little high.' : realClose >= 2 && !spread ? ' All the uses are in one part.' : ''}`,
+      share > PHRASE_HIGH ? 'Use the phrase fewer times. Say it naturally once or twice; reworded forms of it count as uses too.' : realExact === 0 ? `Use the exact phrase ${quote(P)} once inside a sentence, and its natural variations elsewhere.` : realClose <= 1 ? 'Use the phrase, or a natural variation of it, once more in another part of the article.' : 'Spread the phrase out: use it, or a natural variation of it, in another part of the article too.', 'text');
   } else if (target) {
     add('phrase.missing', 'phrase', 'The search phrase is on record', 27, 'fail', 'There is no search phrase on record for this article, so it cannot be scored against one.', 'Plan the article from a search phrase first.', 'rewrite');
   } else leftOut.push('the search phrase checks (no search phrase is on record)');
@@ -922,8 +1082,10 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
     sl === 0 ? 'Give the article a page address ending of a few words joined by hyphens.' : 'Keep the page address ending short: a few key words joined by hyphens. Only change it before the article is live.', 'address');
   // Length, in a band that suits what the searcher wants. Repeated sentences are not counted, and nothing above the
   // band earns more: length is never a reason to pad.
-  const band = LENGTH_BANDS[brief?.searchIntent ?? ''] ?? LENGTH_BANDS.default!;
-  const effective = Math.max(0, wordCount - rep.repeatWords);
+  // Only the bands named here: a search intent such as "constructor" is not a band.
+  const intent = typeof brief?.searchIntent === 'string' && Object.prototype.hasOwnProperty.call(LENGTH_BANDS, brief.searchIntent) ? brief.searchIntent : 'default';
+  const band = LENGTH_BANDS[intent]!;
+  const effective = Math.max(0, leanCount - rep.repeatWords);
   const grade = effective > band.high ? 'long' : effective >= band.low ? 'strong' : effective >= band.thin ? 'fine' : 'thin';
   add('page.length', 'page', 'Article length', SEO_WEIGHTS.articleLength, grade === 'strong' ? 'pass' : grade === 'fine' || grade === 'long' ? 'partly' : 'fail',
     `${plural(wordCount, 'word', 'words')}: ${grade === 'strong' ? `a good length for ${band.what}` : grade}.${rep.repeatWords ? ` ${plural(rep.repeatWords, 'word is', 'words are')} in repeated sentences and not counted.` : ''}`,
@@ -932,7 +1094,7 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
         : `It is over ${band.high.toLocaleString('en-GB')} words. If any part does not help the reader, cut it; a long guide that stays useful is fine.`, 'rewrite');
   const named = sections.filter((s) => str(s.heading).trim());
   const distinctHeadings = new Set(named.map((s) => stems(words(str(s.heading))).join(' '))).size;
-  const thinParts = named.filter((s) => words(readable(str(s.body))).length < PART_MIN_WORDS).length;
+  const thinParts = named.filter((s) => { const t = readable(str(s.body)); return words(t).length - tinyOf({ whole: blocks(t).items, heads: blocks(t).heads }).reduce((x, y) => x + y, 0) < PART_MIN_WORDS; }).length;
   const perThousand = effective ? (named.length * 1000) / effective : named.length ? Infinity : 0;
   const subResult: SeoCheckResult = named.length === 0 ? 'fail'
     : thinParts * 2 > named.length || perThousand > HEADINGS_PER_1000 * 2 ? 'fail'
@@ -955,7 +1117,7 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
     asked > MAX_FAQS ? `Keep the ${MAX_FAQS} questions people ask most and answer each one properly.` : asked ? 'Answer each question in two or three sentences that use its own words, and add a few more of the questions people ask.' : 'Ask for a rewrite that adds three to five questions people ask about this.', 'rewrite');
 
   // ── Search: links ──
-  const own = new Set((context.siteHosts ?? []).map(hostOf).filter((x): x is string => Boolean(x)));
+  const own = new Set((Array.isArray(context.siteHosts) ? context.siteHosts : []).map(hostOf).filter((x): x is string => Boolean(x)));
   const isOwn = (host: string | null) => host !== null && (own.has(host) || [...own].some((o) => host.endsWith(`.${o}`)));
   const issues = issueList(context.checkIssues);
   const flagged = (code: string, url: string) => Boolean(issues?.some((x) => x.code === code && typeof x.message === 'string' && x.message.includes(url)));
@@ -1021,7 +1183,6 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   // the screw. Keep it safe.") are short on purpose, so they are left out of those shares; list items written as full
   // sentences (a glossary's definitions) count as prose. An article that is mostly list items is told so plainly, and
   // with too little prose to judge these checks cannot pass.
-  const STEP_WORDS = 10;
   const readTokens = [...proseTokens, ...tokens.slice(np).filter((t) => t.length >= STEP_WORDS)];
   const nr = readTokens.length;
   const proseWordsN = proseTokens.reduce((s, t) => s + t.length, 0);
@@ -1031,9 +1192,18 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   // Short items are left out of the shares above, so when they carry much of the article the shares describe only the
   // rest of it: those checks cannot pass, and the whole score is held (the cap below). Honest lists (tools, steps,
   // pros and cons) sit well under SHORT_ITEMS_CAP; a list padded out, or bullets in place of writing, sit above it.
-  const shortItemWordsN = tokens.slice(np).reduce((s, t) => s + (t.length < STEP_WORDS ? t.length : 0), 0);
-  const shortItemShare = proseWordsN + itemWordsN ? (shortItemWordsN * 100) / (proseWordsN + itemWordsN) : 0;
-  const listHeavy = wordCount >= 100 && shortItemShare > SHORT_ITEMS_CAP;
+  // Items as the page shows them (a whole item, not each of its sentences), and sub-headings inside the text.
+  const itemLengths = [...blockItems.map((x) => wordsOf(x).length), ...blockSentences.flatMap((b) => b.heads).map((x) => wordsOf(x).length)];
+  const listBase = proseWordsN + itemLengths.reduce((a, b) => a + b, 0);
+  // Neither measure can be diluted by the other kind of item: step-sized items are left out of the very short share's
+  // whole, and very short items out of the step-sized share's whole, so adding one kind never lowers the other.
+  const sumBy = (w: (k: number) => number) => itemLengths.reduce((a, k) => a + w(k) * k, 0);
+  const shareOf2 = (part: number, whole: number) => (whole > 0 ? Math.round((part * 1000) / whole) / 10 : 0);
+  const tinyShare = shareOf2(sumBy(tinyWeight), listBase - sumBy((k) => (k > 5 ? stepWeight(k) : 0)));
+  const stepShare = shareOf2(sumBy(stepWeight), listBase - sumBy((k) => (k < 4 ? 1 : 0)));
+  const listHeavy = wordCount >= 100 && (tinyShare > TINY_ITEMS_CAP || stepShare > STEP_ITEMS_CAP);
+  const runOnShare = proseWordsN ? Math.round((proseTokens.reduce((a, t) => a + (t.length > RUN_ON_WORDS ? t.length : 0), 0) * 1000) / proseWordsN) / 10 : 0;
+  const runOn = wordCount >= 100 && runOnShare > RUN_ON_CAP;
   const thinProse = (mostlyList && readWordsN < MIN_PROSE_WORDS) || listHeavy;
   const listNote = thinProse && n ? (listHeavy && readWordsN >= MIN_PROSE_WORDS ? ' Much of the article is short list items, so this is judged on only part of it.' : ' Most of the article is list items, with too little prose to judge this fully.')
     : mostlyList ? ' Most of the article is list items; this is judged on the prose and the full-sentence items.' : '';
@@ -1043,14 +1213,16 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const fragShare = nr ? (fragments * 100) / nr : 0;
   // Long sentences are counted against every sentence, list items included: a short step is never too long.
   const longS = tokens.filter((t) => t.length > LONG_SENTENCE_WORDS).length;
-  const longShare = n ? (longS * 100) / n : 0;
+  // A very short item is never a long sentence, and never dilutes the long ones either.
+  const longOver = tokens.filter((t, i) => i < np || t.length >= FRAGMENT_WORDS).length;
+  const longShare = longOver ? (longS * 100) / longOver : 0;
   const choppy = avgLen < SENTENCE_FLOOR || fragShare > 15;
   const sentResult: SeoCheckResult = !nr ? 'fail'
     : longShare > 35 || avgLen < CHOPPY_FAIL || fragShare > 35 ? 'fail'
       : notOverPartly(longShare <= 25 && !choppy ? 'pass' : 'partly');
   add('read.sentences', 'read', 'Sentence length', SEO_WEIGHTS.sentenceLength, sentResult,
-    !nr ? (n ? 'The article is all short list items, with no sentences of prose to judge.' : 'The article has no sentences yet.') : `${pct(longShare)} of sentences are longer than ${LONG_SENTENCE_WORDS} words (${longS} of ${n}). Sentences average ${plural(Math.round(avgLen), 'word', 'words')}.${choppy ? ' Many are very short, which reads as choppy.' : ''}${listNote}`,
-    choppy && longShare <= 25 ? `Join very short sentences into full ones. Aim for about ${SENTENCE_FLOOR} to 20 words in most sentences.` : 'Split the longest sentences in two. Aim for no more than one sentence in four over 20 words.', 'text',
+    !nr ? (n ? 'The article is all short list items, with no sentences of prose to judge.' : 'The article has no sentences yet.') : `${pct(longShare)} of sentences are longer than ${LONG_SENTENCE_WORDS} words (${longS} of ${longOver}). Sentences average ${plural(Math.round(avgLen), 'word', 'words')}.${choppy ? ' Many are very short, which reads as choppy.' : ''}${listNote}`,
+    listHeavy ? LIST_HEAVY_TODO : choppy && longShare <= 25 ? `Join very short sentences into full ones. Aim for about ${SENTENCE_FLOOR} to 20 words in most sentences.` : 'Split the longest sentences in two. Aim for no more than one sentence in four over 20 words.', 'text',
     0, count(longShare > 25, choppy, thinProse));
   const proseParas = bodies.flatMap((t) => paragraphs(readable(t)));
   const longP = proseParas.filter((x) => words(x).length > LONG_PARAGRAPH_WORDS).length;
@@ -1059,8 +1231,11 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
     'Split long paragraphs into shorter ones. People read on phones.', 'text');
   // Stretches of text between headings, as the page shows them: the opening, each part, each answer; the closing
   // paragraph runs on from whatever comes last.
-  const stretches = [intro, ...sections.map((s) => str(s.body)), ...faqs.map((f) => str(f.a))].map((t) => words(readable(t)).length);
-  stretches[stretches.length - 1] = (stretches[stretches.length - 1] ?? 0) + words(readable(conclusion)).length;
+  // A sub-heading inside a part ("### ") starts a new stretch.
+  const stretches = [intro, ...sections.map((s) => str(s.body)), ...faqs.map((f) => str(f.a))].flatMap((t) => blocks(readable(t)).stretches);
+  const [closing = 0, ...closingRest] = blocks(readable(conclusion)).stretches;
+  stretches[stretches.length - 1] = (stretches[stretches.length - 1] ?? 0) + closing;
+  stretches.push(...closingRest);
   const longest = Math.max(0, ...stretches);
   const tooLong = stretches.filter((x) => x > HEADING_SPACING_WORDS).length;
   add('read.spacing', 'read', 'Sub-headings often enough', SEO_WEIGHTS.headingSpacing, !n ? 'fail' : tooLong === 0 ? 'pass' : longest <= 400 ? 'partly' : 'fail',
@@ -1071,7 +1246,7 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const easeResult: SeoCheckResult = ease === null ? 'fail' : notOverPartly(ease >= 60 ? (avgLen >= SENTENCE_FLOOR - 2 ? 'pass' : avgLen >= CHOPPY_FAIL ? 'partly' : 'fail') : ease >= 50 ? 'partly' : 'fail');
   add('read.ease', 'read', 'Reading ease', SEO_WEIGHTS.readingEase, easeResult,
     ease === null ? 'There is too little prose to judge how easy it is to read.' : `Reading ease ${Math.round(ease)} out of 100: ${easeWords(ease)}.${ease >= 60 && avgLen < CHOPPY_FAIL ? ' It only looks easy because the sentences are fragments.' : ease >= 60 && avgLen < SENTENCE_FLOOR - 2 ? ' Much of that comes from very short sentences, so the text is not quite as easy as the number says.' : ' Most readers find 60 or more comfortable.'}${listNote}`,
-    ease !== null && ease >= 60 ? 'Write in full sentences with everyday words. Very short fragments are not easier to follow.' : 'Use shorter sentences and everyday words. Swap long words for short ones where you can.', 'text');
+    listHeavy ? LIST_HEAVY_TODO : ease !== null && ease >= 60 ? 'Write in full sentences with everyday words. Very short fragments are not easier to follow.' : 'Use shorter sentences and everyday words. Swap long words for short ones where you can.', 'text');
   // Varied starts: no long run of sentences starting with the same word, and no one word starting too many. Everyday
   // starts ("the", "a", "you", "it") are common in good writing, so they have a higher allowance. List items written
   // as full sentences count, as they do for the other reading checks; short steps ("Turn", "Check") do not.
@@ -1105,7 +1280,7 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
       : notOverPartly(linkShare >= LINKING_FLOOR && linkShare <= 60 && initialShare <= 35 && enoughKinds ? 'pass' : 'partly');
   add('read.linking', 'read', 'Linking words', SEO_WEIGHTS.linkingWords, linkResult,
     nr ? `${pct(linkShare)} of sentences use a linking word such as “because”, “so” or “for example”.${initialShare > 35 ? ` ${pct(initialShare)} of sentences start with one.` : ''}${!enoughKinds ? ' The same few are used again and again.' : ''}${listNote}` : 'The article has no sentences of prose yet.',
-    linkShare > 60 || initialShare > 35 ? 'Use fewer linking words, and put them inside sentences rather than at the start of each one.' : 'Join ideas with words like “because”, “so”, “however” and “for example”, where they fit. About one sentence in six is plenty.', 'text',
+    listHeavy ? LIST_HEAVY_TODO : linkShare > 60 || initialShare > 35 ? 'Use fewer linking words, and put them inside sentences rather than at the start of each one.' : 'Join ideas with words like “because”, “so”, “however” and “for example”, where they fit. About one sentence in six is plenty.', 'text',
     0, count(linkShare < LINKING_FLOOR || linkShare > 60, initialShare > 35, !enoughKinds, thinProse));
   // Varied wording, over the whole article and its lists: repeated or nearly repeated sentences, repeated runs of
   // words, and the vocabulary.
@@ -1203,13 +1378,14 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   if (n && (dupShare > RUNS_CAP || repeatedRuns > RUNS_CAP || vocab < VOCAB_CAP)) caps.push({ kind: 'repetition', limit: REPETITION_CAP, reason: `The wording repeats itself a lot, so the score stays at ${REPETITION_CAP} or below until it reads naturally.` });
   else if (n && (dupShare > RUNS_SOME || repeatedRuns > RUNS_SOME)) caps.push({ kind: 'repetition', limit: SOME_REPETITION_CAP, reason: `Parts of the wording repeat earlier sentences, so the score stays at ${SOME_REPETITION_CAP} or below until each part says something new.` });
   if (wordCount >= 100 && smallWords < SENTENCE_WORDS_CAP) caps.push({ kind: 'not-sentences', limit: REPETITION_CAP, reason: `The text does not read as ordinary sentences: it has very few of the small words (“the”, “of”, “is”, “to”) that join words into sentences. The score stays at ${REPETITION_CAP} or below until it does.` });
+  if (runOn) caps.push({ kind: 'run-on', limit: SOME_REPETITION_CAP, reason: `Some of the text runs on without a full stop for a very long way, so the score stays at ${SOME_REPETITION_CAP} or below until it is written in sentences of a readable length.` });
   if (listHeavy) caps.push({ kind: 'short-items', limit: SOME_REPETITION_CAP, reason: `Much of the article is short list items rather than sentences, so the score stays at ${SOME_REPETITION_CAP} or below until more of it is written out in full sentences.` });
   if (stuffedShare) caps.push({ kind: 'stuffing', limit: STUFFING_CAP, reason: `The search phrase comes up far too often, so the score stays at ${STUFFING_CAP} or below until it is used naturally.` });
   const cap = caps.sort((x, y) => x.limit - y.limit)[0] ?? null;
   const score = cap ? Math.min(uncapped, cap.limit) : uncapped;
   return { score, uncapped, cap, vocabulary: Math.round(vocab * 100) / 100, phrase: hasPhrase ? rawPhrase : null, checks: [...checks].sort((x, y) => order[x.result] - order[y.result]), parts, words: wordCount,
     readingEase: ease === null ? null : Math.round(ease), leftOut, earned, available,
-    measures: { repeatedSentences: Math.round(dupShare * 10) / 10, repeatedWording: Math.round(repeatedRuns * 10) / 10, joiningWords: Math.round(smallWords * 10) / 10, phraseShare, shortItems: Math.round(shortItemShare * 10) / 10 } };
+    measures: { repeatedSentences: Math.round(dupShare * 10) / 10, repeatedWording: Math.round(repeatedRuns * 10) / 10, joiningWords: Math.round(smallWords * 10) / 10, phraseShare, shortItems: tinyShare, stepItems: stepShare, runOn: runOnShare } };
 }
 
 /**
@@ -1258,7 +1434,7 @@ export function seoGate(s: SeoScore): SeoGateResult {
   if (s.cap) reasons.push(s.cap.reason);
   // A phrase a little over the natural rate, or said twice in the picture description, costs few points in the report,
   // but a rewrite that leans on it is not kept.
-  if (s.measures.phraseShare > PHRASE_HIGH && s.cap?.kind !== 'stuffing') reasons.push('The search phrase comes up more often than reads naturally. Use it less, and other words for the same idea.');
+  if (s.measures.phraseShare > PHRASE_HIGH && s.cap?.kind !== 'stuffing') reasons.push('The search phrase comes up more often than reads naturally. Use it fewer times; reworded forms of the phrase count as uses too.');
   if (s.checks.some((c) => c.id === 'pictures.phrase' && c.found === ALT_REPEATS_PHRASE)) reasons.push(ALT_REPEATS_PHRASE);
   // The picture description is not run without a picture; that is not missing information (the lower bar covers it).
   const missing = s.leftOut.filter((x) => !x.startsWith('the picture description'));

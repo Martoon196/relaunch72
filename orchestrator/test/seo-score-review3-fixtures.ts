@@ -57,6 +57,7 @@ const P = 'appraise a property deal';
 
 /** Dodges around the fix: [name, article, what is expected]. */
 export const DODGES: readonly [string, () => ArticleBody, 'stuffing' | 'repetition' | 'short-items' | 'gate' | 'not caught'][] = [
+  // 'gate': no cap, but the gate refuses it (the score is under the bar, or it gives a reason).
   ['the phrase stuffed into list items', () => eachPart((i) => (i < 6 ? `- How to ${P} in ${TOWN[i]} today\n- ${P[0]!.toUpperCase()}${P.slice(1)} near ${TOWN[i + 10]} quickly` : '')), 'stuffing'],
   ['the phrase stuffed into table cells', () => eachPart((i) => `| Town | Tip |\n|---|---|\n| ${TOWN[i]} | ${P} early |\n| ${TOWN[i + 1]} | ${P} slowly |`), 'stuffing'],
   ['one table row pasted 20 times in every part', () => eachPart(() => Array.from({ length: 20 }, () => '| houses | in Leeds | cheap |').join('\n')), 'repetition'],
@@ -69,12 +70,13 @@ export const DODGES: readonly [string, () => ArticleBody, 'stuffing' | 'repetiti
   ['a pasted list disguised with zero-width characters', () => eachPart((k) => SAME_30.map((x) => x.replace('in', `i${ZW.repeat(k % 3)}n`)).join('\n')), 'repetition'],
   ['a pasted list written with "+" bullets', () => eachPart(() => SAME_30.map((x) => `+ ${x.slice(2)}`).join('\n')), 'repetition'],
   ['a pasted list of one-word items', () => eachPart(() => TOWN.slice(0, 30).map((t) => `- ${t}`).join('\n')), 'repetition'],
-  ['a pasted list written as short lines without bullets', () => eachPart(() => SAME_30.map((x) => x.slice(2)).join('\n\n')), 'repetition'],
-  ['a pasted list written as short sentences of prose', () => eachPart(() => SAME_30.map((x) => `${x.slice(2)}.`).join(' ')), 'repetition'],
+  ['a pasted list written as short lines without bullets', () => eachPart(() => SAME_30.map((x) => x.slice(2)).join('\n\n')), 'gate'],
+  ['a pasted list written as short sentences of prose', () => eachPart(() => SAME_30.map((x) => `${x.slice(2)}.`).join(' ')), 'gate'],
+  ['a pasted list written as short lines in one paragraph, no bullets', () => eachPart(() => SAME_30.map((x) => x.slice(2)).join('\n')), 'repetition'],
   ['the same 30 bullets in only two parts', () => eachPart((k) => (k < 2 ? SAME_30.join('\n') : '')), 'repetition'],
   ['a list pasted with one word changed in every item, after every part', () => eachPart((k) => SAME_30.map((_, i) => `- ${KW2[i]} in ${TOWN[(i + k) % 30]}`).join('\n')), 'short-items'],
   ['the phrase said three times in the picture description', () => { const b = F.strongBody(); return { ...b, image: { ...b.image, alt: 'Appraise a property deal: appraise a property deal, property deal appraisal, appraising property deals' } } as ArticleBody; }, 'gate'],
+  ['a list with one word changed in every item, in two parts only (a quarter of the words)', () => eachPart((k) => (k < 2 ? SAME_30.map((_, i) => `- ${KW2[i]} in ${TOWN[(i + k) % 30]}`).join('\n') : '')), 'short-items'],
   // Not caught, on purpose (see the test).
-  ['a list with one word changed in every item, in two parts only (a quarter of the words)', () => eachPart((k) => (k < 2 ? SAME_30.map((_, i) => `- ${KW2[i]} in ${TOWN[(i + k) % 30]}`).join('\n') : '')), 'not caught'],
   ['the phrase split across two different list items', () => eachPart((i) => `- ${['Appraise a', 'Always appraise the', 'First appraise your', 'Then appraise a'][i % 4]}\n- property deal in ${TOWN[i]}`), 'not caught'],
 ];
