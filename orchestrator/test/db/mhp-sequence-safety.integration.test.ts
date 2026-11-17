@@ -99,7 +99,9 @@ test('sequence safety against the real MHP sequence functions', { skip, timeout:
     // A: the confirmation lists exactly who the real database then enrols.
     const plan = await service.startPlan(identity, randomUUID(), A.item, A.version);
     assert.equal(plan.ready, true, plan.refusal?.message); assert.equal(plan.count, 6); assert.equal(plan.webinar.label, 'Before You Buy live webinar');
-    assert.deepEqual(plan.heldBack, { noConsent: 1, unsubscribed: 1, alreadyIn: 0, earlierVersion: 0 });
+    // (0160 adds blocked and purchased counts to the same object; the webinar counts are unchanged.)
+    assert.deepEqual({ noConsent: plan.heldBack.noConsent, unsubscribed: plan.heldBack.unsubscribed, alreadyIn: plan.heldBack.alreadyIn, earlierVersion: plan.heldBack.earlierVersion },
+      { noConsent: 1, unsubscribed: 1, alreadyIn: 0, earlierVersion: 0 });
     // The audience changes between looking and pressing: nothing is started.
     await ownerQuery(owner, `UPDATE app_private.mhp_prospects SET unsubscribed_at=clock_timestamp() WHERE email='reader-6@example.invalid'`);
     const changed = await service.start(identity, randomUUID(), { commandId: randomUUID(), itemId: A.item, versionId: A.version, count: plan.count, digest: plan.digest,
@@ -117,8 +119,17 @@ test('sequence safety against the real MHP sequence functions', { skip, timeout:
     assert.equal(again.kind, 'already_started'); assert.equal((await runs(owner)).length, 5);
 
     // B gets people directly through the database (as if started before this release), so pause-everyone has something to leave alone.
-    await pools.r72_identity_command!.query('SELECT app_private.mhp_sequence_command($1,$2,$3,$4,$5,$6,$7,$8) AS value',
-      [Buffer.from(await sha256(TOKEN)), 'enrol', randomUUID(), B.version, CAMPAIGN, null, null, 'seq-safety-legacy-b']);
+    // Before 0160 the old one-press command did this; from 0160 the database refuses it (a start needs the explicit list), so
+    // the pre-release rows are written as they were left in production: one run per eligible person, the old command's shape.
+    const legacy = await pools.r72_identity_command!.query('SELECT app_private.mhp_sequence_command($1,$2,$3,$4,$5,$6,$7,$8) AS value',
+      [Buffer.from(await sha256(TOKEN)), 'enrol', randomUUID(), B.version, CAMPAIGN, null, null, 'seq-safety-legacy-b']).then(() => 'old command enrolled', (error: { code?: string }) => error.code);
+    if (legacy !== 'old command enrolled') {
+      assert.equal(legacy, '23514');
+      await ownerQuery(owner, `INSERT INTO app_private.mhp_followup_runs(workspace_id,sequence_item_id,sequence_version_id,sequence_sha256,sequence_approval_id,owner_user_id,prospect_id,campaign,enrolment_command_id,state,position,due_at)
+        SELECT v.workspace_id,v.content_item_id,v.id,v.content_sha256,d.id,'${OWNER}',a.prospect_id,'${CAMPAIGN}',gen_random_uuid(),'active',0,clock_timestamp()
+        FROM app.company_content_versions v JOIN app.company_content_approval_decisions d ON d.content_version_id=v.id
+        CROSS JOIN app_private.mhp_owner_email_audience('${CAMPAIGN}') a WHERE v.id='${B.version}'`);
+    }
     const afterB = await runs(owner); assert.equal(afterB.filter(r => r.sequence_item_id === B.item).length, 5);
     // Having people in it does not make a pre-release sequence a webinar sequence: B stays "none yet".
     { const plan = await service.startPlan(identity, randomUUID(), B.item, B.version); assert.equal(plan.audience.origin, 'legacy_none'); assert.equal(plan.refusal?.code, 'no_audience'); }
