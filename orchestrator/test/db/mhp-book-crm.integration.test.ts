@@ -799,3 +799,85 @@ test('fix round after 0159: WhatsApp gate unchanged, race losers enrich, durable
     } finally { await w.close(); }
   } finally { await admin.end().catch(() => undefined); }
 });
+
+test('last round: a stuck person is skipped and never blocks the button; keep-phone is cut at 2 s; the first mobile after 0159 is kept; other-format tick upgrades', { skip, timeout: 900_000 }, async () => {
+  const admin = await openTestDatabase();
+  try {
+    await resetDisposable();
+    await runMigrations(admin, await prefixDirectory(158));
+    await script(admin, SEED, 'COMMIT', 'r72_owner');
+    // SF2: a process that learnt "function missing" before 0159 keeps the first mobile after it, without a restart.
+    let w = await world(admin);
+    try {
+      const before = bookSignup('pre-0159@example.com', 'Pia', '07700 900301');
+      const c0 = await w.growth.capture(before, null);
+      assert.equal(await w.growth.keepBookPhone(c0, '07700 900301'), 'missing');
+      assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+      await new Promise(resolve => setTimeout(resolve, 5_200));
+      const after = await w.growth.capture(bookSignup('post-0159@example.com', 'Pol', '07700 900302'), null);
+      assert.equal(await w.growth.keepBookPhone(after, '07700 900302'), 'kept');
+      assert.equal((await ownerQuery<{ p: string }>(admin, 'SELECT phone AS p FROM app_private.mhp_prospect_signups WHERE id=$1', [after.signupId]))[0]!.p, '07700 900302');
+      assert.notEqual(await w.growth.listBookSignups(w.identity.sessionToken), null, 'the owner read works again too');
+    } finally { await w.close(); }
+    w = await world(admin);
+    try {
+      // SF3: the new row locked by another session: keep-phone gives up at about 2 s; the sign-up is saved.
+      const slow = await w.growth.capture(bookSignup('locked@example.com', 'Lok', '07700 900303'), null);
+      const locker = await admin.connect();
+      try {
+        await locker.query('BEGIN');
+        await locker.query('SET LOCAL ROLE r72_owner');
+        await locker.query('SELECT 1 FROM app_private.mhp_prospect_signups WHERE id=$1 FOR UPDATE', [slow.signupId]);
+        const started = Date.now();
+        await assert.rejects(w.growth.keepBookPhone(slow, '07700 900303'), (e: { code?: string }) => e.code === 'timeout');
+        const took = Date.now() - started;
+        assert.ok(took >= 1_900 && took < 3_000, `cut at about 2 s (${took} ms)`);
+        await locker.query('ROLLBACK');
+      } finally { locker.release(); }
+      assert.equal((await ownerQuery(admin, 'SELECT 1 FROM app_private.mhp_prospect_signups WHERE id=$1', [slow.signupId])).length, 1, 'sign-up saved');
+
+      // SF1: a lead made, then its email moved onto another record with no book enquiry.
+      const people = ['x1@example.com', 'x2@example.com', 'x3@example.com'];
+      const ids: Record<string, string> = {};
+      for (const [i, email] of people.entries()) ids[email] = (await w.capture(bookSignup(email, 'P', `07700 90040${i}`))).prospectId;
+      const order = [...people].sort((a, b) => (ids[a]! < ids[b]! ? -1 : 1));
+      const middle = order[1]!;
+      const signup = bookSignup(middle, 'P');
+      assert.equal((await w.service().project(OWNER, bookCandidateFromCapture(signup, { prospectId: ids[middle]!, signupId: randomUUID() }, Date.now()))).outcome, 'created');
+      const moved = randomUUID();
+      await ownerQuery(admin, `DO $d$ BEGIN PERFORM set_config('app.request_id','move',true);
+        INSERT INTO app.contacts(id,workspace_id,display_name,source) VALUES('${moved}','${WS}','Moved by owner','owner:manual');
+        UPDATE app.contact_points SET contact_id='${moved}' WHERE workspace_id='${WS}' AND kind='email' AND normalized_value='${middle}'; END $d$`);
+      const stuck = await w.service().project(OWNER, bookCandidateFromCapture(signup, { prospectId: ids[middle]!, signupId: randomUUID() }, Date.now()));
+      assert.deepEqual(stuck, { outcome: 'skipped', reason: 'lead_moved' }, 'no throw, a plain reason');
+      // In every mode the button brings in the people after the stuck one, and presses do not loop on them.
+      for (const owner of [OWNER, null]) {
+        const books = w.service(owner);
+        let press = await books.importBatch(w.identity, randomUUID(), ''), presses = 1;
+        while (press.hasMore && presses < 5) { press = await books.importBatch(w.identity, randomUUID(), press.cursor!); presses++; }
+        assert.equal(press.failed, false);
+        assert.ok(press.needYou >= 1 || presses > 1);
+      }
+      for (const email of order.filter(e => e !== middle)) assert.equal((await lead(admin, email))!.opportunities.length, 1, email);
+      const registrants = (await w.growth.listRegistrants(w.identity.sessionToken)).filter(r => r.signups.includes(MHP_BOOK_INTEREST_LABEL));
+      const statuses = await w.service().statuses(w.identity, registrants);
+      assert.deepEqual(statuses.byProspect.get(ids[middle]!), { state: 'needs_you', reason: 'lead_moved' }, 'listed under Needs you');
+      // A refused owner: later sign-ups are not stuck behind them either (the button acts as the workspace owner).
+      // (a configured owner who is not a member of the workspace: the real CRM runner refuses with forbidden_scope)
+      const refused = w.service(randomUUID());
+      assert.equal(await refused.probe(), 'owner_cannot_manage');
+      await w.capture(bookSignup('x4@example.com', 'P', '07700 900404'));
+      let press = await refused.importBatch(w.identity, randomUUID(), '');
+      while (press.hasMore) press = await refused.importBatch(w.identity, randomUUID(), press.cursor!);
+      assert.equal(press.failed, false);
+      assert.equal((await lead(admin, 'x4@example.com'))!.opportunities.length, 1);
+
+      // A tick typed in the other UK format upgrades the person's own book-only number.
+      await w.signUp(bookSignup('format@example.com', 'Fay', '07700 900405'));
+      assert.equal((await lead(admin, 'format@example.com'))!.points.find(p => p.kind === 'phone')!.consent, 'unknown');
+      await w.signUp({ ...bookSignup('format@example.com', 'Fay', '+44 (0)7700 900405'), consentVersion: 'book-2026-11+messages' });
+      const fay = (await lead(admin, 'format@example.com'))!;
+      assert.deepEqual(fay.points.filter(p => p.kind === 'phone').map(p => [p.normalized, p.consent]), [['07700900405', 'opted_in']]);
+    } finally { await w.close(); }
+  } finally { await admin.end().catch(() => undefined); }
+});
