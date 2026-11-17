@@ -242,7 +242,8 @@ entered in the MHP brand's GitHub-static connection (`branch=main`, `publicBaseU
 conditions an automatic rewrite must meet. It counts words, so it is necessary, not sufficient: the other condition is
 a separate meaning check that judges whether the text says something. Five review rounds showed that a word count can
 always be stepped round one notch further out, and that every tightening risks refusing good pages. So the score
-catches cheap, blatant rubbish where that costs nothing on 79 good articles, and stops there. What it lets through is
+catches cheap, blatant rubbish where that costs nothing on the 73 good articles and variants of the review corpora,
+and stops there. What it lets through is
 listed below; the meaning check must catch each of these. The list is kept exact by the tests
 (`KNOWN_LIMITS` in `orchestrator/test/seo-score-review5-rubbish.ts`, asserted in `seo-score-review5.test.ts`): every
 example passes the gate at the score shown, and every rubbish article of every corpus that passes is listed.
