@@ -283,7 +283,10 @@ test('research: with capture off the sources are exactly as before; with it on t
   const strip = (s: ResearchSource) => { const { id: _i, outline: _o, ...rest } = s; return rest; };
   assert.deepEqual(on.b.sources.map(strip), off.b.sources.map(strip));
   assert.ok(off.b.sources.every((s) => !('outline' in s)) && no.b.sources.every((s) => !('outline' in s)));
-  assert.ok(on.b.sources.length > 0 && on.b.sources.every((s) => s.outline && s.outline.headings.length <= SEARCH_CAPS.outlineHeadings && s.outline.words > 100));
+  // The first two readable pages of the search (two different sites) keep an outline; later pages keep none.
+  assert.equal(on.b.sources.length, 3);
+  assert.ok(on.b.sources.slice(0, SEARCH_CAPS.outlinePerQuery).every((s) => s.outline && s.outline.headings.length <= SEARCH_CAPS.outlineHeadings && s.outline.words > 100));
+  assert.ok(on.b.sources.slice(SEARCH_CAPS.outlinePerQuery).every((s) => !('outline' in s)));
   assert.deepEqual(on.b.sources[1]!.outline!.headings, ['How deposit rules works', 'Common mistakes']);
 });
 

@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import {gunzipSync,inflateSync,brotliDecompressSync} from 'node:zlib';
 import { pageOutline, parseHtmlPage } from './html.js';
-import { SEARCH_CAPS } from './search-requirements.js';
+import { registrableHost, SEARCH_CAPS } from './search-requirements.js';
 import { topicTokens } from './dedupe.js';
 import { sameSite } from './inventory.js';
 import type { FetchTransport } from './safe-fetch.js';
@@ -293,7 +293,7 @@ export async function researchQueries(input: {
   // receipts are available, so earlier pages are not fetched on every poll.
   for(const {query,hits} of batches) {
     let kept = 0;
-    let outlined = 0;
+    const outlinedHosts = new Set<string>();
     // Prefer primary sources first within each query.
     const ordered = [...hits].sort((a, b) => Number(isPrimarySource(b.url, input.brandWebsite)) - Number(isPrimarySource(a.url, input.brandWebsite)));
     for (const hit of ordered) {
@@ -319,10 +319,13 @@ export async function researchQueries(input: {
         const text = (parsed ? parsed.text : rawText).replace(/\u0000/gu,' ');
         const passage = supportingPassage(text, query);
         if (passage.length < 60) { notes.push(`${key} had no usable text.`); continue; }
-        // Keyword-first only: the first readable pages of EACH search keep their outline (same bytes, nothing fetched).
-        const outline = input.captureOutlines && parsed && outlined < SEARCH_CAPS.outlinePerQuery && sources.filter((x) => x.outline).length < SEARCH_CAPS.outlinePages
+        // Keyword-first only: the first readable pages of EACH search keep their outline (same bytes, nothing fetched),
+        // from different sites and never the business's own (its headings are not "what top results cover").
+        const site = registrableHost(key);
+        const outline = input.captureOutlines && parsed && site && outlinedHosts.size < SEARCH_CAPS.outlinePerQuery && !outlinedHosts.has(site)
+          && !(input.brandWebsite && sameSite(key, input.brandWebsite)) && sources.filter((x) => x.outline).length < SEARCH_CAPS.outlinePages
           ? pageOutline(rawText.replace(/\u0000/gu, ' '), SEARCH_CAPS.outlineHeadings, SEARCH_CAPS.outlineHeadingChars, SEARCH_CAPS.outlineMaxHtml) : null;
-        if (outline) outlined++;
+        if (outline && site) outlinedHosts.add(site);
         sources.push({
           id: randomUUID(),
           url: key,

@@ -38,14 +38,16 @@ export const SEARCH_CAPS = Object.freeze({
   links: 3,
   linkChars: 200,
   /**
-   * Research capture. Outlines are kept for the first `outlinePerQuery` readable pages of EACH search (research reads
-   * at most four per search and runs at most eight searches), so every measured phrase can get topics, at most
-   * `outlinePages` in all. Per page: `outlineHeadings` headings of at most `outlineHeadingChars` characters. A page over
-   * `outlineMaxHtml` characters keeps no outline (an ordinary article page is well under it). Worst case stored:
-   * 24 x 12 x 100 = 28,800 characters per plan.
+   * Research capture. Outlines are kept for the first `outlinePerQuery` readable pages of EACH search, from different
+   * sites and never the business's own (research reads at most four pages per search and runs at most eight searches),
+   * so every measured phrase whose search returned pages can get topics; two is the least the two-site rule for topics
+   * can use. `outlinePages` = 8 searches x 2, so the total cap never cuts a later search short; it only bounds storage.
+   * Per page (unchanged): `outlineHeadings` headings of at most `outlineHeadingChars` characters. A page over
+   * `outlineMaxHtml` characters keeps no outline (an ordinary article page is well under it; the fetch limit is 1.5 MB).
+   * Worst case stored: 16 x 12 x 100 = 19,200 characters per plan (was 12 pages, 14,400).
    */
-  outlinePerQuery: 3,
-  outlinePages: 24,
+  outlinePerQuery: 2,
+  outlinePages: 16,
   outlineHeadings: 12,
   outlineHeadingChars: 100,
   outlineMaxHtml: 1_000_000,
@@ -158,7 +160,7 @@ const INSTRUCTION_LIKE: readonly RegExp[] = [
  */
 export function cleanPhrase(raw: unknown, max: number, excluded: readonly unknown[] = []): string | null {
   if (typeof raw !== 'string' || raw.length > 4 * max) return null;
-  const text = tidy(raw);
+  const text = tidy(decodeVisible(raw));
   if (text.length < 2 || text.length > max || !/\p{L}/u.test(text)) return null;
   if (mentionsExclusion(text, excluded)) return null;
   return text;
@@ -169,17 +171,27 @@ export function cleanPhrase(raw: unknown, max: number, excluded: readonly unknow
  * then refused when it carries a web address or reads like an instruction to the writer. Checked before and after
  * markup is removed, so a fence or template marker cannot hide one.
  */
+/**
+ * Entities decoded (twice at most, so a double-encoded one cannot hide) with invisible characters removed before and
+ * after, so "Ig&#8203;nore" reads as "Ignore" and "pro&shy;tection" as "protection".
+ */
+function decodeVisible(raw: string): string {
+  let s = stripInvisible(raw.normalize('NFKC'));
+  for (let i = 0; i < 2 && /&(?:#x[0-9a-f]+|#\d+|[a-z]+);/i.test(s); i++) s = stripInvisible(decodeEntities(s.replace(/&(?:shy|zwj|zwnj|lrm|rlm);/gi, '')).normalize('NFKC'));
+  return s;
+}
+
 export function cleanSearchText(raw: unknown, max: number, excluded: readonly unknown[] = []): string | null {
   if (typeof raw !== 'string' || raw.length > 4 * max) return null;
-  // Entities decoded and accents folded for the look-up only, so "evil&#46;example" or "Ignóre previous instructions" cannot hide.
-  const decoded = decodeEntities(stripInvisible(raw.normalize('NFKC')));
+  // Entities decoded and accents folded for the look-up, so "evil&#46;example" or "Ignóre previous instructions" cannot hide.
+  const decoded = decodeVisible(raw);
   const folded = decoded.normalize('NFKD').replace(/\p{M}/gu, '');
   const hostile = (s: string) => ADDRESS_LIKE.some((re) => re.test(s)) || INSTRUCTION_LIKE.some((re) => re.test(s));
   // A role marker on any line, before lines are joined.
   if (folded.split(/[\r\n]+/).some((line) => hostile(line.replace(/\s+/gu, ' ').trim())) || hostile(folded.replace(/\s+/gu, ' '))) return null;
   // A word mixing Latin with Cyrillic or Greek letters is a look-alike spelling.
   if (folded.split(/[^\p{L}]+/u).some((w) => /\p{Script=Latin}/u.test(w) && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(w))) return null;
-  const text = tidy(raw);
+  const text = tidy(decoded);
   if (text.length < 3 || text.length > max || !/\p{L}.*\p{L}/u.test(text)) return null;
   if (hostile(text) || mentionsExclusion(text, excluded)) return null;
   return text;
@@ -348,15 +360,33 @@ export function searchRequirements(input: {
     const internal_links = dedupe(list(input.brief.internalLinks).filter((l): l is string => typeof l === 'string' && /^https:\/\/[^\s<>"]+$/.test(l) && l.length <= SEARCH_CAPS.linkChars && linkable.has(l))).slice(0, SEARCH_CAPS.links);
     const length = lengthBand(pages, preference);
     const skip = [primary, ...list(input.brief.outline).filter((x): x is string => typeof x === 'string')];
-    return {
+    return withinBytes({
       primary_phrase: primary, natural_variants, secondary_phrases, questions_to_answer,
       topics_top_results_cover: commonTopics(pages, skip, ex, input.brandWebsite ?? null),
       length, phrase_use_limit: phraseUseLimit(primary, length.min_words, preference),
       internal_links,
-    };
+    });
   } catch {
     return null;
   }
+}
+
+/**
+ * Keep the block under SEARCH_CAPS.requirementsBytes (as JSON, UTF-8), so the exact block the writer is given can be
+ * stored whole on the version. English text at every cap is about 2,900 bytes; wide characters can go over, and then
+ * the last topics, then questions, secondary phrases, variants and links are left out, in that order, until it fits.
+ * The writer is given the trimmed block, so what is stored is always what was sent.
+ */
+function withinBytes(r: SearchRequirements): SearchRequirements {
+  const size = (x: SearchRequirements) => Buffer.byteLength(JSON.stringify(x), 'utf8');
+  let out = r;
+  const order = ['topics_top_results_cover', 'questions_to_answer', 'secondary_phrases', 'natural_variants', 'internal_links'] as const;
+  while (size(out) > SEARCH_CAPS.requirementsBytes) {
+    const key = order.find((k) => out[k].length > 0);
+    if (!key) break;
+    out = { ...out, [key]: out[key].slice(0, -1) };
+  }
+  return out;
 }
 
 export function requirementsSha(r: SearchRequirements): string {

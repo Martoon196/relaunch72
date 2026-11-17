@@ -1535,13 +1535,17 @@ export class SeoBlogEngine {
     } catch { /* An internal note must never stop writing. */ }
   }
 
-  /** The current Google titles of the business's other articles (a chosen title must not repeat one). */
+  /**
+   * The current Google titles of the business's other articles (a chosen title must not repeat one). Store reads only;
+   * a read that fails gives fewer titles, never a failed write.
+   */
   private async takenSeoTitles(brandId: string, articleId: string): Promise<string[]> {
     const titles: string[] = [];
-    for (const a of await this.store.listArticles(brandId)) {
+    const articles = await this.store.listArticles(brandId).catch(() => [] as Article[]);
+    for (const a of articles) {
       if (a.id === articleId || !a.currentVersionId) continue;
       const v = await this.store.getVersion(brandId, a.currentVersionId).catch(() => null);
-      if (v && typeof v.body.seoTitle === 'string' && v.body.seoTitle.trim()) titles.push(v.body.seoTitle);
+      if (v && typeof v.body?.seoTitle === 'string' && v.body.seoTitle.trim()) titles.push(v.body.seoTitle);
     }
     return titles;
   }

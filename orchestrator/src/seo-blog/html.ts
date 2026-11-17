@@ -180,13 +180,16 @@ export function parseHtmlPage(html: string, baseUrl: string): ParsedPage {
  */
 export function pageOutline(html: string, maxHeadings = 12, maxChars = 100, maxHtml = 1_000_000): { headings: string[]; words: number } | null {
   if (typeof html !== 'string' || html.length > maxHtml) return null;
-  const lower = html.toLowerCase();
+  const lower = asciiLower(html);
   const region = (tag: string, from: number): [number, number] | null => {
-    const open = lower.indexOf(`<${tag}`, from);
-    if (open < 0) return null;
-    const after = lower.charCodeAt(open + tag.length + 1);
-    // "<main" must be the whole tag name ("<mainly" is not it).
-    if (!(after === 62 || after === 32 || after === 9 || after === 10 || after === 13 || after === 47)) return region(tag, open + 1);
+    let open = lower.indexOf(`<${tag}`, from);
+    // "<main" must be the whole tag name ("<mainly" is not it). A loop, not recursion, so many look-alikes cannot overflow the stack.
+    for (;;) {
+      if (open < 0) return null;
+      const after = lower.charCodeAt(open + tag.length + 1);
+      if (after === 62 || after === 32 || after === 9 || after === 10 || after === 13 || after === 47 || after === 12) break;
+      open = lower.indexOf(`<${tag}`, open + 1);
+    }
     const gt = lower.indexOf('>', open);
     if (gt < 0) return null;
     const close = lower.indexOf(`</${tag}`, gt);
@@ -209,7 +212,7 @@ export function pageOutline(html: string, maxHeadings = 12, maxChars = 100, maxH
   const text = plainText(main);
   const words = Math.min(200_000, (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length);
   if (words < 150) return null;
-  const lowerMain = main.toLowerCase();
+  const lowerMain = asciiLower(main);
   const headings: string[] = [];
   // Next-occurrence positions are cached and every look-ahead is windowed, so no step rescans the rest of the page.
   let next2 = lowerMain.indexOf('<h2'), next3 = lowerMain.indexOf('<h3');
@@ -233,8 +236,13 @@ export function pageOutline(html: string, maxHeadings = 12, maxChars = 100, maxH
 }
 
 /** Text of an HTML fragment by a single linear scan: tags dropped, script/style/template/svg/noscript content skipped, entities decoded. */
+/** ASCII letters lowered only, so every index into the result is an index into the original ("İ".toLowerCase() is two code units). */
+function asciiLower(s: string): string {
+  return s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+}
+
 function plainText(fragment: string): string {
-  const lower = fragment.toLowerCase();
+  const lower = asciiLower(fragment);
   let out = '';
   let i = 0;
   while (i < fragment.length) {
