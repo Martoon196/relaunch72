@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { openTestDatabase, ownerQuery, resetIdentityTables, testDatabaseSkipReason } from './database-helper.js';
 import { MhpSequenceService, PgMhpSequenceRepository } from '../../src/mhp/followup-sequence-service.js';
 import { MhpCommerceError } from '../../src/mhp/commerce-service.js';
-import { FOLLOWUP_NO_AUDIENCE_LINE } from '../../src/followup-sequences/audience.js';
+import { FOLLOWUP_NO_AUDIENCE_LINE, FOLLOWUP_NO_AUDIENCE_RESUME } from '../../src/followup-sequences/audience.js';
 import { FOLLOWUP_SEQUENCE_MIME } from '../../src/followup-sequences/definition.js';
 import type { CompanyContentExactReview } from '../../src/company-content-pg/index.js';
 
@@ -120,8 +120,8 @@ test('sequence safety against the real MHP sequence functions', { skip, timeout:
     await pools.r72_identity_command!.query('SELECT app_private.mhp_sequence_command($1,$2,$3,$4,$5,$6,$7,$8) AS value',
       [Buffer.from(await sha256(TOKEN)), 'enrol', randomUUID(), B.version, CAMPAIGN, null, null, 'seq-safety-legacy-b']);
     const afterB = await runs(owner); assert.equal(afterB.filter(r => r.sequence_item_id === B.item).length, 5);
-    // B is now "used with the webinar": the legacy rule classifies it as webinar sign-ups.
-    assert.equal((await service.startPlan(identity, randomUUID(), B.item, B.version)).audience.origin, 'legacy_runs');
+    // Having people in it does not make a pre-release sequence a webinar sequence: B stays "none yet".
+    { const plan = await service.startPlan(identity, randomUUID(), B.item, B.version); assert.equal(plan.audience.origin, 'legacy_none'); assert.equal(plan.refusal?.code, 'no_audience'); }
 
     // Pause one person; a stale second press is reported as already paused.
     const first = afterB.find(r => r.sequence_item_id === A.item)!;
@@ -144,10 +144,41 @@ test('sequence safety against the real MHP sequence functions', { skip, timeout:
     assert.equal('kind' in bad && bad.kind, 'changed');
     const resumed = await service.resumeAll(identity, randomUUID(), { commandId: randomUUID(), itemId: A.item, versionId: A.version, count: resume.people.length, digest: resume.digest });
     assert.equal('changed' in resumed && resumed.changed, 5);
-    assert.ok((await runs(owner)).every(r => r.state === 'active'));
+    assert.ok((await runs(owner)).filter(r => r.sequence_item_id === A.item).every(r => r.state === 'active'));
     // No send work was claimed or prepared by any of this.
     const sends = await ownerQuery<{ n: number }>(owner, 'SELECT count(*)::int AS n FROM app_private.mhp_marketing_sends WHERE sequence_run_id IS NOT NULL AND (sent_at IS NOT NULL OR lease_until IS NOT NULL)');
     assert.equal(sends[0]!.n, 0);
+
+    // The production incident shape on B: a pre-release sequence enrolled by the old one-press command, everyone
+    // then paused (pausing stays allowed), and new webinar sign-ups since.
+    const pausedB = await service.pauseAll(identity, randomUUID(), { commandId: randomUUID(), itemId: B.item, versionId: B.version });
+    assert.equal(pausedB.changed, 5);
+    await ownerQuery(owner, `DO $new$ DECLARE n integer; p uuid; BEGIN FOR n IN 10..11 LOOP p:=('5afe5000-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid;
+      INSERT INTO app_private.mhp_prospects(id,email,first_name,marketing_consent,consent_version,consent_at) VALUES(p,'reader-'||n||'@example.invalid','Reader '||n,true,'seq-safety-v1',clock_timestamp());
+      INSERT INTO app_private.mhp_prospect_signups(prospect_id,kind,label,link,consent_given,consent_version,created_at) VALUES(p,'webinar','Before You Buy live webinar','https://martinhowardproperty.co.uk/webinar/',true,'seq-safety-v1',clock_timestamp()-interval '2 minutes');
+      INSERT INTO app_private.mhp_marketing_sends(prospect_id,template_key,campaign_key,context,due_at,expires_at,created_at) VALUES(p,'webinar_confirm','${CAMPAIGN}','{}',clock_timestamp()-interval '1 minute',clock_timestamp()+interval '1 day',clock_timestamp()-interval '1 minute');
+      END LOOP; END $new$`);
+    const bRuns = async () => (await runs(owner)).filter(r => r.sequence_item_id === B.item);
+    const planB = await service.startPlan(identity, randomUUID(), B.item, B.version);
+    assert.equal(planB.ready, false); assert.equal(planB.refusal?.message, FOLLOWUP_NO_AUDIENCE_LINE); assert.equal(planB.recipients.length, 0);
+    const base = { itemId: B.item, versionId: B.version };
+    await assert.rejects(service.start(identity, randomUUID(), { ...base, commandId: randomUUID(), count: 2, digest: 'a'.repeat(64), people: '', confirmed: true }), { status: 409 });
+    await assert.rejects(service.command(identity, randomUUID(), { ...base, action: 'enrol', commandId: randomUUID(), runId: '', ackProofId: '' }), { status: 409 });
+    await assert.rejects(service.command(identity, randomUUID(), { ...base, action: 'resume', commandId: randomUUID(), runId: '', ackProofId: '' }), { status: 409, message: FOLLOWUP_NO_AUDIENCE_RESUME });
+    const resumeB = await service.resumePlan(identity, randomUUID(), B.item, B.version); assert.equal(resumeB.ready, false); assert.equal(resumeB.refusal, FOLLOWUP_NO_AUDIENCE_RESUME);
+    await assert.rejects(service.resumeAll(identity, randomUUID(), { ...base, commandId: randomUUID(), count: 5, digest: 'a'.repeat(64) }), { status: 409 });
+    const someone = (await bRuns())[0]!;
+    assert.equal((await service.personAction(identity, randomUUID(), { ...base, action: 'resume', commandId: randomUUID(), runId: someone.id, ackProofId: '' })).code, 'no_audience');
+    assert.equal((await bRuns()).length, 5); assert.ok((await bRuns()).every(r => r.state === 'paused'));
+    assert.ok(!(await runs(owner)).some(r => ['reader-10@example.invalid', 'reader-11@example.invalid'].includes(r.email)), 'no new sign-up enrolled');
+    // The real worker claim (0128 claim_v2, as the dispatch worker calls it) leases nothing for B. It may lease A's active people; nothing is prepared or sent.
+    await pools.r72_identity_command!.query('SELECT app_private.mhp_sequence_claim_v2(25,120,NULL) AS value');
+    const claimedB = await ownerQuery<{ n: number }>(owner, `SELECT count(*)::int AS n FROM app_private.mhp_marketing_sends s JOIN app_private.mhp_followup_runs r ON r.id=s.sequence_run_id
+      WHERE r.sequence_item_id='${B.item}' AND (s.lease_until IS NOT NULL OR s.sent_at IS NOT NULL)`);
+    assert.equal(claimedB[0]!.n, 0);
+    // Stop everyone works and is final.
+    const stoppedB = await service.stopAll(identity, randomUUID(), { ...base, commandId: randomUUID() });
+    assert.equal(stoppedB.changed, 5); assert.ok((await bRuns()).every(r => r.state === 'stopped'));
   } finally {
     const client = await owner.connect();
     try { for (const role of ROLES) await client.query(`ALTER ROLE ${role} PASSWORD NULL`); } finally { client.release(); }

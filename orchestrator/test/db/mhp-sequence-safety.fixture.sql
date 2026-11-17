@@ -10,6 +10,9 @@ DECLARE
  owner_id constant uuid:='5afe4000-0000-4000-8000-000000000001'; campaign constant text:='webinar-2026-11-03';
  email_item constant uuid:='5afe4000-0000-4000-8000-000000000010'; email_version constant uuid:='5afe4000-0000-4000-8000-000000000011';
  brand jsonb; canonical text; sha bytea; manifest text; n integer; prospect uuid; seq record; d jsonb; local jsonb;
+ -- One timestamp for every attestation window: two separate clock_timestamp() calls can straddle the
+ -- 15-minute guard of migration 0049 and fail the load at random.
+ at constant timestamptz:=clock_timestamp();
 BEGIN
  IF EXISTS(SELECT 1 FROM app.workspaces WHERE id=ws) THEN RAISE EXCEPTION 'Fresh disposable MHP fixture required'; END IF;
  PERFORM set_config('app.workspace_id',ws::text,true); PERFORM set_config('app.user_id',owner_id::text,true);
@@ -49,7 +52,7 @@ BEGIN
  INSERT INTO app.company_content_source_attestations(workspace_id,content_item_id,content_version_id,source_system,source_item_id,source_version,
   content_sha256,blob_sha256,brand_sha256,source_catalog_sha256,checked_at,expires_at,attested_by_user_id,attested_request_id)
  VALUES(ws,email_item,email_version,'mhp.owner-email','owner-email:'||email_item,'edit:'||email_version,sha,sha,decode(brand->>'sha256','hex'),public.digest(manifest,'sha256'),
-  clock_timestamp(),clock_timestamp()+interval '15 minutes',owner_id,'mhp-seq-safety-fixture');
+  at,at+interval '15 minutes',owner_id,'mhp-seq-safety-fixture');
  INSERT INTO app.company_content_approval_requests(id,workspace_id,content_item_id,content_version_id,content_sha256,request_number,requested_by_user_id,requested_request_id)
  VALUES('5afe4000-0000-4000-8000-000000000012',ws,email_item,email_version,sha,1,owner_id,'mhp-seq-safety-fixture');
  INSERT INTO app.company_content_approval_decisions(workspace_id,content_item_id,content_version_id,approval_request_id,content_sha256,decision,decided_by_user_id,decided_request_id)
@@ -84,7 +87,7 @@ BEGIN
   INSERT INTO app.company_content_source_attestations(workspace_id,content_item_id,content_version_id,source_system,source_item_id,source_version,
    content_sha256,blob_sha256,brand_sha256,source_catalog_sha256,checked_at,expires_at,attested_by_user_id,attested_request_id)
   VALUES(ws,seq.item,seq.version,'mhp.followup-sequence','sequence:'||seq.item,'edit:'||seq.version,public.digest(canonical,'sha256'),public.digest(canonical,'sha256'),
-   decode(brand->>'sha256','hex'),public.digest(manifest,'sha256'),clock_timestamp(),clock_timestamp()+interval '15 minutes',owner_id,'mhp-seq-safety-fixture');
+   decode(brand->>'sha256','hex'),public.digest(manifest,'sha256'),at,at+interval '15 minutes',owner_id,'mhp-seq-safety-fixture');
   INSERT INTO app.company_content_approval_requests(id,workspace_id,content_item_id,content_version_id,content_sha256,request_number,requested_by_user_id,requested_request_id)
   VALUES(seq.request,ws,seq.item,seq.version,public.digest(canonical,'sha256'),1,owner_id,'mhp-seq-safety-fixture');
   INSERT INTO app.company_content_approval_decisions(workspace_id,content_item_id,content_version_id,approval_request_id,content_sha256,decision,decided_by_user_id,decided_request_id)
