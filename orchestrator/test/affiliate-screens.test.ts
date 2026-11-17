@@ -19,6 +19,7 @@ import { readAmazonTrackingReport } from '../src/affiliate/amazon-tracking-repor
 import { cleanDisplay, productSnapshot } from '../src/affiliate/article.js';
 import { programmeFor } from '../src/affiliate/programmes.js';
 import { renderArticleFragment } from '../src/seo-blog/publishers/content-api.js';
+import { renderArticlePage } from '../src/seo-blog/render.js';
 import type { Brand } from '../src/seo-blog/types.js';
 import { harness, OWNER, seedBrandSite, type Harness } from './seo-blog-fixtures.js';
 
@@ -182,7 +183,8 @@ test('a product article: one brief composed in code, written by the existing eng
   // No social drafts for a product article.
   assert.ok(!s.h.llm.calls.includes('SEO_BLOG_SOCIAL'));
   // Every renderer: the disclosure first, each product's button after its part, the stored address exactly.
-  const page = await s.engine.preview(OWNER, s.brand.id, article.id);
+  // (The portal's preview shows the buttons as words only: review N2, tested in affiliate-fixes.test.ts.)
+  const page = renderArticlePage(version.body, { siteName: 'Harbour Lettings', canonicalUrl: `${SITE}/blog/x/`, blogIndexUrl: `${SITE}/blog/`, locale: 'en-GB', publishedAt: '2026-11-02T10:00:00.000Z', articleId: article.id, versionId: version.id, contentSha: version.contentSha });
   const fragment = renderArticleFragment({ body: version.body } as never, `${SITE}/x`);
   for (const html of [page, fragment]) {
     assert.match(html, /<p class="r72-disclosure"><strong>Ad\.<\/strong> This article contains affiliate links\.[^<]*As an Amazon Associate I earn from qualifying purchases\.<\/p>/);
@@ -304,14 +306,14 @@ test('Products inside Articles, Write, the details card in Settings and what Ama
   // A short link is refused in one sentence.
   let r = await call(svc, id, 'POST', `${base}/products`, { form: [['link', 'https://amzn.to/abc'], ['registeredSite', 'harbour.example'], ['siteListed', '1'], ['accountMine', '1']] });
   assert.equal(r.isError, true); assert.match(r.notice, /Short links cannot be used/);
-  // The first product: the tracking ID is read from the link; the details are saved with it.
-  r = await call(svc, id, 'POST', `${base}/products`, { form: [['commandId', randomUUID()], ['link', 'https://www.amazon.co.uk/Wind-Up-Torch-Lantern/dp/B0TORCH001?tag=harbour-21&ref=x'], ['registeredSite', 'harbour.example'], ['siteListed', '1'], ['accountMine', '1'], ['ownerUsed', '1'], ['notes', 'We keep two.\u202E']] });
-  assert.equal(r.isError, false, r.notice); assert.equal(r.notice, 'Product added.');
+  // The first product: the tracking ID the owner types is saved with it (never one read from the link: review M3).
+  r = await call(svc, id, 'POST', `${base}/products`, { form: [['commandId', randomUUID()], ['link', 'https://www.amazon.co.uk/Wind-Up-Torch-Lantern/dp/B0TORCH001?tag=harbour-21&ref=x'], ['trackingId', 'harbour-21'], ['registeredSite', 'harbour.example'], ['siteListed', '1'], ['accountMine', '1'], ['ownerUsed', '1'], ['notes', 'We keep two.\u202E']] });
+  assert.equal(r.isError, false, r.notice); assert.equal(r.notice, 'Product added. Your tracking ID “harbour-21” is saved, and every link uses it.');
   assert.equal(aff.settings_!.trackingId, 'harbour-21');
   assert.equal(aff.products_[0]!.productName, 'Wind Up Torch Lantern', 'the name suggested from the address');
   for (const [i, n] of [[1, 'Battery radio'], [2, '<script>alert(1)</script> Water carrier\u202E']] as const) {
     r = await call(svc, id, 'POST', `${base}/products`, { form: [['commandId', randomUUID()], ['link', `https://www.amazon.co.uk/dp/${ASIN[i]}`], ['productName', n]] });
-    assert.equal(r.isError, r.notice !== 'Product added.', r.notice);
+    assert.equal(r.isError, !r.notice.startsWith('Product added.'), r.notice);
   }
   page = await call(svc, id, 'GET', `${base}/products`);
   const m = main(page.body);
@@ -353,7 +355,8 @@ test('Products inside Articles, Write, the details card in Settings and what Ama
   assert.match(report.body, /Amazon&#39;s report for October 2026|Amazon's report for October 2026/);
   assert.match(visible(report.body), /harbour-21 412 9 8 £23\.40 Not tied to a tracking ID 3 0 0 £0\.50/);
   results = await call(svc, id, 'GET', `${base}/results`);
-  assert.match(visible(results.body), /Clicks counted by Amazon 415 · Earnings £23\.90/);
+  // The saved tracking ID's own row is the headline, not the whole file (review S4).
+  assert.match(visible(results.body), /Your tracking ID harbour-21 : Clicks counted by Amazon 412 · Earnings £23\.40/);
   assert.doesNotMatch(visible(main(results.body)), /rate|per article|conversion/i);
   // A damaged file is refused in one sentence.
   r = await call(svc, id, 'POST', `${base}/results/report`, { multipart: { fields: [['month', '2026-10']], file: { name: 'x.csv', data: 'hello' } } });
