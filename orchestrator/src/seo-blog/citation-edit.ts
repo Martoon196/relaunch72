@@ -113,8 +113,11 @@ export interface RestoredText {
   readonly notRestored: number;
 }
 
-/** Anything that looks like a citation marker, as typed or pasted by the owner. */
-const TYPED = /[ \t]*\[src:[^\]\n]*\]/gi;
+/**
+ * Anything that looks like a citation marker, as typed or pasted by the owner, with the spaces before it. A match only
+ * starts at the first space of a run (or at the marker), so a long run of spaces is scanned once, not once per space.
+ */
+const TYPED = /(?<![ \t])[ \t]*\[src:[^\]\n]*\]/gi;
 
 /**
  * `previous` is the version saved before `stored` (when there is one): a sentence the owner changes back to exactly

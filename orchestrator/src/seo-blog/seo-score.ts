@@ -563,6 +563,8 @@ const listItems = (markdown: string) => blocks(markdown).items;
 const NEVER_END = /\b(?:e\.g|i\.e|mr|mrs|ms|dr|st|vs|cf)\.$/i;
 /** The end of a sentence only when a capital letter follows ("etc. Then", "the U.K. Then"). */
 const END_IF_CAPITAL = /(?:\b(?:etc|approx|inc|ltd|co)|\b(?:[a-z]\.){1,}[a-z])\.$/i;
+/** Characters before a full stop that the patterns above and below can need (the longest is "approx." and a boundary). */
+const ABBREVIATION_WINDOW = 24;
 /** "No. 5" is a number; "The answer is no. Then" is a sentence end. */
 const NUMBER_ABBREVIATION = /\bno\.$/i;
 /** Sentences of a paragraph: split after . ! ? (and runs of them) followed by a space, except after abbreviations. */
@@ -572,8 +574,12 @@ export function sentences(paragraph: string): string[] {
   const text = paragraph.replace(/\s+/g, ' ').trim();
   for (const m of text.matchAll(/[.!?]+["”’)\]]*(?=\s|$)/g)) {
     const end = m.index! + m[0].length;
-    const before = text.slice(start, m.index! + 1);
-    const after = text.slice(end).trimStart();
+    // The abbreviation patterns look only at the last few characters, and the next sentence only at its first few,
+    // so each full stop is judged on a short window, not on everything before or after it (a long run of "No. 5"
+    // would otherwise be read over again at every full stop). The window is longer than any match and the word
+    // boundary before it, so it decides exactly as the whole text would.
+    const before = text.slice(Math.max(start, m.index! + 1 - ABBREVIATION_WINDOW), m.index! + 1);
+    const after = text.slice(end, end + 8).trimStart();
     if (m[0][0] === '.' && m[0].length === 1) {
       if (NEVER_END.test(before)) continue;
       if (END_IF_CAPITAL.test(before) && after && !/^["“‘'(]?\p{Lu}/u.test(after)) continue;
