@@ -21,6 +21,7 @@ import { EMAIL_CONNECTION_CHECKSUM, EMAIL_CONNECTION_MIGRATION } from '../../src
 import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src/db/email-protection-schema.js';
 import { EMAIL_ALLOWLIST_CHECKSUM, EMAIL_ALLOWLIST_MIGRATION } from '../../src/db/email-allowlist-schema.js';
 import { AFFILIATE_CHECKSUM, AFFILIATE_MIGRATION } from '../../src/db/affiliate-schema.js';
+import { MHP_BOOK_CRM_CHECKSUM, MHP_BOOK_CRM_MIGRATION } from '../../src/db/mhp-book-crm-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -637,13 +638,15 @@ test('"Connect email" allow-list (157) cutover requires the exact applied releas
 });
 
 test('Affiliate Studio data layer (158) cutover requires the exact applied allow-list (157) and release 2 (156), and nothing beyond it', async()=>{
-  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  // The exact 158-file Affiliate Studio release, reconstructed from today's source (159 is a separate release).
+  const all=(await discoverMigrations()).slice(0,158).map(({filename,checksum})=>({filename,checksum}));
+  const releaseDir=await prefixDirectory(158,'affiliate158-cutover');
   assert.equal(all.length,158);
   assert.deepEqual(all[157],{filename:AFFILIATE_MIGRATION,checksum:AFFILIATE_CHECKSUM});
   assert.deepEqual(all[156],{filename:EMAIL_ALLOWLIST_MIGRATION,checksum:EMAIL_ALLOWLIST_CHECKSUM});
   assert.deepEqual(all[155],{filename:EMAIL_PROTECTION_MIGRATION,checksum:EMAIL_PROTECTION_CHECKSUM});
   const through157=all.slice(0,157), affiliate=all[157]!;
-  const capable=(rows:typeof all,dir?:string)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
+  const capable=(rows:typeof all,dir:string=releaseDir)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
   // Exactly 0158 pending, or applied: ready.
   await capable(through157); await capable(all);
   // Two pending (0157 and 0158): not ready.
@@ -675,6 +678,59 @@ test('Affiliate Studio data layer (158) cutover requires the exact applied allow
   await capable(through157,crlf);
   // The pinned identity is the file's real sha-256.
   assert.equal(createHash('sha256').update(sql,'utf8').digest('hex'),AFFILIATE_CHECKSUM);
+});
+
+test('book trigger retirement (159) cutover requires the exact applied Affiliate Studio data layer (158) and allow-list (157), and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,159);
+  assert.deepEqual(all[158],{filename:MHP_BOOK_CRM_MIGRATION,checksum:MHP_BOOK_CRM_CHECKSUM});
+  assert.deepEqual(all[157],{filename:AFFILIATE_MIGRATION,checksum:AFFILIATE_CHECKSUM});
+  assert.deepEqual(all[156],{filename:EMAIL_ALLOWLIST_MIGRATION,checksum:EMAIL_ALLOWLIST_CHECKSUM});
+  const through158=all.slice(0,158), retire=all[158]!;
+  const capable=(rows:typeof all,dir?:string)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
+  // Exactly 0159 pending (the code goes out first), or applied: ready.
+  await capable(through158); await capable(all);
+  // Two pending (0158 and 0159): not ready.
+  await assert.rejects(capable(all.slice(0,157)),/schema is behind by 2/);
+  // 0159 applied with another checksum, or out of order: not ready.
+  await assert.rejects(capable([...through158,{...retire,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,157),retire]),/not a contiguous prefix|behind/);
+  // 0158 or 0157 not exactly as released: not ready.
+  await assert.rejects(capable([...through158.slice(0,157),{...through158[157]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...through158.slice(0,156),{...through158[156]!,checksum:'0'.repeat(64)},through158[157]!]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0160_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // A build whose 0159 file was renamed, or changed by one byte, is not admitted while it is pending.
+  const source=await discoverMigrations();
+  const variant=async(label:string,name:string,sql:string)=>{
+    const dir=await mkdtemp(path.join(tmpdir(),`r72-book159-${label}-`));
+    await Promise.all(source.slice(0,158).map(m=>writeFile(path.join(dir,m.filename),m.sql,'utf8')));
+    await writeFile(path.join(dir,name),sql,'utf8');
+    return dir;
+  };
+  const sql=source[158]!.sql;
+  const renamed=await variant('renamed','0159_mhp_book_crm_v2.sql',sql);
+  await assert.rejects(capable(through158,renamed),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm_v2\.sql/);
+  const altered=await variant('altered',MHP_BOOK_CRM_MIGRATION,sql.replace('SET LOCAL lock_timeout=\'5s\';','SET LOCAL lock_timeout=\'6s\';'));
+  await assert.rejects(capable(through158,altered),/schema is behind by 1 migration\(s\); first pending: 0159_mhp_book_crm\.sql/);
+  const extraByte=await variant('byte',MHP_BOOK_CRM_MIGRATION,sql+' ');
+  await assert.rejects(capable(through158,extraByte),/schema is behind by 1/);
+  const crlf=await variant('crlf',MHP_BOOK_CRM_MIGRATION,sql.replace(/\n/g,'\r\n'));
+  await capable(through158,crlf);
+  assert.equal(createHash('sha256').update(sql,'utf8').digest('hex'),MHP_BOOK_CRM_CHECKSUM);
+});
+
+test('Affiliate Studio 158 binary stays ready after the exact book trigger retirement (159) and nothing else', async()=>{
+  const directory=await prefixDirectory(158,'affiliate158-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,158);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[158]!]);
+  await assert.rejects(check([...rows,{...all[158]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0159_mhp_book_crm_v2.sql',checksum:MHP_BOOK_CRM_CHECKSUM}]),/migration not present/);
+  await assert.rejects(check([...rows,all[158]!,{filename:'0160_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // The bridge needs the exact 0158 underneath it.
+  await assert.rejects(check([...rows.slice(0,157),{...rows[157]!,checksum:'0'.repeat(64)},all[158]!]),/checksum changed|migration not present/);
 });
 
 test('allow-list 157 binary stays ready after the exact Affiliate Studio data layer (158) and nothing else', async()=>{

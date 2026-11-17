@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PostgresPortalDeps } from '../portal/router.js';
+import { MARKETING_WORKSPACE_FIRST, marketingWorkspaceFirstPage } from './marketing-workspace-view.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
 import { principalAbuseAdmission, sourceAbuseAdmission } from '../portal/abuse.js';
 import { parseCookies } from '../server/admin/session.js';
@@ -112,7 +113,9 @@ export async function handleMhpOwnerEmail(req: IncomingMessage, res: ServerRespo
     const detail = await emails.review(identity, context.requestId, itemId, versionId);
     respond(res, 200, await page({ detail, message }), true);
   } catch (error) {
-    outcome = 'service_error';respond(res, error instanceof MhpCommerceError ? error.status : 503,
+    outcome = 'service_error';
+    if (error instanceof MhpCommerceError && error.message === MARKETING_WORKSPACE_FIRST) { respond(res, error.status, marketingWorkspaceFirstPage(), true); return true; }
+    respond(res, error instanceof MhpCommerceError ? error.status : 503,
       error instanceof MhpCommerceError ? error.message : 'The email editor is temporarily unavailable.');
   } finally { await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome))); }
   return true;
