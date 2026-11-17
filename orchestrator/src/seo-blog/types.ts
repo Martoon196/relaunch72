@@ -437,6 +437,8 @@ export interface ArticleBrief {
   readonly engine?: EngineStamp;
   /** The measured search target this brief answers, its secondary phrases and real searched questions (keyword-first planning). */
   readonly seo?: import('./keyword-planning.js').BriefSeo;
+  /** A product article's products, frozen when the owner asked for it (Affiliate Studio). */
+  readonly products?: import('../affiliate/article.js').BriefProducts;
 }
 
 export interface TopicPlan {
@@ -520,6 +522,8 @@ export interface ArticleBody {
   readonly citations: readonly ArticleSourceCitation[];
   readonly image: FeaturedImage;
   readonly author: BrandAuthor | null;
+  /** Product links and the disclosure (Affiliate Studio): structured, rendered by code, never in the prose. */
+  readonly affiliate?: import('../affiliate/article.js').ArticleAffiliate;
 }
 
 export type VersionChange = 'generated' | 'edited' | 'section_regenerated' | 'regenerated' | 'image_changed' | 'metadata_changed';

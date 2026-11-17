@@ -5,6 +5,8 @@ import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED }
  * actor and brand; access is re-checked on every call.
  */
 
+import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
+import { bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt } from '../stages/prompt.js';
@@ -154,6 +156,11 @@ export interface EngineDeps {
   readonly keywordResearch?: KeywordResearchProvider | null;
   /** Read-only method assignments for the strict setting when the method switch is off (to tell an expected method from none). */
   readonly methodAssignments?: Pick<MethodStore, 'snapshot'>;
+  /**
+   * The business's products and Amazon UK details, read in the signed-in owner's own session (AFFILIATE_STUDIO,
+   * portal only; the worker has none). Null when 0158 is not opened yet or the business is not the session's own.
+   */
+  readonly affiliate?: { read(brandId: string): Promise<{ readonly catalogue: readonly AffiliateProduct[]; readonly settings: ProgrammeSettings | null } | null> };
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
@@ -1559,7 +1566,8 @@ export class SeoBlogEngine {
     const sourceKnowledgeSha=websiteSha(this.knowledgeRefs(await this.activeKnowledge(brandId)));
     const { article: created } = await this.store.createArticle({
       id: randomUUID(), brandId, briefId: brief.id, planId: brief.planId, slug: brief.slug, editorialState: 'writing',
-      currentVersionId: null, requiresApproval: false, approval: null, checks: null, schedule: null, hold: null,
+      // A product article always waits for the owner's approval.
+      currentVersionId: null, requiresApproval: Boolean(brief.products), approval: null, checks: null, schedule: null, hold: null,
       delivery: 'none', publishedVersionId: null, publishedUrl: null, lastAttemptAt: null, publishedAt: null, failure: null,
       createdAt: this.now(), rowVersion: 1,
     });
@@ -1595,7 +1603,7 @@ export class SeoBlogEngine {
     if (brief.status !== 'generating') await this.store.saveBrief({ ...brief, status: 'generating', articleId: article.id });
     if (article.editorialState !== 'writing') article = await this.store.updateArticle({ ...article, editorialState: 'writing' });
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
-    const sources = await this.sourcesForBrief(brandId, brief);
+    const sources = brief.products ? await this.productSources(brand, brief) : await this.sourcesForBrief(brandId, brief);
     const linkable = await this.linkable(brandId);
     let written;
     try {
@@ -1620,7 +1628,10 @@ export class SeoBlogEngine {
       image: previous?.body.image ?? { kind: 'none', url: null, alt: v.image_alt, provenance: 'No image selected yet.', width: null, height: null },
       author: brand.settings.author,
     };
-    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,false,claimedJob);
+    // Product links are bound in code to the part about each product; they are never in the prose.
+    const withLinks: ArticleBody = brief.products ? { ...body, affiliate: bindAffiliate(body.sections, brief.products) } : body;
+    // A product article gets no social drafts in this slice (no model call for them).
+    const version = await this.appendVersion(brand, article, withLinks, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,Boolean(brief.products),claimedJob);
     await this.store.saveBrief({ ...(await this.store.getBrief(brandId, brief.id))!, status: 'generated', articleId: article.id });
     await this.log(brandId, payload.requestedBy ?? 'system', previous ? 'article.regenerated' : 'article.generated', `“${body.title}” ${previous ? 'regenerated' : 'written'} (version ${version.number}).`, article.id);
     await this.queueAutomaticArticleImage(brand, article, version, profile);
@@ -1726,6 +1737,8 @@ export class SeoBlogEngine {
     brand: Brand, article: Article, body: ArticleBody, change: VersionChange, changedSectionId: string | null, actor: string,
     generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string, skipPromotionGeneration=false, claimedJob?:Job,
   ): Promise<ArticleVersion> {
+    // An article with product links gets no social drafts (Affiliate Studio, slice 1): no model call for them.
+    if (body.affiliate?.links.length) skipPromotionGeneration = true;
     const versions = await this.store.listVersions(brand.id, article.id);
     const prior=versions.find((v)=>v.id===article.currentVersionId);
     if(article.publishedUrl&&body.slug!==new URL(article.publishedUrl).pathname.split('/').filter(Boolean).at(-1))throw new SeoBlogError(409,'An already-published article keeps its original slug and URL.');
@@ -2218,6 +2231,16 @@ export class SeoBlogEngine {
       citations: version.body.citations,
       author: brand.settings.author,
     };
+    // Product links are pinned like sources: an edit never sets them, and a deleted part takes its link with it.
+    const { affiliate: _sent, ...rest } = body;
+    const pinned = pruneAffiliate(version.body.affiliate, rest.sections);
+    const edited: ArticleBody = pinned ? { ...rest, affiliate: pinned } : rest;
+    return this.saveEdit(brand, actor, article, version, edited, edit, profile, brief);
+  }
+
+  private async saveEdit(brand: Brand, actor: Actor, article: Article, version: ArticleVersion, body: ArticleBody, edit: Partial<Omit<ArticleBody, 'citations' | 'author'>>, profile: BrandProfile, brief: ArticleBrief): Promise<ArticleVersion> {
+    const brandId = brand.id, articleId = article.id;
+    const sections = edit.sections;
     if (sha256(body) === version.contentSha) return version;
     const onlyMeta = sections === undefined && edit.intro === undefined && edit.conclusion === undefined && edit.faqs === undefined;
     const change: VersionChange = edit.image && Object.keys(edit).length === 1 ? 'image_changed' : onlyMeta ? 'metadata_changed' : 'edited';
@@ -2566,9 +2589,120 @@ export class SeoBlogEngine {
     return result;
   }
 
+  // ─── Product articles (AFFILIATE_STUDIO) ─────────────────────────────────
+
+  /** How many live articles carry product links (read only). */
+  async linkedLiveArticles(actor: Actor, brandId: string): Promise<number> {
+    await this.brandFor(actor, brandId);
+    let n = 0;
+    for (const a of await this.store.listArticles(brandId)) {
+      if (a.delivery !== 'published' || !a.publishedVersionId) continue;
+      if ((await this.store.getVersion(brandId, a.publishedVersionId))?.body.affiliate?.links.length) n++;
+    }
+    return n;
+  }
+
+  /** Whether product articles are offered by this engine (the switch is on and the owner's session can read products). */
+  get productArticlesReady(): boolean { return Boolean(this.deps.affiliate); }
+
+  private async affiliateCatalogue(brandId: string): Promise<{ readonly catalogue: readonly AffiliateProduct[]; readonly settings: ProgrammeSettings | null }> {
+    const read = this.deps.affiliate ? await this.deps.affiliate.read(brandId) : null;
+    if (!read) throw new SeoBlogError(409, 'Products are not available for this business right now.', 'affiliate_unavailable');
+    return read;
+  }
+
+  /** Every link must match the current product and tracking ID before approval; otherwise one press updates them. */
+  private async requireCurrentLinks(brandId: string, affiliate: ArticleAffiliate): Promise<void> {
+    const read = this.deps.affiliate ? await this.deps.affiliate.read(brandId).catch(() => null) : null;
+    if (!read) throw new SeoBlogError(409, 'The product links could not be checked against your products, so this cannot be approved here yet.', 'affiliate_unchecked');
+    if (linkStatus(affiliate, read.catalogue, read.settings).some((l) => l.state !== 'current')) throw new SeoBlogError(409, 'A product or its link has changed since this was written. Update the links, then approve.', 'affiliate_stale');
+  }
+
+  /**
+   * A product article: one accepted plan and one brief composed in code (no planning call), with the products frozen
+   * as they are now, then the usual write task. Idempotent per command.
+   */
+  async requestProductArticle(actor: Actor, brandId: string, input: { commandId: string; kind: ProductArticleKind | string; topic: string; productIds: readonly string[] }): Promise<Job> {
+    const brand = await this.brandFor(actor, brandId);
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
+    const h = sha256(`product-article:${brandId}:${input.commandId}`);
+    const briefId = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    const existing = await this.store.getBrief(brandId, briefId);
+    if (existing) return this.enqueue(brandId, 'write', `write:${briefId}`, { briefId, requestedBy: actor.userId });
+    const { catalogue, settings } = await this.affiliateCatalogue(brandId);
+    if (!settings) throw new SeoBlogError(409, 'Add your Amazon UK tracking ID and website first.', 'affiliate_settings');
+    const snap = productSnapshot({ kind: input.kind, topic: input.topic, productIds: input.productIds }, catalogue, settings);
+    if (!snap.ok) throw new SeoBlogError(400, snap.reason, 'affiliate_invalid');
+    const { profile, stale } = await this.currentFactsKey(brandId);
+    if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm your Brand DNA before writing.', 'not_ready');
+    await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
+    const fields = productBriefFields(snap.value);
+    const planned = await this.store.listBriefs(brandId), articles = await this.store.listArticles(brandId);
+    const used = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
+    const base = slugify(snap.value.topic).slice(0, 70) || 'products';
+    let slug = base; for (let n = 2; used.has(slug); n++) slug = `${base}-${n}`.slice(0, 80);
+    const now = this.now(), planId = randomUUID();
+    const brief: ArticleBrief = {
+      id: briefId, planId, brandId, role: 'pillar', slug, workingTitle: fields.workingTitle, targetQuery: fields.targetQuery, searchIntent: fields.searchIntent,
+      relatedQuestions: [], angle: fields.angle, outline: fields.outline, keyPoints: fields.keyPoints, cta: null, internalLinks: [], whyFit: fields.whyFit,
+      demand: { kind: 'qualitative', rationale: 'Products chosen by the business.' }, sourceIds: [],
+      duplicate: { verdict: 'distinct', score: 0, against: null, againstKind: null, advice: '' }, status: 'accepted', suggestedAtUtc: null, articleId: null,
+      products: snap.value,
+    };
+    const plan: TopicPlan = { id: planId, brandId, status: 'accepted', topic: snap.value.topic, moneyPage: null, briefIds: [briefId], sources: [],
+      inputs: { focus: null, excluded: [], sourceArticleUrl: null }, profileVersion: profile.version, inventoryAt: null,
+      generation: { mode: this.deps.llm?.mode === 'live' ? 'live' : 'simulated', model: 'none', promptVersion: 'product-brief@1', tokensIn: 0, tokensOut: 0 }, createdAt: now, acceptedAt: now };
+    await this.store.savePlan(plan);
+    await this.store.saveBrief(brief);
+    await this.log(brandId, actor.userId, 'affiliate.article_requested', `Product article requested: “${snap.value.topic}” with ${snap.value.products.length} products.`, briefId);
+    return this.enqueue(brandId, 'write', `write:${briefId}`, { briefId, requestedBy: actor.userId });
+  }
+
+  /** Research for a product article, once: the topic and product names, never the shop's own pages. */
+  private async productSources(brand: Brand, brief: ArticleBrief): Promise<ResearchSource[]> {
+    const plan = await this.store.getPlan(brand.id, brief.planId);
+    if (plan?.sources.length) return [...plan.sources];
+    if (!plan || this.deps.search.mode !== 'live' || !brief.products) return [];
+    await this.requireBudget(brand, 'search_calls', 3);
+    const research = await researchQueries({ queries: [brief.products.topic, ...brief.products.products.map((p) => p.productName)].slice(0, 3), search: this.deps.search, transport: this.deps.transport,
+      locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: null, maxSources: 8, excludeHosts: ['amazon.co.uk', 'amazon.com', 'amzn.to'] }).catch(() => null);
+    if (!research) return [];
+    if (research.searchCalls > 0) await this.store.recordUsage({ brandId: brand.id, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: `product:${brief.id}` });
+    await this.store.savePlan({ ...plan, sources: research.sources });
+    return research.sources;
+  }
+
+  /** Update every product link to the current product and tracking ID (retired products lose their link). A new version; approval is reset. */
+  async refreshAffiliateLinks(actor: Actor, brandId: string, articleId: string, expectedVersionId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    if (!version.body.affiliate) throw new SeoBlogError(409, 'This article has no product links.');
+    const { catalogue, settings } = await this.affiliateCatalogue(brandId);
+    if (!settings) throw new SeoBlogError(409, 'Add your Amazon UK tracking ID and website first.', 'affiliate_settings');
+    const body: ArticleBody = { ...version.body, affiliate: refreshedAffiliate(version.body.affiliate, catalogue, settings) };
+    if (sha256(body) === version.contentSha) return version;
+    const next = await this.appendVersion(brand, article, body, 'metadata_changed', null, actor.userId, null, profile, brief, undefined, true);
+    await this.log(brandId, actor.userId, 'affiliate.links_updated', `Product links updated (version ${next.number}). Approval was reset.`, articleId);
+    return next;
+  }
+
+  /** Remove one product's link. The disclosure goes only when the last link goes. */
+  async removeAffiliateLink(actor: Actor, brandId: string, articleId: string, expectedVersionId: string, productId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    const a = version.body.affiliate;
+    if (!a || !a.links.some((l) => l.productId === productId)) throw new SeoBlogError(404, 'That product link was not found.');
+    const body: ArticleBody = { ...version.body, affiliate: { ...a, links: a.links.filter((l) => l.productId !== productId) } };
+    const next = await this.appendVersion(brand, article, body, 'metadata_changed', null, actor.userId, null, profile, brief, undefined, true);
+    await this.log(brandId, actor.userId, 'affiliate.link_removed', `A product link was removed (version ${next.number}). Approval was reset.`, articleId);
+    return next;
+  }
+
   async setRequiresApproval(actor: Actor, brandId: string, articleId: string, rowVersion: number, required: boolean): Promise<Article> {
     await this.brandFor(actor, brandId);
     const article = await this.mutableArticle(brandId, articleId, rowVersion);
+    const current = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    if (!required && current?.body.affiliate?.links.length) throw new SeoBlogError(409, 'An article with product links always waits for your approval.', 'affiliate_approval');
     const next = await this.store.updateArticle({ ...article, requiresApproval: required });
     await this.log(brandId, actor.userId, 'article.approval_flag', `Article ${required ? 'now needs' : 'no longer needs'} your approval before publishing.`, articleId);
     return next;
@@ -2580,6 +2714,7 @@ export class SeoBlogEngine {
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
     if (article.currentVersionId !== versionId) throw new SeoBlogError(409, 'A newer version exists. Review the current version before approving.', 'stale_write');
     const version = await this.store.getVersion(brandId, versionId);
+    if (version?.body.affiliate?.links.length) await this.requireCurrentLinks(brandId, version.body.affiliate);
     const facts = await this.currentFactsKey(brandId);
     let checks = article.checks;
     if (!checksAreCurrent(checks, version, facts.key)) checks = await this.checkVersion(brand, version!);
@@ -2865,7 +3000,9 @@ export class SeoBlogEngine {
     const version = article?.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
     if (!article || !version) throw new SeoBlogError(404, 'That article has no version yet.');
     if (format === 'markdown') {
-      return { filename: `${version.body.slug}.md`, contentType: 'text/markdown; charset=utf-8', body: exportMarkdown(version.body, { canonicalUrl: article.publishedUrl, versionId: version.id, articleId }) };
+      // Product links never go into a document or email copy (the programme's rules); say so in the copy.
+      const md = exportMarkdown(version.body, { canonicalUrl: article.publishedUrl, versionId: version.id, articleId });
+      return { filename: `${version.body.slug}.md`, contentType: 'text/markdown; charset=utf-8', body: version.body.affiliate?.links.length ? `${md.trimEnd()}\n\n_Product links are not included in this copy._\n` : md };
     }
     return { filename: `${version.body.slug}.html`, contentType: 'text/html; charset=utf-8', body: await this.preview(actor, brandId, articleId, version.id) };
   }
