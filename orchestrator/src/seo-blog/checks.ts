@@ -7,6 +7,7 @@
  * override them. Warnings are editorial signals.
  */
 
+import { affiliateIssues } from '../affiliate/article.js';
 import { GLOBAL_BANNED_PHRASES } from '../qa/banned.js';
 import { normalizeLoose, normalizeText } from '../util/text.js';
 import { topicSimilarity } from './dedupe.js';
@@ -94,6 +95,9 @@ export function runChecks(version: ArticleVersion, ctx: CheckContext): CheckRepo
   const add = (severity: CheckIssue['severity'], code: string, message: string, fix: string, location: string | null = null) =>
     issues.push({ code, severity, message, fix, location });
   const b = version.body;
+
+  // ── Product links (Affiliate Studio): every issue is critical and blocks approval ──
+  for (const issue of affiliateIssues(b, ctx.website)) add('critical', issue.code, issue.message, issue.fix, issue.location);
 
   // ── Completeness & metadata ──
   if (!b.title.trim()) add('critical', 'structure.title_missing', 'The article has no page heading.', 'Add a clear title.');

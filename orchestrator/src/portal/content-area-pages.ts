@@ -428,7 +428,7 @@ function headerLabel(first: Item, n: number): string {
   return n === 1 ? 'Open it' : 'Open the first one';
 }
 
-export function contentArticlesPage(shell: Shell, d: ContentAreaData): string {
+export function contentArticlesPage(shell: Shell, d: ContentAreaData, top = ''): string {
   const b = shell.brand!;
   const g = groups(b, d);
   const titles = { ready: 'Needs you', coming: 'Coming up', writing: 'Being written', stopped: 'Stopped', live: 'Live' } as const;
@@ -441,7 +441,7 @@ export function contentArticlesPage(shell: Shell, d: ContentAreaData): string {
   };
   const sections = (['ready', 'coming', 'writing', 'stopped', 'live'] as const).filter((k) => g[k].length).map((k) => `<section class="ca-group" aria-labelledby="ca-g-${k}"><div class="ca-group-head"><h2 id="ca-g-${k}" class="ca-h2">${titles[k]}</h2><span class="ca-gcount${k === 'ready' ? ' ca-gcount-needs' : ''}"><span class="ca-sr">: </span>${g[k].length}</span><span class="ca-grow"></span>${k === 'ready' ? amber(g.ready[0]!.href, headerLabel(g.ready[0]!, g.ready.length), 'ca-btn-sm') : ''}</div><ul class="ca-panel ca-rows">${g[k].map((i) => row(i, k)).join('')}</ul></section>`).join('');
   const empty = `<section class="ca-panel ca-empty-big"><h2 class="ca-h2">No articles yet</h2><p>Choose the topics you want us to write about. The articles appear here as they are written.</p><a class="ca-btn" href="${e(brandHref(b, 'topics'))}" data-primary>Choose topics ${arrow}</a></section>`;
-  return layout(shell, 'Articles', `<div class="ca-col"><header><h1 class="ca-h1">Articles</h1><p class="ca-lede">Everything we have written for ${e(b.name)}.</p></header>${sections || empty}</div>`, `<style>${PAGE_CSS}</style>`);
+  return layout(shell, 'Articles', `<div class="ca-col"><header>${top}<h1 class="ca-h1">Articles</h1><p class="ca-lede">Everything we have written for ${e(b.name)}.</p></header>${sections || empty}</div>`, `<style>${PAGE_CSS}</style>`);
 }
 
 // ─── Your businesses ─────────────────────────────────────────────────────────
@@ -510,12 +510,12 @@ const BUSINESS_CSS = `
 
 // ─── Results ─────────────────────────────────────────────────────────────────
 
-export function contentResultsPage(shell: Shell, d: ContentAreaData): string {
+export function contentResultsPage(shell: Shell, d: ContentAreaData, extra = ''): string {
   const b = shell.brand!;
   const live = groups(b, d).live;
   return layout(shell, 'Results', `<div class="ca-col"><header><h1 class="ca-h1">Results</h1><p class="ca-lede">How many people read your articles will show here once we can count visits to your website. We do not count readers yet, so you will not see guessed numbers.</p></header>
 <section aria-labelledby="ca-live"><h2 id="ca-live" class="ca-h2">Live on your website</h2><p class="ca-sub">${live.length ? `${plural(live.length, 'article is', 'articles are')} live. Open one to see it on your website.` : 'Nothing is live yet. Articles appear here once they go out.'}</p>
-${live.length ? `<ul class="ca-panel ca-rows">${live.map((i) => `<li class="ca-row"><a class="ca-row-main" href="${e(i.href)}">${picture(i, 'ca-row-pic')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span></span>${chevron}</a></li>`).join('')}</ul>` : ''}</section>
+${live.length ? `<ul class="ca-panel ca-rows">${live.map((i) => `<li class="ca-row"><a class="ca-row-main" href="${e(i.href)}">${picture(i, 'ca-row-pic')}<span class="ca-row-text"><span class="ca-row-title">${e(i.title)}</span><span class="ca-row-line">${e(i.line)}</span></span>${chevron}</a></li>`).join('')}</ul>` : ''}</section>${extra}
 <p class="ca-quiet-links">Meanwhile you can see how your social campaigns are doing in <a href="${e(`/portal/campaign-journey?brand=${b.id}`)}">Campaign results</a>.</p></div>`, `<style>${PAGE_CSS}</style>`);
 }
 
@@ -617,5 +617,5 @@ const PAGE_CSS = `
 }
 `;
 
-/** The page styles, shared with the Keywords place (content-area-keywords.ts). */
+/** The page styles, shared with the Keywords place (content-area-keywords.ts) and the Affiliate Studio screens. */
 export const CONTENT_PAGE_CSS = PAGE_CSS;
