@@ -73,7 +73,9 @@ export const RUBBISH4: readonly [string, () => Body][] = [
 ];
 
 /**
- * Rubbish the gate cannot refuse, kept visible: fluent filler that a word-counting score cannot tell from writing.
- * Each needs the separate meaning check the gate documents. [name, why].
+ * Rubbish the gate cannot refuse, kept visible: text a word-counting score cannot tell from writing. Each needs the
+ * separate meaning check the gate documents, and is listed in KNOWN_LIMITS (seo-score-review5-rubbish.ts). [name, why].
  */
-export const KNOWN_LIMIT4: readonly [string, string][] = [];
+export const KNOWN_LIMIT4: readonly [string, string][] = [
+  ['B4 keyword lines as blockquotes', 'At 23.8% very short items it is under the 25% line the fifth review set so that kit lists (19.8%) and price lists are not refused.'],
+];

@@ -11,6 +11,7 @@ import * as R2 from './seo-score-review2-fixtures.js';
 import * as R3 from './seo-score-review3-fixtures.js';
 import * as G4 from './seo-score-review4-good.js';
 import * as RB4 from './seo-score-review4-rubbish.js';
+import * as RB5 from './seo-score-review5-rubbish.js';
 import { seoBlogCapabilitiesLine } from '../src/portal/seo-blog-capabilities.js';
 import type { ArticleBody } from '../src/seo-blog/types.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
@@ -710,10 +711,10 @@ test('G2 phrase stuffing: 4% and above is held at 70 or below; good writing meas
     assert.ok(s.score <= 70, `${k} phrase sentences scored ${s.score}`);
     assert.equal(result(s, 'phrase.use'), 'fail');
   }
-  // F2 of the third review: 13 added uses in 997 words (3.9% then; 4.0% now that very short items are left out of the
-  // whole) is stuffed now, not "a little high".
+  // F2 of the third review: 13 added uses in 997 words (3.9% then; 4.0% once very short items were left out of the
+  // whole; 4.1% now that every list item of under ten words is, review 5's G2) is stuffed now, not "a little high".
   const high = seoScore(R2.REVIEW2_BRIEF, R2.strongPlusPhrase(10), R2.REVIEW2_CONTEXT);
-  assert.equal(high.measures.phraseShare, 4);
+  assert.equal(high.measures.phraseShare, 4.1);
   assert.equal(result(high, 'phrase.use'), 'fail', 'the phrase is stuffed');
   assert.equal(high.cap?.kind, 'stuffing');
   for (const [name, x] of [...GOOD, ...SHAPES]) {
@@ -821,9 +822,9 @@ test('F1 short list items: the review\'s bullet articles (92 to 98 before) are h
   // A pasted list is a repeat however short its items, and however many times it is pasted.
   for (const k of [1, 2, 3]) { assert.equal(by(k).cap?.kind, 'repetition'); assert.equal(by(k).score, REPETITION_CAP); }
   assert.equal(by(3).words, 27_857);
-  // Different keyword bullets are not repeats, but they are very short items (over 12% of the words); filler bullets
-  // of six to eight words are step-sized items over 60% of the words.
-  for (const k of [0, 4, 6]) assert.ok(by(k).measures.shortItems > 12, String(by(k).measures.shortItems));
+  // Different keyword bullets are not repeats, but they are very short items (over 25% of the words, the line since
+  // review 5); filler bullets of six to eight words are step-sized items over 60% of the words.
+  for (const k of [0, 4, 6]) assert.ok(by(k).measures.shortItems > 25, String(by(k).measures.shortItems));
   assert.ok(by(5).measures.stepItems > 60, String(by(5).measures.stepItems));
   const x3 = by(4);
   assert.equal(x3.cap?.kind, 'short-items');
@@ -896,9 +897,11 @@ test('dodges around the fix: list items, table cells, sub-headings, answers, lin
     const s = seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT);
     const g = seoGate(s);
     if (expected === 'not caught') {
-      // The known limit, kept visible: a phrase split over two different bullets is not read as one use by readers or
-      // search engines, and the volume is bounded by the short-items caps.
+      // Known limits, kept visible and listed in KNOWN_LIMITS for the meaning check: a phrase split over two different
+      // bullets is not read as one use by readers or search engines; a list with one word changed in every item, in two
+      // parts, is under the 25% line for very short items (a kit list is 19.8%).
       assert.equal(s.cap, null, name); assert.equal(g.pass, true, name);
+      assert.ok(RB5.KNOWN_LIMITS.some((k) => k.example === name || k.also?.includes(name)), `${name} is in KNOWN_LIMITS`);
       continue;
     }
     assert.equal(g.pass, false, name);
@@ -909,7 +912,9 @@ test('dodges around the fix: list items, table cells, sub-headings, answers, lin
   for (const k of [6, 7]) assert.ok(seoScore(R2.REVIEW2_BRIEF, R3.DODGES[k]![1](), R2.REVIEW2_CONTEXT).measures.phraseShare > 3.5, R3.DODGES[k]![0]);
   const alt = seoScore(R2.REVIEW2_BRIEF, R3.DODGES.find((d) => /picture description/.test(d[0]))![1](), R2.REVIEW2_CONTEXT);
   assert.equal(result(alt, 'pictures.phrase'), 'fail');
-  assert.deepEqual(seoGate(alt).reasons, ['The picture description uses the search phrase more than once.']);
+  // Its uses there count towards the phrase's share as well (four uses in a picture description), so the share is high
+  // too since review 5 measures it without the short list items.
+  assert.deepEqual(seoGate(alt).reasons, ['The search phrase comes up more often than reads naturally. Use it fewer times; reworded forms of the phrase count as uses too.', 'The picture description uses the search phrase more than once.']);
   // Long list items count as sentences for every reading check, starts included.
   const we = seoScore(null, mini({ intro: prose(12), sections: [{ id: 'a', heading: 'What we do', body: Array.from({ length: 12 }, (_, i) => `- We ${BANK[i]!.charAt(0).toLowerCase()}${BANK[i]!.slice(1)}`).join('\n') }] }), SITE);
   assert.equal(result(we, 'read.starts'), 'fail', check(we, 'read.starts').found);
@@ -980,12 +985,16 @@ test('corpus, good side: honest writing is measured check by check exactly as at
 });
 
 test('corpus, rubbish side: every article the review found passing the gate is refused now, with and without a picture', () => {
+  const limits = new Set(RB4.KNOWN_LIMIT4.map(([n]) => n));
   for (const [name, f] of RB4.RUBBISH4) for (const body of [f(), R.withoutPicture(f())]) {
     const s = seoScore(R2.REVIEW2_BRIEF, body, R2.REVIEW2_CONTEXT);
-    assert.equal(seoGate(s).pass, false, `${name}: ${s.score} ${JSON.stringify(s.measures)}`);
+    assert.equal(seoGate(s).pass, limits.has(name), `${name}: ${s.score} ${JSON.stringify(s.measures)}`);
   }
-  // No row of the review's table is left as a known limit; the fluent filler of the second review still is (G1).
-  assert.deepEqual(RB4.KNOWN_LIMIT4, []);
+  // One row of the review's table is a known limit since review 5 moved the very-short-items line to 25% (M1: kit lists
+  // and price lists were refused at 12%): keyword lines as blockquotes, at 23.8%. It is in KNOWN_LIMITS for the meaning
+  // check, with the fluent filler of the second review (G1).
+  assert.deepEqual([...limits], ['B4 keyword lines as blockquotes']);
+  for (const n of limits) assert.ok(RB5.KNOWN_LIMITS.some((k) => k.example === n || k.also?.includes(n)), n);
   // The earlier rounds' rubbish stays refused too.
   for (const [name, f] of [...R2.ROUND2_RUBBISH, ...R3.BULLET_ATTACKS]) assert.equal(seoGate(seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT)).pass, false, name);
 });
@@ -1048,16 +1057,17 @@ test('B2 B3 B4 C7: sub-headings inside the text, other bullet markers, run-on ke
   assert.equal(result(seoScore(null, split, SITE), 'read.spacing'), 'pass');
   const unsplit = mini({ intro: prose(10), sections: [{ id: 'a', heading: 'A long part', body: `${prose(10)}\n\n${prose(10, 3)}\n\n${prose(10, 7)}` }] });
   assert.notEqual(result(seoScore(null, unsplit, SITE), 'read.spacing'), 'pass');
-  // The article quoting a regulation keeps its long sentences (6% of its words) without a cap.
+  // The article quoting a regulation keeps its long sentences without a cap: 14.7% of its words are in sentences of
+  // over 40 words (the run-on line since review 5; 6% over 50).
   const q = seoScore(R2.Q.brief, R2.Q.body, strictFor(R2.Q));
-  assert.equal(q.measures.runOn, 6); assert.equal(q.cap, null);
+  assert.equal(q.measures.runOn, 14.7); assert.equal(q.cap, null);
   const runOn = seoScore(R2.REVIEW2_BRIEF, RB4.RUBBISH4.find(([n]) => /run-on/.test(n))![1](), R2.REVIEW2_CONTEXT);
   assert.equal(runOn.cap?.kind, 'run-on'); assert.ok(runOn.measures.runOn > 20);
   assert.match(runOn.cap!.reason, /^Some of the text runs on without a full stop for a very long way, so the score stays at 70 or below until it is written in sentences of a readable length\.$/);
   // C7: the cap follows the reported (rounded) measures exactly, everywhere in the corpus.
   const every = [...G4.GOOD16.map(([x]) => seoScore(x.brief, x.body, ctx4(x))), ...G4.VARIANTS.map((v) => seoScore(v.art.brief, v.art.body, ctx4(v.art))), ...RB4.RUBBISH4.map(([, f]) => seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT)), ...R3.BULLET_ATTACKS.map(([, f]) => seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT))];
   for (const s of every) {
-    const heavy = s.words >= 100 && (s.measures.shortItems > 12 || s.measures.stepItems > 60);
+    const heavy = s.words >= 100 && (s.measures.shortItems > 25 || s.measures.stepItems > 60);
     assert.equal(heavy, s.cap?.kind === 'short-items' || (heavy && s.cap !== null && s.cap.limit <= SOME_REPETITION_CAP), JSON.stringify(s.measures));
   }
 });

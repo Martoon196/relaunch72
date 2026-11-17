@@ -10,6 +10,7 @@ import * as F from './seo-panel-fixtures.js';
 import * as R2 from './seo-score-review2-fixtures.js';
 import * as R3 from './seo-score-review3-fixtures.js';
 import { DAMP, HEATPUMP, MOT, PROBATE } from './seo-score-review5-good.js';
+import * as G4 from './seo-score-review4-good.js';
 import type { Art } from './seo-score-review4-good.js';
 
 type Brief = Pick<ArticleBrief, 'targetQuery'> & Partial<Pick<ArticleBrief, 'relatedQuestions' | 'searchIntent'>>;
@@ -72,10 +73,10 @@ A('D1 platitudes fixture + 12 different five-word keyword bullets per part', () 
 A('D2 platitudes fixture + 20 different six-word keyword bullets per part', () => stepBullets(R2.make(R2.GEN.platitude), 20, 6), 'repetition');
 A('D3 four-templates fixture + 20 different nine-word keyword bullets per part', () => stepBullets(R2.make(R2.GEN.templ), 20, 9), 'repetition');
 A('D4 the stuffing fixture + 22 different six-word keyword bullets per part', () => stepBullets(R2.strongPlusPhrase(16), 22, 6), 'stuffing');
-A('D5 strong fixture + 15 six-word keyword bullets per part (about 55% of the page)', () => stepBullets(F.strongBody(), 15, 6), 'limit');
+A('D5 strong fixture + 15 six-word keyword bullets per part (about 55% of the page)', () => stepBullets(F.strongBody(), 15, 6), 'short-items');
 A('D6 platitudes fixture + 8 different eight-word bullets per part', () => { let k = 0; return addEach(R2.make(R2.GEN.platitude), () => Array.from({ length: 8 }, () => { k++; return `- ${J(k)} ${K(k)} in ${TR(k % 60)} for ${J(k * 7)} ${K(k * 11)} near ${TR((k * 13) % 60)}`; }).join('\n')); }, 'repetition');
-A('D7 the phrase five times in the page title + 7 seven-word bullets per part', () => { let k = 0; return addEach({ ...F.strongBody(), title: Array.from({ length: 5 }, () => P).join(', ') } as ArticleBody, () => Array.from({ length: 7 }, () => { k++; return `- ${J(k)} ${K(k)} in ${TR(k % 60)} for ${J(k * 7)} ${K(k * 11)}`; }).join('\n')); }, 'gate');
-A('D8 the phrase a little high (strongPlusPhrase(8)) + 6 six-word keyword bullets per part', () => { let k = 0; return addEach(R2.strongPlusPhrase(8), () => Array.from({ length: 6 }, () => { k++; return `- ${J(k)} ${K(k)} in ${TR(k % 60)} for ${K(k * 11)}`; }).join('\n')); }, 'gate');
+A('D7 the phrase five times in the page title + 7 seven-word bullets per part', () => { let k = 0; return addEach({ ...F.strongBody(), title: Array.from({ length: 5 }, () => P).join(', ') } as ArticleBody, () => Array.from({ length: 7 }, () => { k++; return `- ${J(k)} ${K(k)} in ${TR(k % 60)} for ${J(k * 7)} ${K(k * 11)}`; }).join('\n')); }, 'repetition');
+A('D8 the phrase a little high (strongPlusPhrase(8)) + 6 six-word keyword bullets per part', () => { let k = 0; return addEach(R2.strongPlusPhrase(8), () => Array.from({ length: 6 }, () => { k++; return `- ${J(k)} ${K(k)} in ${TR(k % 60)} for ${K(k * 11)}`; }).join('\n')); }, 'stuffing');
 A('G2 the phrase at 2.6% + four numbered one-word bullets per part ("1. Leeds")', () => numbered(5, 4, true), 'gate');
 A('G2 the phrase at 2.6% + six numbered one-word bullets per part', () => numbered(5, 6, true), 'gate');
 A('G2 the phrase at 2.6% + four dashed one-word bullets per part (the control)', () => numbered(5, 4, false), 'gate');
@@ -94,7 +95,7 @@ A('S2 "Cheap houses Leeds." pasted as 30 separate paragraphs', () => each((i) =>
 A('S3 3 different three-word keyword sentences inside a paragraph, after every part', () => { const { pick } = rng(); return each(() => Array.from({ length: 3 }, () => `${pick(ADJ)[0]!.toUpperCase()}${pick(ADJ).slice(1)} ${pick(KW)} ${pick(TOWN)}.`).join(' ')); }, 'limit');
 A('S4 "Call us today." as its own paragraph twice after every part (24 copies)', () => each(() => 'Call us today.\n\nCall us today.'), 'repetition');
 A('S5 5 different three-word keyword paragraphs after every part (60 lines)', () => { const { pick } = rng(); return each(() => Array.from({ length: 5 }, () => `${pick(ADJ)} ${pick(KW)} ${pick(TOWN)}`).join('\n\n')); }, 'limit');
-A('I1 3 bullets per part, each 8 different two-word keyword "sentences"', () => { const { rnd } = rng(); let k = 0; const fat = (n: number) => Array.from({ length: 8 }, (_, j) => `${cap1(J(n + j))} ${K(n * 3 + j * 5 + Math.floor(rnd() * 30))}.`).join(' '); return each(() => Array.from({ length: 3 }, () => `- ${fat(k++)}`).join('\n')); }, 'gate');
+A('I1 3 bullets per part, each 8 different two-word keyword "sentences"', () => { const { rnd } = rng(); let k = 0; const fat = (n: number) => Array.from({ length: 8 }, (_, j) => `${cap1(J(n + j))} ${K(n * 3 + j * 5 + Math.floor(rnd() * 30))}.`).join(' '); return each(() => Array.from({ length: 3 }, () => `- ${fat(k++)}`).join('\n')); }, 'not-sentences');
 A('I2 one bullet of 8 two-word "sentences" pasted 3 times after every part', () => each(() => Array.from({ length: 3 }, () => '- Cheap houses. Best flats. Top homes. Quick sales. Easy lets. Local plots. New barns. Low rents.').join('\n')), 'repetition');
 A('I3 one bullet of five three-word "sentences" with a small word, pasted 4 times after every part', () => each(() => Array.from({ length: 4 }, () => '- Cheap houses in Leeds. Best flats in York. Top homes in Hull. Quick sales in Bath. Easy lets in Derby.').join('\n')), 'repetition');
 A('I4 one 15-word bullet of five 3-word keyword sentences pasted 3 times after every part (36 copies)', () => each(() => Array.from({ length: 3 }, () => '- Houses in Leeds. Flats in York. Homes in Hull. Sales in Bath. Lets in Derby.').join('\n')), 'repetition');
@@ -102,7 +103,7 @@ A('I5 3 different such bullets after every part', () => { const { pick } = rng()
 
 // ── G3: long items, wide table rows, run-ons
 A('L1 5 bullets per part of 15 keyword words each ("cheap houses in Leeds and best flats in York and ...")', () => { const { pick } = rng(); return each(() => Array.from({ length: 5 }, () => fifteen(pick)).join('\n')); }, 'limit');
-A('L2 a keyword table after every part: 5 rows of 15 cells', () => { const { pick } = rng(); return each(() => `| ${Array.from({ length: 15 }, (_, j) => `c${j}`).join(' | ')} |\n|${'---|'.repeat(15)}\n${Array.from({ length: 5 }, () => `| ${Array.from({ length: 5 }, () => `${pick(ADJ)} | ${pick(KW)} | ${pick(TOWN)}`).join(' | ')} |`).join('\n')}`); }, 'gate');
+A('L2 a keyword table after every part: 5 rows of 15 cells', () => { const { pick } = rng(); return each(() => `| ${Array.from({ length: 15 }, (_, j) => `c${j}`).join(' | ')} |\n|${'---|'.repeat(15)}\n${Array.from({ length: 5 }, () => `| ${Array.from({ length: 5 }, () => `${pick(ADJ)} | ${pick(KW)} | ${pick(TOWN)}`).join(' | ')} |`).join('\n')}`); }, 'not-sentences');
 A('L3 240 keyword bullets of exactly 15 words ("We find cheap houses and best flats in Leeds daily for ...")', () => { const { pick } = rng(); return each(() => Array.from({ length: 20 }, () => `- We find ${pick(ADJ)} ${pick(KW)} and ${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)} ${pick(['daily', 'weekly', 'today', 'now', 'fast'])} for ${pick(ADJ)} buyers and ${pick(ADJ)} sellers`).join('\n')); }, 'repetition');
 A('L4 10 bullets per part of 15 keyword words (68% of the page)', () => { const { pick } = rng(); return each(() => Array.from({ length: 10 }, () => fifteen(pick)).join('\n')); }, 'limit');
 A('L5 platitudes fixture + 5 bullets per part of 15 keyword words', () => { const { pick } = rng(); return addEach(R2.make(R2.GEN.platitude), () => Array.from({ length: 5 }, () => fifteen(pick)).join('\n')); }, 'repetition');
@@ -114,19 +115,24 @@ A('O5 three 50-word keyword sentences in every other part', () => { const { pick
 A('X1 per part: one 50-word keyword sentence, 3 bullets of 15 keyword words, 4 six-word keyword bullets, 1 two-word bullet', () => { const { pick } = rng(); return each(() => [longSentence(pick, 12), [...Array.from({ length: 3 }, () => fifteen(pick)), ...Array.from({ length: 4 }, () => `- ${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)} for ${pick(KW)}`), `- ${pick(KW)} ${pick(TOWN)}`].join('\n')].join('\n\n')); }, 'run-on');
 
 // ── S4, S5: the phrase said in ways the count does not see; headings and questions outside the measures
-A('U1 16 sentence pairs splitting the phrase with a full stop', () => each((i) => (i < 8 ? `In ${T(i)} buyers ask how to appraise. A property deal there needs local figures first. Investors near ${T(i + 20)} learn to appraise. A property deal rewards patient sums.` : '')), 'gate');
+A('U1 16 sentence pairs splitting the phrase with a full stop', () => each((i) => (i < 8 ? `In ${T(i)} buyers ask how to appraise. A property deal there needs local figures first. Investors near ${T(i + 20)} learn to appraise. A property deal rewards patient sums.` : '')), 'repetition');
 A('U2 24 sentences using two of its three main words ("property deal")', () => each((i) => `A property deal in ${T(i)} moves quickly in spring. Every property deal near ${T(i + 20)} needs a second look.`), 'limit');
 A('U3 the page title set to 60 keyword words, the phrase once', () => { const { pick } = rng(); return { ...F.strongBody(), title: `How to ${P}: ${Array.from({ length: 18 }, () => `${pick(ADJ)} ${pick(KW)} ${pick(TOWN)}`).join(', ')}` } as ArticleBody; }, 'limit');
 A('H1 150 extra questions, each a keyword line with an empty answer', () => { const { pick } = rng(); const b = F.strongBody(); return { ...b, faqs: [...b.faqs, ...Array.from({ length: 150 }, () => ({ q: `${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)}?`, a: '' }))] } as ArticleBody; }, 'limit');
-A('H2 the stuffing fixture + 150 keyword questions with empty answers', () => { const { pick } = rng(); const b = R2.strongPlusPhrase(16); return { ...b, faqs: [...b.faqs, ...Array.from({ length: 150 }, () => ({ q: `${pick(ADJ)} ${pick(KW)} for sale in ${pick(TOWN)} today?`, a: '' }))] } as ArticleBody; }, 'stuffing');
+A('H2 the stuffing fixture + 150 keyword questions with empty answers', () => { const { pick } = rng(); const b = R2.strongPlusPhrase(16); return { ...b, faqs: [...b.faqs, ...Array.from({ length: 150 }, () => ({ q: `${pick(ADJ)} ${pick(KW)} for sale in ${pick(TOWN)} today?`, a: '' }))] } as ArticleBody; }, 'gate');
 A('H3 200 extra parts: a keyword heading over an empty body', () => { const { pick } = rng(); const b = F.strongBody(); return { ...b, sections: [...b.sections, ...Array.from({ length: 200 }, (_, i) => ({ id: `k${i}`, heading: `${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)} ${i}`, body: '' }))] } as ArticleBody; }, 'limit');
 A('H4 the same keyword question 100 times with an empty answer', () => { const b = F.strongBody(); return { ...b, faqs: [...b.faqs, ...Array.from({ length: 100 }, () => ({ q: 'Cheap houses for sale in Leeds?', a: '' }))] } as ArticleBody; }, 'repetition');
 
 // ── Just under each list line
-A('M1 very short keyword bullets at about 11% and six-word keyword bullets at about 55%, together', () => { const { pick } = rng(); return each((i) => `${Array.from({ length: 14 }, () => `- ${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)} for ${pick(KW)}`).join('\n')}\n\nAlso:\n\n${Array.from({ length: 4 }, (_, j) => `- ${K(i * 4 + j)} ${T(i * 4 + j)}`).join('\n')}`); }, 'limit');
+A('M1 very short keyword bullets at about 11% and six-word keyword bullets at about 55%, together', () => { const { pick } = rng(); return each((i) => `${Array.from({ length: 14 }, () => `- ${pick(ADJ)} ${pick(KW)} in ${pick(TOWN)} for ${pick(KW)}`).join('\n')}\n\nAlso:\n\n${Array.from({ length: 4 }, (_, j) => `- ${K(i * 4 + j)} ${T(i * 4 + j)}`).join('\n')}`); }, 'short-items');
 A('M2b distinctBullets(6): very short keyword bullets at 11.5%', () => R3.distinctBullets(6), 'limit');
 A('M3 100 five-word template bullets, one word changed ("- We buy houses in <town>")', () => each((i) => Array.from({ length: 8 }, (_, j) => `- We buy houses in ${T(i * 8 + j)}`).join('\n')), 'repetition');
 A('M4 60 four-word template sentences of prose ("We buy Leeds houses.")', () => each((i) => Array.from({ length: 5 }, (_, j) => `${['We', 'They', 'Buyers', 'Agents', 'Banks'][j]} ${['buy', 'sell', 'want', 'list', 'fund'][j]} ${T(i * 5 + j)} ${K(i * 5 + j)}.`).join(' ')), 'limit');
+
+// ── G2's residue: different bullets of four to nine words still count as sentences for the sentence-length check
+const FAQ3C = G4.VARIANTS.find((v) => v.art.name.startsWith('3c'))!.art;
+const NO_PICTURE = { kind: 'none', url: null, alt: '', provenance: '', width: null, height: null };
+A('G2r the 3c FAQ page without a picture (refused at 84) + 33 different four-word bullets in each of four parts', () => { let k = 0; return { ...FAQ3C.body, image: NO_PICTURE, sections: FAQ3C.body.sections.map((s, i) => (i < 4 ? { ...s, body: `${s.body}\n\n${Array.from({ length: 33 }, () => { k++; return `- zq${k}a in zq${k}b zq${k}c`; }).join('\n')}` } : s)) } as ArticleBody; }, 'limit', FAQ3C.brief, ctxOf(FAQ3C));
 
 /** Every row of the fifth review's rubbish: [name, the article, how it is refused]. */
 export const RUBBISH5: readonly (readonly [string, () => Case, Outcome])[] = rows;
@@ -135,11 +141,41 @@ export const RUBBISH5: readonly (readonly [string, () => Case, Outcome])[] = row
 export interface KnownLimit {
   /** The family, in plain words. */
   readonly name: string;
-  /** The row of RUBBISH5 (or the earlier corpus) that shows it. */
+  /** The article that shows it: a row name in RUBBISH5, the fourth review's RUBBISH4, the third review's DODGES or the
+   * second review's KNOWN_LIMIT. Scored with its own brief and context, as the tests score that corpus. */
   readonly example: string;
-  /** Its score with a picture, and whether the gate passes it, on this tree. */
+  /** Its score on this tree (with the picture it has); the gate passes it. A change that catches it must move it out. */
   readonly score: number;
+  /** Other rows of the same family, which pass the gate too. */
+  readonly also?: readonly string[];
   /** Why a word count cannot decide it without refusing good pages too. */
   readonly why: string;
 }
-export const KNOWN_LIMITS: readonly KnownLimit[] = [];
+/**
+ * KNOWN LIMITS: what the meaning check must catch, because this score cannot. Each passes the gate today; the tests
+ * keep the list exact (every row of the corpora that passes is here, and everything here passes at this score).
+ */
+export const KNOWN_LIMITS: readonly KnownLimit[] = [
+  { name: 'Fluent empty filler', example: 'N1 grammatical-looking filler (mad-lib sentences)', score: 98, also: ['N0 word salad with small words sprinkled in'],
+    why: 'Grammatical sentences that say nothing have the same lengths, small words and variety as sentences that say something; only meaning tells them apart.' },
+  { name: 'Very short keyword items under the 25% line', example: 'B4 keyword lines as blockquotes', score: 98, also: ['M2b distinctBullets(6): very short keyword bullets at 11.5%', 'a list with one word changed in every item, in two parts only (a quarter of the words)'],
+    why: 'A kit list is 19.8% very short items ("Tent", "Spare pegs") and a price list 13.8%; keyword lines at 11% to 24% look the same to a counter, and "Spare pegs", "Spare socks" is one word changed too.' },
+  { name: 'Long keyword items with no full stop', example: 'L1 5 bullets per part of 15 keyword words each ("cheap houses in Leeds and best flats in York and ...")', score: 98, also: ['L4 10 bullets per part of 15 keyword words (68% of the page)'],
+    why: 'An item of 15 words joined by "and" and "in" has the small words of a sentence, and a thorough checklist is 45% items as long ("Cut the grass and weed the borders, if the garden is yours").' },
+  { name: 'Different two- or three-word sentences of prose', example: 'S3 3 different three-word keyword sentences inside a paragraph, after every part', score: 92, also: ['S5 5 different three-word keyword paragraphs after every part (60 lines)', 'I5 3 different such bullets after every part'],
+    why: 'Short sentences are ordinary ("Yes.", "Stir well.", "Call us."); only repeats of them are caught (from the sixth), and different keyword ones are not repeats.' },
+  { name: 'Four-word template sentences', example: 'M4 60 four-word template sentences of prose ("We buy Leeds houses.")', score: 95,
+    why: 'Templates are matched with one word changed from five words up; at four words every pair of plain sentences ("We buy the house.", "We sell the flat.") would match.' },
+  { name: 'One long run-on in a long article', example: 'O2 one 140-word keyword run-on in the whole article', score: 97,
+    why: 'It is 16.9% of the prose words; the article quoting a regulation has 14.7% in long sentences, so a line low enough to catch one run-on refuses good legal writing.' },
+  { name: 'Two of the three main words of the phrase', example: 'U2 24 sentences using two of its three main words ("property deal")', score: 100,
+    why: 'Natural writing about a phrase says its parts often ("the property", "the deal"); counting them as uses refuses the good price guide (2.7%).' },
+  { name: 'The phrase split by a full stop or across two list items', example: 'the phrase split across two different list items', score: 97,
+    why: 'Neither readers nor search engines read it as the phrase, so it is not counted as a use; the volume is held by the list measures.' },
+  { name: 'A page title of keywords', example: 'U3 the page title set to 60 keyword words, the phrase once', score: 97,
+    why: 'The page title is one line outside the text measures; how long a title may be is an editorial choice the score does not make.' },
+  { name: 'Keyword questions with empty answers', example: 'H1 150 extra questions, each a keyword line with an empty answer', score: 97, also: ['H3 200 extra parts: a keyword heading over an empty body'],
+    why: 'Questions and headings are not list items or sentences of the text. Empty parts are a must-fix of the quality checks (a part under 25 words), which hold the score at 59 when they run; whether the writer can produce an empty answer is not verified here.' },
+  { name: 'Different bullets of four to nine words count as content', example: 'G2r the 3c FAQ page without a picture (refused at 84) + 33 different four-word bullets in each of four parts', score: 89,
+    why: 'Steps and checklist items of four to nine words are content: they count towards length, part length and the sentence-length check. Leaving them out of those lowers 11, 9 and 4 good pages, so different bullets can still add points there (never through the phrase, repetition or list measures; at most the 11 points of those three checks, five seen) and lift a refused page over the bar (seen only within five points of it).' },
+];
