@@ -64,19 +64,21 @@ export const REPORT_MESSAGES = Object.freeze({
 
 function normalise(s: string): string { return s.trim().toLowerCase().replace(/[\u00a0\s\-_./()]+/gu, ''); }
 function parseDelimited(text: string, delimiter: string): string[][] {
-  const lines: string[][] = []; let row: string[] = [], cell = '', quoted = false;
+  // `blank` says whether the cell so far is only spaces, so a quotation mark never re-reads a growing cell (that took
+  // minutes on a small hostile file).
+  const lines: string[][] = []; let row: string[] = [], cell = '', quoted = false, blank = true;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (quoted) {
-      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; continue; }
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; blank = false; i++; continue; }
       if (ch === '"') { quoted = false; continue; }
-      cell += ch;
+      cell += ch; if (blank && !/\s/u.test(ch)) blank = false;
     } else {
-      if (ch === '"' && cell.trim() === '') { quoted = true; cell = ''; continue; }
-      if (ch === delimiter) { row.push(cell.trim()); cell = ''; continue; }
-      if (ch === '\n') { row.push(cell.trim()); cell = ''; if (row.some(Boolean)) lines.push(row); row = []; continue; }
-      if (ch === '\r') { if (text[i + 1] === '\n') continue; row.push(cell.trim()); cell = ''; if (row.some(Boolean)) lines.push(row); row = []; continue; }
-      cell += ch;
+      if (ch === '"' && blank) { quoted = true; cell = ''; continue; }
+      if (ch === delimiter) { row.push(cell.trim()); cell = ''; blank = true; continue; }
+      if (ch === '\n') { row.push(cell.trim()); cell = ''; blank = true; if (row.some(Boolean)) lines.push(row); row = []; continue; }
+      if (ch === '\r') { if (text[i + 1] === '\n') continue; row.push(cell.trim()); cell = ''; blank = true; if (row.some(Boolean)) lines.push(row); row = []; continue; }
+      cell += ch; if (blank && !/\s/u.test(ch)) blank = false;
     }
     if (lines.length > 3000) throw new AmazonReportError(REPORT_MESSAGES.tooManyLines);
   }

@@ -56,18 +56,32 @@ export function engineStamp(input: { strict: boolean; research: EngineStamp['res
 export const MIN_PLAN_SOURCES = 3;
 
 /** Why the strict setting stopped (internal; the owner sees only the neutral message). */
-export type EngineGap = 'research' | 'numbers' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers';
+export type EngineGap = 'research' | 'numbers' | 'numbers_unknown' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers';
 
 /** Neutral owner messages: no supplier, method, model or mechanism. */
 export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
   research: 'Topic research is not available right now, so planning is paused. Nothing has been spent. We will pick it up once it is back.',
   numbers: 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. Nothing has been spent on writing. To check again, press Retry beside this planning task in Activity. Your saved searches are reused.',
+  numbers_unknown: 'We could not confirm whether the last check of how many people search for these topics finished, so it will not be repeated for this plan and planning is paused rather than guessing. Nothing has been spent on writing. To try afresh, open Topics and choose to resume research as a new intent. Its searches count again against your research allowance.',
   numbers_off: 'Checking how many people search for these topics is not switched on for this business yet, so planning is paused rather than guessing. Nothing has been spent. Please ask us to check your set-up.',
   numbers_allowance: 'There is not enough research allowance left this month to check how many people search for these topics, so planning is paused rather than guessing. Nothing has been spent on writing. Once the allowance is raised in Settings or renews next month, press Retry beside this planning task in Activity.',
   thin_research: 'We did not find enough trustworthy sources to plan these articles properly, so planning is paused rather than going ahead on thin evidence. Nothing has been spent on writing. To try again, start a new plan in Topics, ideally with a focus, and confirm the fresh search it asks for.',
   method: 'Your writing standard is not switched on for this business right now, so this was paused rather than written to a lower standard. Nothing has been spent. Please ask us to check your set-up.',
   planned_without_numbers: 'This article was planned without checking how many people search for it, so it is paused rather than written without that. Nothing has been spent. Please ask us to check it.',
 };
+
+/**
+ * Strict setting, autopilot plans only: one failed search-numbers lookup is checked once more by itself after this
+ * delay (nobody may be watching Topics). A second failure holds with `ENGINE_GAP_MESSAGE.numbers`.
+ */
+export const NUMBERS_RECHECK_DELAY_MS = 30 * 60_000;
+/** What the owner reads while that one re-check is queued. */
+export const NUMBERS_RECHECK_MESSAGE = 'We could not check how many people search for these topics just now, so planning is paused rather than guessing. We will check once more in about half an hour, reusing your saved searches. There is nothing you need to do. Nothing has been spent on writing.';
+
+/** What the owner reads when asking for a plan while that re-check waits: the waiting task runs now instead. */
+export const NUMBERS_RECHECK_NOW = 'Planning was already waiting to check how many people search for these topics. It is checking now, reusing your saved searches, instead of starting a second plan.';
+/** What the owner reads when a plan was made while the re-check waited, so the waiting task stopped. */
+export const NUMBERS_RECHECK_SUPERSEDED = 'A newer plan was made while this one was waiting, so this one stopped without planning again. Nothing more was spent.';
 
 /** Thrown when the strict setting stops planning or writing. A 409, so jobs hold (they are not retried automatically). */
 export class EngineIncompleteError extends SeoBlogError {

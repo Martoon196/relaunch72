@@ -98,7 +98,7 @@ function demandCard(brief: ArticleBrief | null | undefined): string {
   if (demand && demand.kind === 'measured') {
     const volume = typeof demand.volume === 'number' && Number.isFinite(demand.volume) && demand.volume >= 0 ? Math.round(demand.volume) : null;
     const when = typeof demand.retrievedAt === 'string' ? longDate(demand.retrievedAt) : null;
-    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google</p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
+    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google for <span class="sp-phrase">${e((brief?.seo && brief.seo.primary.basis !== 'none' && typeof brief.seo.primary.phrase === 'string' && brief.seo.primary.phrase.trim()) || (typeof brief?.targetQuery === 'string' ? brief.targetQuery.trim() : ''))}</span></p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
   }
   return `${head}<p>We do not have search numbers for this phrase yet.</p><p class="ap-note">${VISITS}</p></section>`;
 }

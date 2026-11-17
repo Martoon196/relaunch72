@@ -15,6 +15,7 @@ import { createHash, createHmac } from 'node:crypto';
 import type { Destination } from '../types.js';
 import { SeoBlogError } from '../types.js';
 import { citationNumbers, renderMarkdown, versionMarker } from '../render.js';
+import { disclosureHtml, productLinkHtml } from '../../affiliate/render.js';
 import { escapeHtml } from '../html.js';
 import { parseWebsiteCapabilities, websiteOrigin, websiteSha, type WebsiteCapabilityReceipt } from '../website-target.js';
 import {
@@ -35,8 +36,10 @@ export function renderArticleFragment(input: PublishInput, canonicalUrl: string)
   const cites = citationNumbers(body);
   const md = (t: string, subHeadings = false) => renderMarkdown(t, cites.number, canonicalUrl, subHeadings);
   return [
+    // A product article starts with its disclosure, and each product's part ends with its link (rendered by code).
+    disclosureHtml(body.affiliate),
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}`),
+    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',

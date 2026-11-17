@@ -437,14 +437,21 @@ export interface ArticleBrief {
   readonly engine?: EngineStamp;
   /** The measured search target this brief answers, its secondary phrases and real searched questions (keyword-first planning). */
   readonly seo?: import('./keyword-planning.js').BriefSeo;
+  /** A product article's products, frozen when the owner asked for it (Affiliate Studio). */
+  readonly products?: import('../affiliate/article.js').BriefProducts;
 }
 
 export interface TopicPlan {
   readonly programme?: ProgrammeProvenance;
   /** Which parts of the engine ran for this plan (internal). */
   readonly engine?: EngineStamp;
-  /** Keyword-first planning only (internal): the output contract used, how many candidates were shown and how many returned ids were stripped. */
-  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number };
+  /**
+   * Keyword-first planning only (internal): the output contract used, how many candidates were shown, how many returned
+   * ids were stripped by the id rules, how many chosen phrases were dropped by the fit rule (`unfit`), and how many
+   * acceptable secondary phrases were withdrawn only because their brief was left without a target (`withdrawn`).
+   * `unfit` and `withdrawn` are absent on plans made before they existed.
+   */
+  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number; readonly unfit?: number; readonly withdrawn?: number };
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';
@@ -516,6 +523,8 @@ export interface ArticleBody {
   readonly citations: readonly ArticleSourceCitation[];
   readonly image: FeaturedImage;
   readonly author: BrandAuthor | null;
+  /** Product links and the disclosure (Affiliate Studio): structured, rendered by code, never in the prose. */
+  readonly affiliate?: import('../affiliate/article.js').ArticleAffiliate;
 }
 
 export type VersionChange = 'generated' | 'edited' | 'section_regenerated' | 'regenerated' | 'image_changed' | 'metadata_changed';

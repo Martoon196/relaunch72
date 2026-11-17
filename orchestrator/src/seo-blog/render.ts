@@ -9,6 +9,7 @@
  * invented.
  */
 
+import { disclosureHtml, productLinkHtml } from '../affiliate/render.js';
 import { escapeHtml, escapeXml } from './html.js';
 import type { ArticleBody, ArticleSourceCitation } from './types.js';
 
@@ -182,9 +183,10 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     `<article>`,
     `<h1>${escapeHtml(body.title)}</h1>`,
     `<p class="meta">${body.author ? `By ${escapeHtml(body.author.name)} · ` : ''}<time datetime="${escapeHtml(ctx.publishedAt)}">${escapeHtml(dateLabel)}</time></p>`,
+    disclosureHtml(body.affiliate),
     body.image.url ? `<figure><img src="${escapeHtml(body.image.url)}" alt="${escapeHtml(body.image.alt)}"${body.image.width ? ` width="${body.image.width}"` : ''}${body.image.height ? ` height="${body.image.height}"` : ''} loading="eager"></figure>` : '',
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}`),
+    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',
