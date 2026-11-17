@@ -12,7 +12,7 @@
  */
 
 import type {
-  Article, ArticleHold, ArticleVersion, Brand, CheckReport, Destination, IsoInstant, PolicySnapshot,
+  Article, ArticleBrief, ArticleHold, ArticleVersion, Brand, CheckReport, Destination, IsoInstant, PolicySnapshot,
 } from './types.js';
 
 /** Work that is due but older than this is held instead of being published late in a bunch. */
@@ -28,6 +28,8 @@ export interface PublicationGateInput {
   readonly destination: Destination | null;
   readonly now: IsoInstant;
   readonly missedWindowMs?: number;
+  /** The article's brief, read fresh: a brief with products makes approval required whatever the flag says. */
+  readonly brief?: Pick<ArticleBrief, 'products'> | null;
 }
 
 export type PublicationDecision =
@@ -38,6 +40,15 @@ export type PublicationDecision =
 
 export function approvalRequired(autoPublish: boolean, requiresApproval: boolean): boolean {
   return !autoPublish || requiresApproval;
+}
+
+/**
+ * A product article (Affiliate Studio): the version's body carries product links, or its brief has products. Such an
+ * article always needs the owner's approval of that exact version, whatever its stored "needs my approval" flag and
+ * the business's auto-publish setting say (review M1): the gate decides from the version and brief, not the flag.
+ */
+export function isProductArticle(version: Pick<ArticleVersion, 'body'> | null | undefined, brief?: Pick<ArticleBrief, 'products'> | null): boolean {
+  return Boolean(version?.body?.affiliate?.links?.length || brief?.products);
 }
 
 /** True when the stored approval is for exactly the article's current immutable version. */
@@ -103,7 +114,8 @@ export function evaluatePublication(input: PublicationGateInput): PublicationDec
   if (!destination || destination.status !== 'connected' || destination.id !== article.schedule.destinationId) {
     return { decision: 'hold', hold: { reason: 'destination', detail: 'The website connection is not connected and verified.' } };
   }
-  const needsApproval = approvalRequired(settings.autoPublish, article.requiresApproval);
+  const product = isProductArticle(version, input.brief);
+  const needsApproval = approvalRequired(settings.autoPublish, article.requiresApproval) || product;
   if (needsApproval && !approvalIsCurrent(article, version)) {
     return {
       decision: 'hold',
@@ -114,7 +126,7 @@ export function evaluatePublication(input: PublicationGateInput): PublicationDec
     decision: 'publish',
     policy: {
       autoPublish: settings.autoPublish,
-      requiresApproval: article.requiresApproval,
+      requiresApproval: article.requiresApproval || product,
       approvedVersionId: approvalIsCurrent(article, version) ? version.id : null,
       rule: needsApproval ? 'approved' : 'auto_unflagged',
       decidedAt: input.now,

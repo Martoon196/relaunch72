@@ -56,7 +56,7 @@ export function engineStamp(input: { strict: boolean; research: EngineStamp['res
 export const MIN_PLAN_SOURCES = 3;
 
 /** Why the strict setting stopped (internal; the owner sees only the neutral message). */
-export type EngineGap = 'research' | 'numbers' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers';
+export type EngineGap = 'research' | 'numbers' | 'numbers_off' | 'numbers_allowance' | 'thin_research' | 'method' | 'planned_without_numbers' | 'product_research' | 'thin_product_research';
 
 /** Neutral owner messages: no supplier, method, model or mechanism. */
 export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
@@ -67,6 +67,9 @@ export const ENGINE_GAP_MESSAGE: Record<EngineGap, string> = {
   thin_research: 'We did not find enough trustworthy sources to plan these articles properly, so planning is paused rather than going ahead on thin evidence. Nothing has been spent on writing. To try again, start a new plan in Topics, ideally with a focus, and confirm the fresh search it asks for.',
   method: 'Your writing standard is not switched on for this business right now, so this was paused rather than written to a lower standard. Nothing has been spent. Please ask us to check your set-up.',
   planned_without_numbers: 'This article was planned without checking how many people search for it, so it is paused rather than written without that. Nothing has been spent. Please ask us to check it.',
+  // Product articles (Affiliate Studio) under the strict setting: they use no search numbers, but need live research.
+  product_research: 'Research is not available right now, so this product article is paused rather than written without it. Nothing has been spent on writing. You can try again from Activity once it is back.',
+  thin_product_research: 'We did not find enough trustworthy sources for this product article, so it is paused rather than written on thin evidence. Its research use is recorded and will not be repeated. To try again, ask for a new product article with a clearer topic.',
 };
 
 /** Thrown when the strict setting stops planning or writing. A 409, so jobs hold (they are not retried automatically). */

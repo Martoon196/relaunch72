@@ -6,6 +6,8 @@ import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED }
  */
 
 import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
+import { AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_BLOCK, AFFILIATE_PAGE_PASSED, AFFILIATE_PAGE_UNVERIFIED, checkAffiliatePage } from '../affiliate/page-check.js';
+import { usableProductSource, withoutAffiliateParams } from '../affiliate/article.js';
 import { bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
@@ -25,7 +27,7 @@ import {
 } from './brand-dna.js';
 import { CreativeImageError, verifyCreativeImage } from '../creative-studio/image-input.js';
 import { cleanText, extractKnowledge } from './knowledge.js';
-import { approvalIsCurrent, articleStatusLabel, checksAreCurrent, evaluatePublication } from './policy.js';
+import { approvalIsCurrent, articleStatusLabel, checksAreCurrent, evaluatePublication, isProductArticle } from './policy.js';
 import { publisherFor, type PublisherRegistry } from './publishers/registry.js';
 import { PublisherOutcomeUnknownError, PublisherRejectedError, verifyPublicUrl, type PublishInput, type WebsitePublisher } from './publishers/types.js';
 import { reviewedWebsiteTarget, targetEligibility, destinationIdentity,websiteIdentity, websiteSha, websiteWakeJob, type ArticleWebsiteTarget, type WebsiteStructure, type WebsiteVersionGuard } from './website-target.js';
@@ -1571,7 +1573,8 @@ export class SeoBlogEngine {
       // Strict: a brief planned under the strict setting without search numbers, or a business whose writing method is
       // expected but not active, stops here. Briefs planned before the strict setting was on are exempt ("planned
       // before"): they were planned under the rules of their time and there is no way to plan an accepted brief again.
-      const gap = brief.engine?.strict === true && (brief.engine.numbers === 'off' || brief.engine.numbers === 'unavailable') ? 'planned_without_numbers' as const
+      // A product article uses no search numbers; under the strict setting it holds on research instead (productSources).
+      const gap = !brief.products && brief.engine?.strict === true && (brief.engine.numbers === 'off' || brief.engine.numbers === 'unavailable') ? 'planned_without_numbers' as const
         : (await this.methodState(brandId, 'blog')) === 'inactive' ? 'method' as const : null;
       if (gap) {
         await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: ENGINE_GAP_MESSAGE[gap].slice(0, 300) }).catch(() => undefined);
@@ -1715,8 +1718,10 @@ export class SeoBlogEngine {
     brand: Brand, article: Article, body: ArticleBody, change: VersionChange, changedSectionId: string | null, actor: string,
     generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string, skipPromotionGeneration=false, claimedJob?:Job,
   ): Promise<ArticleVersion> {
-    // An article with product links gets no social drafts (Affiliate Studio, slice 1): no model call for them.
-    if (body.affiliate?.links.length) skipPromotionGeneration = true;
+    // A product article (links in the body, or products in the brief) gets no social drafts and no campaign at all
+    // (Affiliate Studio, slice 1; review S2): no pack, no posts, no model call and no Activity line about them.
+    const product = Boolean(body.affiliate?.links.length || brief.products);
+    if (product) skipPromotionGeneration = true;
     const versions = await this.store.listVersions(brand.id, article.id);
     const prior=versions.find((v)=>v.id===article.currentVersionId);
     if(article.publishedUrl&&body.slug!==new URL(article.publishedUrl).pathname.split('/').filter(Boolean).at(-1))throw new SeoBlogError(409,'An already-published article keeps its original slug and URL.');
@@ -1743,7 +1748,8 @@ export class SeoBlogEngine {
       network, title: body.title, copy: `${body.title}\n\n${body.excerpt}\n\nRead the full article.`,
       artworkInstructions: `Create a brand-approved editorial image illustrating “${body.title}”. Review the image before scheduling.`,
     }));
-    if(initialCampaign && !skipPromotionGeneration) {
+    if (product) { /* no accompanying drafts for a product article */ }
+    else if(initialCampaign && !skipPromotionGeneration) {
       const result=await this.initialCampaignCopy({brand,article,body,generation,profile,brief,actor,versionId,number:(versions.at(-1)?.number??0)+1,claimedJob,sourceKnowledgeSha});
       article=result.article; campaignDrafts=result.drafts; generationRecord=result.generation;
       posts=campaignDrafts.filter(p=>p.angle==='launch').map(({network,title,copy,artworkInstructions})=>({network,title,copy,artworkInstructions}));
@@ -1762,7 +1768,7 @@ export class SeoBlogEngine {
         ? 'Accompanying drafts use labelled article-text templates because model output was unavailable or incomplete. No automatic correction call was made.'
         : `Accompanying drafts use the article excerpt: ${(error as Error).message.slice(0, 160)}`, article.id);
     }
-    const promotionPack: ArticlePromotionPack = {
+    const promotionPack: ArticlePromotionPack | null = product ? null : {
       source: 'relaunch72.seo-blog', brandId: brand.id, articleId: article.id, versionId, contentSha,
       profileVersion: profile.version, factsSha: profile.factsSha, canonicalUrl,
       generation: generationRecord, mode: generationRecord ? 'model' : 'excerpt_fallback', posts,
@@ -1773,7 +1779,7 @@ export class SeoBlogEngine {
       id: versionId, articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
-      generation, contentSha, promotionPack,
+      generation, contentSha, ...(promotionPack ? { promotionPack } : {}),
       engine: engineStamp({ strict: this.deps.requireFullEngine === true, research: brief.engine?.research ?? 'not_recorded', numbers: brief.engine?.numbers ?? 'not_recorded',
         method: !generation ? 'not_used' : generation.methodReceiptId ? 'active' : await this.methodState(brand.id, 'blog').catch(() => 'not_recorded' as never),
         methodReceiptId: generation?.methodReceiptId ?? null, at: this.now() }),
@@ -1782,7 +1788,9 @@ export class SeoBlogEngine {
     // A new version always invalidates the old approval; review-required articles return to Needs approval.
     const nextArticle:Article={
       ...article, slug: body.slug, currentVersionId: version.id, editorialState: 'draft', approval: null, checks, failure: null,
-      ...(initialCampaign ? { campaign: createArticleCampaign({ articleVersionId: version.id, articleContentSha: version.contentSha, canonicalUrl,
+      // A product article always needs the owner's approval: the flag is set back whenever such a version is added (review M1).
+      ...(product ? { requiresApproval: true } : {}),
+      ...(initialCampaign && !product ? { campaign: createArticleCampaign({ articleVersionId: version.id, articleContentSha: version.contentSha, canonicalUrl,
         drafts: campaignDrafts, createdAt: version.createdAt, createdBy: actor, generation: generationRecord }) } : {}),
       hold: article.hold && ['checks_failed', 'stale_version'].includes(article.hold.reason) ? null : article.hold,
     };
@@ -1999,7 +2007,7 @@ export class SeoBlogEngine {
     const facts = await this.currentFactsKey(brand.id);
     const profile = facts.profile;
     if (!profile) throw new SeoBlogError(409, 'Extract the brand profile first.');
-    const [inventory, articles, plan] = await Promise.all([this.store.getInventory(brand.id), this.store.listArticles(brand.id), this.store.getPlan(brand.id, version.planId)]);
+    const [inventory, articles, plan, brief] = await Promise.all([this.store.getInventory(brand.id), this.store.listArticles(brand.id), this.store.getPlan(brand.id, version.planId), this.store.getBrief(brand.id, version.briefId)]);
     const linkable = linkableUrls(inventory);
     for (const a of articles) if (a.delivery === 'published' && a.publishedUrl) linkable.add(a.publishedUrl);
     // A bounded crawl may omit the current, owner-confirmed conversion page.
@@ -2019,7 +2027,7 @@ export class SeoBlogEngine {
       ...articles.filter((a) => a.id !== version.articleId).map((a) => ({ title: a.slug.replace(/-/g, ' '), slug: a.slug, kind: 'article' as const })),
       ...(inventory?.pages ?? []).filter((p) => p.fetchStatus === 'ok' && p.title).map((p) => ({ title: p.title!, slug: '', kind: 'page' as const })),
     ];
-    const report = runChecks(version, { profile, sources, linkable, website: brand.website, others, now: this.now() });
+    const report = runChecks(version, { profile, sources, linkable, website: brand.website, others, now: this.now(), ...(brief?.products ? { productArticle: true } : {}) });
     const issues = facts.stale
       ? [{ code: 'profile.stale', severity: 'critical' as const, message: 'Brand facts changed after this profile was confirmed.', fix: 'Re-extract and confirm the brand profile, then rerun checks.', location: null }, ...report.issues]
       : report.issues;
@@ -2199,7 +2207,9 @@ export class SeoBlogEngine {
     const brand = await this.brandFor(actor, brandId);
     const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is being published. Wait for it to finish before editing.');
-    const sections = edit.sections?.map((s) => ({ id: s.id && version.body.sections.some((x) => x.id === s.id) ? s.id : randomUUID(), heading: cleanText(s.heading).slice(0, 140), body: cleanText(s.body) }));
+    const kept = edit.sections?.map((s) => ({ id: s.id && version.body.sections.some((x) => x.id === s.id) ? s.id : randomUUID(), heading: cleanText(s.heading).slice(0, 140), body: cleanText(s.body) }));
+    // With product links, a part id sent twice keeps its id once: the copy is a new part, so no link is shown twice (review N3).
+    const sections = kept && version.body.affiliate ? kept.map((s, i) => kept.findIndex((x) => x.id === s.id) === i ? s : { ...s, id: randomUUID() }) : kept;
     const body: ArticleBody = {
       ...version.body,
       ...edit,
@@ -2533,10 +2543,13 @@ export class SeoBlogEngine {
     const index = version.body.sections.findIndex((s) => s.id === sectionId);
     if (index < 0) throw new SeoBlogError(404, 'That section was not found.');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.section);
-    const sources = await this.sourcesForBrief(brandId, brief);
+    // A product article: its own saved research and the product rules (review S11).
+    const sources = brief.products ? await this.productSources(brand, brief) : await this.sourcesForBrief(brandId, brief);
+    const linked = version.body.affiliate?.links.find((l) => l.sectionId === sectionId);
     const result = await rewriteSection(await this.methodLlm(brand,profile,'revision','article:'+articleId,sources,version.generation?.methodReceiptId??null), {
       profile, outline: version.body.sections.map((s) => s.heading), section: version.body.sections[index]!,
       instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId),
+      ...(brief.products ? { products: { brief: brief.products, keepHeading: linked ? linked.name : null } } : {}),
     });
     await this.recordGeneration(brandId, result.record, `section:${articleId}`);
     // Only the target section changes; every other section is carried over byte-for-byte.
@@ -2596,6 +2609,48 @@ export class SeoBlogEngine {
     if (linkStatus(affiliate, read.catalogue, read.settings).some((l) => l.state !== 'current')) throw new SeoBlogError(409, 'A product or its link has changed since this was written. Update the links, then approve.', 'affiliate_stale');
   }
 
+  /** For a product article's current version with links: the links must match the current products (owner session only). */
+  private async requireCurrentProductLinks(brandId: string, article: Article): Promise<void> {
+    const version = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    if (version?.body.affiliate?.links.length) await this.requireCurrentLinks(brandId, version.body.affiliate);
+  }
+
+  /**
+   * The owner changed their Amazon UK details or stopped using a product (review S1): every approval of a linked
+   * article not yet live in that version is taken back, so nothing goes out with a link made before the change. With
+   * `productId`, only articles linking to that product. Returns how many approvals were taken back.
+   */
+  async affiliateDetailsChanged(actor: Actor, brandId: string, change: { readonly productId?: string }): Promise<number> {
+    await this.brandFor(actor, brandId);
+    let n = 0;
+    for (const article of await this.store.listArticles(brandId)) {
+      if (!article.approval || !article.currentVersionId) continue;
+      if (article.delivery === 'published' && article.publishedVersionId === article.currentVersionId) continue;
+      const version = await this.store.getVersion(brandId, article.currentVersionId);
+      const links = version?.body.affiliate?.links ?? [];
+      if (!links.length || (change.productId && !links.some((l) => l.productId === change.productId))) continue;
+      for (let i = 0; i < 3; i++) {
+        const fresh = await this.store.getArticle(brandId, article.id);
+        if (!fresh?.approval || fresh.currentVersionId !== article.currentVersionId) break;
+        try { await this.store.updateArticle({ ...fresh, approval: null }); n++; break; }
+        catch (error) { if (!(error instanceof StaleWriteError)) throw error; }
+      }
+      await this.log(brandId, actor.userId, 'affiliate.approval_cleared', 'Approval was taken back because your Amazon UK details or products changed. Update the links, then approve it again.', article.id);
+    }
+    return n;
+  }
+
+  /**
+   * Whether product articles may go to this website now (review M7): null when they may, or the plain reason they may
+   * not. They may not while the latest after-publishing check of a product page on it failed or could not be made.
+   */
+  private async affiliateDestinationBlock(brandId: string, destinationId: string): Promise<string | null> {
+    const checks = (await this.store.listPublications(brandId)).filter((p) => p.destinationId === destinationId && p.affiliateCheck)
+      .map((p) => p.affiliateCheck!).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    const latest = checks[0];
+    return latest && latest.state !== 'passed' ? AFFILIATE_PAGE_BLOCK : null;
+  }
+
   /**
    * A product article: one accepted plan and one brief composed in code (no planning call), with the products frozen
    * as they are now, then the usual write task. Idempotent per command.
@@ -2614,6 +2669,10 @@ export class SeoBlogEngine {
     const { profile, stale } = await this.currentFactsKey(brandId);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm your Brand DNA before writing.', 'not_ready');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
+    // The strict setting applies to product articles too (review S6): it checks what it can before anything is spent.
+    const strict = this.deps.requireFullEngine === true;
+    if (strict && this.deps.search.mode !== 'live') throw new EngineIncompleteError('product_research');
+    if (strict && (await this.methodState(brandId, 'blog')) === 'inactive') throw new EngineIncompleteError('method');
     const fields = productBriefFields(snap.value);
     const planned = await this.store.listBriefs(brandId), articles = await this.store.listArticles(brandId);
     const used = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
@@ -2626,28 +2685,54 @@ export class SeoBlogEngine {
       demand: { kind: 'qualitative', rationale: 'Products chosen by the business.' }, sourceIds: [],
       duplicate: { verdict: 'distinct', score: 0, against: null, againstKind: null, advice: '' }, status: 'accepted', suggestedAtUtc: null, articleId: null,
       products: snap.value,
+      // Planned in code: research runs once when it is written; no search numbers are used for a product article.
+      engine: engineStamp({ strict, research: this.deps.search.mode === 'live' ? 'live' : 'unconfigured', numbers: 'off', method: 'not_used', at: now }),
     };
     const plan: TopicPlan = { id: planId, brandId, status: 'accepted', topic: snap.value.topic, moneyPage: null, briefIds: [briefId], sources: [],
       inputs: { focus: null, excluded: [], sourceArticleUrl: null }, profileVersion: profile.version, inventoryAt: null,
-      generation: { mode: this.deps.llm?.mode === 'live' ? 'live' : 'simulated', model: 'none', promptVersion: 'product-brief@1', tokensIn: 0, tokensOut: 0 }, createdAt: now, acceptedAt: now };
+      generation: { mode: this.deps.llm?.mode === 'live' ? 'live' : 'simulated', model: 'none', promptVersion: 'product-brief@1', tokensIn: 0, tokensOut: 0 }, createdAt: now, acceptedAt: now,
+      engine: brief.engine! };
     await this.store.savePlan(plan);
     await this.store.saveBrief(brief);
     await this.log(brandId, actor.userId, 'affiliate.article_requested', `Product article requested: “${snap.value.topic}” with ${snap.value.products.length} products.`, briefId);
     return this.enqueue(brandId, 'write', `write:${briefId}`, { briefId, requestedBy: actor.userId });
   }
 
-  /** Research for a product article, once: the topic and product names, never the shop's own pages. */
+  /**
+   * Research for a product article, once: the topic and product names, never the shop's own pages (review M5). Every
+   * address of the Amazon family, any short, redirect or paid link is skipped before it is fetched and again after
+   * redirects; tracking parameters are removed from what is kept. The search use is recorded whatever happens, and the
+   * result is saved even when empty, so a rewrite never buys it again (review S5). Under the strict setting a product
+   * article needs live research and at least MIN_PLAN_SOURCES usable sources (review S6).
+   */
   private async productSources(brand: Brand, brief: ArticleBrief): Promise<ResearchSource[]> {
     const plan = await this.store.getPlan(brand.id, brief.planId);
-    if (plan?.sources.length) return [...plan.sources];
-    if (!plan || this.deps.search.mode !== 'live' || !brief.products) return [];
+    const clean = (list: readonly ResearchSource[]) => list.filter((x) => usableProductSource(x.url)).map((x) => ({ ...x, url: withoutAffiliateParams(x.url) }));
+    const strict = this.deps.requireFullEngine === true;
+    if (!plan || !brief.products) return [];
+    if (plan.productResearchAt || plan.sources.length) {
+      const saved = clean(plan.sources);
+      if (strict && saved.length < MIN_PLAN_SOURCES) throw new EngineIncompleteError('thin_product_research');
+      return saved;
+    }
+    if (this.deps.search.mode !== 'live') { if (strict) throw new EngineIncompleteError('product_research'); return []; }
     await this.requireBudget(brand, 'search_calls', 3);
-    const research = await researchQueries({ queries: [brief.products.topic, ...brief.products.products.map((p) => p.productName)].slice(0, 3), search: this.deps.search, transport: this.deps.transport,
-      locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: null, maxSources: 8, excludeHosts: ['amazon.co.uk', 'amazon.com', 'amzn.to'] }).catch(() => null);
-    if (!research) return [];
-    if (research.searchCalls > 0) await this.store.recordUsage({ brandId: brand.id, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: `product:${brief.id}` });
-    await this.store.savePlan({ ...plan, sources: research.sources });
-    return research.sources;
+    const search = this.deps.search;
+    let calls = 0;
+    const counted: SearchProvider = Object.assign(Object.create(search) as SearchProvider, { search: (query: string, options: { readonly locale: string; readonly limit: number }) => { calls++; return search.search(query, options); } });
+    let research: Awaited<ReturnType<typeof researchQueries>> | null = null;
+    try {
+      research = await researchQueries({ queries: [brief.products.topic, ...brief.products.products.map((p) => p.productName)].slice(0, 3), search: counted, transport: this.deps.transport,
+        locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: null, maxSources: 8, excludeUrl: (url) => !usableProductSource(url) }).catch(() => null);
+    } finally {
+      // Every search asked for is recorded, including one that failed part-way.
+      if (calls > 0) await this.store.recordUsage({ brandId: brand.id, kind: 'search_calls', amount: calls, at: this.now(), reference: `product:${brief.id}` });
+    }
+    const sources = clean(research?.sources ?? []);
+    await this.store.savePlan({ ...plan, sources, productResearchAt: this.now() });
+    if (!sources.length && !strict) await this.log(brand.id, 'system', 'affiliate.research', research ? 'Research for this product article found no usable sources, so it is written from your own words about the products. Its research use is recorded.' : 'Research for this product article could not finish, so it is written from your own words about the products. Its research use is recorded.', brief.articleId ?? brief.id);
+    if (strict && sources.length < MIN_PLAN_SOURCES) throw new EngineIncompleteError('thin_product_research');
+    return sources;
   }
 
   /** Update every product link to the current product and tracking ID (retired products lose their link). A new version; approval is reset. */
@@ -2680,7 +2765,8 @@ export class SeoBlogEngine {
     await this.brandFor(actor, brandId);
     const article = await this.mutableArticle(brandId, articleId, rowVersion);
     const current = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
-    if (!required && current?.body.affiliate?.links.length) throw new SeoBlogError(409, 'An article with product links always waits for your approval.', 'affiliate_approval');
+    // A product article keeps waiting for approval even once every link is removed: a rewrite can put them back (review M1).
+    if (!required && isProductArticle(current, await this.store.getBrief(brandId, article.briefId))) throw new SeoBlogError(409, 'An article with product links always waits for your approval.', 'affiliate_approval');
     const next = await this.store.updateArticle({ ...article, requiresApproval: required });
     await this.log(brandId, actor.userId, 'article.approval_flag', `Article ${required ? 'now needs' : 'no longer needs'} your approval before publishing.`, articleId);
     return next;
@@ -2737,6 +2823,7 @@ export class SeoBlogEngine {
     if (article.delivery === 'unknown') throw new SeoBlogError(409, 'The last publication is still being reconciled with the website. Wait until it is resolved.');
     const destination = await this.store.getDestination(brandId, input.destinationId);
     if (!destination) throw new SeoBlogError(400, 'Choose a connected website for this article.');
+    await this.requireCurrentProductLinks(brandId, article);
     const conversion = localToUtc(input.localDate, input.localTime, brand.timezone);
     if (Date.parse(conversion.utc) <= Date.parse(this.now())) throw new SeoBlogError(400, 'Choose a time in the future. Missed times are never published late.');
     const next = await this.store.updateArticle({
@@ -2849,6 +2936,8 @@ export class SeoBlogEngine {
       }
     } else slot = ownSlot(input.when.localDate.trim(), input.when.localTime.trim(), brand.timezone, now);
     if (!slot) throw new SeoBlogError(409, 'There is no free publishing day in your plan. Choose “Publish later” to pick a time. Nothing was approved.', 'no_slot');
+    // Product links are checked against the current products on every press, approved already or not (review M1).
+    await this.requireCurrentProductLinks(brandId, article);
     // Approval: the existing step, bound to this exact version, refusing critical check failures.
     const approvedNow = !approvalIsCurrent(article, version);
     const previousApproval = article.approval;
@@ -2969,6 +3058,8 @@ export class SeoBlogEngine {
     return renderArticlePage(version.body, {
       siteName: version.websiteTarget?.brandName??brand.name, canonicalUrl: canonical, blogIndexUrl: version.websiteTarget?.target.indexUrl ?? (destination ? publisherFor(this.deps.publishers, destination.type).indexUrlFor(destination) : `${base}/blog/`),
       locale: brand.locale, publishedAt: this.now(), articleId, versionId: version.id, contentSha: version.contentSha, noindex: true,
+      // Product links are words only here: the preview and HTML copy are not the business's website (review N2).
+      ...(version.body.affiliate?.links.length ? { productLinks: 'text' as const } : {}),
     });
   }
 
@@ -3022,14 +3113,23 @@ export class SeoBlogEngine {
     const now = this.now();
     let attempted: Article | null = null;
     const knownOperations = new Set((await this.store.listPublications(brandId, articleId)).map(p => p.id));
+    // Product articles: the brief is read fresh for the gate, and a website whose last product page failed its
+    // after-publishing check takes no further product article until a later check passes (review M1, M7).
+    const brief = await this.store.getBrief(brandId, article.briefId);
+    const productBlock = article.schedule && isProductArticle(version, brief) ? await this.affiliateDestinationBlock(brandId, article.schedule.destinationId) : null;
     let begun: import('./store.js').BeginResult;
     try { begun = await this.store.beginPublication({
       brandId, articleId, resumePublicationId: null,
       decide: (s) => {
         const f = this.factsKeyFrom(s.profile, s.knowledge);
-        const decision = evaluatePublication({ brand: s.brand, article: s.article, version: s.version, checks: s.article.checks, currentFactsSha: f.key, destination: s.destination, now });
+        const decision = evaluatePublication({ brand: s.brand, article: s.article, version: s.version, checks: s.article.checks, currentFactsSha: f.key, destination: s.destination, now, brief });
         if (decision.decision === 'not_due' || decision.decision === 'skip') return { kind: 'skip', why: decision.decision === 'skip' ? decision.why : 'Not due.' };
         if (decision.decision === 'hold') return { kind: 'hold', article: { ...s.article, hold: { ...decision.hold, at: now } } };
+        if (isProductArticle(s.version, brief)) {
+          // The block was read for the website scheduled before the lock; a schedule changed meanwhile waits for the next pass.
+          if (s.article.schedule?.destinationId !== article.schedule?.destinationId) return { kind: 'skip', why: 'The schedule changed meanwhile.' };
+          if (productBlock) return { kind: 'hold', article: { ...s.article, hold: { reason: 'destination', detail: productBlock, at: now } } };
+        }
         const issue=this.websitePublicationIssue(s.destination!,s.version!,s.brand.settings,s.article);
         if(issue)return {kind:'hold',article:{...s.article,hold:{reason:'destination',detail:issue,at:now}}};
         const publisher = publisherFor(this.deps.publishers, s.destination!.type);
@@ -3177,17 +3277,26 @@ export class SeoBlogEngine {
     const complete=evidence.article.state==='verified'&&evidence.index.state==='verified'&&evidence.categories.every((c)=>c.state==='verified')&&evidence.sitemap.state==='verified';
     const observation={websiteDelivery:evidence,websiteObserveRunId:publication.websiteObserveRunId??randomUUID(),websiteObserveAttempts:observed,websiteObserveAfter:complete||observed>=12?null:new Date(Date.parse(this.now())+(observed<=2?30000:300000)).toISOString()};
     if (evidence.article.state === 'verified') {
-      const p = await this.store.updatePublication(this.pub(publication, { ...observation,state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: complete?'Article, index, categories and served sitemap verified.':'Article and canonical verified live; some index, category or sitemap checks are still pending.' }));
+      // A product article: the served page must still show the ad label first and mark every product link as paid (review M7).
+      const affiliateCheck = version.body.affiliate?.links.length ? await checkAffiliatePage(this.deps.transport, publication.publicUrl, version.body.affiliate, this.now()) : undefined;
+      const p = await this.store.updatePublication(this.pub(publication, { ...observation,...(affiliateCheck?{affiliateCheck}:{}),state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: complete?'Article, index, categories and served sitemap verified.':'Article and canonical verified live; some index, category or sitemap checks are still pending.' }));
       const current=await this.store.getArticle(brand.id,publication.articleId);
       await this.setArticleDelivery(brand.id, publication.articleId, 'published', null, { publishedVersionId: publication.versionId, publishedUrl: current?.publishedUrl??publication.publicUrl, publishedAt: current?.publishedAt??this.now() },p);
       if(observation.websiteObserveAfter)await this.enqueueObservation(p);
       await this.log(brand.id, 'system', 'publish.verified', `Published and verified at ${publication.publicUrl} (version ${version.number}).`, publication.articleId);
+      if (affiliateCheck && affiliateCheck.state !== publication.affiliateCheck?.state) {
+        if (affiliateCheck.state === 'passed') await this.log(brand.id, 'system', 'affiliate.page_checked', AFFILIATE_PAGE_PASSED, publication.articleId);
+        else await this.log(brand.id, 'system', 'affiliate.page_alert', affiliateCheck.state === 'failed' ? AFFILIATE_PAGE_ALERT : AFFILIATE_PAGE_UNVERIFIED, publication.articleId);
+      }
       return p;
     }
     if(publication.state==='published'){
       const current=await this.store.getArticle(brand.id,publication.articleId);
       if(current?.currentVersionId===publication.versionId&&current.publishedVersionId===publication.versionId)await this.setArticleDelivery(brand.id,publication.articleId,'unknown','The latest public article/canonical observation needs attention.',{},publication);
-      const next=await this.store.updatePublication(this.pub(publication,{...observation,detail:'Previously verified article: the latest public observation needs attention. No content was re-published.'}));
+      // A product page that can no longer be read is not verified, never still passed (review M7).
+      const unverified = version.body.affiliate?.links.length ? { state: 'unverified' as const, at: this.now(), problems: ['The published page could not be opened.'] } : undefined;
+      const next=await this.store.updatePublication(this.pub(publication,{...observation,...(unverified?{affiliateCheck:unverified}:{}),detail:'Previously verified article: the latest public observation needs attention. No content was re-published.'}));
+      if (unverified && publication.affiliateCheck?.state !== 'unverified') await this.log(brand.id, 'system', 'affiliate.page_alert', AFFILIATE_PAGE_UNVERIFIED, publication.articleId);
       if(next.websiteObserveAfter)await this.enqueueObservation(next);return next;
     }
     const attempts = publication.verifyAttempts + 1;
@@ -3274,6 +3383,9 @@ export class SeoBlogEngine {
     const currentDestination=await this.store.getDestination(brand.id,publication.destinationId);
     if(currentDestination?.type==='content_api'||currentDestination?.type==='wordpress')await this.checkDestinationInternal(currentDestination);
     const now = this.now();
+    const resumeVersion = await this.store.getVersion(brand.id, publication.versionId);
+    const brief = resumeVersion ? await this.store.getBrief(brand.id, resumeVersion.briefId) : null;
+    const productBlock = isProductArticle(resumeVersion, brief) ? await this.affiliateDestinationBlock(brand.id, publication.destinationId) : null;
     const result = await this.store.beginPublication({
       brandId: brand.id, articleId: publication.articleId, resumePublicationId: publication.id,
       decide: (s) => {
@@ -3298,11 +3410,12 @@ export class SeoBlogEngine {
         const f = this.factsKeyFrom(s.profile, s.knowledge);
         const decision = evaluatePublication({
           brand: s.brand, article: { ...article, delivery: 'none', hold: clearUnknownHold }, version: s.version, checks: article.checks,
-          currentFactsSha: f.key, destination: s.destination, now,
+          currentFactsSha: f.key, destination: s.destination, now, brief,
         });
         if (decision.decision === 'hold') {
           return cancel(`Not re-sent: ${decision.hold.detail}`, { ...decision.hold, at: now });
         }
+        if (productBlock) return cancel(`Not re-sent: ${productBlock}`, { reason: 'destination', detail: productBlock, at: now });
         if (decision.decision !== 'publish') {
           return cancel(`Not re-sent: ${decision.decision === 'skip' ? decision.why : 'no longer due'}.`, clearUnknownHold ?? { reason: 'owner', detail: 'Choose a new time.', at: now });
         }

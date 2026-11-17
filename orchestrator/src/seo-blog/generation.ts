@@ -8,7 +8,7 @@
  * tagged data blocks; the prompts treat it as data, never instructions.
  */
 
-import { PRODUCT_RULES, productArticleProblems, productsForWriter } from '../affiliate/article.js';
+import { PRODUCT_RULES, productArticleProblems, productsForWriter, readerSurfaces, textRuleBreaks, type BriefProducts } from '../affiliate/article.js';
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import { stageModel } from '../config.js';
 import { methodRunFor, inheritMethodRun } from './method-packs.js';
@@ -642,11 +642,16 @@ export async function rewriteSection(llm: LlmClient, input: {
   readonly instruction: string;
   readonly sources: readonly ResearchSource[];
   readonly linkable: readonly { url: string; title: string | null }[];
+  /** A product article (Affiliate Studio): the product rules apply here too, and a product's part keeps its heading (review S11). */
+  readonly products?: { readonly brief: BriefProducts; readonly keepHeading: string | null };
 }): Promise<JsonCallResult<{ heading: string; body: string }> & { readonly short: Map<string, ResearchSource> }> {
   const short = shortSourceIds(input.sources);
   const allowedLinks = new Set([...input.linkable.map((l) => l.url), ...input.sources.map((s) => s.url)]);
+  const products = input.products ?? null;
+  const prompt = loadPrompt('seo-blog-section.md');
   const result = await callJson<{ heading: string; body: string }>(llm, {
-    prompt: loadPrompt('seo-blog-section.md'),
+    prompt,
+    ...(products ? { system: `${prompt.body}\n\n${PRODUCT_RULES}${products.keepHeading ? `\nThis part is about one product: keep its heading exactly "${products.keepHeading}".` : ''}` } : {}),
     schema: { type: 'object', required: ['heading', 'body'], properties: { heading: { type: 'string', minLength: 3, maxLength: 140 }, body: { type: 'string', minLength: 40, maxLength: 12000 } } },
     maxTokens: 6000,
     user: [
@@ -656,11 +661,14 @@ export async function rewriteSection(llm: LlmClient, input: {
       dataBlock('owner_instruction', input.instruction.slice(0, 1000) || 'Improve clarity and usefulness without changing the facts.'),
       dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('linkable_pages', input.linkable.slice(0, 80)),
+      ...(products ? [dataBlock('products', productsForWriter(products.brief))] : []),
     ].join('\n\n'),
     validate: (v) => {
       const problems = sourceMarkers(v.body).filter((id) => !short.has(id)).map((id) => `unknown source marker [src:${id}]`);
       for (const m of v.body.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) if (!allowedLinks.has(m[1]!)) problems.push(`link ${m[1]} is not a listed page or source`);
       if (/<\s*[a-z!\/]/i.test(v.body)) problems.push('HTML is not allowed inside bodies');
+      if (products?.keepHeading && v.heading.trim().toLowerCase() !== products.keepHeading.toLowerCase()) problems.push(`Keep the heading exactly "${products.keepHeading}".`);
+      if (products) for (const rule of new Set(readerSurfaces({ title: '', seoTitle: '', metaDescription: '', excerpt: '', image: { alt: '' }, intro: '', conclusion: '', sections: [v], faqs: [] }).flatMap((x) => textRuleBreaks(x.text)))) problems.push(`This product part breaks the product rules (${rule.replace(/_/g, ' ')}); follow them.`);
       return problems;
     },
   });

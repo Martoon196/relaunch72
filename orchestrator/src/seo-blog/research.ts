@@ -262,6 +262,8 @@ export async function researchQueries(input: {
   readonly maxSources?: number;
   readonly keywordProvider?: KeywordProvider | null;
   readonly excludeHosts?: readonly string[];
+  /** Addresses never fetched or kept, checked on the search result and again on the address after redirects. */
+  readonly excludeUrl?: (url: string) => boolean;
 }): Promise<ResearchBundle> {
   if (input.search.mode !== 'live') throw new ResearchUnavailableError();
   const perQuery = input.perQuery ?? 4;
@@ -295,9 +297,11 @@ export async function researchQueries(input: {
       try { key = new URL(hit.url).toString(); } catch { continue; }
       if (seen.has(key)) continue;
       if ((input.excludeHosts ?? []).some((h) => sameSite(key, `https://${h}`))) continue;
+      if (input.excludeUrl?.(key)) continue;
       seen.add(key);
       try {
         const page = await input.transport.fetch(key, { maxBytes: 1_500_000 });
+        if (input.excludeUrl && page.finalUrl && input.excludeUrl(page.finalUrl)) { notes.push(`${key} led to an address that is not used.`); continue; }
         if (page.status !== 200 || !/html|text\/plain/i.test(page.contentType)) { notes.push(`${key} could not be read (HTTP ${page.status}).`); continue; }
         const encoding=(page.headers['content-encoding']??'identity').toLowerCase().trim();
         const options={maxOutputLength:1_500_000};
