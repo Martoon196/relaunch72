@@ -71,11 +71,15 @@
  * - an open must-fix issue from the quality checks, or one found on an earlier version when they have not run on this
  *   one: at most 59;
  * - heavy repetition (over 25% of sentences and list items repeat an earlier one word for word or with a word or two
- *   changed, or over 25% of the article's five-word runs came earlier, or a very small vocabulary): at most 40;
+ *   changed, or over 25% of the article's five-word runs came earlier, or a very small vocabulary): at most 40. Every
+ *   list item counts here however short, and a list's items are read as one run of words, so a short list pasted
+ *   again is a repeat;
  * - text that is not built of sentences (under 28% of its words are the small joining words such as "the", "of",
  *   "is"; ordinary prose is 40% to 55%): at most 40;
- * - a stuffed search phrase (its uses, in every close form and every place, take over 4% of the words; good
- *   articles measure 0% to 2.1%): at most 60;
+ * - a stuffed search phrase (its uses, in every close form and every place, take over 3.5% of the words; good
+ *   articles measure 0% to 2.1%): at most 60; over 2.5% the gate refuses, though the score is only marked down a little;
+ * - much of the article in short list items (over 40% of its words are in items of under 10 words; good articles
+ *   measure 0% to 8%, a recipe-style how-to about 30%): at most 70;
  * - some repetition (over 10% by either measure above): at most 70.
  * Length alone never caps: padding is caught as repetition, and a long guide that stays useful is fine.
  *
@@ -88,7 +92,9 @@
  * "landlord"; "buses" matches "bus" but "glasses" is not "glass"); whole words only ("let" is not found in "letter").
  * The title, description and opening want the phrase as searched; elsewhere close forms count as uses too: -ing and
  * -ed forms and the main words in another order ("appraising property deals"). The phrase counts towards "enough"
- * only inside a real sentence, but every occurrence anywhere counts towards "too often".
+ * only inside a real sentence, but every occurrence anywhere counts towards "too often" (text, list items, table cells,
+ * link text, sub-headings, answers, and the picture description when it says the phrase twice or more). Invisible
+ * characters are dropped and Cyrillic or Greek look-alike letters read as Latin, so neither can hide a use or a repeat.
  */
 
 import type { ArticleBody, ArticleBrief, CheckIssue } from './types.js';
@@ -143,8 +149,8 @@ export interface SeoScoreContext {
 
 export interface SeoPartTotal { readonly part: SeoPart; readonly label: string; readonly points: number; readonly weight: number }
 /** Why the score is held down: an open must-fix, checks that ran on an earlier version (or not at all, as a target),
- * heavy repetition, text that is not sentences, or a stuffed phrase. */
-export type SeoCapKind = 'must-fix' | 'stale-checks' | 'not-checked' | 'repetition' | 'not-sentences' | 'stuffing';
+ * heavy repetition, text that is not sentences, much of the article in short list items, or a stuffed phrase. */
+export type SeoCapKind = 'must-fix' | 'stale-checks' | 'not-checked' | 'repetition' | 'not-sentences' | 'short-items' | 'stuffing';
 export interface SeoCap { readonly kind: SeoCapKind; readonly limit: number; readonly reason: string }
 
 export interface SeoScore {
@@ -170,7 +176,7 @@ export interface SeoScore {
   /** Share of different words in a moving window (0 to 1); low means the same few words again and again. */
   readonly vocabulary: number;
   /** What the repetition, sentence and stuffing measures found (percentages of the article), for tests and tuning. */
-  readonly measures: { readonly repeatedSentences: number; readonly repeatedWording: number; readonly joiningWords: number; readonly phraseShare: number };
+  readonly measures: { readonly repeatedSentences: number; readonly repeatedWording: number; readonly joiningWords: number; readonly phraseShare: number; readonly shortItems: number };
 }
 
 export const SEO_WEIGHTS = {
@@ -233,11 +239,15 @@ const RUNS_PASS = 6;
 const RUNS_FAIL = 15;
 const RUNS_CAP = 25;
 /**
- * The phrase's share of the article's words (every use in any close form, times its main words): above PHRASE_HIGH it
- * reads as forced; above PHRASE_STUFFED it is stuffed, the check fails and the score is capped at STUFFING_CAP.
+ * The phrase's share of the article's words (every use in any close form, times its main words, to one decimal place):
+ * above PHRASE_HIGH it reads as forced, the use check is only partly met and seoGate() refuses; above PHRASE_STUFFED
+ * it is stuffed, the check fails and the score is capped at STUFFING_CAP. Good natural articles measure 0% to 2.1%
+ * (the highest, a how-to whose two-word topic is said in nearly every step); 13 uses of a three-word phrase in 1,000
+ * words is 3.9%, about one use every 77 words, and is stuffed.
  */
-const PHRASE_HIGH = 2.5;
-const PHRASE_STUFFED = 4;
+export const PHRASE_HIGH = 2.5;
+const PHRASE_STUFFED = 3.5;
+const ALT_REPEATS_PHRASE = 'The picture description uses the search phrase more than once.';
 /** A part (sub-heading and its text) needs at least this many words. */
 const PART_MIN_WORDS = 40;
 /** At most this many sub-headings per 1,000 words (one every 80 words or so). */
@@ -265,6 +275,12 @@ const VOCAB_FAIL = 0.55;
 const VOCAB_CAP = 0.5;
 /** Ordinary sentences are about 40% to 55% small joining words; under this percentage the text is capped. */
 const SENTENCE_WORDS_CAP = 28;
+/**
+ * Words in short list items (under STEP_WORDS words), as a share of the article's sentences and items: above this the
+ * reading checks cannot pass and the score is capped at SOME_REPETITION_CAP. Good articles measure 0% to 8%; a
+ * recipe-style how-to with a tools list and short steps measures about 30%.
+ */
+const SHORT_ITEMS_CAP = 40;
 
 // ─── Words ───────────────────────────────────────────────────────────────────
 
@@ -282,11 +298,25 @@ function readable(markdown: string): string {
     .replace(/\*\*|__|[*_`]/g, '');
 }
 
-/** Lower-case words: letters and numbers, with an apostrophe allowed inside a word (curly or straight, the same). */
+/**
+ * Cyrillic and Greek letters drawn like Latin ones ("а" for "a", "ο" for "o"). A word made only of these and Latin
+ * letters is read as the Latin word it looks like, so a look-alike letter cannot hide a repeat or the phrase. A word
+ * with any other letter of its own script (ordinary Russian or Greek) is left as it is.
+ */
+const LOOK_ALIKE: Readonly<Record<string, string>> = { 'а': 'a', 'в': 'b', 'е': 'e', 'ё': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'ї': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'һ': 'h', 'ӏ': 'l', 'ԛ': 'q', 'ԝ': 'w', 'к': 'k', 'м': 'm', 'н': 'h', 'т': 't', 'п': 'n', 'г': 'r',
+  'α': 'a', 'β': 'b', 'ε': 'e', 'η': 'n', 'ι': 'i', 'κ': 'k', 'ν': 'v', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'χ': 'x', 'ϲ': 'c', 'ϳ': 'j', 'ω': 'w' };
+const foldLookAlike = (w: string) => (/[^\x00-\x7f]/.test(w) && [...w].every((c) => c < '\x80' || c in LOOK_ALIKE) ? [...w].map((c) => LOOK_ALIKE[c] ?? c).join('') : w);
+
+/**
+ * Lower-case words: letters and numbers, with an apostrophe allowed inside a word (curly or straight, the same).
+ * Invisible characters (zero-width spaces and joiners, soft hyphens, byte-order marks) are dropped first, so they
+ * cannot split a word the reader sees whole.
+ */
 export function words(text: string): string[] {
   const out: string[] = [];
-  const s = (/[^\x00-\x7f]/.test(text) ? text.normalize('NFKC') : text).toLowerCase().replace(/[‘’ʼ`´]/g, "'");
-  for (const m of s.matchAll(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu)) out.push(m[0]);
+  const wide = /[^\x00-\x7f]/.test(text);
+  const s = (wide ? text.replace(/\p{Cf}/gu, '').normalize('NFKC') : text).toLowerCase().replace(/[‘’ʼ`´]/g, "'");
+  for (const m of s.matchAll(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu)) out.push(wide ? foldLookAlike(m[0]) : m[0]);
   return out;
 }
 
@@ -592,8 +622,10 @@ function vocabulary(ws: readonly string[]): number {
   return total / windows;
 }
 
+/** A sentence, or a list item's sentence, in reading order. `list` is the block's list number for items, or -1. */
+interface Unit { readonly t: readonly string[]; readonly list: number }
 interface Repetition {
-  /** Sentences and list items of FRAGMENT_WORDS words or more (the ones that can repeat). */
+  /** Sentences of FRAGMENT_WORDS words or more, and every list item whatever its length (the ones that can repeat). */
   readonly counted: number;
   /** Of those, the ones that repeat an earlier one word for word, or nearly (one or two words changed). */
   readonly repeats: number;
@@ -607,30 +639,49 @@ interface Repetition {
  * Repetition over the whole article, list items included: a sentence repeats when it matches an earlier one word for
  * word, or when most of its runs of three words already came earlier (an earlier sentence with one or two words
  * swapped); and the share of all runs of REPEAT_RUN words that came earlier in the article.
+ *
+ * Every list item counts as a possible repeat, however short: a word-for-word repeat of a three-word bullet is still a
+ * repeat, and an honest list rarely says the same item twice. The items of one list are read as one run of words for
+ * the runs of REPEAT_RUN words, so a list of short items pasted again is seen as repeated wording, not as items too
+ * short to compare. Different short items make different runs, so an honest list adds nothing to the measure.
  */
-function repetition(sentenceTokens: readonly (readonly string[])[]): Repetition {
-  const seen = new Set<string>();
+function repetition(units: readonly Unit[]): Repetition {
+  const seen = new Map<string, number>();
   const tri = new Set<string>();
   const runs = new Set<string>();
   let counted = 0, repeats = 0, exactRepeats = 0, repeatWords = 0, runTotal = 0, runRepeated = 0;
-  for (const t of sentenceTokens) {
+  const countRuns = (t: readonly string[]) => {
     for (let i = 0; i + REPEAT_RUN <= t.length; i++) {
       const k = t.slice(i, i + REPEAT_RUN).join(' ');
       runTotal++;
       if (runs.has(k)) runRepeated++; else runs.add(k);
     }
+  };
+  let stream: string[] = [], streamList = -1;
+  const flush = () => { countRuns(stream); stream = []; streamList = -1; };
+  for (const { t, list } of units) {
+    if (list < 0 || list !== streamList) flush();
+    if (list < 0) countRuns(t); else { streamList = list; stream.push(...t); }
     const grams: string[] = [];
     for (let i = 0; i + 3 <= t.length; i++) grams.push(t.slice(i, i + 3).join(' '));
-    if (t.length >= FRAGMENT_WORDS) {
-      counted++;
+    if (t.length > 0) {
       const key = t.join(' ');
-      const exact = seen.has(key);
-      const near = !exact && t.length >= NEAR_REPEAT_WORDS && grams.filter((g) => tri.has(g)).length * 3 >= grams.length * 2;
-      if (exact || near) { repeats++; repeatWords += t.length; if (exact) exactRepeats++; }
-      seen.add(key);
+      const times = seen.get(key) ?? 0;
+      seen.set(key, times + 1);
+      const short = t.length < FRAGMENT_WORDS;
+      // A very short sentence or item said twice is ordinary ("Cost" as a pro and a con, "Yes." opening two answers);
+      // from its third time it is a repeat. A short sentence of prose is counted only then, so honest prose full of
+      // short sentences is measured exactly as before; every list item is counted.
+      const exact = short ? times >= 2 : times >= 1;
+      const near = !short && times === 0 && t.length >= NEAR_REPEAT_WORDS && grams.filter((g) => tri.has(g)).length * 3 >= grams.length * 2;
+      if (!short || list >= 0 || exact) {
+        counted++;
+        if (exact || near) { repeats++; repeatWords += t.length; if (exact) exactRepeats++; }
+      }
     }
     for (const g of grams) tri.add(g);
   }
+  flush();
   return { counted, repeats, exactRepeats, repeatWords, repeatedRuns: runTotal ? runRepeated / runTotal : 0 };
 }
 
@@ -727,15 +778,16 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const np = proseSentences.length;
 
   // Repetition over the whole article, in reading order, list items included.
-  const readingOrder = blockSentences.flatMap((b) => [...b.prose, ...b.items]).map(wordsOf);
-  const rep = repetition(readingOrder);
+  const units: Unit[] = blockSentences.flatMap((b, i) => [...b.prose.map((s) => ({ t: wordsOf(s), list: -1 })), ...b.items.map((s) => ({ t: wordsOf(s), list: i }))]);
+  const readingOrder = units.map((u) => u.t);
+  const rep = repetition(units);
   const dupShare = rep.counted ? (rep.repeats * 100) / rep.counted : 0;
   const repeatedRuns = rep.repeatedRuns * 100;
   const vocab = vocabulary(allWords);
   const smallWords = functionShare(readingOrder) * 100;
 
   // ── Search: the search phrase ──
-  let stuffedShare = 0, phraseShare = 0;
+  let stuffedShare = 0, phraseShare = 0, altUses = 0;
   if (hasPhrase) {
     const titleTokens = words(seoTitle);
     const t = matchTokens(stems(titleTokens), p);
@@ -831,8 +883,12 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
       }
     });
     for (const x of headings) all += closeAt(keysOf(words(x)), needKeys, p.s.length + 5).length;
+    // A picture description describes one picture: the phrase said twice or more there is stuffing, and every use counts.
+    altUses = closeAt(keysOf(words(str(body?.image && typeof body.image === 'object' ? body.image.alt : ''))), needKeys, p.s.length + 5).length;
+    if (altUses >= 2) all += altUses;
     // Three uses are never too many, however short the text.
-    const share = wordCount && all > 3 ? (all * p.need.length * 100) / wordCount : 0;
+    // Rounded once, so the check, the cap, the reported measure and the gate always agree.
+    const share = wordCount && all > 3 ? Math.round((all * p.need.length * 1000) / wordCount) / 10 : 0;
     stuffedShare = share > PHRASE_STUFFED ? share : 0;
     phraseShare = share;
     const spread = usedIn.size >= 2;
@@ -953,10 +1009,11 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
     const needKeys = p.need.map(closeKeys);
     const got = covers(needKeys, have);
     const head = needKeys.length ? covers([needKeys[needKeys.length - 1]!], have) > 0 : false;
-    const aResult: SeoCheckResult = altOnlyPhrase ? 'fail' : !altOk ? 'partly' : head || got * 2 >= needKeys.length ? 'pass' : got > 0 ? 'partly' : 'fail';
+    const altStuffed = altUses >= 2;
+    const aResult: SeoCheckResult = altOnlyPhrase || altStuffed ? 'fail' : !altOk ? 'partly' : head || got * 2 >= needKeys.length ? 'pass' : got > 0 ? 'partly' : 'fail';
     add('pictures.phrase', 'pictures', 'The picture description mentions the topic', SEO_WEIGHTS.pictureDescriptionPhrase, aResult,
-      altOnlyPhrase ? 'The picture description is the phrase on its own, not a description that mentions it.' : !altOk ? 'The picture description needs to describe the picture first.' : aResult === 'pass' ? 'The picture description mentions what the article is about.' : got ? 'The picture description mentions only part of what the article is about.' : 'The picture description does not mention what the article is about.',
-      !altOk ? 'Describe what the picture shows in a few words; mention the topic only where it is true to the picture.' : 'If it is true to the picture, mention the topic in its description. The exact search phrase is not needed.', 'picture-description');
+      altOnlyPhrase ? 'The picture description is the phrase on its own, not a description that mentions it.' : altStuffed ? ALT_REPEATS_PHRASE : !altOk ? 'The picture description needs to describe the picture first.' : aResult === 'pass' ? 'The picture description mentions what the article is about.' : got ? 'The picture description mentions only part of what the article is about.' : 'The picture description does not mention what the article is about.',
+      !altOk || altStuffed ? 'Describe what the picture shows in a few words; mention the topic only where it is true to the picture.' : 'If it is true to the picture, mention the topic in its description. The exact search phrase is not needed.', 'picture-description');
   } else if (hasPhrase) leftOut.push('the picture description (there is no picture yet)');
 
   // ── Easy to read ──
@@ -971,8 +1028,15 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   const readWordsN = readTokens.reduce((s, t) => s + t.length, 0);
   const itemWordsN = tokens.slice(np).reduce((s, t) => s + t.length, 0);
   const mostlyList = itemWordsN > proseWordsN;
-  const thinProse = mostlyList && readWordsN < MIN_PROSE_WORDS;
-  const listNote = thinProse && n ? ` Most of the article is list items, with too little prose to judge this fully.` : mostlyList ? ' Most of the article is list items; this is judged on the prose and the full-sentence items.' : '';
+  // Short items are left out of the shares above, so when they carry much of the article the shares describe only the
+  // rest of it: those checks cannot pass, and the whole score is held (the cap below). Honest lists (tools, steps,
+  // pros and cons) sit well under SHORT_ITEMS_CAP; a list padded out, or bullets in place of writing, sit above it.
+  const shortItemWordsN = tokens.slice(np).reduce((s, t) => s + (t.length < STEP_WORDS ? t.length : 0), 0);
+  const shortItemShare = proseWordsN + itemWordsN ? (shortItemWordsN * 100) / (proseWordsN + itemWordsN) : 0;
+  const listHeavy = wordCount >= 100 && shortItemShare > SHORT_ITEMS_CAP;
+  const thinProse = (mostlyList && readWordsN < MIN_PROSE_WORDS) || listHeavy;
+  const listNote = thinProse && n ? (listHeavy && readWordsN >= MIN_PROSE_WORDS ? ' Much of the article is short list items, so this is judged on only part of it.' : ' Most of the article is list items, with too little prose to judge this fully.')
+    : mostlyList ? ' Most of the article is list items; this is judged on the prose and the full-sentence items.' : '';
   const notOverPartly = (r: SeoCheckResult): SeoCheckResult => (thinProse && r === 'pass' ? 'partly' : r);
   const avgLen = nr ? readWordsN / nr : 0;
   const fragments = readTokens.filter((t) => t.length < FRAGMENT_WORDS).length;
@@ -1009,8 +1073,9 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
     ease === null ? 'There is too little prose to judge how easy it is to read.' : `Reading ease ${Math.round(ease)} out of 100: ${easeWords(ease)}.${ease >= 60 && avgLen < CHOPPY_FAIL ? ' It only looks easy because the sentences are fragments.' : ease >= 60 && avgLen < SENTENCE_FLOOR - 2 ? ' Much of that comes from very short sentences, so the text is not quite as easy as the number says.' : ' Most readers find 60 or more comfortable.'}${listNote}`,
     ease !== null && ease >= 60 ? 'Write in full sentences with everyday words. Very short fragments are not easier to follow.' : 'Use shorter sentences and everyday words. Swap long words for short ones where you can.', 'text');
   // Varied starts: no long run of sentences starting with the same word, and no one word starting too many. Everyday
-  // starts ("the", "a", "you", "it") are common in good writing, so they have a higher allowance.
-  const firsts = proseTokens.map((t) => t[0] ?? '');
+  // starts ("the", "a", "you", "it") are common in good writing, so they have a higher allowance. List items written
+  // as full sentences count, as they do for the other reading checks; short steps ("Turn", "Check") do not.
+  const firsts = readTokens.map((t) => t[0] ?? '');
   const runLimit = (w: string) => (COMMON_STARTS.has(w) ? 4 : 3);
   let runs = 0;
   for (let i = 0, len = 1; i < firsts.length; i++) {
@@ -1019,13 +1084,13 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   }
   const startCounts = new Map<string, number>();
   for (const w of firsts) if (w) startCounts.set(w, (startCounts.get(w) ?? 0) + 1);
-  const shareOf = (w: string) => (np >= 10 ? ((startCounts.get(w) ?? 0) * 100) / np : 0);
+  const shareOf = (w: string) => (nr >= 10 ? ((startCounts.get(w) ?? 0) * 100) / nr : 0);
   const over = (w: string, common: number, other: number) => shareOf(w) > (COMMON_STARTS.has(w) ? common : other);
   const overStart = [...startCounts.keys()].filter((w) => over(w, START_SHARE_COMMON, START_SHARE)).sort((x, y) => shareOf(y) - shareOf(x))[0];
   const failStart = [...startCounts.keys()].some((w) => over(w, START_FAIL_COMMON, START_FAIL));
-  const startResult: SeoCheckResult = !np ? 'fail' : runs >= 2 || failStart ? 'fail' : runs === 1 || overStart ? 'partly' : 'pass';
+  const startResult: SeoCheckResult = !nr ? 'fail' : runs >= 2 || failStart ? 'fail' : runs === 1 || overStart ? 'partly' : 'pass';
   add('read.starts', 'read', 'Varied sentence starts', SEO_WEIGHTS.sentenceStarts, startResult,
-    !np ? 'The article has no sentences yet.' : runs ? `${plural(runs, 'place has', 'places have')} a long run of sentences in a row starting with the same word.` : overStart ? `${pct(shareOf(overStart))} of sentences start with ${quote(overStart)}.` : 'Sentences start in varied ways.',
+    !nr ? 'The article has no sentences yet.' : runs ? `${plural(runs, 'place has', 'places have')} a long run of sentences in a row starting with the same word.` : overStart ? `${pct(shareOf(overStart))} of sentences start with ${quote(overStart)}.` : 'Sentences start in varied ways.',
     runs ? 'Start one of those sentences differently.' : 'Start more sentences in other ways, so the text does not sound repetitive.', 'text');
   // Linking words: a pass band, with variety, and not just bolted to the start of every sentence.
   const linkInfo = readTokens.map(linkingIn);
@@ -1138,12 +1203,13 @@ export function seoScore(brief: Pick<ArticleBrief, 'targetQuery'> & Partial<Pick
   if (n && (dupShare > RUNS_CAP || repeatedRuns > RUNS_CAP || vocab < VOCAB_CAP)) caps.push({ kind: 'repetition', limit: REPETITION_CAP, reason: `The wording repeats itself a lot, so the score stays at ${REPETITION_CAP} or below until it reads naturally.` });
   else if (n && (dupShare > RUNS_SOME || repeatedRuns > RUNS_SOME)) caps.push({ kind: 'repetition', limit: SOME_REPETITION_CAP, reason: `Parts of the wording repeat earlier sentences, so the score stays at ${SOME_REPETITION_CAP} or below until each part says something new.` });
   if (wordCount >= 100 && smallWords < SENTENCE_WORDS_CAP) caps.push({ kind: 'not-sentences', limit: REPETITION_CAP, reason: `The text does not read as ordinary sentences: it has very few of the small words (“the”, “of”, “is”, “to”) that join words into sentences. The score stays at ${REPETITION_CAP} or below until it does.` });
+  if (listHeavy) caps.push({ kind: 'short-items', limit: SOME_REPETITION_CAP, reason: `Much of the article is short list items rather than sentences, so the score stays at ${SOME_REPETITION_CAP} or below until more of it is written out in full sentences.` });
   if (stuffedShare) caps.push({ kind: 'stuffing', limit: STUFFING_CAP, reason: `The search phrase comes up far too often, so the score stays at ${STUFFING_CAP} or below until it is used naturally.` });
   const cap = caps.sort((x, y) => x.limit - y.limit)[0] ?? null;
   const score = cap ? Math.min(uncapped, cap.limit) : uncapped;
   return { score, uncapped, cap, vocabulary: Math.round(vocab * 100) / 100, phrase: hasPhrase ? rawPhrase : null, checks: [...checks].sort((x, y) => order[x.result] - order[y.result]), parts, words: wordCount,
     readingEase: ease === null ? null : Math.round(ease), leftOut, earned, available,
-    measures: { repeatedSentences: Math.round(dupShare * 10) / 10, repeatedWording: Math.round(repeatedRuns * 10) / 10, joiningWords: Math.round(smallWords * 10) / 10, phraseShare: Math.round(phraseShare * 10) / 10 } };
+    measures: { repeatedSentences: Math.round(dupShare * 10) / 10, repeatedWording: Math.round(repeatedRuns * 10) / 10, joiningWords: Math.round(smallWords * 10) / 10, phraseShare, shortItems: Math.round(shortItemShare * 10) / 10 } };
 }
 
 /**
@@ -1170,7 +1236,8 @@ export function seoNextSteps(s: SeoScore, count = 3, canFix: (c: SeoCheck) => bo
 /**
  * The gate an automatic step uses: NECESSARY, NOT SUFFICIENT. A pass means only that the article clears the bar on
  * the things words can show (placement, length, structure, repetition, stuffing) with nothing left out and the
- * quality checks run on this version. It does not mean the article is true, useful or says what it should: fluent
+ * quality checks run on this version, the search phrase at a natural rate (PHRASE_HIGH or under) and said at most
+ * once in the picture description. It does not mean the article is true, useful or says what it should: fluent
  * empty filler can pass. A separate meaning check is required before any automatic rewrite is accepted.
  */
 export interface SeoGateResult {
@@ -1189,6 +1256,10 @@ export function seoGate(s: SeoScore): SeoGateResult {
   const reasons: string[] = [];
   if (s.score < bar) reasons.push(`The score is ${s.score}, below the bar of ${bar}.`);
   if (s.cap) reasons.push(s.cap.reason);
+  // A phrase a little over the natural rate, or said twice in the picture description, costs few points in the report,
+  // but a rewrite that leans on it is not kept.
+  if (s.measures.phraseShare > PHRASE_HIGH && s.cap?.kind !== 'stuffing') reasons.push('The search phrase comes up more often than reads naturally. Use it less, and other words for the same idea.');
+  if (s.checks.some((c) => c.id === 'pictures.phrase' && c.found === ALT_REPEATS_PHRASE)) reasons.push(ALT_REPEATS_PHRASE);
   // The picture description is not run without a picture; that is not missing information (the lower bar covers it).
   const missing = s.leftOut.filter((x) => !x.startsWith('the picture description'));
   if (missing.length) reasons.push(`Some checks could not run: ${missing.join('; ')}. Score it in target mode.`);

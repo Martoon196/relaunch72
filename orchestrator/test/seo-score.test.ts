@@ -4,10 +4,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { closeKeys, MUST_FIX_CAP, readingEase, REPETITION_CAP, sentences, SEO_GATE_BAR, SEO_WEIGHTS, seoNextSteps, seoScore, stem, STUFFING_CAP, syllables, SOME_REPETITION_CAP, seoGate, type SeoCheck, type SeoScore } from '../src/seo-blog/seo-score.js';
+import { closeKeys, MUST_FIX_CAP, readingEase, REPETITION_CAP, sentences, SEO_GATE_BAR, SEO_WEIGHTS, seoNextSteps, seoScore, stem, STUFFING_CAP, syllables, SOME_REPETITION_CAP, seoGate, words, type SeoCheck, type SeoScore } from '../src/seo-blog/seo-score.js';
 import { readFileSync } from 'node:fs';
 import * as R from './seo-score-review-fixtures.js';
 import * as R2 from './seo-score-review2-fixtures.js';
+import * as R3 from './seo-score-review3-fixtures.js';
 import { seoBlogCapabilitiesLine } from '../src/portal/seo-blog-capabilities.js';
 import type { ArticleBody } from '../src/seo-blog/types.js';
 import * as fx from './seo-blog-article-page-fixtures.js';
@@ -123,11 +124,14 @@ test('the search phrase checks: title, start of title, description, address, ope
 
 test('counterweights on the phrase: alone as a sentence or heading does not count, more than two headings is forced, split across a heading is not a use', () => {
   const P = 'maximum offer';
-  const alone = seoScore(q(P), mini({ intro: `Maximum offer. ${prose(3)}`, sections: [{ id: 'a', heading: 'Maximum offer', body: `Maximum offer. ${prose(5)}` }, { id: 'b', heading: 'More', body: `Maximum offer. ${prose(5)}` }] }), SITE);
+  const aloneIn = (introSentences: number) => seoScore(q(P), mini({ intro: `Maximum offer. ${prose(introSentences)}`, sections: [{ id: 'a', heading: 'Maximum offer', body: `Maximum offer. ${prose(5)}` }, { id: 'b', heading: 'More', body: `Maximum offer. ${prose(5)}` }] }), SITE);
+  const alone = aloneIn(8);
   assert.equal(result(alone, 'phrase.opening'), 'partly', 'the phrase on its own is not a sentence');
   assert.equal(result(alone, 'phrase.heading'), 'partly', 'a heading that is only the phrase');
   assert.equal(result(alone, 'phrase.use'), 'fail');
   assert.match(check(alone, 'phrase.use').found, /only appears on its own/);
+  // In about 200 words, four uses of a two-word phrase (4%) is stuffed as well as alone, and is told so.
+  assert.match(check(aloneIn(3), 'phrase.use').found, /mostly on its own\. That is too many: it reads as stuffed/);
   const many = seoScore(q(P), mini({ sections: ['Your maximum offer explained', 'Setting a maximum offer', 'When the maximum offer is too low'].map((heading, i) => ({ id: `${i}`, heading, body: prose(5, i) })) }), SITE);
   assert.equal(result(many, 'phrase.heading'), 'partly'); assert.match(check(many, 'phrase.heading').found, /More than two/);
   // "maximum" ends a heading and "offer" starts the text below: not a use.
@@ -699,8 +703,11 @@ test('G2 phrase stuffing: 4% and above is held at 70 or below; good writing meas
     assert.ok(s.score <= 70, `${k} phrase sentences scored ${s.score}`);
     assert.equal(result(s, 'phrase.use'), 'fail');
   }
+  // F2 of the third review: 3.9% (13 uses in 997 words) is stuffed now, not "a little high".
   const high = seoScore(R2.REVIEW2_BRIEF, R2.strongPlusPhrase(10), R2.REVIEW2_CONTEXT);
-  assert.equal(result(high, 'phrase.use'), 'partly', 'at 3.9% the use check is no longer full marks');
+  assert.equal(high.measures.phraseShare, 3.9);
+  assert.equal(result(high, 'phrase.use'), 'fail', 'at 3.9% the phrase is stuffed');
+  assert.equal(high.cap?.kind, 'stuffing');
   for (const [name, x] of [...GOOD, ...SHAPES]) {
     const s = seoScore(x.brief, x.body, strictFor(x));
     assert.ok(s.measures.phraseShare <= 2.5, `${name}: ${s.measures.phraseShare}`);
@@ -763,4 +770,136 @@ test('R2 a check with two things open is not promised in the headline gain', () 
   assert.equal(sub.reasons, 2, sub.found);
   assert.match(sub.found, /fewer than 40 words/); assert.match(sub.found, /a lot of sub-headings for the length/);
   assert.ok(!seoNextSteps(s).checks.includes(sub), 'one change will not pass it, so it is not one of the three');
+});
+
+// ─── The third review: short list items (F1) and a phrase share just under the old stuffing line (F2) ──────────────
+
+test('F1/F2 regression: every good article scores exactly what it scored before, with and without a picture, as a report and as a gate', () => {
+  // Pinned on d4e5527, before these changes. Any change here must be explained, line by line.
+  const pinned: [string, R.GoodArticle, number, number, number][] = [
+    ['how-to', R.A, 99, 99, 94], ['comparison', R.B, 100, 100, 95], ['long guide', R.C, 98, 98, 93],
+    ['listicle', R2.L, 96, 96, 91], ['recipe-style steps', R2.R, 94, 94, 88], ['glossary', R2.G, 94, 94, 90],
+    ['quotes a regulation', R2.Q, 94, 94, 90], ['buy page', R2.Y, 98, 98, 92],
+  ];
+  for (const [name, x, report, strict, bare] of pinned) {
+    const s = seoScore(x.brief, x.body, { ...strictFor(x), targetMode: false });
+    const t = seoScore(x.brief, x.body, strictFor(x));
+    const n = seoScore(x.brief, R.withoutPicture(x.body), strictFor(x));
+    assert.deepEqual([s.score, t.score, n.score], [report, strict, bare], name);
+    assert.equal(t.cap, null, name);
+    assert.equal(seoGate(t).pass, true, name); assert.equal(seoGate(n).pass, true, `${name} without a picture`);
+    assert.ok(t.measures.shortItems <= 30, `${name}: ${t.measures.shortItems}% in short list items`);
+    assert.ok(t.measures.phraseShare <= 2.1, `${name}: phrase ${t.measures.phraseShare}%`);
+  }
+  // The recipe is the most list-heavy good piece: about 30% of its words in short items, well under the 40% line.
+  assert.equal(seoScore(R2.R.brief, R2.R.body, strictFor(R2.R)).measures.shortItems, 29.3);
+  const chapters = [R.C, R2.Q, R2.L, R.B, R.A, R2.G].flatMap((x, k) => x.body.sections.map((s, i) => ({ id: `c${k}-${i}`, heading: s.heading.replace(/^\d+\. /, ''), body: s.body })));
+  assert.equal(seoScore(R.C.brief, { ...R.C.body, sections: chapters }, { siteHosts: [R.C.site], checkIssues: [], targetMode: true }).score, 96, 'the pillar');
+  assert.equal(seoScore(sp.brief(), sp.strongBody(), SITE).score, 97, 'the strong fixture');
+  assert.equal(seoScore(sp.brief(), sp.strongBody(), { ...SITE, targetMode: true }).score, 97, 'the strong fixture as a gate');
+  assert.equal(seoScore(sp.brief(), fx.body(), SITE).score, 72, 'the realistic fixture');
+  assert.equal(seoScore(sp.brief(), R.longVariedBody(300), R.REVIEW_CONTEXT).score, 93, 'a long varied guide');
+});
+
+test('F1 short list items: the review\'s bullet articles (92 to 98 before) are held at 70 or below and refused by the gate', () => {
+  for (const [name, f] of R3.BULLET_ATTACKS) for (const body of [f(), R.withoutPicture(f())]) {
+    const s = seoScore(R2.REVIEW2_BRIEF, body, R2.REVIEW2_CONTEXT);
+    assert.ok(s.score <= SOME_REPETITION_CAP, `${name} scored ${s.score} (uncapped ${s.uncapped})`);
+    assert.equal(seoGate(s).pass, false, name);
+  }
+  const by = (k: number) => seoScore(R2.REVIEW2_BRIEF, R3.BULLET_ATTACKS[k]![1](), R2.REVIEW2_CONTEXT);
+  // A pasted list is a repeat however short its items, and however many times it is pasted.
+  for (const k of [1, 2, 3]) { assert.equal(by(k).cap?.kind, 'repetition'); assert.equal(by(k).score, REPETITION_CAP); }
+  assert.equal(by(3).words, 27_857);
+  // Different short bullets are not repeats, but when they carry much of the article the score is held.
+  for (const k of [0, 4, 5, 6]) assert.ok(by(k).measures.shortItems > 40, String(by(k).measures.shortItems));
+  const x3 = by(4);
+  assert.equal(x3.cap?.kind, 'short-items');
+  assert.match(x3.cap!.reason, /^Much of the article is short list items rather than sentences, so the score stays at 70 or below until more of it is written out in full sentences\.$/);
+  for (const id of ['read.sentences', 'read.ease', 'read.linking']) {
+    assert.notEqual(result(x3, id), 'pass', id);
+    assert.match(check(x3, id).found, /Much of the article is short list items, so this is judged on only part of it\./, id);
+  }
+});
+
+test('F1 honest lists are not marked down: tools, steps, pros and cons sharing an item, parallel steps', () => {
+  const base = seoScore(R2.REVIEW2_BRIEF, sp.strongBody(), R2.REVIEW2_CONTEXT);
+  for (const [name, f] of R3.HONEST_LISTS) {
+    const s = seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT);
+    assert.equal(s.cap, null, name);
+    assert.ok(s.score >= base.score, `${name}: ${s.score} against ${base.score} without the list`);
+    assert.equal(result(s, 'read.variety'), 'pass', `${name}: ${check(s, 'read.variety').found}`);
+    assert.equal(seoGate(s).pass, true, name);
+  }
+  // The line sits between the most list-heavy good piece (29%) and padding: different short bullets pass up to 40%.
+  const under = seoScore(R2.REVIEW2_BRIEF, R3.distinctBullets(34), R2.REVIEW2_CONTEXT);
+  const over = seoScore(R2.REVIEW2_BRIEF, R3.distinctBullets(35), R2.REVIEW2_CONTEXT);
+  assert.ok(under.measures.shortItems > 39 && under.measures.shortItems <= 40, String(under.measures.shortItems));
+  assert.equal(under.cap, null);
+  assert.ok(over.measures.shortItems > 40, String(over.measures.shortItems));
+  assert.equal(over.cap?.kind, 'short-items'); assert.equal(over.score, SOME_REPETITION_CAP);
+  // A very short item said twice is ordinary; said a third time it is a repeat.
+  const twice = seoScore(null, mini({ intro: prose(20), sections: [{ id: 'a', heading: 'Pros and cons', body: '- Cost\n- Speed\n\nAnd then:\n\n- Cost\n- Risk' }] }), SITE);
+  assert.equal(twice.measures.repeatedSentences, 0);
+  const thrice = seoScore(null, mini({ intro: prose(20), sections: [{ id: 'a', heading: 'Pros and cons', body: '- Cost\n- Speed\n\nAnd then:\n\n- Cost\n- Risk\n\nAgain:\n\n- Cost' }] }), SITE);
+  assert.ok(thrice.measures.repeatedSentences > 0);
+});
+
+test('F2 the phrase: over 2.5% the gate refuses, over 3.5% it is stuffed and capped; close forms count; good writing is untouched', () => {
+  const seen = { natural: 0, high: 0, stuffed: 0 };
+  for (let k = 0; k <= 24; k++) {
+    const s = seoScore(R2.REVIEW2_BRIEF, R2.strongPlusPhrase(k), R2.REVIEW2_CONTEXT);
+    const share = s.measures.phraseShare, g = seoGate(s), use = result(s, 'phrase.use');
+    const phraseReason = g.reasons.some((r) => /comes up more often than reads naturally|far too often/.test(r));
+    if (share > 3.5) { seen.stuffed++; assert.equal(use, 'fail', `${k}`); assert.equal(s.cap?.kind, 'stuffing', `${k}`); assert.ok(s.score <= STUFFING_CAP); assert.ok(phraseReason); }
+    else if (share > 2.5) { seen.high++; assert.equal(use, 'partly', `${k}`); assert.equal(s.cap, null); assert.equal(g.pass, false, `${k} at ${share}%`); assert.ok(g.reasons.includes('The search phrase comes up more often than reads naturally. Use it less, and other words for the same idea.')); }
+    else { seen.natural++; assert.ok(!phraseReason, `${k} at ${share}%: ${g.reasons.join(' | ')}`); }
+  }
+  assert.ok(seen.natural && seen.high && seen.stuffed, JSON.stringify(seen));
+  // The review's case: 13 uses in 997 words, 3.9%, scored 98 and passed; now it is held at 60.
+  const f2 = seoScore(R2.REVIEW2_BRIEF, R2.strongPlusPhrase(10), R2.REVIEW2_CONTEXT);
+  assert.deepEqual([f2.words, f2.measures.phraseShare, f2.score, seoGate(f2).pass], [997, 3.9, STUFFING_CAP, false]);
+  assert.match(check(f2, 'phrase.use').found, /comes up 13 times in 997 words\. That is too many: it reads as stuffed\./);
+  // Close forms count the same as the phrase as searched: plural, -ing and -ed, its main words in another order.
+  const variants = ['Careful buyers appraise property deals before they offer.', 'Property deals appraised on paper rarely surprise anyone later.', 'Appraising a property deal takes an evening with the figures.', 'A deal on a property is easier to appraise once the works are priced.'];
+  const close = (k: number) => seoScore(R2.REVIEW2_BRIEF, R3.eachPart((i) => (i < k ? variants[i % 4]! : '')), R2.REVIEW2_CONTEXT);
+  assert.equal(seoGate(close(4)).pass, true, 'four natural variations in 900 words are fine');
+  assert.equal(seoGate(close(6)).pass, false); assert.equal(close(6).cap, null);
+  assert.equal(close(10).cap?.kind, 'stuffing');
+  // Every good piece stays at 2.1% or under (the regression test pins their scores), and passes the gate.
+  for (const [name, x] of [...GOOD, ...SHAPES]) assert.ok(!seoGate(seoScore(x.brief, x.body, strictFor(x))).reasons.some((r) => /search phrase/.test(r)), name);
+});
+
+test('dodges around the fix: list items, table cells, sub-headings, answers, link text, look-alike letters, zero-width characters, the picture description', () => {
+  for (const [name, f, expected] of R3.DODGES) {
+    const s = seoScore(R2.REVIEW2_BRIEF, f(), R2.REVIEW2_CONTEXT);
+    const g = seoGate(s);
+    if (expected === 'not caught') {
+      // The known limits, kept visible: one word changed in each item of a short list is how honest parallel lists
+      // look too ("Turn off the gas", "Turn off the water"), and a phrase split over two bullets is not read as one
+      // use by readers or search engines. Both are bounded: past 40% of the words in short items the score is held.
+      assert.equal(s.cap, null, name); assert.equal(g.pass, true, name);
+      continue;
+    }
+    assert.equal(g.pass, false, name);
+    if (expected === 'gate') continue;
+    if (expected === 'stuffing') { assert.equal(s.cap?.kind, 'stuffing', name); assert.ok(s.measures.phraseShare > 3.5, `${name}: ${s.measures.phraseShare}`); }
+    else assert.equal(s.cap?.kind, expected, `${name}: ${s.cap?.kind} ${JSON.stringify(s.measures)}`);
+  }
+  // Look-alike letters and zero-width characters do not hide the phrase: it is counted as if written plainly.
+  for (const k of [6, 7]) assert.ok(seoScore(R2.REVIEW2_BRIEF, R3.DODGES[k]![1](), R2.REVIEW2_CONTEXT).measures.phraseShare > 3.5, R3.DODGES[k]![0]);
+  // The picture description saying the phrase more than once fails its check and is refused by the gate.
+  const alt = seoScore(R2.REVIEW2_BRIEF, R3.DODGES.find((d) => d[2] === 'gate')![1](), R2.REVIEW2_CONTEXT);
+  assert.equal(result(alt, 'pictures.phrase'), 'fail');
+  assert.deepEqual(seoGate(alt).reasons, ['The picture description uses the search phrase more than once.']);
+  // Long list items count as sentences for every reading check, starts included.
+  const we = seoScore(null, mini({ intro: prose(12), sections: [{ id: 'a', heading: 'What we do', body: Array.from({ length: 12 }, (_, i) => `- We ${BANK[i]!.charAt(0).toLowerCase()}${BANK[i]!.slice(1)}`).join('\n') }] }), SITE);
+  assert.equal(result(we, 'read.starts'), 'fail', check(we, 'read.starts').found);
+});
+
+test('words: invisible characters are dropped and look-alike letters read as the Latin letters they copy; real Cyrillic and Greek words are kept', () => {
+  assert.deepEqual(words('app​raise a prop­erty⁠ deal﻿'), ['appraise', 'a', 'property', 'deal']);
+  assert.deepEqual(words(R3.lookAlike('appraise a property deal')), ['appraise', 'a', 'property', 'deal']);
+  assert.deepEqual(words('Дом и сад, ελληνικά'), ['дом', 'и', 'сад', 'ελληνικά']);
+  assert.deepEqual(words('Café naïve'), ['café', 'naïve']);
 });
