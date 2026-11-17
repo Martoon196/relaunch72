@@ -390,7 +390,10 @@ test('through the engine: a measured brief is written with prompt v2 and its req
   assert.deepEqual(version.generation!.searchDraft!.title!.main, []);
   assert.equal(version.generation!.searchDraft!.title!.chosen, 'model');
   const d = version.generation!.searchDraft!.description!;
-  assert.equal(version.body.metaDescription, d.chosen === 'option' ? ['Tenancy deposit protection explained for private landlords: what the law requires and how to stay organised.', 'Second option about tenancy deposit protection for landlords in England.'][d.index!] : 'A plain-English explanation of tenancy deposit protection rules for private landlords in England and Wales.');
+  // The writer's own description names "England and Wales", which the article's prose never does, so it fails the
+  // name check and the first option that passes every check is used instead.
+  assert.deepEqual({ chosen: d.chosen, index: d.index, main: d.main }, { chosen: 'option', index: 0, main: ['unknown_name'] });
+  assert.equal(version.body.metaDescription, 'Tenancy deposit protection explained for private landlords: what the law requires and how to stay organised.');
   assert.equal(version.generation!.searchDraft!.requirements.primary_phrase, 'tenancy deposit protection', 'the block itself is recorded');
   assert.ok(Buffer.byteLength(JSON.stringify(version.generation!.searchDraft!.requirements)) < SEARCH_CAPS.requirementsBytes);
   assert.ok(!JSON.stringify(version.body).includes('title_options') && !JSON.stringify(version.body).includes('searchDraft'), 'nothing of the choice is in the body or its hash');

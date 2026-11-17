@@ -508,6 +508,8 @@ test('S7: the reviewer\'s hostile pages cost milliseconds in pageOutline (a 1.5 
     'unclosed <h2>': `<html><body><main>${pad('<h2>x ', n)}</main></body></html>`, '<h2 a with no >': `<html><body><main>${pad('<h2 a', n)}</main></body></html>`,
     'unclosed <main>': `<html><body>${pad('<main>x ', n)}</body></html>`, 'unclosed <article>': `<html><body>${pad('<article>x ', n)}</body></html>`,
     'unclosed <script> in main': `<html><body><main>${pad('<script>x ', n)}</main></body></html>`, 'unclosed comment': `<html><body><main><h2>A</h2>${pad('<!-- x ', n)}</main></body></html>`,
+    'text then <h2 a with no >': `<html><body><main><p>${'word '.repeat(300)}</p>${pad('<h2 a', n)}</main></body></html>`, 'text then unclosed <h2>': `<html><body><main><p>${'word '.repeat(300)}</p>${pad('<h2>x ', n)}</main></body></html>`,
+    '<mainx look-alikes': `<html><body>${pad('<mainx ', n)}</body></html>`, 'many <article> cards': `<html><body>${pad('<article><h2>c</h2><p>w w w</p></article>', n)}</body></html>`,
   })) {
     const t = process.hrtime.bigint();
     H.pageOutline(html);
@@ -557,4 +559,16 @@ test('B3: a page outline is never taken from the business\'s own site or twice f
 test('S7: pageOutline indexes stay aligned on pages whose lowercase changes length ("İ")', () => {
   const o = H.pageOutline(`<html><body><p>${'İ'.repeat(500)}</p><main><h2>Kira depozitosu</h2><p>${'kelime '.repeat(200)}</p><h3>İade süresi</h3></main></body></html>`)!;
   assert.deepEqual(o.headings, ['Kira depozitosu', 'İade süresi']);
+});
+
+test('S5 with D1: once keyword-first work is switched off, a section rewrite of an article written under v2 uses the original section prompt and request', async () => {
+  const s = await setup();
+  const { version, article } = await write(s, s.pillar.id);
+  assert.ok(version!.generation!.searchDraft, 'written under v2');
+  const off = new SeoBlogEngine({ store: s.h.store, llm: s.h.llm, search: s.search, transport: s.h.web, publishers: new Map(), vault: s.h.vault, now: s.h.clock.now, batchLimit: 20, internalLog: () => undefined });
+  const sec = await off.regenerateSection(OWNER, s.brandId, article!.id, version!.id, version!.body.sections[0]!.id, 'tighter');
+  const req = s.seen.at(-1)!;
+  assert.equal(req.system, loadPrompt('seo-blog-section.md').body);
+  assert.doesNotMatch(req.messages[0]!.content, /search_requirements/);
+  assert.equal((sec.generation as Any).searchDraft, undefined);
 });

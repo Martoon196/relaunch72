@@ -216,18 +216,21 @@ export function pageOutline(html: string, maxHeadings = 12, maxChars = 100, maxH
   const headings: string[] = [];
   // Next-occurrence positions are cached and every look-ahead is windowed, so no step rescans the rest of the page.
   let next2 = lowerMain.indexOf('<h2'), next3 = lowerMain.indexOf('<h3');
+  let close2 = lowerMain.indexOf('</h2'), close3 = lowerMain.indexOf('</h3'), nextGt = lowerMain.indexOf('>');
   for (let at = 0; headings.length < maxHeadings;) {
     if (next2 >= 0 && next2 < at) next2 = lowerMain.indexOf('<h2', at);
     if (next3 >= 0 && next3 < at) next3 = lowerMain.indexOf('<h3', at);
     const open = next2 < 0 ? next3 : next3 < 0 ? next2 : Math.min(next2, next3);
     if (open < 0) break;
     const level = lowerMain[open + 2];
-    const gtAt = lowerMain.slice(open, open + 500).indexOf('>');
-    if (gtAt < 0) { at = open + 3; continue; }
-    const gt = open + gtAt;
-    const closeAt = lowerMain.slice(gt, gt + 2_000).indexOf(`</h${level}`);
-    if (closeAt < 0) { at = gt + 1; continue; }
-    const close = gt + closeAt;
+    if (nextGt !== -1 && nextGt < open) nextGt = lowerMain.indexOf('>', open);
+    if (nextGt < 0) break;
+    if (nextGt - open > 500) { at = open + 3; continue; }
+    const gt = nextGt;
+    // The next closing tag of this level, cached like the openings: a page of unclosed headings is one scan, not one per heading.
+    if (level === '2') { if (close2 !== -1 && close2 < gt) close2 = lowerMain.indexOf('</h2', gt); } else if (close3 !== -1 && close3 < gt) close3 = lowerMain.indexOf('</h3', gt);
+    const close = level === '2' ? close2 : close3;
+    if (close < 0 || close - gt > 2_000) { at = gt + 1; continue; }
     const t = plainText(main.slice(gt + 1, close)).replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Cs}]/gu, '').replace(/[\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim();
     if (t && t.length <= maxChars && !headings.includes(t)) headings.push(t);
     at = close + 4;
@@ -241,6 +244,7 @@ function asciiLower(s: string): string {
   return s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
 }
 
+const SKIPPED_TAGS = ['script', 'style', 'template', 'svg', 'noscript', 'iframe'] as const;
 function plainText(fragment: string): string {
   const lower = asciiLower(fragment);
   let out = '';
@@ -249,9 +253,9 @@ function plainText(fragment: string): string {
     const lt = fragment.indexOf('<', i);
     if (lt < 0) { out += fragment.slice(i); break; }
     out += fragment.slice(i, lt);
-    const skip = /^<(script|style|template|svg|noscript|iframe)\b/.exec(lower.slice(lt, lt + 12));
+    const skip = SKIPPED_TAGS.find((t) => lower.startsWith(t, lt + 1) && !/[a-z0-9-]/.test(lower[lt + 1 + t.length] ?? ''));
     if (skip) {
-      const end = lower.indexOf(`</${skip[1]}`, lt);
+      const end = lower.indexOf(`</${skip}`, lt);
       if (end < 0) break;
       const gt = lower.indexOf('>', end);
       i = gt < 0 ? fragment.length : gt + 1;

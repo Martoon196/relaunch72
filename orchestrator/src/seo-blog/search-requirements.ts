@@ -498,7 +498,10 @@ export function optionProblems(raw: unknown, kind: 'title' | 'description', ctx:
   tokens.forEach((t, i) => {
     const start = i === 0 || /[:.?|–—-]$/.test(tokens[i - 1]!);
     const w = t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/[’']s$/u, '');
-    if (!start && /\p{Lu}/u.test(w) && !proseWords.has(w.toLowerCase()) && !brandWords.has(w.toLowerCase()) && !TITLE_CASE_WORDS.has(w)) add('unknown_name');
+    // A joined spelling is a name as a whole ("OpenRent", "Acme-Lettings") only when the whole is unknown; each part of
+    // "plain-English" is looked up on its own.
+    const known = (x: string) => proseWords.has(x.toLowerCase()) || brandWords.has(x.toLowerCase()) || TITLE_CASE_WORDS.has(x) || !/\p{Lu}/u.test(x);
+    if (!start && w && !known(w) && !w.split(/[-–]/).every(known)) add('unknown_name');
   });
   if (kind === 'title' && (ctx.takenTitles ?? []).some((t) => typeof t === 'string' && norm(t) === norm(text))) add('duplicate');
   return problems;
