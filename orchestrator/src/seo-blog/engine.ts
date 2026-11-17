@@ -1199,7 +1199,9 @@ export class SeoBlogEngine {
         return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
       }
       if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt&&!(a.supplierTask&&this.deps.search.readTask)) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
-      return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
+      // The numbers-retry marker is used once: cleared as the task resumes, so it can never resume a later hold.
+      const used=('numbersRetry' in withRun.payload)?(({numbersRetry:_n,...rest})=>({...withRun,payload:rest}))(withRun.payload):withRun;
+      return {job:{...used,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
         ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}
           :numbersResume?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null}}}:{})};
     });
@@ -3634,7 +3636,9 @@ export class SeoBlogEngine {
       const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
       // Retry would only skip the same unknown lookup again: refuse with the true words instead.
       if(numbersRetry&&numbersOutcomeUnknown(job)) throw new SeoBlogError(409,ENGINE_GAP_MESSAGE.numbers_unknown,'numbers_unknown');
-      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})},state:'queued',runAfter:this.now(),error:null,
+      const payload:Record<string,unknown>={...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})};
+      if(!numbersRetry) delete payload.numbersRetry; // A marker left from an earlier numbers retry never carries over.
+      return this.store.updateJob({...job,payload,state:'queued',runAfter:this.now(),error:null,
         progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');

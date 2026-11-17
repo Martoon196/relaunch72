@@ -246,3 +246,34 @@ test('F4: the message is plain and neutral and passes the owner-words rule uncha
   assert.ok(m.length <= 400, 'fits the stored error');
   assert.doesNotMatch(m, /[–—]|supplier|provider|\bmodel\b|method|engine|Retry/i);
 });
+
+// ─── F5: the numbers-retry marker is used once ───────────────────────────────
+
+test('F5: after a numbers Retry has run, a later hold of another kind on the same autopilot task is not resumed by Retry', async () => {
+  const h = harness(); const kw = flaky(); const e = strictEngine(h, kw, true);
+  const brand = await readyBrand(h, e);
+  await autopilotPlan(h, e, brand); h.clock.advance(NUMBERS_RECHECK_DELAY_MS); await e.tick('w');
+  let job = (await planJobs(h, brand.id))[0]!;
+  assert.equal(job.state, 'blocked');
+  await e.retryJob(OWNER, brand.id, job.id);
+  assert.equal((await planJobs(h, brand.id))[0]!.payload.numbersRetry, true);
+  // The numbers retry runs (still failing here): the marker is cleared as soon as the task resumes.
+  h.clock.advance(1000); await e.tick('w');
+  job = (await planJobs(h, brand.id))[0]!;
+  assert.equal(job.state, 'blocked');
+  assert.equal('numbersRetry' in job.payload, false, 'cleared once used');
+  // The reviewer's planted case: the same task now held for another strict reason, with the marker left on.
+  const store = h.store as unknown as { jobs: Map<string, typeof job> };
+  const cur = store.jobs.get(job.id)!;
+  store.jobs.set(job.id, { ...cur, state: 'blocked', payload: { ...cur.payload, numbersRetry: true, programme: { ...(cur.payload.programme as object), hold: 'engine_incomplete', metricsWarning: undefined } }, error: ENGINE_GAP_MESSAGE.thin_research });
+  kw.healthy = true;
+  const tokens = () => (h.store as unknown as { usage: { brandId: string; kind: string; amount: number }[] }).usage.filter((u) => u.brandId === brand.id && u.kind === 'model_tokens').reduce((n, u) => n + u.amount, 0);
+  const before = tokens();
+  await e.retryJob(OWNER, brand.id, job.id);
+  assert.equal('numbersRetry' in (await planJobs(h, brand.id))[0]!.payload, false, 'a Retry that is not a numbers retry drops a stale marker');
+  h.clock.advance(1000); await e.tick('w');
+  job = (await planJobs(h, brand.id))[0]!;
+  assert.equal(job.state, 'blocked', 'the hold stays: only an explicit resume clears it');
+  assert.equal(tokens(), before, 'nothing was written');
+  assert.ok((await e.getBrand(OWNER, brand.id)).settings.programme?.researchHold, 'the hold remains');
+});
