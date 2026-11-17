@@ -24,10 +24,14 @@
  * skipped. Nothing here sends, queues or enrols anything, and no consent ledger event is written.
  */
 import { randomUUID } from 'node:crypto';
+import type { Pool } from 'pg';
+import { withTransaction } from '../db/transaction.js';
 import { CrmCommandService } from '../crm-pg/commands.js';
+import { CrmPgRepository } from '../crm-pg/repository.js';
 import type { CreateLeadResult, CrmTransactionRunner, SqlExecutor } from '../crm-pg/types.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
+import { MhpCommerceError } from './commerce-service.js';
 import { MHP_BOOK_INTEREST_LABEL } from './book-interest.js';
 import { MHP_CONSENT_VERSION, type MhpCapturedSignup, type MhpRegistrantRecord, type MhpSignup } from './growth-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
@@ -99,10 +103,19 @@ export function bookLeadPhone(value: string | null): string | null {
   return /^\+?\d{7,15}$/u.test(number) ? number : null;
 }
 
-/** The task text: what they asked for and whether they ticked the marketing box, in plain words. */
+/**
+ * The task text, in plain words: what they asked for, their mobile if they gave one (the form promises a quick call to
+ * anyone who adds it) and whether they may be sent marketing emails.
+ */
 export function bookTaskDescription(candidate: Pick<MhpBookLeadCandidate, 'marketingEmails' | 'phone'>): string {
-  const phone = bookLeadPhone(candidate.phone) ? `\nMobile given (unverified): ${candidate.phone!.trim()}` : '';
-  return `Asked for Chapter One. Marketing emails: ${candidate.marketingEmails ? 'yes.' : 'no, contact about the book only.'}${phone}`;
+  const typed = (candidate.phone ?? '').trim().slice(0, 40);
+  const mobile = !typed ? 'No mobile given.'
+    : bookLeadPhone(typed) ? `Mobile: ${typed} (they asked for a call). The number has not been checked.`
+      : `Mobile: ${typed} (they asked for a call, but this does not look like a complete number). The number has not been checked.`;
+  return ['Registered interest in the book Before You Buy on the book page: asked for Chapter One and the launch updates.'
+    + (typed ? ' Added a mobile for a quick call about the book and the property they are looking at.' : ''),
+  mobile,
+  candidate.marketingEmails ? 'Marketing emails: yes (they ticked the box on the form).' : 'Marketing emails: no. Contact them about the book only.'].join('\n');
 }
 
 /** One working day after `now` (Saturday and Sunday move to Monday, UK calendar; bank holidays are not known here). */
@@ -188,6 +201,18 @@ async function classify(tx: SqlExecutor, candidate: MhpBookLeadCandidate, actorU
 
 export const bookLeadKey = (prospectId: string): string => `mhp.book.${prospectId}`;
 
+/**
+ * The MHP marketing workspace's one active owner, read at run time on the web login as the viewing person (who must
+ * be a member: the membership policy shows nothing otherwise). Null when there is not exactly one active owner.
+ */
+export async function readMhpWorkspaceOwner(webPool: Pick<Pool, 'connect'>, identity: PortalSessionIdentity): Promise<string | null> {
+  const context = requestDatabaseContext({ workspaceId: MHP_MARKETING_WORKSPACE_ID, userId: identity.userId, requestId: `mhp-book-owner:${randomUUID()}` });
+  const rows = await withTransaction(webPool, context, async tx => (await tx.query<{ userId: string }>(`/* mhp.book-lead-workspace-owner */
+    SELECT m.user_id AS "userId" FROM app.workspace_memberships m WHERE m.workspace_id=app_private.current_workspace_id()
+      AND m.role='owner' AND m.status='active' ORDER BY m.user_id LIMIT 2`)).rows, { readOnly: true });
+  return rows.length === 1 && SIGNUP_LEAD_UUID.test(rows[0]!.userId) ? rows[0]!.userId : null;
+}
+
 class ProjectionChanged extends Error {}
 
 /**
@@ -229,22 +254,19 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
   }
   // The mobile is added only as an unverified phone point, and only if no other record already holds that number:
   // a visitor must not be able to attach their sign-up to someone else's record by typing that person's number.
+  // Through the CRM's own repository, exactly as crm.createLead and the Group HQ inbox "link" command add a point:
+  // never verified, first phone of the contact becomes its primary, an existing primary is never replaced.
+  const repository = new CrmPgRepository(tx);
   let phone: 'added' | 'present' | 'other_contact' | 'none' = 'none';
   const number = bookLeadPhone(candidate.phone);
   if (number) {
-    const holder = (await tx.query<{ contactId: string }>(`/* mhp.book-lead-phone-holder */
-      SELECT contact_id AS "contactId" FROM app.contact_points WHERE workspace_id=app_private.current_workspace_id() AND kind='phone'
-        AND normalized_value=$1 AND deleted_at IS NULL AND dedupe_state='normal' LIMIT 1`, [number])).rows[0];
+    const holder = await repository.findContactPoint('phone', number);
     if (holder) phone = holder.contactId === contactId ? 'present' : 'other_contact';
     else {
-      const inserted = await tx.query(`/* mhp.book-lead-phone */ INSERT INTO app.contact_points
-        (id,workspace_id,contact_id,kind,label,value,normalized_value,is_primary,consent_status,row_version,created_at,updated_at)
-        VALUES($1::uuid,app_private.current_workspace_id(),$2::uuid,'phone','Mobile (unverified)',$3,$4,
-          NOT EXISTS(SELECT 1 FROM app.contact_points q WHERE q.workspace_id=app_private.current_workspace_id() AND q.contact_id=$2::uuid
-            AND q.kind='phone' AND q.is_primary AND q.deleted_at IS NULL),'unknown',1,clock_timestamp(),clock_timestamp())
-        ON CONFLICT (workspace_id, kind, normalized_value) WHERE deleted_at IS NULL AND dedupe_state = 'normal' DO NOTHING RETURNING id`,
-        [randomUUID(), contactId, candidate.phone!.trim().slice(0, 500), number]);
-      phone = inserted.rowCount === 1 ? 'added' : 'other_contact';
+      const inserted = await repository.insertContactPoint({ id: randomUUID(), contactId, kind: 'phone', label: 'Mobile (unverified)',
+        value: candidate.phone!.trim().slice(0, 320), normalizedValue: number,
+        isPrimary: !(await repository.hasPrimaryContactPoint(contactId, 'phone')), consentStatus: 'unknown', createdAt: now.toISOString() });
+      phone = inserted ? 'added' : 'other_contact';
       if (phone === 'added') changes.push('mobile number (unverified)');
     }
   }
@@ -252,12 +274,11 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
     const id = randomUUID();
     const signed = new Date(candidate.signedUpAt);
     const occurredAt = Number.isFinite(signed.getTime()) && signed <= now ? signed : now;
-    await tx.query(`/* mhp.book-lead-activity */ INSERT INTO app.activities
-      (id,workspace_id,contact_id,opportunity_id,activity_type,channel,actor_kind,actor_user_id,subject,body,metadata,request_id,correlation_id,occurred_at,created_at)
-      VALUES($1::uuid,app_private.current_workspace_id(),$2::uuid,$3::uuid,$4,'crm','user',$5::uuid,$6,$7,$8::jsonb,$9,$10,$11::timestamptz,greatest($11::timestamptz,clock_timestamp()))`,
-      [id, contactId, opportunityId, MHP_BOOK_ACTIVITY, context.userId, 'Before You Buy book sign-up',
-        `${bookTaskDescription(candidate)}\nRecorded: ${changes.join(', ')}.${phone === 'other_contact' ? '\nThe mobile number already belongs to another record in Leads, so it was not added here.' : ''}`,
-        JSON.stringify({ source: MHP_BOOK_SOURCE, ...bookEvidence(candidate), phone }), context.requestId, id, occurredAt.toISOString()]);
+    await repository.insertActivity({ id, contactId, opportunityId, taskId: null, activityType: MHP_BOOK_ACTIVITY,
+      actorUserId: context.userId ?? null, actorKind: 'user', subject: 'Before You Buy book sign-up',
+      body: `${bookTaskDescription(candidate)}\nRecorded in Leads: ${changes.join(', ')}.${phone === 'other_contact' ? '\nThe mobile number already belongs to another record in Leads, so it was not added here.' : ''}`,
+      metadata: { source: MHP_BOOK_SOURCE, ...bookEvidence(candidate), phone }, requestId: context.requestId, correlationId: id,
+      causationId: null, occurredAt: occurredAt.toISOString() });
   }
   return { changed: changes.length > 0, phone };
 }
@@ -267,8 +288,16 @@ export interface MhpBookLeadDependencies {
   transactions: CrmTransactionRunner;
   /** The owner-only registrant read the Book interest page already uses. */
   registrants: (sessionToken: string) => Promise<readonly MhpRegistrantRecord[]>;
-  /** The MHP brand's configured lead owner (null: automatic copy off; owner visits and the button still work). */
+  /**
+   * The MHP brand's lead owner by the existing rule: the user the Group HQ inbox bridge and the LeadRelay feed create
+   * MHP enquiries as. Null when that is not configured; the workspace owner is then resolved at run time.
+   */
   ownerUserId: string | null;
+  /**
+   * The MHP marketing workspace's one active owner, read at run time as the viewing owner (used only when ownerUserId is
+   * null). Never a stored id; null when there is not exactly one.
+   */
+  workspaceOwner?: (identity: PortalSessionIdentity) => Promise<string | null>;
   cursorSecret: string;
   commands?: (runner: CrmTransactionRunner) => Pick<CrmCommandService, 'createLead'>;
   now?: () => number;
@@ -285,6 +314,8 @@ export class MhpBookLeadService {
   private readonly commands: (runner: CrmTransactionRunner) => Pick<CrmCommandService, 'createLead'>;
   private warnedOff = false;
   private catchingUp: Promise<unknown> | null = null;
+  /** The workspace owner last resolved on an owner's visit (only when no lead owner is configured). */
+  private resolvedOwner: string | null = null;
 
   constructor(private readonly deps: MhpBookLeadDependencies) {
     if (deps.ownerUserId !== null && !SIGNUP_LEAD_UUID.test(deps.ownerUserId)) throw new Error('Invalid MHP book lead owner');
@@ -294,7 +325,8 @@ export class MhpBookLeadService {
     this.commands = deps.commands ?? (runner => new CrmCommandService({ transactionRunner: runner }));
   }
 
-  get automatic(): boolean { return this.deps.ownerUserId !== null; }
+  /** Whether a sign-up is copied the moment it is saved (an owner is known), rather than at the next visit. */
+  get automatic(): boolean { return (this.deps.ownerUserId ?? this.resolvedOwner) !== null; }
 
   private context(actorUserId: string, requestId = `mhp-book-lead:${randomUUID()}`): DatabaseRequestContext {
     return requestDatabaseContext({ workspaceId: MHP_MARKETING_WORKSPACE_ID, userId: actorUserId, requestId });
@@ -352,11 +384,11 @@ export class MhpBookLeadService {
    */
   afterCapture(signup: MhpSignup, captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, now = this.now()): void {
     if (!isBookSignup(signup)) return;
-    const owner = this.deps.ownerUserId;
+    const owner = this.deps.ownerUserId ?? this.resolvedOwner;
     if (!owner) {
       if (!this.warnedOff) {
         this.warnedOff = true;
-        this.log('mhp book leads: book sign-ups are saved but not copied into Leads automatically, because no MHP lead owner is configured; they are brought in when an owner opens Book interest or presses "Bring book sign-ups into Leads".');
+        this.log('mhp book leads: a book sign-up was saved but not copied into Leads yet, because no MHP lead owner is configured and no owner has opened the marketing pages since this process started; it is brought in at the next owner visit to Book interest or Growth CRM, or with "Bring book sign-ups into Leads".');
       }
       return;
     }
@@ -378,8 +410,18 @@ export class MhpBookLeadService {
     attempt(0);
   }
 
-  private actorFor(identity: PortalSessionIdentity): string {
-    return this.deps.ownerUserId ?? identity.userId;
+  /** Who owns (and creates) book enquiries: the configured lead owner, else the workspace owner resolved now. */
+  private async actorFor(identity: PortalSessionIdentity): Promise<string | null> {
+    if (this.deps.ownerUserId) return this.deps.ownerUserId;
+    let owner: string | null = null;
+    try { owner = (await this.deps.workspaceOwner?.(identity)) ?? null; }
+    catch { this.log('mhp book leads: the MHP marketing workspace owner could not be looked up; book sign-ups were not copied into Leads on this visit.'); return null; }
+    if (owner === null || !SIGNUP_LEAD_UUID.test(owner)) {
+      this.log('mhp book leads: the MHP marketing workspace has no single active owner to assign book enquiries to; book sign-ups were not copied into Leads.');
+      return null;
+    }
+    this.resolvedOwner = owner;
+    return owner;
   }
 
   /** Whether each book registrant is in Leads yet, read as the viewing owner. */
@@ -388,7 +430,8 @@ export class MhpBookLeadService {
     const empty = { available: false, byProspect: new Map<string, MhpBookLeadStatus>(), inLeads: 0, total: people.length };
     if (!people.length) return { ...empty, available: true };
     try {
-      const rows = await this.deps.transactions.run(this.context(identity.userId), tx => tx.query<EmailRow & { email: string; stage: string | null; status: string | null; complete: boolean }>(`/* mhp.book-lead-status */
+      const phones = [...new Set(people.map(p => bookLeadPhone(p.phone)).filter((n): n is string => n !== null))];
+      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null; status: string | null; complete: boolean }>(`/* mhp.book-lead-status */
         SELECT lower(cp.normalized_value) AS email, cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted,
           c.lifecycle_status AS lifecycle, o.id AS "opportunityId", s.name AS stage, o.status, c.custom_fields ? 'mhpSignup' AS complete,
           EXISTS(SELECT 1 FROM app.activities a WHERE a.workspace_id=cp.workspace_id AND a.contact_id=cp.contact_id AND a.activity_type=$4) AS recorded
@@ -398,7 +441,10 @@ export class MhpBookLeadService {
             AND h.opportunity_id=o.id AND h.actor_kind='system' AND h.note=$3)) ORDER BY o.created_at,o.id LIMIT 1) o ON true
         LEFT JOIN app.pipeline_stages s ON s.workspace_id=cp.workspace_id AND s.id=o.stage_id
         WHERE cp.workspace_id=app_private.current_workspace_id() AND cp.kind='email' AND cp.deleted_at IS NULL
-          AND lower(cp.normalized_value)=ANY($1::text[])`, [people.map(p => p.email), MHP_BOOK_ENQUIRY_PREFIX, MHP_BOOK_TRIGGER_NOTE, MHP_BOOK_ACTIVITY]));
+          AND lower(cp.normalized_value)=ANY($1::text[])`, [people.map(p => p.email), MHP_BOOK_ENQUIRY_PREFIX, MHP_BOOK_TRIGGER_NOTE, MHP_BOOK_ACTIVITY]),
+        // A mobile given at sign-up that no record in Leads holds yet still has to be added (the trigger never added one).
+        held: new Set((await tx.query<{ n: string }>(`/* mhp.book-lead-status-phones */ SELECT normalized_value AS n FROM app.contact_points
+          WHERE workspace_id=app_private.current_workspace_id() AND kind='phone' AND deleted_at IS NULL AND normalized_value=ANY($1::text[])`, [phones])).rows.map(r => r.n)) }));
       const byEmail = new Map<string, typeof rows.rows>();
       for (const row of rows.rows) byEmail.set(row.email, [...(byEmail.get(row.email) ?? []), row]);
       const byProspect = new Map<string, MhpBookLeadStatus>();
@@ -414,7 +460,11 @@ export class MhpBookLeadService {
           if (row.deleted) status = { state: 'needs_you', reason: 'deleted_contact' };
           else if (row.dedupeState !== 'normal') status = { state: 'needs_you', reason: 'shared_contact' };
           else if (row.lifecycle === 'archived') status = { state: 'needs_you', reason: 'archived_contact' };
-          else if (row.opportunityId || row.recorded) status = { state: 'in_leads', contactId: row.contactId, opportunityId: row.opportunityId, stage: row.stage, status: row.status, complete: row.complete === true || row.recorded === true };
+          else if (row.opportunityId || row.recorded) {
+            const number = bookLeadPhone(person.phone);
+            status = { state: 'in_leads', contactId: row.contactId, opportunityId: row.opportunityId, stage: row.stage, status: row.status,
+              complete: (row.complete === true || row.recorded === true) && (number === null || held.has(number)) };
+          }
           else status = { state: 'not_yet' };
         }
         if (status.state === 'in_leads') inLeads += 1;
@@ -422,6 +472,7 @@ export class MhpBookLeadService {
       }
       return { available: true, byProspect, inLeads, total: people.length };
     } catch {
+      this.log('mhp book leads: whether book sign-ups are in Leads could not be read; the page says so and nothing was changed.');
       return empty;
     }
   }
@@ -441,11 +492,14 @@ export class MhpBookLeadService {
         const status = statuses.byProspect.get(person.id);
         return status?.state === 'not_yet' || (status?.state === 'in_leads' && !status.complete);
       }).slice(0, options.limit ?? SIGNUP_LEAD_BATCH_SIZE);
+      if (!due.length) return { processed: 0, failed: 0 };
+      const actor = await this.actorFor(identity);
+      if (!actor) return { processed: 0, failed: due.length };
       const deadline = this.now() + (options.budgetMs ?? 3_000);
       let processed = 0, failed = 0;
       for (const person of due) {
         if (this.now() > deadline) break;
-        try { await this.project(this.actorFor(identity), bookCandidateFromRegistrant(person)); processed += 1; }
+        try { await this.project(actor, bookCandidateFromRegistrant(person)); processed += 1; }
         catch { failed += 1; }
       }
       if (failed > 0) this.log(`mhp book leads: ${failed} book sign-up(s) could not be copied into Leads on the owner's visit; they are retried at the next visit or button press.`);
@@ -468,10 +522,12 @@ export class MhpBookLeadService {
       .filter(person => after === null || person.id > after);
     const page = people.slice(0, SIGNUP_LEAD_BATCH_SIZE);
     const hasMore = people.length > page.length;
+    const actor = page.length ? await this.actorFor(identity) : null;
+    if (page.length && !actor) throw new MhpCommerceError(503, 'Book sign-ups cannot be brought in yet: the MHP marketing workspace needs exactly one active owner to assign them to.');
     let added = 0, alreadyIn = 0, completed = 0, needYou = 0, last = after;
     for (const person of page) {
       try {
-        const result = await this.project(this.actorFor(identity), bookCandidateFromRegistrant(person), `${requestId}:${person.id}`.slice(0, 128));
+        const result = await this.project(actor!, bookCandidateFromRegistrant(person), `${requestId}:${person.id}`.slice(0, 128));
         if (result.outcome === 'created') added += 1;
         else if (result.outcome === 'enriched') completed += 1;
         else if (result.outcome === 'present') alreadyIn += 1;

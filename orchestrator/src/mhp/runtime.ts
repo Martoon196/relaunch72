@@ -18,7 +18,7 @@ import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js
 import { createMhpMarketingSender, mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index.js';
 import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
-import { MhpBookLeadService } from './book-leads-service.js';
+import { MhpBookLeadService, readMhpWorkspaceOwner } from './book-leads-service.js';
 import { createInboxCrmRunner, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
 import { createMhpOwnerEmailService, mhpOwnerEmailContentRunner, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
 import { PgMhpOwnerEmailDispatch } from './owner-email-dispatch.js';
@@ -206,7 +206,7 @@ export async function buildMhpRuntime(input: {
   const growth = new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env));
   const emailHealth = input.emailBounces ? new MhpEmailHealth({ bounces: input.emailBounces, growth }) : undefined;
   if (emailHealth) input.emailBounces!.setEffects(emailHealth.workspaceId, emailHealth.effects());
-  const bookLeads = composeMhpBookLeads(env, commandPool, growth);
+  const bookLeads = composeMhpBookLeads(env, commandPool, webPool, growth);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
   if (vaultKey && (vaultKey.length !== 32 || vaultKey.toString('base64') !== rawVaultKey)) {
@@ -284,9 +284,10 @@ export function mhpBookLeadOwner(env: NodeJS.ProcessEnv): string | null {
   } catch { return null; }
 }
 
-function composeMhpBookLeads(env: NodeJS.ProcessEnv, commandPool: Pool, growth: PgMhpGrowthService): MhpBookLeadService | undefined {
+function composeMhpBookLeads(env: NodeJS.ProcessEnv, commandPool: Pool, webPool: Pool, growth: PgMhpGrowthService): MhpBookLeadService | undefined {
   try {
     const service = new MhpBookLeadService({ transactions: createInboxCrmRunner(commandPool), ownerUserId: mhpBookLeadOwner(env),
+      workspaceOwner: identity => readMhpWorkspaceOwner(webPool, identity),
       registrants: token => growth.listRegistrants(token), cursorSecret: env.SESSION_SECRET?.trim() ?? '' });
     console.info(JSON.stringify({ event: 'mhp.book-leads.readiness', automatic: service.automatic }));
     return service;
