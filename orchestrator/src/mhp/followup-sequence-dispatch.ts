@@ -10,7 +10,10 @@ import { mhpRecipientsAvailable } from './marketing-mail.js';
 export interface MhpSequenceDispatch extends MhpOwnerEmailDispatch {
   unknown(lease: MhpOwnerEmailLease): Promise<void>;
   enrolCaptures?(limit: number): Promise<FollowupEntrySweepResult>;
+  /** 0160: stop book readers who bought, then enter new book sign-ups for switches that are on. null while the database is at 0159. */
+  bookSweep?(limit: number): Promise<MhpBookSweepResult | null>;
 }
+export interface MhpBookSweepResult { stoppedPurchased: number; processed: number; enrolled: number; skipped: number; heldSwitches: number }
 export class PgMhpSequenceDispatch implements MhpSequenceDispatch {
   private readonly owner: PgMhpOwnerEmailDispatch;
   constructor(private readonly pool: Pick<Pool, 'query'>) { this.owner = new PgMhpOwnerEmailDispatch(pool); }
@@ -24,6 +27,15 @@ export class PgMhpSequenceDispatch implements MhpSequenceDispatch {
   }
   settle(lease: MhpOwnerEmailLease, accepted: boolean, reference: string | null): Promise<void> { return this.owner.settle(lease, accepted, reference); }
   async unknown(lease: MhpOwnerEmailLease): Promise<void> { await this.pool.query('SELECT app_private.mhp_sequence_unknown($1,$2)', [lease.id, lease.leaseId]); }
+  async bookSweep(limit: number): Promise<MhpBookSweepResult | null> {
+    try {
+      const result = await this.pool.query<{ value: MhpBookSweepResult }>('SELECT app_private.mhp_book_sequence_sweep($1) AS value', [limit]);
+      const value = result.rows[0]?.value;
+      if (!value || ![value.stoppedPurchased, value.processed, value.enrolled, value.skipped, value.heldSwitches].every(n => Number.isSafeInteger(n) && n >= 0)
+          || value.processed > limit) throw new Error('Invalid book sweep result');
+      return value;
+    } catch (error) { if ((error as { code?: string })?.code === '42883') return null; throw error; }
+  }
   async enrolCaptures(limit: number): Promise<FollowupEntrySweepResult> {
     const result = await this.pool.query<{ value: FollowupEntrySweepResult }>('SELECT app_private.mhp_sequence_enrol_captures($1) AS value', [limit]);
     const value = result.rows[0]?.value;
@@ -36,12 +48,17 @@ export class PgMhpSequenceDispatch implements MhpSequenceDispatch {
 /** Phase-aware: every unclassified post-proof failure is unknown, never a definite rejection/retry. */
 export async function dispatchMhpSequenceEmails(input: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
   testRecipients: readonly string[] | null; stopped?: () => boolean; now?: () => number;
-  onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void;
+  onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void; onBookResult?: (result: MhpBookSweepResult) => void;
   onBlocked?: (prospectId: string) => Promise<void> }): Promise<{ sent: number; failed: number; unknown: number }> {
   let sent = 0, failed = 0, unknown = 0;
   if (input.queue.enrolCaptures && !input.stopped?.()) {
     try { const result = await input.queue.enrolCaptures(100); try { input.onEntryResult?.(result); } catch { /* telemetry only */ } }
     catch { try { input.onEntryError?.(); } catch { /* Entry failure must not starve existing due runs. */ } }
+  }
+  // Book readers: purchases stop runs before this sweep's claims; new book sign-ups enter switches that are on.
+  if (input.queue.bookSweep && !input.stopped?.()) {
+    try { const result = await input.queue.bookSweep(100); if (result) try { input.onBookResult?.(result); } catch { /* telemetry only */ } }
+    catch { try { input.onEntryError?.(); } catch { /* A book entry failure must not starve existing due runs. */ } }
   }
   // Claims spend attempts; while the durable block list cannot be read, claim nothing (tried again next sweep).
   if (!await mhpRecipientsAvailable(input.sender)) return { sent, failed, unknown };

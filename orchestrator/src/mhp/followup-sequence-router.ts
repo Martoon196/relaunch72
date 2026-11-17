@@ -7,7 +7,7 @@ import { parseCookies } from '../server/admin/session.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
 import { MHP_SEQUENCE_UNAVAILABLE, type MhpSequenceAction, type MhpSequenceSaveInput, type MhpSequenceService } from './followup-sequence-service.js';
-import { mhpSequenceEntryConfirmPage, mhpSequenceNewDraft, mhpSequencePage, mhpSequencePauseAllPage, mhpSequenceResumeAllPage, mhpSequenceStartConfirmPage,
+import { mhpSequenceBookEntryConfirmPage, mhpSequenceEntryConfirmPage, mhpSequenceNewDraft, mhpSequencePage, mhpSequencePauseAllPage, mhpSequenceResumeAllPage, mhpSequenceStartConfirmPage,
   sequenceHref, type MhpSequenceNote, type MhpSequencePageInput } from './followup-sequence-view.js';
 import { MHP_SEQUENCE_EDITOR_SCRIPT } from './followup-sequence-client.js';
 import { readNativeFlowForm, FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
@@ -20,7 +20,7 @@ import { escapeHtml } from '../portal/ui.js';
 import { readMhpNote, signMhpNote } from './owner-notes.js';
 
 const BASE = '/hq/marketing/sequences';
-const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'start', 'pause', 'resume', 'cancel', 'stop', 'pause-all', 'stop-all', 'resume-all', 'entry-activate', 'entry-off', 'open-workspace'] as const;
+const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'start', 'pause', 'resume', 'cancel', 'stop', 'pause-all', 'stop-all', 'resume-all', 'entry-activate', 'entry-off', 'book-entry-on', 'book-entry-off', 'open-workspace'] as const;
 const PATHS = new Set([BASE, `${BASE}/editor.js`, `${BASE}/message`, ...ACTIONS.map(action => `${BASE}/${action}`)]);
 const DRAFT = ['csrf', 'commandId', 'contentItemId', 'previousVersionId', 'definition'];
 const SAVED = ['csrf', 'commandId', 'itemId', 'versionId'];
@@ -29,6 +29,7 @@ const START = [...SAVED, 'count', 'digest', 'people', 'issued', 'sig'];
 const RESUME_ALL = [...SAVED, 'count', 'digest', 'issued', 'sig'];
 const ENTRY_ACTIVATE = [...SAVED, 'expiresAt'];
 const ENTRY_OFF = [...SAVED, 'ruleId'];
+const BOOK_OFF = [...SAVED, 'switchId'];
 const OPEN_WORKSPACE = ['csrf', 'commandId', 'back'];
 const PERSON = new Set(['pause', 'resume', 'cancel', 'stop']);
 const CSP = FLOW_NATIVE_CSP;
@@ -53,7 +54,7 @@ const startSignature = (secret: string, session: string, f: Record<string, strin
 const resumeSignature = (secret: string, session: string, f: Record<string, string>) =>
   mac(secret, ['mhp.sequence.resume-all/v1', session, f.commandId!, f.itemId!, f.versionId!, f.count!, f.digest!, f.issued!]);
 type Sequences = Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'>
-  & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate' | 'startPlan' | 'start' | 'pauseAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace' | 'stopAll'>>;
+  & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate' | 'startPlan' | 'start' | 'pauseAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace' | 'stopAll' | 'bookEntry'>>;
 
 export async function handleMhpSequence(req: IncomingMessage, res: ServerResponse, url: URL, deps: { portal: PostgresPortalDeps; sequences: Sequences }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (!PATHS.has(path)) return false;
@@ -99,7 +100,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       const allowed = ['new', 'item', 'version', 'confirm', 'until', 'note', 'sig'];
       if ([...url.searchParams.keys()].some(key => !allowed.includes(key) || url.searchParams.getAll(key).length !== 1)) throw new MhpCommerceError(400, 'That link to a sequence is not complete. Open the sequence from your saved sequences.');
       const item = url.searchParams.get('item'), version = url.searchParams.get('version'), fresh = url.searchParams.get('new'), confirm = url.searchParams.get('confirm'), until = url.searchParams.get('until');
-      if (Boolean(item) !== Boolean(version) || (fresh !== null && fresh !== '1') || (fresh && item) || (confirm !== null && (!item || !['start', 'pause-all', 'stop-all', 'resume-all', 'entry'].includes(confirm)))
+      if (Boolean(item) !== Boolean(version) || (fresh !== null && fresh !== '1') || (fresh && item) || (confirm !== null && (!item || !['start', 'pause-all', 'stop-all', 'resume-all', 'entry', 'book-entry'].includes(confirm)))
           || ((confirm === 'entry') !== (until !== null))) throw new MhpCommerceError(400, 'That link to a sequence is not complete. Open the sequence from your saved sequences.');
       if (item && version) {
         if (confirm === 'start') {
@@ -119,6 +120,10 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
           const commandId = randomUUID(), plan = await sequences.resumePlan(identity, context.requestId, item, version);
           html(res, 200, mhpSequenceResumeAllPage({ csrf, commandId, plan, token: resumeToken(portal.sessionSecret, token, commandId, plan, now) })); return true;
         }
+        if (confirm === 'book-entry') {
+          const [snapshot, detail] = await Promise.all([sequences.snapshot(identity, context.requestId), sequences.review(identity, context.requestId, item, version)]);
+          html(res, 200, mhpSequenceBookEntryConfirmPage({ csrf, commandId: randomUUID(), detail, databaseReady: snapshot.bookSwitches !== null && snapshot.bookSwitches !== undefined && Boolean(sequences.bookEntry) })); return true;
+        }
         if (confirm === 'entry') {
           let expiresAt: string;
           try { expiresAt = followupEntryExpiry(until ?? '', now); } catch { throw new MhpCommerceError(400, 'Choose a date and time in the future for automatic sign-ups to stop.'); }
@@ -137,8 +142,8 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     if (url.search !== '' || req.headers.origin !== MHP_AUTH_ORIGIN || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new MhpCommerceError(403, 'This page was out of date. Open the sequence again and try once more.');
     const action = path.slice(BASE.length + 1) as typeof ACTIONS[number], editing = action === 'save' || action === 'preview' || action === 'simulate';
     const keys = editing ? DRAFT : action === 'publish' || action === 'pause-all' || action === 'stop-all' ? SAVED : action === 'start' ? START : action === 'resume-all' ? RESUME_ALL
-      : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : action === 'open-workspace' ? OPEN_WORKSPACE : CONTROL;
-    const fields = await form(req, keys, editing ? ['audience'] : ['start', 'resume-all', 'entry-activate'].includes(action) ? ['confirm'] : []), field = (key: string) => fields.get(key) ?? '';
+      : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : action === 'book-entry-on' ? SAVED : action === 'book-entry-off' ? BOOK_OFF : action === 'open-workspace' ? OPEN_WORKSPACE : CONTROL;
+    const fields = await form(req, keys, editing ? ['audience'] : ['start', 'resume-all', 'entry-activate', 'book-entry-on'].includes(action) ? ['confirm'] : []), field = (key: string) => fields.get(key) ?? '';
     // Only for the way back from an error: validated ids, never trusted for an action.
     if (uuid(field('itemId')) && uuid(field('versionId'))) place = { itemId: field('itemId'), versionId: field('versionId') };
     if (!verifyPortalCsrf(portal.sessionSecret, token, field('csrf'))) throw new MhpCommerceError(403, 'This page was out of date. Open the sequence again and try once more.');
@@ -215,6 +220,12 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       const result = await sequences.resumeAll(identity, context.requestId, { commandId, itemId, versionId, count: Number(f.count), digest: f.digest! });
       if (result.kind === 'changed') { await again(result.previousCount); return true; }
       back(itemId, versionId, { c: 'b', a: 'resume', n: result.changed, m: result.remaining, k: result.blocked, f: result.inFlight, r: result.replayed ? 1 : 0 }, '#result'); return true;
+    }
+    if (action === 'book-entry-on' || action === 'book-entry-off') {
+      if (!sequences.bookEntry) throw new MhpCommerceError(409, 'This will be ready after one database step. The sequence is saved; nothing has been sent.');
+      const result = await sequences.bookEntry(identity, context.requestId, { action: action === 'book-entry-on' ? 'on' : 'off', itemId, versionId,
+        switchId: action === 'book-entry-off' ? field('switchId') : '', confirmed: field('confirm') === 'yes' });
+      back(itemId, versionId, { c: 'k', a: result.state, r: result.replayed ? 1 : 0 }, '#automatic'); return true;
     }
     if (action === 'entry-activate' || action === 'entry-off') {
       if (!sequences.entryCommand) throw new MhpCommerceError(503, 'Automatic sign-ups are not available yet.');

@@ -8,7 +8,7 @@ import { previewFlowMessage } from '../followup-sequences/channel-drafts.js';
 import type { FlowInlineMessage } from '../followup-sequences/composition.js';
 import type { simulateFollowupFlow } from '../followup-sequences/simulation.js';
 import type { FollowupEntryRule } from '../followup-sequences/entry.js';
-import { followupAudienceCanStart, FOLLOWUP_NO_AUDIENCE_LINE, type FollowupAudience } from '../followup-sequences/audience.js';
+import { followupAudienceCanStart, followupAudienceIsBook, followupAudienceIsWebinar, BOOK_READERS_DATABASE_STEP, FOLLOWUP_NO_AUDIENCE_LINE, type FollowupAudience } from '../followup-sequences/audience.js';
 import { marketingReturnControl } from './marketing-workspace-view.js';
 import { MHP_OWNER_NAV, MHP_OWNER_STYLES } from './owner-frame.js';
 import { mhpRunResumable, MHP_UNRESUMABLE_REASONS } from './followup-sequence-service.js';
@@ -22,7 +22,9 @@ export type MhpSequenceNote =
   | { c: 's'; n: number; e: number; x: number; y: number; z: number; o: number; q: number; w: number; r: number; f: number }
   | { c: 'a'; n: number }
   | { c: 'e'; a: 'on' | 'off'; u: string; r: number }
-  | { c: 'pub' };
+  | { c: 'pub' }
+  /** The book readers switch: on or off, and whether it was already so. */
+  | { c: 'k'; a: 'on' | 'off'; r: number };
 export interface MhpSequencePageInput {
   snapshot: MhpSequenceSnapshot; csrf: string; commandId: string; returnCommandId: string;
   detail?: MhpSequenceReview; draft?: MhpSequenceSaveInput;
@@ -55,6 +57,7 @@ const REASONS: Readonly<Record<string, string>> = {
   unsubscribed: 'Stopped because this person unsubscribed or no longer agrees to emails.',
   delivery_expired: 'Their email could not be sent in time, so nothing more was sent.',
   delivery_failed: 'Their email could not be sent, so nothing more was sent.',
+  purchased: 'Stopped because they bought from you. Nothing more from this sequence is sent to them.',
   manual: 'You stopped this person.', recovery: 'Put on hold during a system check. Resume them when you are ready.',
 };
 const STATES: Readonly<Record<FollowupRunState, { label: string; tone: string }>> = {
@@ -74,6 +77,7 @@ export function mhpSequenceNewDraft(campaign: string, commandId: string): MhpSeq
 export const webinarWords = (webinar?: { label: string | null; date: string | null }) => webinar?.label ? `“${webinar.label}”${webinar.date ? ` (the webinar on ${webinar.date})` : ''}` : webinar?.date ? `the webinar on ${webinar.date}` : 'the current webinar';
 export function audienceWords(audience: FollowupAudience, webinar?: { label: string | null; date: string | null }): string {
   if (audience.kind === 'none_yet') return 'No one yet. This sequence has no audience that can be started.';
+  if (audience.kind === 'book_readers') return 'People who asked for the Before You Buy first chapter and agreed to emails';
   return `People who registered for ${webinarWords(webinar)} and agreed to emails`;
 }
 /** When the page cannot see everyone (it reads the 100 most recent people of the whole webinar), every count is a minimum and says so. */
@@ -111,6 +115,9 @@ function topNote(note: MhpSequenceNote | undefined): string {
   let text: string, details = '';
   if (note.c === 'pub') text = 'Published. Nobody was emailed. When you are ready, press Start: you will see exactly who gets it before anything is sent.';
   else if (note.c === 'a') text = `This sequence had already been started for these ${plural(note.n, 'person', 'people')}. Pressing the button again sent nothing new.`;
+  else if (note.c === 'k') text = note.r ? `That was already ${note.a === 'on' ? 'on' : 'off'}; nothing new happened.`
+    : note.a === 'on' ? 'Switched on. From now on, each new book sign-up who agrees to emails gets this sequence: the first email within a few minutes, the rest on schedule. Nobody who signed up earlier was added.'
+      : 'Switched off. New book sign-ups are no longer added. People already in the sequence carry on; pause them if they should stop too.';
   else if (note.c === 'e') text = note.r ? `That ${note.a === 'on' ? 'switch-on' : 'switch-off'} had already been done earlier; nothing new happened. The current setting is shown below.`
     : note.a === 'on' ? `Automatic sign-ups are on. New webinar sign-ups who agree to emails will be added until ${time(note.u)} (UK time). Nobody who registered earlier was added.`
       : 'Automatic sign-ups are off. Nobody new will be added. People already in the sequence carry on; pause them if you want them to stop.';
@@ -198,11 +205,14 @@ function sequenceSummary(page: MhpSequencePageInput, detail: MhpSequenceReview):
   else if (!canStart) start = `<p class="notice"><strong>${e(detail.audience.kind === 'webinar_signups' ? 'This sequence is for the sign-ups of a different webinar, so it cannot be started from here.'
     : published ? FOLLOWUP_NO_AUDIENCE_LINE : 'This sequence has no audience yet, so it cannot be started. It is saved, ready for when its audience is connected.')}</strong></p>`
     + (published ? '' : `<form method="post" action="${BASE}/publish">${savedFields()}<button class="secondary">Publish this version</button></form><p class="note">Publishing records the wording you approved. It sends nothing.</p>`);
+  else if (followupAudienceIsBook(detail.audience) && snapshot.bookSwitches === null) start = `<p class="notice"><strong>${e(BOOK_READERS_DATABASE_STEP)}</strong></p>`;
   else if (!published) start = `<p>Publish this version first. Publishing records the wording you approved. It sends nothing and adds nobody.</p><form method="post" action="${BASE}/publish">${savedFields()}<button>Publish this version</button></form>`;
   else if (detail.blockers.length) start = `<div class="notice"><strong>Before this can start</strong><ul>${detail.blockers.map(key => `<li>${e(blockers[key] ?? 'Something in this sequence needs setting up first.')}</li>`).join('')}</ul></div>`;
   else start = justStarted
     ? `<div class="actions"><a class="button secondary" href="${e(sequenceHref(detail.review.contentItemId, detail.review.contentVersionId, '&confirm=start'))}">Check for anyone new…</a></div>`
     : `<div class="actions"><a class="button" href="${e(sequenceHref(detail.review.contentItemId, detail.review.contentVersionId, '&confirm=start'))}">Start this sequence…</a></div><p class="note">Next you will see exactly who gets it, and when, before anything is sent.</p>`;
+  // A sequence with no audience: the way to make it a book readers sequence, in the owner's own steps.
+  if (!canStart && detail.review.isLatest && detail.audience.kind === 'none_yet') start += `<p class="note">To send this to book readers: in “Edit your sequence” below, choose “Book readers” under “Who is this for?”, press Save draft, then Publish this version, then switch on “Send this to each new book sign-up automatically”. Your emails stay exactly as they are.</p>`;
   const link = (confirm: string, label: string) => `<a class="button secondary" href="${e(sequenceHref(detail.review.contentItemId, detail.review.contentVersionId, `&confirm=${confirm}`))}">${e(label)}</a>`;
   const bulk = [active || (atLeast && open) ? link('pause-all', `Pause everyone (${atLeast ? 'at least ' : ''}${active})`) : '',
     canStart && resumable && !atLeast ? link('resume-all', `Resume everyone (${resumable})`) : '',
@@ -222,10 +232,25 @@ function peopleSection(page: MhpSequencePageInput, detail: MhpSequenceReview): s
   return `<section class="card" id="people"><h2>People in this sequence</h2>${gone}${runs.length ? `<p>${e(counts(runs, truncated))}.</p><ul class="people">${sorted.map(run => personCard(run, page, detail)).join('')}</ul>` : '<p>Nobody is in this sequence yet.</p>'}
     ${truncated ? '<p class="note">Only the most recent people are listed here; there may be more in this sequence.</p>' : ''}</section>`;
 }
+/** Book readers: "Send this to each new book sign-up automatically", from the moment it is switched on. */
+function bookSection(page: MhpSequencePageInput, detail: MhpSequenceReview): string {
+  if (!followupAudienceIsBook(detail.audience)) return '';
+  const switches = page.snapshot.bookSwitches;
+  if (switches === null || switches === undefined) return `<section class="card" id="automatic"><h2>Send to each new book sign-up automatically</h2><p class="notice">${e(BOOK_READERS_DATABASE_STEP)}</p></section>`;
+  const mine = switches.filter(sw => sw.contentItemId === detail.review.contentItemId), current = mine.find(sw => sw.state !== 'off');
+  const published = publishedOf(detail);
+  const offForm = (id: string) => `<form method="post" action="${BASE}/book-entry-off">${hidden('csrf', page.csrf)}${hidden('commandId', randomUUID())}${hidden('itemId', detail.review.contentItemId)}${hidden('versionId', detail.review.contentVersionId)}${hidden('switchId', id)}<button class="secondary">Stop sending to new book sign-ups</button></form>`;
+  const status = current ? `<div class="good"><p><strong>${current.state === 'on' ? `On since ${e(time(current.activatedAt))} (UK time).` : 'On hold.'}</strong> ${plural(current.enrolled, 'person', 'people')} added automatically · ${current.skipped} not added (already in this sequence, unsubscribed, bounced, bought, or did not agree to emails).</p>
+      ${current.state === 'held' ? `<p>${e(current.heldReason === 'newer_sequence' ? 'You saved a newer version of this sequence. Publish it and switch this on for that version.' : 'One of the emails changed. Check the current wording, publish, and switch this on again.')}</p>` : ''}${offForm(current.id)}</div>` : '';
+  const control = current?.state === 'on' && current.contentVersionId === detail.review.contentVersionId ? ''
+    : !published || detail.blockers.length ? '<p class="notice">Publish this version, and sort out any setup notes above, before switching this on.</p>'
+      : `<div class="actions"><a class="button" href="${e(sequenceHref(detail.review.contentItemId, detail.review.contentVersionId, '&confirm=book-entry'))}">Send this to each new book sign-up automatically…</a></div><p class="note">Next you will see exactly what will happen, and from when, before anything is switched on.</p>`;
+  return `<section class="card" id="automatic"><h2>Send to each new book sign-up automatically</h2><p>When this is on, each new person who asks for the Before You Buy first chapter and agrees to emails is added and sent the first email within a few minutes. People who signed up before you switch it on are never added this way; you can start them with “Start this sequence…”.</p>${status}${control}</section>`;
+}
 function entrySection(page: MhpSequencePageInput, detail: MhpSequenceReview): string {
   const { snapshot } = page, rules = (snapshot.database.entryRules ?? []).filter(rule => rule.contentItemId === detail.review.contentItemId);
-  const future = followupEntryIntent(detail.definition).mode === 'webinar_signup', canStart = followupAudienceCanStart(detail.audience, snapshot.database.campaign);
-  if (!future && !rules.length) return '';
+  const future = followupEntryIntent(detail.definition).mode === 'webinar_signup', canStart = followupAudienceIsWebinar(detail.audience, snapshot.database.campaign);
+  if ((!future && !rules.length) || (followupAudienceIsBook(detail.audience) && !rules.length)) return '';
   const published = publishedOf(detail);
   const control = !snapshot.entryAvailable ? '<p class="notice">Automatic sign-ups are not available in this release.</p>'
     : !canStart ? `<p class="notice">${e(FOLLOWUP_NO_AUDIENCE_LINE)}</p>`
@@ -253,7 +278,7 @@ export function mhpSequencePage(page: MhpSequencePageInput): string {
   const published = detail ? publishedOf(detail) : false;
   const emailChoices = snapshot.emailCatalog.items.map(item => ({ itemId: item.contentItemId, versionId: item.contentVersionId, sha256: item.contentSha256,
     label: `${item.title} · v${item.versionNumber}${item.approvalStatus === 'approved' && !item.approvalStale ? ' · published' : ' · draft'}` }));
-  const audienceValue = draft?.audience === 'webinar_signups' ? 'webinar_signups' : 'none_yet';
+  const audienceValue = draft?.audience === 'webinar_signups' || draft?.audience === 'book_readers' ? draft.audience : 'none_yet';
   const editor = draft && definition ? renderFlowEditor({ profile: { brand: 'mhp', base: BASE, libraryHref: '/hq/marketing/emails', futureWebinarEntry: true, audience: { value: audienceValue } },
     csrf: page.csrf, commandId: draft.commandId, contentItemId: draft.contentItemId, previousVersionId: draft.previousVersionId,
     definition: page.preview?.definition ?? definition, choices: snapshot.messageChoices ?? emailChoices.map(choice => ({ ...choice, channel: 'email' as const })),
@@ -269,7 +294,7 @@ export function mhpSequencePage(page: MhpSequencePageInput): string {
   const returnControl = `<div class="toplinks">${detail || page.draft ? `<a href="${BASE}">← All sequences</a>` : ''}${marketingReturnControl(page.csrf, page.returnCommandId)}</div>`;
   const hero = detail ? '' : `<section class="card"><div class="eyebrow">Growth HQ · MHP brand</div><h1>The right follow-up.<br>At the right moment.</h1><p>Write a sequence of emails with waits between them. Nothing is ever sent until you start it, and Start always shows you exactly who will get it first.</p><p><strong>Email: ${snapshot.readiness.email ? e(snapshot.mode === 'live' ? 'on' : snapshot.mode) : 'setup needed'}</strong> · Text messages: setup needed · WhatsApp: setup needed</p><div class="actions"><a class="button" href="${BASE}?new=1">Create a sequence</a></div></section>`;
   const status = page.message ? `<section class="card notice" role="status">${e(page.message)}</section>` : '';
-  const body = `${returnControl}${topNote(page.note)}${status}${hero}${detail ? sequenceSummary(page, detail) + peopleSection(page, detail) + entrySection(page, detail) : ''}
+  const body = `${returnControl}${topNote(page.note)}${status}${hero}${detail ? sequenceSummary(page, detail) + peopleSection(page, detail) + bookSection(page, detail) + entrySection(page, detail) : ''}
   ${editor}${timeline}${renderFlowMessagePreviews(copyPreviews)}${renderFlowSimulation(page.simulation)}<section class="card"><h2>Your saved sequences</h2>${catalog ? `<ul class="library">${catalog}</ul>` : '<p>No sequences saved yet. Start with one email, add a wait, then choose the next email.</p>'}<p class="note">Showing up to 50 latest sequences.</p></section>`;
   return frame(detail ? detail.definition.title : 'Follow-up sequences', body);
 }
@@ -283,7 +308,10 @@ export function mhpSequenceStartConfirmPage(input: MhpStartConfirmInput): string
   const first = plan.messages[0], later = plan.messages.slice(1);
   const subject = (m: MhpStartPlan['messages'][number]) => m.subject ? `“${m.subject}”` : `${m.channel === 'email' ? 'Email' : 'Message'} ${m.number}`;
   const held = [plan.heldBack.noConsent ? `${plural(plan.heldBack.noConsent, 'person')} did not agree to emails` : '', plan.heldBack.unsubscribed ? `${plural(plan.heldBack.unsubscribed, 'person', 'people')} unsubscribed` : '',
-    plan.heldBack.alreadyIn ? `${plural(plan.heldBack.alreadyIn, 'person is', 'people are')} already in this sequence` : '', plan.heldBack.earlierVersion ? `${plural(plan.heldBack.earlierVersion, 'person is', 'people are')} still in an earlier version of it (stop them there first)` : ''].filter(Boolean);
+    plan.heldBack.alreadyIn ? `${plural(plan.heldBack.alreadyIn, 'person is', 'people are')} already in this sequence` : '', plan.heldBack.earlierVersion ? `${plural(plan.heldBack.earlierVersion, 'person is', 'people are')} still in an earlier version of it (stop them there first)` : '',
+    plan.heldBack.blocked ? `${plural(plan.heldBack.blocked, 'person’s', 'people’s')} email address bounced or is blocked` : '', plan.heldBack.purchased ? `${plural(plan.heldBack.purchased, 'person has', 'people have')} already bought from you` : ''].filter(Boolean);
+  const stateWords: Readonly<Record<string, string>> = { active: 'active', paused: 'paused', held: 'on hold', completed: 'finished', stopped: 'stopped', cancelled: 'removed', failed: 'could not be sent' };
+  const alreadyList = plan.alreadyInPeople?.length ? `<details><summary>Who is already in this sequence (${plan.alreadyInPeople.length})</summary><ul class="list">${plan.alreadyInPeople.map(person => `<li><strong>${e(person.firstName?.trim() || '(no first name)')}</strong> · <span class="wrap">${e(person.email)}</span> · already in this sequence (${e(stateWords[person.state] ?? person.state)})</li>`).join('')}</ul><p class="note">People who have ever been in this sequence are never added again.</p></details>` : '';
   const changed = input.changed ? `<section class="card notice" role="alert"><h2>The list changed, so nothing was sent</h2><p>${e(input.changed.reason ?? `When you looked, this was ${plural(input.changed.previousCount, 'person', 'people')}. It is now ${plural(plan.count, 'person', 'people')}.`)}</p>
     ${input.changed.added.length ? `<p><strong>New since you looked:</strong> ${input.changed.added.map(person => e(`${person.firstName?.trim() || '(no first name)'} (${person.email})`)).join(', ')}</p>` : ''}
     ${input.changed.removed.length ? `<p><strong>No longer on the list:</strong> ${input.changed.removed.map(person => e(`${person.firstName?.trim() || '(no first name)'} (${person.email})`)).join(', ')}</p>` : ''}
@@ -292,7 +320,7 @@ export function mhpSequenceStartConfirmPage(input: MhpStartConfirmInput): string
   if (!plan.ready) {
     return frame('Start this sequence', `<div class="toplinks"><a href="${e(back)}">← Back to the sequence</a></div>${changed}${problem}<section class="card"><div class="eyebrow">Start · ${e(plan.title)}</div><h1>This sequence cannot be started</h1>
       <p><strong>${e(plan.refusal?.message ?? 'It cannot be started right now.')}</strong></p><p>Nothing has been sent and nobody was added.</p>
-      ${held.length ? `<p class="note">${e(held.join('; '))}.</p>` : ''}<div class="actions"><a class="button" href="${e(back)}">Back to the sequence</a></div></section>`, false);
+      ${held.length ? `<p class="note">${e(held.join('; '))}.</p>` : ''}${alreadyList}<div class="actions"><a class="button" href="${e(back)}">Back to the sequence</a></div></section>`, false);
   }
   const fields = hidden('csrf', input.csrf) + hidden('commandId', input.commandId) + hidden('itemId', plan.itemId) + hidden('versionId', plan.versionId)
     + Object.entries(input.token).map(([key, value]) => hidden(key, value)).join('');
@@ -303,7 +331,8 @@ export function mhpSequenceStartConfirmPage(input: MhpStartConfirmInput): string
     ${later.length ? `<h2>Then</h2><ol>${later.map(m => `<li>${e(subject(m))}: ${e(waitWords(m.waitMinutes))} after the previous email${m.offsetMinutes >= 1440 ? ` (about day ${Math.round(m.offsetMinutes / 1440)})` : ''}</li>`).join('')}</ol><p class="note">Each wait starts once the previous email has gone. Anyone who unsubscribes gets nothing more.</p>` : ''}
     ${plan.mode === 'test' ? '<p class="notice">Email is in test mode: only your test addresses actually receive anything. Everyone listed is still added to the sequence.</p>' : ''}
     <h2>The ${plural(plan.count, 'person', 'people')}</h2>${recipientList(plan.recipients)}
-    <h2>Held back</h2>${held.length ? `<ul>${held.map(line => `<li>${e(line)}</li>`).join('')}</ul><p class="note">These people are not emailed.</p>` : '<p>Nobody is held back.</p>'}
+    <h2>Held back</h2>${held.length ? `<ul>${held.map(line => `<li>${e(line)}</li>`).join('')}</ul><p class="note">These people are not emailed.</p>` : '<p>Nobody is held back.</p>'}${alreadyList}
+    ${plan.remainingAfter ? `<p class="notice">${plural(plan.remainingAfter, 'more person', 'more people')} can receive this too. At most 500 people start in one go: confirm these first, then press Start again for the rest.</p>` : ''}
     <form method="post" action="${BASE}/start">${fields}<div class="confirm-box"><label class="check" for="start-confirm"><input id="start-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send to these ${plural(plan.count, 'person', 'people')}</label></div>
       <div class="actions"><button>Start for ${plural(plan.count, 'person', 'people')}</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form></section>`, false);
 }
@@ -339,4 +368,19 @@ export function mhpSequenceEntryConfirmPage(input: { csrf: string; commandId: st
     <p>Nobody who registered before now is added. You can switch this off at any time.</p>
     <form method="post" action="${BASE}/entry-activate">${fields}<div class="confirm-box"><label class="check" for="entry-confirm"><input id="entry-confirm" type="checkbox" name="confirm" value="yes" required> Yes, add new sign-ups automatically until ${e(time(input.expiresAt))}</label></div>
       <div class="actions"><button>Switch on automatic sign-ups</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form></section>`, false);
+}
+
+/** The book readers switch-on page: what will happen, from when, and the tick. Nothing switches on until it is confirmed. */
+export function mhpSequenceBookEntryConfirmPage(input: { csrf: string; commandId: string; detail: MhpSequenceReview; databaseReady: boolean }): string {
+  const { detail } = input, back = sequenceHref(detail.review.contentItemId, detail.review.contentVersionId);
+  const first = detail.timeline[0], subject = first ? detail.subjects?.[first.step.contentVersionId] : undefined, later = detail.timeline.slice(1);
+  const fields = hidden('csrf', input.csrf) + hidden('commandId', input.commandId) + hidden('itemId', detail.review.contentItemId) + hidden('versionId', detail.review.contentVersionId);
+  const body = !input.databaseReady ? `<p class="notice"><strong>${e(BOOK_READERS_DATABASE_STEP)}</strong></p><div class="actions"><a class="button" href="${e(back)}">Back to the sequence</a></div>`
+    : !followupAudienceIsBook(detail.audience) ? `<p class="notice"><strong>This sequence is not saved for book readers, so it cannot be switched on for them.</strong></p><div class="actions"><a class="button" href="${e(back)}">Back to the sequence</a></div>`
+      : `<p>From the moment you confirm, everyone who asks for the Before You Buy first chapter and ticks the email box will be added to this sequence and sent ${e(subject ? `“${subject}”` : 'the first email')} <strong>${e(first && first.waitMinutes > 0 ? `${waitWords(first.waitMinutes)} after they sign up` : 'within a few minutes of signing up')}</strong>${later.length ? `, then ${plural(later.length, 'more email')} on schedule` : ''}.</p>
+    <ul><li>People who signed up before now are not added by this. You can start them yourself with “Start this sequence…”.</li><li>Nobody who has ever been in this sequence is added again, and nobody who unsubscribed, whose email bounced, or who has bought from you.</li><li>You can switch this off at any time.</li></ul>
+    <form method="post" action="${BASE}/book-entry-on">${fields}<div class="confirm-box"><label class="check" for="book-confirm"><input id="book-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send this to each new book sign-up automatically</label></div>
+      <div class="actions"><button>Switch on</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form>`;
+  return frame('Send to new book sign-ups', `<div class="toplinks"><a href="${e(back)}">← Back without switching on</a></div><section class="card"><div class="eyebrow">Book readers · ${e(detail.definition.title)}</div>
+    <h1>Send this to each new book sign-up automatically?</h1>${body}</section>`, false);
 }

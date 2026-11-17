@@ -18,7 +18,9 @@ const withPeople = (world: World, states: Record<number, 'active' | 'paused' | '
 
 test('audience: a choice is explicit, a missing one is "none yet", malformed storage can never be started', () => {
   assert.equal(parseFollowupAudienceChoice(undefined), 'none_yet'); assert.equal(parseFollowupAudienceChoice(''), 'none_yet');
-  assert.equal(parseFollowupAudienceChoice('webinar_signups'), 'webinar_signups'); assert.throws(() => parseFollowupAudienceChoice('book_readers'), /Choose who this sequence is for/u);
+  assert.equal(parseFollowupAudienceChoice('webinar_signups'), 'webinar_signups'); assert.throws(() => parseFollowupAudienceChoice('everyone'), /Choose who this sequence is for/u);
+  // Release B: book readers is a real, explicit choice.
+  assert.equal(parseFollowupAudienceChoice('book_readers'), 'book_readers');
   assert.equal(readStoredFollowupAudience({}), null);
   assert.deepEqual(readStoredFollowupAudience({ mhpSequence: { audience: storedFollowupAudience('webinar_signups', CAMPAIGN) } }), { kind: 'webinar_signups', campaign: CAMPAIGN, origin: 'chosen' });
   for (const bad of [{ kind: 'webinar_signups' }, { schema: 'mhp.followup-sequence-audience/v1', kind: 'everyone', campaign: null }, { schema: 'mhp.followup-sequence-audience/v1', kind: 'webinar_signups', campaign: null }, 'webinar'])

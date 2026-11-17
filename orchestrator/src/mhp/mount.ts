@@ -51,7 +51,7 @@ interface MhpMountDependencies {
     owner?: Pick<MhpEventPhoneOwner, 'programmes' | 'smsTexts' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control'>;
     whatsappOwner?: Pick<MhpEventWhatsAppOwner, 'programmes' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control' | 'connect'>; campaign: string };
   sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'
-    | 'startPlan' | 'start' | 'pauseAll' | 'stopAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace'>>;
+    | 'startPlan' | 'start' | 'pauseAll' | 'stopAll' | 'resumePlan' | 'resumeAll' | 'personAction' | 'openWorkspace' | 'bookEntry'>>;
   readiness(): Promise<readonly string[]>;
 }
 
