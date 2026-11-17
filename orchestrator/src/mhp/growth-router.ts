@@ -270,7 +270,9 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       const allRegistrants = await deps.growth.listRegistrants(token);
       const registrants = bookOnly ? bookInterestRegistrants(allRegistrants) : allRegistrants;
       if (url.searchParams.get('format') === 'csv') {
-        const csv = registrantsCsv(registrants);
+        // The book CSV adds "Texts/WhatsApp offers" (from Leads; read only, no catch-up started by a download).
+        const csvLeads = bookOnly && deps.bookLeads ? await deps.bookLeads.statuses(identity, registrants).catch(() => undefined) : undefined;
+        const csv = registrantsCsv(registrants, csvLeads);
         res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${bookOnly ? 'mhp-before-you-buy-interest' : 'mhp-registrants'}.csv"`,
           'cache-control': 'no-store', 'content-length': String(Buffer.byteLength(csv)), 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff' });
         res.end(csv); return true;

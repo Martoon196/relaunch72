@@ -33,7 +33,7 @@ import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.j
 import type { PortalSessionIdentity } from '../portal/auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
 import { MHP_BOOK_INTEREST_LABEL } from './book-interest.js';
-import { MHP_CONSENT_VERSION, type MhpCapturedSignup, type MhpRegistrantRecord, type MhpSignup } from './growth-service.js';
+import { mhpMessagesConsented, mhpSignupConsentVersion, type MhpCapturedSignup, type MhpRegistrantRecord, type MhpSignup } from './growth-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 import { createOrReplaySignupLead, newEnquiryStage, readSignupLeadCursor, signSignupLeadCursor, SIGNUP_LEAD_BATCH_SIZE,
   SIGNUP_LEAD_UUID, type SignupLeadAudience } from './signup-leads.js';
@@ -64,6 +64,8 @@ export interface MhpBookLeadCandidate {
   /** The sign-up's own tick-box (null when only the owner list was available). */
   consentGiven: boolean | null;
   consentVersion: string | null;
+  /** Promotional texts and WhatsApp messages: true only for a "+messages" consent version; null when not known. */
+  messages: boolean | null;
   /** "Tips emails: Yes" — ticked and not unsubscribed. */
   marketingEmails: boolean;
   label: string;
@@ -79,7 +81,9 @@ export type MhpBookLeadOutcome =
 export type MhpBookSkipReason = 'test_address' | 'several_contacts' | 'archived_contact' | 'deleted_contact' | 'shared_contact' | 'contact_without_email';
 
 export type MhpBookLeadStatus =
-  | { state: 'in_leads'; contactId: string; opportunityId: string | null; stage: string | null; status: string | null; complete: boolean }
+  | { state: 'in_leads'; contactId: string; opportunityId: string | null; stage: string | null; status: string | null; complete: boolean;
+      /** Texts/WhatsApp offers from the latest sign-up's stored consent version; null when no version is known yet. */
+      messages: boolean | null }
   | { state: 'not_yet' }
   | { state: 'needs_you'; reason: MhpBookSkipReason };
 export interface MhpBookLeadStatuses { available: boolean; byProspect: ReadonlyMap<string, MhpBookLeadStatus>; inLeads: number; total: number }
@@ -107,7 +111,7 @@ export function bookLeadPhone(value: string | null): string | null {
  * The task text, in plain words: what they asked for, their mobile if they gave one (the form promises a quick call to
  * anyone who adds it) and whether they may be sent marketing emails.
  */
-export function bookTaskDescription(candidate: Pick<MhpBookLeadCandidate, 'marketingEmails' | 'phone'>): string {
+export function bookTaskDescription(candidate: Pick<MhpBookLeadCandidate, 'marketingEmails' | 'phone'> & { messages?: boolean | null }): string {
   const typed = (candidate.phone ?? '').trim().slice(0, 40);
   const mobile = !typed ? 'No mobile given.'
     : bookLeadPhone(typed) ? `Mobile: ${typed} (they asked for a call). The number has not been checked.`
@@ -115,7 +119,10 @@ export function bookTaskDescription(candidate: Pick<MhpBookLeadCandidate, 'marke
   return ['Registered interest in the book Before You Buy on the book page: asked for Chapter One and the launch updates.'
     + (typed ? ' Added a mobile for a quick call about the book and the property they are looking at.' : ''),
   mobile,
-  candidate.marketingEmails ? 'Marketing emails: yes (they ticked the box on the form).' : 'Marketing emails: no. Contact them about the book only.'].join('\n');
+  candidate.marketingEmails ? 'Marketing emails: yes (they ticked the box on the form).' : 'Marketing emails: no. Contact them about the book only.',
+  candidate.messages === true && bookLeadPhone(typed) ? 'Texts and WhatsApp offers: yes (they ticked the box on the form).'
+    : candidate.messages === null || candidate.messages === undefined ? 'Texts and WhatsApp: not recorded for this sign-up, so about the book only.'
+      : 'Texts and WhatsApp: about the book only.'].join('\n');
 }
 
 /** One working day after `now` (Saturday and Sunday move to Monday, UK calendar; bank holidays are not known here). */
@@ -129,14 +136,15 @@ export function bookTaskDue(now: number): string {
 /** The sign-up evidence stored on the contact (custom field mhpSignup) and on its timeline entry. */
 export function bookEvidence(candidate: MhpBookLeadCandidate): Record<string, string | boolean | null> {
   return { form: candidate.label, module: candidate.module, link: candidate.link, signedUpAt: candidate.signedUpAt,
-    consentGiven: candidate.consentGiven, consentVersion: candidate.consentVersion, marketingEmails: candidate.marketingEmails,
+    consentGiven: candidate.consentGiven, consentVersion: candidate.consentVersion, marketingEmails: candidate.marketingEmails, messages: candidate.messages,
     signupId: candidate.signupId, prospectId: candidate.prospectId, recordedFrom: candidate.recordedFrom };
 }
 
 /** The candidate for a sign-up the form has just committed: the request is the evidence. */
 export function bookCandidateFromCapture(signup: MhpSignup, captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, now: number): MhpBookLeadCandidate {
+  const consentVersion = mhpSignupConsentVersion(signup);
   return { prospectId: captured.prospectId, signupId: captured.signupId, email: normalEmail(signup.email), firstName: signup.firstName,
-    phone: signup.phone ?? null, consentGiven: signup.consent, consentVersion: MHP_CONSENT_VERSION,
+    phone: signup.phone ?? null, consentGiven: signup.consent, consentVersion, messages: mhpMessagesConsented(consentVersion),
     // The capture clears an earlier unsubscribe when the box is ticked, so a ticked box is "Tips emails: Yes".
     marketingEmails: signup.consent, label: signup.label, module: signup.module, link: signup.link,
     signedUpAt: new Date(now).toISOString(), recordedFrom: 'sign-up' };
@@ -145,7 +153,7 @@ export function bookCandidateFromCapture(signup: MhpSignup, captured: Pick<MhpCa
 /** The candidate for a person in the owner's registrant list (the book filter the Book interest page uses). */
 export function bookCandidateFromRegistrant(person: MhpRegistrantRecord): MhpBookLeadCandidate {
   return { prospectId: person.id, signupId: null, email: normalEmail(person.email), firstName: person.firstName, phone: person.phone,
-    consentGiven: null, consentVersion: null, marketingEmails: person.marketingConsent && !person.unsubscribed,
+    consentGiven: null, consentVersion: null, messages: null, marketingEmails: person.marketingConsent && !person.unsubscribed,
     label: MHP_BOOK_INTEREST_LABEL, module: MHP_BOOK_MODULE, link: null, signedUpAt: person.lastSignupAt, recordedFrom: 'owner-list' };
 }
 
@@ -201,6 +209,35 @@ async function classify(tx: SqlExecutor, candidate: MhpBookLeadCandidate, actorU
 
 export const bookLeadKey = (prospectId: string): string => `mhp.book.${prospectId}`;
 
+/** Which promotional-message state this projection itself last gave the contact's mobile (custom field mhpBookPhone). */
+async function markPhoneConsent(tx: SqlExecutor, contactId: string, state: 'messages' | 'book_only'): Promise<void> {
+  await tx.query(`/* mhp.book-lead-phone-consent-mark */ UPDATE app.contacts SET custom_fields=custom_fields||jsonb_build_object('mhpBookPhone',$2::text),
+    row_version=row_version+1, updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`, [contactId, state]);
+}
+
+/**
+ * A repeat sign-up for a mobile the contact already has. Follows the latest sign-up for upgrades only: "unknown" becomes
+ * what the sign-up says; "opted out" becomes "opted in" only when the person has now ticked the texts/WhatsApp box AND
+ * that "opted out" was this projection's own "about the book only" AND no suppression (a STOP or an unsubscribe) has
+ * ever been recorded for the number. Anything an owner, a STOP or an unsubscribe set is never undone here. Never a
+ * downgrade: not ticking again is not a withdrawal.
+ */
+async function phonePermission(tx: SqlExecutor, pointId: string, contactId: string, fields: Record<string, unknown>, candidate: MhpBookLeadCandidate): Promise<string | null> {
+  if (candidate.messages === null) return null;
+  const row = (await tx.query<{ consent: string; suppressed: boolean }>(`/* mhp.book-lead-phone-permission */
+    SELECT p.consent_status AS consent, EXISTS(SELECT 1 FROM app.communication_suppression_events e WHERE e.workspace_id=p.workspace_id
+      AND e.contact_point_id=p.id) AS suppressed
+    FROM app.contact_points p WHERE p.workspace_id=app_private.current_workspace_id() AND p.id=$1::uuid FOR UPDATE OF p`, [pointId])).rows[0];
+  if (!row) return null;
+  const next = row.consent === 'unknown' ? (candidate.messages ? 'opted_in' : 'opted_out')
+    : row.consent === 'opted_out' && candidate.messages && fields.mhpBookPhone === 'book_only' && !row.suppressed ? 'opted_in' : row.consent;
+  if (next === row.consent) return null;
+  await tx.query(`/* mhp.book-lead-phone-permission-set */ UPDATE app.contact_points SET consent_status=$2, row_version=row_version+1,
+    updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid`, [pointId, next]);
+  await markPhoneConsent(tx, contactId, next === 'opted_in' ? 'messages' : 'book_only');
+  return next === 'opted_in' ? 'texts and WhatsApp offers yes' : 'texts and WhatsApp about the book only';
+}
+
 /**
  * The MHP marketing workspace's one active owner, read at run time on the web login as the viewing person (who must
  * be a member: the membership policy shows nothing otherwise). Null when there is not exactly one active owner.
@@ -228,6 +265,11 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
   if (!('mhpProspectId' in contact.fields)) patch.mhpProspectId = candidate.prospectId;
   if (!('bookInterest' in contact.fields)) patch.bookInterest = 'Before You Buy';
   if (!('mhpSignup' in contact.fields)) patch.mhpSignup = bookEvidence(candidate);
+  // The latest sign-up's consent wording (evidence stays per sign-up in mhp_prospect_signups; this is what Leads shows).
+  const latest = contact.fields.mhpBookLatest as { signupId?: unknown } | undefined;
+  if (candidate.recordedFrom === 'sign-up' && candidate.signupId && latest?.signupId !== candidate.signupId) {
+    patch.mhpBookLatest = { signupId: candidate.signupId, signedUpAt: candidate.signedUpAt, consentVersion: candidate.consentVersion, messages: candidate.messages };
+  }
   const changes: string[] = [];
   if (Object.keys(patch).length > 0) {
     await tx.query(`/* mhp.book-lead-evidence */ UPDATE app.contacts SET custom_fields=custom_fields||$2::jsonb, row_version=row_version+1,
@@ -261,13 +303,24 @@ async function enrich(tx: SqlExecutor, context: DatabaseRequestContext, contactI
   const number = bookLeadPhone(candidate.phone);
   if (number) {
     const holder = await repository.findContactPoint('phone', number);
-    if (holder) phone = holder.contactId === contactId ? 'present' : 'other_contact';
-    else {
+    if (holder) {
+      phone = holder.contactId === contactId ? 'present' : 'other_contact';
+      if (phone === 'present') {
+        const decided = await phonePermission(tx, holder.id, contactId, contact.fields, candidate);
+        if (decided) changes.push(decided);
+      }
+    } else {
+      // Promotional texts/WhatsApp: "opted in" only with the +messages tick; otherwise "opted out" (contact about the
+      // book only); "unknown" only when the sign-up's wording is not known here (the owner list carries no version).
+      const consentStatus = candidate.messages === true ? 'opted_in' : candidate.messages === false ? 'opted_out' : 'unknown';
       const inserted = await repository.insertContactPoint({ id: randomUUID(), contactId, kind: 'phone', label: 'Mobile (unverified)',
         value: candidate.phone!.trim().slice(0, 320), normalizedValue: number,
-        isPrimary: !(await repository.hasPrimaryContactPoint(contactId, 'phone')), consentStatus: 'unknown', createdAt: now.toISOString() });
+        isPrimary: !(await repository.hasPrimaryContactPoint(contactId, 'phone')), consentStatus, createdAt: now.toISOString() });
       phone = inserted ? 'added' : 'other_contact';
-      if (phone === 'added') changes.push('mobile number (unverified)');
+      if (phone === 'added') {
+        changes.push(`mobile number (unverified; texts and WhatsApp ${consentStatus === 'opted_in' ? 'offers yes' : consentStatus === 'opted_out' ? 'about the book only' : 'not recorded'})`);
+        if (consentStatus !== 'unknown') await markPhoneConsent(tx, contactId, consentStatus === 'opted_in' ? 'messages' : 'book_only');
+      }
     }
   }
   if (changes.length > 0) {
@@ -431,8 +484,8 @@ export class MhpBookLeadService {
     if (!people.length) return { ...empty, available: true };
     try {
       const phones = [...new Set(people.map(p => bookLeadPhone(p.phone)).filter((n): n is string => n !== null))];
-      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null; status: string | null; complete: boolean }>(`/* mhp.book-lead-status */
-        SELECT lower(cp.normalized_value) AS email, cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted,
+      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null; status: string | null; complete: boolean; version: string | null }>(`/* mhp.book-lead-status */
+        SELECT lower(cp.normalized_value) AS email, coalesce(c.custom_fields->'mhpBookLatest'->>'consentVersion',c.custom_fields->'mhpSignup'->>'consentVersion') AS version, cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted,
           c.lifecycle_status AS lifecycle, o.id AS "opportunityId", s.name AS stage, o.status, c.custom_fields ? 'mhpSignup' AS complete,
           EXISTS(SELECT 1 FROM app.activities a WHERE a.workspace_id=cp.workspace_id AND a.contact_id=cp.contact_id AND a.activity_type=$4) AS recorded
         FROM app.contact_points cp JOIN app.contacts c ON c.workspace_id=cp.workspace_id AND c.id=cp.contact_id
@@ -463,7 +516,8 @@ export class MhpBookLeadService {
           else if (row.opportunityId || row.recorded) {
             const number = bookLeadPhone(person.phone);
             status = { state: 'in_leads', contactId: row.contactId, opportunityId: row.opportunityId, stage: row.stage, status: row.status,
-              complete: (row.complete === true || row.recorded === true) && (number === null || held.has(number)) };
+              complete: (row.complete === true || row.recorded === true) && (number === null || held.has(number)),
+              messages: row.version ? mhpMessagesConsented(row.version) : null };
           }
           else status = { state: 'not_yet' };
         }

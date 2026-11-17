@@ -100,25 +100,31 @@ export function hqRegistrantsPage(registrants: readonly MhpRegistrantRecord[], b
   const when = (value: string): string => new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
   const webinar = registrants.filter(r => r.webinar).length;
   const withLeads = bookOnly && leads !== undefined;
-  const rows = registrants.map(r => `<tr><td>${e(when(r.lastSignupAt))}</td><td>${e(r.firstName ?? '')}</td><td><a href="mailto:${e(r.email)}">${e(r.email)}</a></td><td>${e(r.phone ?? '')}</td><td>${e(r.signups.join(', '))}</td><td>${r.marketingConsent && !r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.applied ? 'Yes' : 'No'}</td><td>${e(r.level ?? '')}</td>${withLeads ? `<td>${bookLeadCell(leads.byProspect.get(r.id), leads.available)}</td>` : ''}</tr>`).join('');
+  const rows = registrants.map(r => `<tr><td>${e(when(r.lastSignupAt))}</td><td>${e(r.firstName ?? '')}</td><td><a href="mailto:${e(r.email)}">${e(r.email)}</a></td><td>${e(r.phone ?? '')}</td><td>${e(r.signups.join(', '))}</td><td>${r.marketingConsent && !r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.applied ? 'Yes' : 'No'}</td><td>${e(r.level ?? '')}</td>${withLeads ? `<td>${leads.available ? e(bookMessagesAnswer(leads.byProspect.get(r.id))) : 'Not checked'}</td><td>${bookLeadCell(leads.byProspect.get(r.id), leads.available)}</td>` : ''}</tr>`).join('');
   const leadsLine = withLeads
     ? leads.available
       ? `<p role="status"><strong>${e(leads.inLeads)} of ${e(leads.total)} are in your Leads.</strong> New book sign-ups go into New enquiry with a follow-up task for you. Lead links open in the MHP marketing workspace; open it from <a href="/hq/marketing">Growth CRM</a> first.</p>`
       : '<p role="status"><strong>Whether these people are in your Leads could not be checked just now.</strong> Open the MHP marketing workspace from <a href="/hq/marketing">Growth CRM</a>, then refresh this page.</p>'
     : '';
-  return frame(bookOnly ? 'Before You Buy — book interest' : 'Registrants', `<span class="eyebrow">Owner HQ · Registrants</span><h1>${bookOnly ? 'Before You Buy — book interest.' : 'Who signed up.'}</h1>${bookOnly ? '<p>People who requested the book launch updates. Registering interest is not an order or payment. This view filters the latest 2,000 MHP registrants; it is not an all-time count.</p><p><a href="https://martinhowardproperty.co.uk/book/">Open the book holding page</a> · <a href="/hq/marketing">Back to Growth CRM</a></p>' : ''}<p class="intro">Newest first, up to 2,000 people. ${bookOnly ? `${e(registrants.length)} book enquiries in this view.` : `${e(webinar)} registered for the webinar.`} Contact people only about what they asked for; send marketing only where "Tips emails" says Yes.</p>${leadsLine}<p><a href="/hq/registrants?format=csv${bookOnly ? '&amp;audience=book' : ''}">Download as CSV</a></p><div class="scroll"><table><thead><tr><th>Latest sign-up (UK)</th><th>First name</th><th>Email</th><th>Mobile (unverified)</th><th>Signed up for</th><th>Tips emails</th><th>Unsubscribed</th><th>Applied</th><th>Level</th>${withLeads ? '<th>In your Leads</th>' : ''}</tr></thead><tbody>${rows || `<tr><td colspan="${withLeads ? 10 : 9}">No sign-ups yet.</td></tr>`}</tbody></table></div>`);
+  return frame(bookOnly ? 'Before You Buy — book interest' : 'Registrants', `<span class="eyebrow">Owner HQ · Registrants</span><h1>${bookOnly ? 'Before You Buy — book interest.' : 'Who signed up.'}</h1>${bookOnly ? '<p>People who requested the book launch updates. Registering interest is not an order or payment. This view filters the latest 2,000 MHP registrants; it is not an all-time count.</p><p><a href="https://martinhowardproperty.co.uk/book/">Open the book holding page</a> · <a href="/hq/marketing">Back to Growth CRM</a></p>' : ''}<p class="intro">Newest first, up to 2,000 people. ${bookOnly ? `${e(registrants.length)} book enquiries in this view.` : `${e(webinar)} registered for the webinar.`} Contact people only about what they asked for; send marketing only where "Tips emails" says Yes${bookOnly ? ', and promotional texts or WhatsApp messages only where "Texts/WhatsApp offers" says Yes' : ''}.</p>${leadsLine}<p><a href="/hq/registrants?format=csv${bookOnly ? '&amp;audience=book' : ''}">Download as CSV</a></p><div class="scroll"><table><thead><tr><th>Latest sign-up (UK)</th><th>First name</th><th>Email</th><th>Mobile (unverified)</th><th>Signed up for</th><th>Tips emails</th><th>Unsubscribed</th><th>Applied</th><th>Level</th>${withLeads ? '<th>Texts/WhatsApp offers</th><th>In your Leads</th>' : ''}</tr></thead><tbody>${rows || `<tr><td colspan="${withLeads ? 11 : 9}">No sign-ups yet.</td></tr>`}</tbody></table></div>`);
 }
 
 /** CSV for a spreadsheet. Cells a spreadsheet would read as a formula get a leading apostrophe. */
-export function registrantsCsv(registrants: readonly MhpRegistrantRecord[]): string {
+/** "Texts/WhatsApp offers" for one book registrant, from the latest sign-up's stored consent version as copied to Leads. */
+export function bookMessagesAnswer(status: MhpBookLeadStatus | undefined): string {
+  return status?.state === 'in_leads' && status.messages !== null ? (status.messages ? 'Yes' : 'No') : 'Not known yet';
+}
+
+export function registrantsCsv(registrants: readonly MhpRegistrantRecord[], leads?: MhpBookLeadStatuses): string {
   const cell = (value: unknown): string => {
     let text = String(value ?? '');
     if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   };
-  const head = ['Latest sign-up (UTC)', 'First name', 'Email', 'Mobile (unverified)', 'Signed up for', 'Tips emails', 'Unsubscribed', 'Applied', 'Level', 'First seen (UTC)'];
+  const head = ['Latest sign-up (UTC)', 'First name', 'Email', 'Mobile (unverified)', 'Signed up for', 'Tips emails', 'Unsubscribed', 'Applied', 'Level', 'First seen (UTC)',
+    ...(leads ? ['Texts/WhatsApp offers'] : [])];
   const lines = registrants.map(r => [r.lastSignupAt, r.firstName ?? '', r.email, r.phone ?? '', r.signups.join('; '), r.marketingConsent && !r.unsubscribed ? 'Yes' : 'No',
-    r.unsubscribed ? 'Yes' : 'No', r.applied ? 'Yes' : 'No', r.level ?? '', r.firstSeenAt].map(cell).join(','));
+    r.unsubscribed ? 'Yes' : 'No', r.applied ? 'Yes' : 'No', r.level ?? '', r.firstSeenAt, ...(leads ? [leads.available ? bookMessagesAnswer(leads.byProspect.get(r.id)) : 'Not checked'] : [])].map(cell).join(','));
   return '﻿' + [head.map(cell).join(','), ...lines].join('\r\n') + '\r\n';
 }
 

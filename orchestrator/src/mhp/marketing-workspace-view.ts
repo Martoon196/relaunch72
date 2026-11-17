@@ -5,6 +5,13 @@ import type { MhpBookLeadBatch } from './book-leads-service.js';
 import type { EmailHealthSnapshot } from '../email-bounces/registry.js';
 import { emailHealthCard } from './email-health.js';
 
+/** The sentence a sequence or owner email page answers outside the brand workspace. */
+export const MARKETING_WORKSPACE_FIRST = 'Open the MHP marketing workspace first.';
+/** That sentence with the one press that fixes it: a link to the marketing workspace page. */
+export function marketingWorkspaceFirstPage(): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open the MHP marketing workspace</title></head><body><main><p>${escapeHtml(MARKETING_WORKSPACE_FIRST)}</p><p><a href="/hq/marketing">Go to the MHP marketing workspace</a></p></main></body></html>`;
+}
+
 export function marketingReturnControl(csrf: string, commandId: string): string {
   return `<form method="post" action="/hq/marketing/return"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="commandId" value="${escapeHtml(commandId)}"><button class="button secondary" type="submit">Return to personal Desk</button></form>`;
 }

@@ -173,7 +173,7 @@ test('Book interest shows who is in Leads with a link, the mobile, a plain count
   const contact = 'b1590000-0000-4000-8000-000000000007';
   const people = [person(), person({ id: other, email: 'second@example.com', firstName: '<b>Second</b>', phone: null }), person({ id: third, email: 'third@example.com' })];
   const leads: MhpBookLeadStatuses = { available: true, inLeads: 1, total: 3, byProspect: new Map([
-    [PROSPECT, { state: 'in_leads', contactId: contact, opportunityId: WS, stage: 'New <enquiry>', status: 'open', complete: true }],
+    [PROSPECT, { state: 'in_leads', contactId: contact, opportunityId: WS, stage: 'New <enquiry>', status: 'open', complete: true, messages: true }],
     [other, { state: 'not_yet' }], [third, { state: 'needs_you', reason: 'several_contacts' }]]) };
   const html = hqRegistrantsPage(people, true, leads);
   assert.match(html, /<strong>1 of 3 are in your Leads\.<\/strong>/);
@@ -215,4 +215,106 @@ test('the owner button refuses a stale, forged or other-audience cursor before r
   const empty = await service.importBatch(identity, 'req', '');
   assert.deepEqual(empty, { added: 0, alreadyIn: 0, completed: 0, needYou: 0, failed: false, processed: 0, hasMore: false, cursor: null });
   assert.equal(reads, 1);
+});
+
+// ── Consent wording (CONSENT_FORM / OPT_IN_MESSAGES) ─────────────────────────────────────────────────────────────
+
+const forms = {
+  webinar: { FIRSTNAME: 'Viewer', EMAIL: 'viewer@example.com', OPT_IN: '1', PHONE: '07700 900159', CHEATSHEET: 'Webinar', CHEATSHEET_LINK: `${SITE}/webinar/` },
+  webinarNoTick: { FIRSTNAME: 'Viewer', EMAIL: 'viewer@example.com', CHEATSHEET: 'Webinar', CHEATSHEET_LINK: `${SITE}/webinar/` },
+  sheet: { FIRSTNAME: 'Sheet', EMAIL: 'sheet@example.com', OPT_IN: 'on', CHEATSHEET: 'Deal checklist', CHEATSHEET_MODULE: 'deal-checklist', CHEATSHEET_LINK: `${SITE}/cheat-sheets/deal/` },
+  course: { FIRSTNAME: 'Course', EMAIL: 'course@example.com', OPT_IN: 'true', CHEATSHEET: 'Course waitlist', CHEATSHEET_MODULE: 'course', CHEATSHEET_LINK: `${SITE}/course/` },
+  book: BOOK_FORM,
+};
+
+/** The values the PG adapter sends to mhp_capture_signup_v3 for a parsed form. */
+async function storedValues(fields: Record<string, string>): Promise<unknown[]> {
+  const { PgMhpGrowthService, mhpWebinarConfig } = await import('../src/mhp/growth-service.js');
+  let values: unknown[] = [];
+  const pool = { query: async (_sql: string, v: unknown[] = []) => { values = v; return { rows: [{ outcome: { signupId: WS, prospectId: USER,
+    campaign: v[5] === 'webinar' ? 'webinar-2026-11-04' : null, entryEventSequence: v[5] === 'webinar' ? '1' : null, queued: 0 } }] }; } };
+  const signup = parseMhpSignup(new URLSearchParams(fields));
+  assert.notEqual(signup, 'honeypot');
+  await new PgMhpGrowthService(pool as never, pool as never, mhpWebinarConfig({})).capture(signup as MhpSignup, null, Date.parse('2026-11-17T12:00:00Z'));
+  return values;
+}
+
+test('forms that send neither new field are parsed and stored exactly as before (webinar, cheat sheet, course waitlist, current book form)', async () => {
+  const { MHP_CONSENT_VERSION } = await import('../src/mhp/growth-service.js');
+  assert.equal(MHP_CONSENT_VERSION, 'site-2026-10');
+  for (const [name, form] of Object.entries(forms)) {
+    const parsed = parseMhpSignup(new URLSearchParams(form)) as MhpSignup;
+    assert.equal('consentVersion' in parsed, false, name);
+    assert.deepEqual(Object.keys(parsed), ['email', 'firstName', 'level', 'consent', 'kind', 'label', 'module', 'link', 'phone'], name);
+    assert.equal((await storedValues(form))[4], 'site-2026-10', name);
+  }
+  // The required email tick for the waitlist is unchanged, whatever the new fields say.
+  for (const extra of [{}, { CONSENT_FORM: 'book-2026-11' }, { CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' }] as Record<string, string>[]) {
+    assert.throws(() => parseMhpSignup(new URLSearchParams({ ...BOOK_FORM, OPT_IN: '', ...extra })), /Tick the box so we can email you/);
+  }
+});
+
+test('CONSENT_FORM names an allow-listed wording; +messages only with the texts tick, the email tick and a usable mobile; anything else is ignored', async () => {
+  const { MHP_CONSENT_WORDINGS, MHP_BOOK_EMAIL_CONSENT_TEXT, MHP_MESSAGES_CONSENT_TEXT, mhpMessagesConsented } = await import('../src/mhp/growth-service.js');
+  assert.equal(MHP_CONSENT_WORDINGS['book-2026-11'], "Give me access to Chapter One and email me about Before You Buy, occasional property tips, and offers of Martin Howard Property's training and Property Predator software. I can unsubscribe at any time.");
+  assert.equal(MHP_CONSENT_WORDINGS['book-2026-11+messages'], `${MHP_BOOK_EMAIL_CONSENT_TEXT} ${MHP_MESSAGES_CONSENT_TEXT}`);
+  assert.match(MHP_MESSAGES_CONSENT_TEXT, /^Also send me occasional texts and WhatsApp messages from Martin Howard Property .* Reply STOP or unsubscribe at any time\.$/);
+  const version = async (extra: Record<string, string>, base: Record<string, string> = BOOK_FORM) => (await storedValues({ ...base, ...extra }))[4];
+  assert.equal(await version({ CONSENT_FORM: 'book-2026-11' }), 'book-2026-11');
+  for (const tick of ['1', 'on', 'true']) assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: tick }), 'book-2026-11+messages');
+  // No (or an unusable) mobile: the texts tick is not recorded.
+  assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1', PHONE: '' }), 'book-2026-11');
+  assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1', PHONE: '123 456' }), 'book-2026-11');
+  assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: 'yes please' }), 'book-2026-11');
+  assert.equal(await version({ OPT_IN_MESSAGES: '1' }), 'site-2026-10', 'the texts tick alone changes nothing');
+  // The site default has no texts wording: never +messages.
+  assert.equal(await version({ CONSENT_FORM: 'site-2026-10', OPT_IN_MESSAGES: '1' }), 'site-2026-10');
+  // Hostile or unknown values: ignored, today's default, never an error.
+  for (const hostile of ['book-2026-11+messages', 'book-2026-12', "book-2026-11'; DROP TABLE x;--", '<script>', 'x'.repeat(5000), '__proto__', 'constructor', 'toString', ' book-2026-11 x']) {
+    const stored = await version({ CONSENT_FORM: hostile, OPT_IN_MESSAGES: '1' });
+    assert.ok(stored === 'site-2026-10', `${hostile.slice(0, 30)} -> ${String(stored)}`);
+  }
+  // A webinar without the email tick cannot carry the texts wording.
+  assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' }, forms.webinarNoTick), 'book-2026-11');
+  assert.equal(mhpMessagesConsented('book-2026-11+messages'), true);
+  for (const value of ['book-2026-11', 'site-2026-10', 'forged+messages', null, undefined]) assert.equal(mhpMessagesConsented(value), false);
+  // A hand-built sign-up with an unlisted version is stored with the default.
+  const { mhpSignupConsentVersion } = await import('../src/mhp/growth-service.js');
+  assert.equal(mhpSignupConsentVersion({ consentVersion: 'forged+messages' }), 'site-2026-10');
+});
+
+test('the lead and task say which texts/WhatsApp permission was given', async () => {
+  const { bookCandidateFromCapture } = await import('../src/mhp/book-leads-service.js');
+  const yes = bookCandidateFromCapture(parseMhpSignup(new URLSearchParams({ ...BOOK_FORM, CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' })) as MhpSignup, { prospectId: PROSPECT, signupId: WS }, Date.now());
+  assert.deepEqual([yes.consentVersion, yes.messages], ['book-2026-11+messages', true]);
+  assert.match(bookTaskDescription(yes), /^Texts and WhatsApp offers: yes/m);
+  const no = bookCandidateFromCapture(parseMhpSignup(new URLSearchParams({ ...BOOK_FORM, CONSENT_FORM: 'book-2026-11' })) as MhpSignup, { prospectId: PROSPECT, signupId: WS }, Date.now());
+  assert.deepEqual([no.consentVersion, no.messages], ['book-2026-11', false]);
+  assert.match(bookTaskDescription(no), /^Texts and WhatsApp: about the book only\.$/m);
+  const today = bookCandidateFromCapture(parseMhpSignup(new URLSearchParams(BOOK_FORM)) as MhpSignup, { prospectId: PROSPECT, signupId: WS }, Date.now());
+  assert.deepEqual([today.consentVersion, today.messages], ['site-2026-10', false]);
+  assert.match(bookTaskDescription({ phone: '07700 900159', marketingEmails: true, messages: null }), /^Texts and WhatsApp: not recorded for this sign-up, so about the book only\.$/m);
+});
+
+test('Book interest and its CSV show "Texts/WhatsApp offers" from the stored version', async () => {
+  const { registrantsCsv } = await import('../src/mhp/growth-view.js');
+  const other = 'b1590000-0000-4000-8000-000000000008', third = 'b1590000-0000-4000-8000-000000000009';
+  const people = [person(), person({ id: other, email: 'no@example.com' }), person({ id: third, email: 'later@example.com' })];
+  const base = { state: 'in_leads' as const, contactId: USER, opportunityId: WS, stage: 'New enquiry', status: 'open', complete: true };
+  const leads: MhpBookLeadStatuses = { available: true, inLeads: 2, total: 3, byProspect: new Map([[PROSPECT, { ...base, messages: true }], [other, { ...base, messages: false }], [third, { state: 'not_yet' }]]) };
+  const html = hqRegistrantsPage(people, true, leads);
+  assert.match(html, /<th>Texts\/WhatsApp offers<\/th><th>In your Leads<\/th>/);
+  assert.deepEqual([...html.matchAll(/<td>(Yes|No|Not known yet)<\/td><td>(?:<a|Not yet)/g)].map(m => m[1]), ['Yes', 'No', 'Not known yet']);
+  const csv = registrantsCsv(people, leads).split('\r\n');
+  assert.match(csv[0]!, /,Texts\/WhatsApp offers$/);
+  assert.deepEqual(csv.slice(1, 4).map(line => line.split(',').at(-1)), ['Yes', 'No', 'Not known yet']);
+  assert.doesNotMatch(registrantsCsv(people).split('\r\n')[0]!, /Texts/);
+});
+
+test('sequence and owner email pages outside the brand workspace answer the same sentence with a link to /hq/marketing', async () => {
+  const { marketingWorkspaceFirstPage, MARKETING_WORKSPACE_FIRST } = await import('../src/mhp/marketing-workspace-view.js');
+  assert.equal(MARKETING_WORKSPACE_FIRST, 'Open the MHP marketing workspace first.');
+  const html = marketingWorkspaceFirstPage();
+  assert.match(html, /<p>Open the MHP marketing workspace first\.<\/p>/);
+  assert.match(html, /<a href="\/hq\/marketing">Go to the MHP marketing workspace<\/a>/);
 });
