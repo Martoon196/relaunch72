@@ -23,6 +23,9 @@ while p.poll() is None:
 result={'exitCode':p.returncode,'aggregateRssWatchdogLimitKiB':1572864,'aggregateLimitKilled':killed,'aggregatePeakRssKiB':peak,'elapsedSeconds':round(time.monotonic()-start,2),'samples':samples,'outerAddressSpaceLimitBytes':1610612736 if strict else None,'nodeJitEnabled':not strict,'nodeMaxOldSpaceMiB':128,'ffmpegAddressSpaceLimitBytes':1073741824,'input':os.environ.get('RL72_MEDIA_MEMORY_INPUT_DESCRIPTION','180 seconds moving testsrc2 1920x1080 30fps + AAC sine; synthetic stress'),'timeline':'0-90 s plus 90-180 s, landscape, #ad, speed 1'}
 result['scope']='whole download/normalise/bundle/probe/render command' if whole else 'renderer subprocess tree only'
 if whole:
+ result['input']='Tears of Steel: continuous original seconds 60–240, 1920x800 picture letterboxed to 1920x1080; includes preparation and rendering'
+ result['command']=['sh','orchestrator/test/tools/media-real-footage-memory.sh']
+ for key in ['nodeJitEnabled','nodeMaxOldSpaceMiB','ffmpegAddressSpaceLimitBytes','outerAddressSpaceLimitBytes']:result.pop(key,None)
  result['rendererOnly']=json.load(open('/tmp/rl72-render-evidence/measurement.json')) if os.path.exists('/tmp/rl72-render-evidence/measurement.json') else None
 else:result['rendererReceipts']=[json.loads(line) for line in open(log) if line.startswith('{')]
 path='/tmp/rl72-render-evidence/whole-command-memory.json' if whole else '/tmp/rl72-render-evidence/measurement.json'
