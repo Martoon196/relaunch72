@@ -23,6 +23,8 @@ export interface CheckContext {
   /** Other articles (title + slug) and existing page titles for duplication. */
   readonly others: readonly { readonly title: string; readonly slug: string; readonly kind: 'article' | 'page' }[];
   readonly now: string;
+  /** The article's brief has products (Affiliate Studio): the product rules apply even when no link is left. */
+  readonly productArticle?: boolean;
 }
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -97,7 +99,7 @@ export function runChecks(version: ArticleVersion, ctx: CheckContext): CheckRepo
   const b = version.body;
 
   // ── Product links (Affiliate Studio): every issue is critical and blocks approval ──
-  for (const issue of affiliateIssues(b, ctx.website)) add('critical', issue.code, issue.message, issue.fix, issue.location);
+  for (const issue of affiliateIssues(b, ctx.website, ctx.productArticle === true)) add('critical', issue.code, issue.message, issue.fix, issue.location);
 
   // ── Completeness & metadata ──
   if (!b.title.trim()) add('critical', 'structure.title_missing', 'The article has no page heading.', 'Add a clear title.');

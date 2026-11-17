@@ -14,6 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { InactivePortalSessionError, withTransaction } from '../db/transaction.js';
 import { programmeFor, parseRegisteredSite, type ProgrammeId } from './programmes.js';
+import { cleanDisplay } from './article.js';
 
 /** The signed-in owner making the call (the user variant of the content stores' principal). */
 export interface AffiliateOwner {
@@ -163,7 +164,8 @@ const TEXT = /[\u0000-\u001f\u007f<>]/u;
 function cleanName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/\s+/gu, ' ').trim();
-  return text.length >= 1 && text.length <= 200 && !TEXT.test(text) ? text : null;
+  // A name of invisible or direction-changing characters only would show as nothing (review S9).
+  return text.length >= 1 && text.length <= 200 && !TEXT.test(text) && cleanDisplay(text).length > 0 ? text : null;
 }
 function cleanNotes(value: unknown): string | null | undefined {
   if (value === null || value === undefined) return null;
