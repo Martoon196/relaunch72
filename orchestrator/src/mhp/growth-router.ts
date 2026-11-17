@@ -186,8 +186,9 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
         const captured = await deps.growth.capture(signup, source, now);
         // 0159: a book sign-up's mobile is kept on that sign-up row (one statement, awaited). Before 0159 the function is
         // missing and this is skipped; any failure is logged without the number and never changes the answer.
+        let mobileKept = false;
         if (signup.phone && deps.growth.keepBookPhone && isBookSignup(signup)) {
-          try { await deps.growth.keepBookPhone(captured, signup.phone); }
+          try { mobileKept = (await deps.growth.keepBookPhone(captured, signup.phone)) === 'kept'; }
           catch (error) {
             const code = (error as { code?: unknown })?.code;
             console.warn(`mhp book leads: mobile not kept${typeof code === 'string' ? ` (${code.slice(0, 20)})` : ''}`);
@@ -195,7 +196,7 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
         }
         // The sign-up is committed. Copying a book sign-up into Leads is started here and never awaited: it cannot
         // change this response, its timing or the evidence just saved (afterCapture ignores every other sign-up).
-        try { deps.bookLeads?.afterCapture(signup, captured, now); } catch { /* Logged and retried inside; the visitor is unaffected. */ }
+        try { deps.bookLeads?.afterCapture(signup, captured, now, mobileKept); } catch { /* Logged and retried inside; the visitor is unaffected. */ }
         if (signup.kind === 'webinar' && deps.phoneSignup) {
           // This optional step must never undo or conceal an accepted registration.
           const handoff = await deps.phoneSignup.fromSignup(captured, source, now).catch(() => null);

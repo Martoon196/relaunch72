@@ -79,7 +79,7 @@ export interface MhpBookLeadCandidate {
 export type MhpBookLeadOutcome =
   | { outcome: 'created' | 'enriched' | 'present'; contactId: string; opportunityId: string | null; phone: 'added' | 'present' | 'other_contact' | 'none' }
   | { outcome: 'skipped'; reason: MhpBookSkipReason };
-export type MhpBookSkipReason = 'test_address' | 'several_contacts' | 'archived_contact' | 'deleted_contact' | 'shared_contact' | 'contact_without_email';
+export type MhpBookSkipReason = 'test_address' | 'several_contacts' | 'archived_contact' | 'deleted_contact' | 'shared_contact' | 'contact_without_email' | 'lead_moved' | 'kept_changing';
 
 export type MhpBookLeadStatus =
   | { state: 'in_leads'; contactId: string; opportunityId: string | null; stage: string | null; status: string | null; complete: boolean;
@@ -115,12 +115,15 @@ export const MHP_BOOK_SKIP_TEXT: Readonly<Record<MhpBookSkipReason, string>> = O
   deleted_contact: 'A deleted record in Leads still holds this email. Restore or remove it first.',
   shared_contact: 'This email is marked shared or held for review in Leads. Resolve it first.',
   contact_without_email: 'The book lead made earlier no longer has this email address. Check it in Leads.',
+  lead_moved: 'The book lead made earlier is a different record from the one that now has this email. Merge the two records in Leads, then bring book sign-ups in again.',
+  kept_changing: 'This person\'s record in Leads kept changing while the book enquiry was being added. Check the record, then bring book sign-ups in again.',
 });
 
 const normalEmail = (value: string): string => value.trim().toLowerCase();
 /** The CRM command's own phone normalisation, so a match means the same thing in both places. */
 export function bookLeadPhone(value: string | null): string | null {
-  let number = (value ?? '').trim().replace(/[\s().-]/gu, '');
+  // "+44 (0)7700 900123" is the UK number 07700 900123: the "(0)" is the trunk prefix, not a digit of the number.
+  let number = (value ?? '').trim().replace(/^(\+44|0044)\s*\(0\)/u, '$1').replace(/[\s().-]/gu, '');
   if (number.startsWith('00')) number = `+${number.slice(2)}`;
   return /^\+?\d{7,15}$/u.test(number) ? number : null;
 }
@@ -238,6 +241,9 @@ async function classify(tx: SqlExecutor, candidate: MhpBookLeadCandidate, actorU
     if (row.opportunityId || row.recorded || receipt?.result?.contactId === row.contactId) {
       return { kind: 'existing', contactId: row.contactId, opportunityId: row.opportunityId ?? receiptOpportunity, viaEmail: true };
     }
+    // This person's book lead was made before, on another record than the one holding the email now: the owner's to
+    // sort out (merge). Creating again would only replay that earlier receipt, round and round.
+    if (receipt) return { kind: 'blocked', reason: 'lead_moved' };
     return { kind: 'create' };
   }
   // No record holds the email now. A book lead made for this sign-up earlier (by the trigger or by us) whose email was
@@ -271,7 +277,8 @@ async function markPhone(tx: SqlExecutor, contactId: string, number: string, sta
  */
 async function phonePermission(tx: SqlExecutor, pointId: string, contactId: string, number: string, fields: Record<string, unknown>,
   candidate: MhpBookLeadCandidate): Promise<string | null> {
-  const mine = (fields.mhpBookPhones as Record<string, unknown> | undefined)?.[number];
+  const marks = (fields.mhpBookPhones as Record<string, unknown> | undefined) ?? {};
+  const mine = bookPhoneVariants(number).map(v => marks[v]).find(v => v !== undefined);
   if (candidate.messages !== true || (mine !== 'book_only' && mine !== 'not_recorded')) return null;
   const row = (await tx.query<{ consent: string; suppressed: boolean }>(`/* mhp.book-lead-phone-permission */
     SELECT p.consent_status AS consent, EXISTS(SELECT 1 FROM app.communication_suppression_events e WHERE e.workspace_id=p.workspace_id
@@ -280,7 +287,7 @@ async function phonePermission(tx: SqlExecutor, pointId: string, contactId: stri
   if (!row || row.consent !== 'unknown' || row.suppressed) return null;
   await tx.query(`/* mhp.book-lead-phone-permission-set */ UPDATE app.contact_points SET consent_status='opted_in', row_version=row_version+1,
     updated_at=greatest(updated_at,clock_timestamp()) WHERE workspace_id=app_private.current_workspace_id() AND id=$1::uuid AND contact_id=$2::uuid`, [pointId, contactId]);
-  await markPhone(tx, contactId, number, 'messages');
+  for (const variant of bookPhoneVariants(number)) if (marks[variant] !== undefined) await markPhone(tx, contactId, variant, 'messages');
   return 'texts and WhatsApp offers yes';
 }
 
@@ -442,6 +449,7 @@ export class MhpBookLeadService {
   }
 
   private ownerRefused = false;
+  private lastProbe = 0;
   /** How new sign-ups reach Leads on this process. */
   get mode(): MhpBookLeadMode { return this.deps.ownerUserId === null ? 'no_owner' : this.ownerRefused ? 'owner_cannot_manage' : 'automatic'; }
   /** Whether a sign-up is copied the moment it is saved. */
@@ -449,6 +457,7 @@ export class MhpBookLeadService {
 
   /** Start-up: whether the configured lead owner can manage the workspace (one read; the runner re-checks every time). */
   async probe(): Promise<MhpBookLeadMode> {
+    this.lastProbe = this.now();
     if (this.deps.ownerUserId) {
       try { await this.deps.transactions.run(this.context(this.deps.ownerUserId), async () => null); this.ownerRefused = false; }
       catch (error) { if (refusedOwner(error)) this.ownerRefused = true; }
@@ -512,20 +521,24 @@ export class MhpBookLeadService {
         if (!(error instanceof ProjectionChanged)) throw error;
       }
     }
-    throw new Error('Book lead kept changing while it was being copied');
+    // Never fail for ever on one person (and never block everyone after them in the owner's batch): skip and say so.
+    this.log('mhp book leads: a book sign-up could not be copied into Leads because the person\'s record kept changing; it is listed for the owner on Book interest.');
+    return { outcome: 'skipped', reason: 'kept_changing' };
   }
 
   /**
    * After the public form has committed a sign-up. Never awaited by the form and never throws: a failure is logged,
    * retried in this process, and otherwise picked up by the owner's next visit or button press.
    */
-  afterCapture(signup: MhpSignup, captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, now = this.now()): void {
+  afterCapture(signup: MhpSignup, captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, now = this.now(), mobileKept = false): void {
     if (!isBookSignup(signup)) return;
     const owner = this.deps.ownerUserId;
+    // A refused owner is checked again now and then (at most every 10 minutes), so fixing the membership is enough.
+    if (owner && this.ownerRefused && this.now() - this.lastProbe > 10 * 60_000) void this.probe().catch(() => undefined);
     if (!owner || this.ownerRefused) {
       if (!this.warnedOff) {
         this.warnedOff = true;
-        this.log(`mhp book leads: book sign-ups are saved (with their mobiles) but wait for "Bring book sign-ups into Leads", because ${owner ? 'the configured MHP lead owner cannot manage the workspace' : 'no MHP lead owner is configured'}; Book interest says how many are waiting.`);
+        this.log(`mhp book leads: book sign-ups are saved${mobileKept ? ' (with their mobiles)' : ' (mobiles are kept once the database update 0159 is finished)'} but wait for "Bring book sign-ups into Leads", because ${owner ? 'the configured MHP lead owner cannot manage the workspace' : 'no MHP lead owner is configured'}; Book interest says how many are waiting.`);
       }
       return;
     }
@@ -609,7 +622,7 @@ export class MhpBookLeadService {
     if (!people.length) return { ...empty, available: true, waiting: 0 };
     try {
       const phones = [...new Set(people.flatMap(p => { const n = bookLeadPhone(p.phone); return n ? bookPhoneVariants(n) : []; }))];
-      const { rows, held } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null;
+      const { rows, held, made } = await this.deps.transactions.run(this.context(identity.userId), async tx => ({ rows: await tx.query<EmailRow & { email: string; stage: string | null;
           status: string | null; complete: boolean; version: string | null; emailConsent: string; emailMark: string | null }>(`/* mhp.book-lead-status */
         SELECT lower(cp.normalized_value) AS email, coalesce(c.custom_fields->'mhpBookLatest'->>'consentVersion',c.custom_fields->'mhpSignup'->>'consentVersion') AS version,
           cp.contact_id AS "contactId", cp.dedupe_state AS "dedupeState", c.deleted_at IS NOT NULL AS deleted, cp.consent_status AS "emailConsent",
@@ -627,7 +640,12 @@ export class MhpBookLeadService {
         held: new Map((await tx.query<{ n: string; contactId: string; consent: string }>(`/* mhp.book-lead-status-phones */
           SELECT normalized_value AS n, contact_id AS "contactId", consent_status AS consent FROM app.contact_points
           WHERE workspace_id=app_private.current_workspace_id() AND kind='phone' AND deleted_at IS NULL AND normalized_value=ANY($1::text[])`, [phones])).rows
-          .map(r => [r.n, r] as const)) }));
+          .map(r => [r.n, r] as const)),
+        // Book leads made for these people (by prospect), wherever their email is now.
+        made: new Map((await tx.query<{ prospect: string; contactId: string }>(`/* mhp.book-lead-status-made */
+          SELECT custom_fields->>'mhpProspectId' AS prospect, id AS "contactId" FROM app.contacts
+          WHERE workspace_id=app_private.current_workspace_id() AND deleted_at IS NULL AND custom_fields->>'mhpProspectId'=ANY($1::text[])`,
+        [people.map(p => p.prospectId)])).rows.map(r => [r.prospect, r.contactId] as const)) }));
       const byEmail = new Map<string, typeof rows.rows>();
       for (const row of rows.rows) byEmail.set(row.email, [...(byEmail.get(row.email) ?? []), row]);
       const byProspect = new Map<string, MhpBookLeadStatus>();
@@ -637,7 +655,7 @@ export class MhpBookLeadService {
         let status: MhpBookLeadStatus;
         if (person.email.endsWith('.invalid')) status = { state: 'needs_you', reason: 'test_address' };
         else if (found.length > 1) status = { state: 'needs_you', reason: 'several_contacts' };
-        else if (found.length === 0) status = { state: 'not_yet' };
+        else if (found.length === 0) status = made.has(person.prospectId) ? { state: 'needs_you', reason: 'contact_without_email' } : { state: 'not_yet' };
         else {
           const row = found[0]!;
           if (row.deleted) status = { state: 'needs_you', reason: 'deleted_contact' };
@@ -655,7 +673,8 @@ export class MhpBookLeadService {
               messages: row.version ? mhpMessagesConsented(row.version) : null,
               phoneConsent: point && point.contactId === row.contactId ? point.consent : null };
           }
-          else status = { state: 'not_yet' };
+          else status = made.has(person.prospectId) && made.get(person.prospectId) !== row.contactId
+            ? { state: 'needs_you', reason: 'lead_moved' } : { state: 'not_yet' };
         }
         if (status.state === 'in_leads') inLeads += 1;
         if (status.state === 'not_yet') waiting += 1;

@@ -111,7 +111,7 @@ test('with no lead owner configured and no owner visit yet, the copy waits for t
   service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
   assert.deepEqual(r.calls, []);
   assert.equal(logs.length, 1);
-  assert.match(logs[0]!, /^mhp book leads: book sign-ups are saved \(with their mobiles\) but wait for "Bring book sign-ups into Leads", because no MHP lead owner is configured/);
+  assert.match(logs[0]!, /^mhp book leads: book sign-ups are saved \(mobiles are kept once the database update 0159 is finished\) but wait for "Bring book sign-ups into Leads", because no MHP lead owner is configured/);
   assert.equal(service.mode, 'no_owner');
   assert.throws(() => new MhpBookLeadService({ transactions: r.transactions, registrants: async () => [], ownerUserId: 'not-a-uuid', cursorSecret: SECRET }));
 });
@@ -358,13 +358,19 @@ test('a configured owner who cannot manage the workspace: detected at start-up o
   assert.equal(service.mode, 'automatic');
   assert.equal(await service.probe(), 'owner_cannot_manage');
   assert.equal(service.automatic, false);
-  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
+  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS }, Date.now(), true);
   service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
   assert.deepEqual(logs, ['mhp book leads: book sign-ups are saved (with their mobiles) but wait for "Bring book sign-ups into Leads", because the configured MHP lead owner cannot manage the workspace; Book interest says how many are waiting.']);
   const html = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map([[PROSPECT, { state: 'not_yet' }]]), inLeads: 0, total: 1, mode: 'owner_cannot_manage', waiting: 1 });
-  assert.match(html, /New book sign-ups are not going into Leads automatically \(the configured lead owner cannot manage the MHP marketing workspace\)\.<\/strong> They and their mobiles are saved; 1 is waiting\. One press of "Bring book sign-ups into Leads"/);
-  const none = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map(), inLeads: 0, total: 1, mode: 'no_owner', waiting: 2 });
-  assert.match(none, /\(no lead owner is set for MHP\)[\s\S]*2 are waiting/);
+  // SF4: before 0159 (no stored read) the page never claims the mobiles are saved.
+  assert.match(html, /1 book sign-up is waiting to go into Leads \(the configured lead owner cannot manage the MHP marketing workspace\)\.<\/strong> They are saved; mobiles will be kept once the database update is finished\. One press of "Bring book sign-ups into Leads"/);
+  assert.doesNotMatch(html, /mobiles are saved/);
+  const after = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map(), inLeads: 0, total: 1, mode: 'no_owner', waiting: 2, book: new Map() });
+  assert.match(after, /2 book sign-ups are waiting to go into Leads \(no lead owner is set for MHP\)\.<\/strong> They and their mobiles are saved\./);
+  // While the old trigger still makes every lead, nobody waits: no "waiting" or "not automatic" sentence at all.
+  const trigger = hqRegistrantsPage([person()], true, { available: true, byProspect: new Map([[PROSPECT, { state: 'in_leads', contactId: USER, opportunityId: WS, stage: 'New enquiry', status: 'open', complete: true, messages: null }]]), inLeads: 1, total: 1, mode: 'no_owner', waiting: 0 });
+  assert.match(trigger, /1 of 1 are in your Leads/);
+  assert.doesNotMatch(trigger, /waiting|not going into Leads/);
 });
 
 test('with stored book sign-ups the page and CSV show the book mobile and its texts answer beside it, never a webinar number', async () => {
@@ -384,4 +390,47 @@ test('with stored book sign-ups the page and CSV show the book mobile and its te
   assert.ok(csv[2]!.endsWith(',No mobile given'));
   assert.ok(csv[3]!.endsWith(',"No, about the book only · 07700 900160"'));
   assert.doesNotMatch(csv.join('\n'), /07700 111111|07700 222222|07700 333333/);
+});
+
+
+test('+44 (0)7700… is the same UK number as 07700…; a refused owner is checked again after ten minutes', async () => {
+  const { bookPhoneVariants } = await import('../src/mhp/book-leads-service.js');
+  assert.equal(bookLeadPhone('+44 (0)7700 900159'), '+447700900159');
+  assert.equal(bookLeadPhone('0044 (0) 7700 900159'), '+447700900159');
+  assert.ok(bookPhoneVariants(bookLeadPhone('+44 (0)7700 900159')!).includes(bookLeadPhone('07700 900159')!));
+  let clock = Date.parse('2026-11-18T10:00:00Z'), refuse = true, probes = 0;
+  const service = new MhpBookLeadService({ transactions: { run: async () => { probes++; if (refuse) throw Object.assign(new Error('x'), { code: 'forbidden_scope' }); return null as never; } },
+    registrants: async () => [], ownerUserId: OWNER, cursorSecret: SECRET, now: () => clock, log: () => undefined, retryDelaysMs: [], schedule: () => undefined });
+  assert.equal(await service.probe(), 'owner_cannot_manage');
+  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
+  assert.equal(probes, 1, 'not re-checked straight away');
+  refuse = false; clock += 11 * 60_000;
+  service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(service.mode, 'automatic', 'the owner fixed: back to automatic without a restart');
+});
+
+test('keep-phone: "missing" is re-asked every few seconds when a mobile arrives, and a stalled call is cut at 2 seconds', async () => {
+  const { PgMhpGrowthService, mhpWebinarConfig } = await import('../src/mhp/growth-service.js');
+  let installed = false, calls = 0;
+  const pool = { query: async () => { calls++; if (!installed) throw Object.assign(new Error('function does not exist'), { code: '42883' }); return { rows: [{ kept: true }] }; } };
+  const growth = new PgMhpGrowthService(pool as never, pool as never, mhpWebinarConfig({}));
+  const captured = { prospectId: PROSPECT, signupId: WS };
+  assert.equal(await growth.keepBookPhone(captured, '07700 900159'), 'missing');
+  assert.equal(await growth.keepBookPhone(captured, '07700 900159'), 'missing');
+  assert.equal(calls, 1, 'not asked again within a few seconds');
+  installed = true;
+  const realNow = Date.now;
+  Date.now = () => realNow() + 6_000;
+  try { assert.equal(await growth.keepBookPhone(captured, '07700 900159'), 'kept', 'the first mobile after 0159 is kept without a restart'); }
+  finally { Date.now = realNow; }
+  assert.equal(calls, 2);
+  const stalled = new PgMhpGrowthService({ query: () => new Promise(() => undefined) } as never, { query: () => new Promise(() => undefined) } as never, mhpWebinarConfig({}));
+  stalled.keepBookPhoneTimeoutMs = 50;
+  const keepAlive = setInterval(() => undefined, 1_000); // the cut-off timer is unref'd, as in the server
+  const started = Date.now();
+  await assert.rejects(stalled.keepBookPhone(captured, '07700 900159'), (e: { code?: string }) => e.code === 'timeout');
+  assert.ok(Date.now() - started < 1_000);
+  clearInterval(keepAlive);
+  assert.equal(new PgMhpGrowthService(pool as never, pool as never, mhpWebinarConfig({})).keepBookPhoneTimeoutMs, 2_000);
 });

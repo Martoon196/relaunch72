@@ -358,6 +358,10 @@ export class PgMhpGrowthService {
 
   /** Whether 0159's book functions answered "missing" recently (a build deployed before the migration): skip, not fail. */
   private bookFunctionsMissingUntil = 0;
+  private bookPhoneProbedAt = 0;
+  private bookReadProbedAt = 0;
+  /** Upper bound on the awaited keep-phone call; the visitor's answer never waits longer (tests may shorten it). */
+  keepBookPhoneTimeoutMs = 2_000;
   private bookMissing(error: unknown): boolean {
     if ((error as { code?: string })?.code !== '42883') return false;
     this.bookFunctionsMissingUntil = Date.now() + 5 * 60_000;
@@ -369,24 +373,40 @@ export class PgMhpGrowthService {
    * statement on the capture login. 'missing' before 0159 is applied (then skipped for five minutes); throws otherwise.
    */
   async keepBookPhone(captured: Pick<MhpCapturedSignup, 'prospectId' | 'signupId'>, phone: string): Promise<'kept' | 'not_kept' | 'missing'> {
-    if (Date.now() < this.bookFunctionsMissingUntil) return 'missing';
+    // "Missing" is remembered, but a sign-up carrying a mobile asks again at most every 5 seconds, so the first one after
+    // 0159 is applied is kept without a restart and a database without 0159 is not asked on every sign-up.
+    const now = Date.now();
+    if (now < this.bookFunctionsMissingUntil && now - this.bookPhoneProbedAt < 5_000) return 'missing';
+    this.bookPhoneProbedAt = now;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('keep-phone timed out'), { code: 'timeout' })), this.keepBookPhoneTimeoutMs);
+      timer.unref?.();
+    });
     try {
-      const result = await this.commandPool.query<{ kept: boolean }>('SELECT app_private.mhp_book_signup_keep_phone($1::uuid,$2::uuid,$3::text) AS kept',
-        [captured.signupId, captured.prospectId, phone]);
+      const result = await Promise.race([this.commandPool.query<{ kept: boolean }>('SELECT app_private.mhp_book_signup_keep_phone($1::uuid,$2::uuid,$3::text) AS kept',
+        [captured.signupId, captured.prospectId, phone]), timeout]);
+      this.bookFunctionsMissingUntil = 0;
       return result.rows[0]?.kept === true ? 'kept' : 'not_kept';
     } catch (error) {
       if (this.bookMissing(error)) return 'missing';
       throw error;
-    }
+    } finally { if (timer) clearTimeout(timer); }
   }
+
+  /** Whether the stored book sign-ups (0159) answered last time: the owner page says "mobiles are saved" only then. */
+  get bookMobilesStored(): boolean { return this.bookFunctionsMissingUntil <= Date.now(); }
 
   /** 0159: the owner's read of book sign-ups (latest book sign-up per person, and the latest mobile given). Null before 0159. */
   async listBookSignups(token: string): Promise<MhpBookSignupRecord[] | null> {
-    if (Date.now() < this.bookFunctionsMissingUntil) return null;
+    const now = Date.now();
+    if (now < this.bookFunctionsMissingUntil && now - this.bookReadProbedAt < 5_000) return null;
+    this.bookReadProbedAt = now;
     try {
       const result = await this.readPool.query<{ signups: unknown }>('SELECT app_private.mhp_book_signups($1) AS signups', [sessionHash(token)]);
       const rows = result.rows[0]?.signups;
       if (!Array.isArray(rows) || !rows.every(validBookSignup)) throw new MhpGrowthError(503, 'Book sign-ups could not load.');
+      this.bookFunctionsMissingUntil = 0;
       return rows as MhpBookSignupRecord[];
     } catch (error) {
       if (this.bookMissing(error)) return null;
