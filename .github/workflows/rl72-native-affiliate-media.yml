@@ -1,0 +1,138 @@
+name: RL72 native affiliate media review gate
+concurrency:
+  group: rl72-native-media-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+on:
+  pull_request:
+    branches: ['codex/relaunch72-platform-foundation']
+    paths:
+      - 'orchestrator/src/creative-studio/**'
+      - 'orchestrator/src/portal/creative-media-*.ts'
+      - 'orchestrator/src/portal/media-*.ts'
+      - 'orchestrator/src/workers/creative-media/**'
+      - 'orchestrator/test/media-*.test.ts'
+      - 'orchestrator/test/creative-media-*.test.ts'
+      - 'orchestrator/test/db/creative-media-*.integration.test.ts'
+      - '.github/workflows/rl72-native-affiliate-media.yml'
+
+jobs:
+  native-creative:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install offline FFmpeg and FFprobe for real video render smoke
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg tesseract-ocr fonts-dejavu-core
+      - name: Typecheck the canonical app
+        run: npm --prefix orchestrator run typecheck
+      - name: Affiliate intake and Creative Studio regressions
+        env:
+          RL72_MEDIA_BROWSER_TESTS: "true"
+        working-directory: orchestrator
+        run: node --import ./test/windows-node24-shim.mjs --import tsx --test test/media-third-audit.test.ts test/media-visible-disclosure.test.ts test/media-native-calendar.test.ts test/media-service.test.ts test/media-completion.test.ts test/media-suite.test.ts test/media-editor-browser.test.ts test/media-scene-timeline.test.ts test/media-video-byte-range.test.ts test/media-video-sources.test.ts test/media-source-probe.test.ts    test/media-local-render.test.ts test/media-local-render-pg-store.test.ts test/creative-media-local-render-view.test.ts  test/media-local-output-review.test.ts test/creative-media-local-output-review-view.test.ts test/media-output-worker-command.test.ts  test/media-edit-plan.test.ts test/media-cut-editor.test.ts       test/affiliate-direct-link.test.ts test/portal-product-profile.test.ts test/creative-studio.test.ts test/creative-studio-video.test.ts
+      - name: Bootstrap canonical migrations plus media drafts in disposable localhost PG
+        env:
+          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: |
+          node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+          node orchestrator/test/tools/prepare-native-draft-proof.mjs
+          node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
+      - name: Check tenant, owner session and exact approval in real PG
+        working-directory: orchestrator
+        env:
+          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test test/db/creative-studio-pg.integration.test.ts   test/db/creative-media-local-render-pg.integration.test.ts
+      - name: Remove optional OCR before the complete canonical suite
+        run: |
+          sudo apt-get remove -y -qq tesseract-ocr
+          if command -v tesseract; then echo "OCR executable must be absent"; exit 1; fi
+      - name: Full canonical suite without Tesseract (all email protections, bounded concurrency)
+        run: npm --prefix orchestrator test -- --test-concurrency=2
+  native-calendar-clock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+      RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg tesseract-ocr fonts-dejavu-core
+      - name: Install controllable clock in disposable PostgreSQL only
+        env:
+          RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
+        shell: bash
+        run: |
+          docker exec -u 0 -i "$RL72_MEDIA_CLOCK_CONTAINER" bash -s <<'CLOCK'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq libfaketime
+          binary="$(command -v postgres)"
+          mv "$binary" "$binary.native-test-real"
+          cat > "$binary" <<'WRAPPER'
+          #!/bin/sh
+          export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
+          export FAKETIME_TIMESTAMP_FILE=/tmp/rl72-native-clock
+          export FAKETIME_NO_CACHE=1
+          export FAKETIME_DONT_FAKE_MONOTONIC=1
+          exec "$(dirname "$0")/postgres.native-test-real" "$@"
+          WRAPPER
+          chmod 755 "$binary"
+          printf '+0\n' > /tmp/rl72-native-clock
+          chown postgres:postgres /tmp/rl72-native-clock
+          CLOCK
+          docker restart "$RL72_MEDIA_CLOCK_CONTAINER"
+          for n in $(seq 1 30); do
+            if docker exec "$RL72_MEDIA_CLOCK_CONTAINER" pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+      - name: Bootstrap canonical schema and private media drafts
+        run: |
+          node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+          node orchestrator/test/tools/prepare-native-draft-proof.mjs
+          node orchestrator/src/creative-studio/migration-drafts/apply-to-disposable.mjs
+      - name: Prove planner to native video calling after three elapsed days
+        env:
+          RL72_MEDIA_CLOCK_CONTAINER: ${{ job.services.postgres.id }}
+        run: node --import tsx --test orchestrator/test/db/creative-media-native-calendar-pg.integration.test.ts
+      - name: Measure continuous live-action 1080p under aggregate memory limit
+        run: python3 orchestrator/test/tools/media-memory-measure.py --whole-command

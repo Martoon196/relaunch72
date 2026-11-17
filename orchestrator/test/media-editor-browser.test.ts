@@ -1,0 +1,46 @@
+/** Real headless Chromium proof of owner editor controls and narrow mobile layout. */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {existsSync} from 'node:fs';
+import {chromium} from 'playwright-core';
+import {MEDIA_CUT_EDITOR_SCRIPT} from '../src/portal/media-cut-editor.js';
+const executable=process.env.MEDIA_BROWSER_EXECUTABLE??['/usr/bin/chromium','/usr/bin/google-chrome','/usr/bin/google-chrome-stable'].find(existsSync);
+test('real browser: split, mute, undo, redo, duplicate and reorder preserve exact owner save payload',{skip:process.env.RL72_MEDIA_BROWSER_TESTS!=='true'?'Explicit media browser run only':false,timeout:30000},async()=>{
+ assert.ok(executable,'Explicit browser proof requires a system Chromium executable');
+ const browser=await chromium.launch({executablePath:executable,headless:true,args:['--no-sandbox']});
+ try{
+  const page=await browser.newPage({viewport:{width:390,height:844}});
+  await page.route('**/stream',route=>route.abort());
+  const plan={canvas:'portrait',disclosure:'#ad',clips:[{startMs:0,endMs:4000,caption:'Original',transition:'cut',speed:1}]};
+  await page.setContent('<form data-rl72-cut-editor data-rl72-preview-base="https://app.test/creative"><input name="source" value="11111111-1111-4111-8111-111111111111:a"><input type="hidden" name="planJson"></form>');
+  await page.locator('[name=planJson]').evaluate((el,value)=>{(el as HTMLInputElement).value=value;},JSON.stringify(plan));
+  await page.addScriptTag({content:MEDIA_CUT_EDITOR_SCRIPT});
+  await page.locator('video').evaluate(v=>Object.defineProperty(v,'currentTime',{value:2,writable:true,configurable:true}));
+  await page.getByRole('button',{name:'Split at playhead',exact:true}).click();
+  assert.equal(await page.locator('fieldset').count(),2);
+  await page.getByLabel('Audio volume',{exact:true}).first().selectOption('0');
+  const read=async()=>JSON.parse(await page.locator('[name=planJson]').inputValue());
+  assert.equal((await read()).clips[0].volume,0);
+  await page.getByRole('button',{name:'Undo',exact:true}).click();assert.equal((await read()).clips[0].volume,undefined);
+  await page.getByRole('button',{name:'Redo',exact:true}).click();assert.equal((await read()).clips[0].volume,0);
+  await page.getByRole('button',{name:'Duplicate clip',exact:true}).first().click();assert.equal((await read()).clips.length,3);
+  await page.getByLabel('Caption',{exact:true}).first().fill('First');await page.getByLabel('Caption',{exact:true}).first().dispatchEvent('change');
+  await page.getByRole('button',{name:'Move later',exact:true}).first().click();assert.equal((await read()).clips[1].caption,'First');
+  await page.getByRole('button',{name:'Undo',exact:true}).click();assert.equal((await read()).clips[0].caption,'First');
+  assert.equal(await page.locator('input[type=number]').count(),6);
+  assert.equal(await page.locator('output').getAttribute('aria-live'),'polite');
+ }finally{await browser.close();}
+});
+
+test('real browser runs the bounded checksum worker used by the 1 GB uploader',{skip:process.env.RL72_MEDIA_BROWSER_TESTS!=='true'?'Explicit media browser run only':false,timeout:30000},async()=>{
+ assert.ok(executable);const browser=await chromium.launch({executablePath:executable,headless:true,args:['--no-sandbox']});
+ try{
+  const {MEDIA_STREAMING_SHA256}=await import('../src/portal/media-streaming-sha256.js');const page=await browser.newPage();
+  const digest=await page.evaluate(async code=>{
+   const source=code+';self.onmessage=event=>{const hash=new RL72Sha256();hash.update(new Uint8Array(event.data));self.postMessage(hash.hex());};';
+   const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'})),worker=new Worker(url);URL.revokeObjectURL(url);
+   return await new Promise<string>((resolve,reject)=>{worker.onmessage=e=>{worker.terminate();resolve(e.data);};worker.onerror=e=>{worker.terminate();reject(Error(e.message));};worker.postMessage(new TextEncoder().encode('abc').buffer);});
+  },MEDIA_STREAMING_SHA256);
+  assert.equal(digest,'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+ }finally{await browser.close();}
+});

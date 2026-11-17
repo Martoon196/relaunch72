@@ -1,0 +1,8 @@
+import {createHash} from 'node:crypto';
+import {createReadStream} from 'node:fs';
+import {stat,copyFile,mkdir,chmod} from 'node:fs/promises';
+import {PrivateMediaFiles} from '../../src/creative-studio/media-private-files.js';
+import {probePrivateMediaFile} from '../../src/creative-studio/media-object-sources.js';
+import {renderLocalVideoFile} from '../../src/creative-studio/media-local-render.js';
+async function main(){const src=process.env.RL72_MEDIA_MEMORY_SOURCE??'/tmp/rl72-render-evidence/source-180s-1080p.mp4',hash=createHash('sha256');for await(const part of createReadStream(src))hash.update(part);const digest=hash.digest('hex'),ws='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222',root='/tmp/rl72-render-evidence/private';await mkdir(root+'/'+ws+'/'+id,{recursive:true,mode:0o700});await chmod(root,0o700);await chmod(root+'/'+ws,0o700);const path=root+'/'+ws+'/'+id+'/'+digest+'.mp4';await chmod(path,0o600).catch(()=>{});await copyFile(src,path);await chmod(path,0o400);const object={workspaceId:ws,sourceId:id,sha256:digest,byteLength:(await stat(src)).size,mime:'video/mp4' as const,objectKey:ws+'/'+id+'/'+digest+'.mp4'};const probe=await probePrivateMediaFile({...object,path});console.log(JSON.stringify({probe}));const result=await renderLocalVideoFile(new PrivateMediaFiles(root),object,probe,{canvas:'landscape',disclosure:'#ad',clips:[{startMs:0,endMs:90000,caption:'Stress first segment',transition:'cut',speed:1},{startMs:90000,endMs:180000,caption:'Stress second segment',transition:'cut',speed:1}]});console.log(JSON.stringify({sourceSha256:digest,bytes:result.bytes.length,durationMs:result.durationMs,sha256:result.sha256}));}
+main().catch(e=>{console.error(e);process.exitCode=1;});
