@@ -24,7 +24,7 @@ export function renderFlowEditor(input: FlowEditorInput): string {
     ${hidden('csrf', input.csrf)}${hidden('commandId', input.commandId)}${hidden('contentItemId', input.contentItemId)}${hidden('previousVersionId', input.previousVersionId)}${hidden('definition', JSON.stringify(definition))}${hidden('inlineMessages', JSON.stringify(input.inlineMessages ?? {}))}
     <label>Sequence name<input data-field="title" maxlength="180" value="${e(definition.title)}" required></label>
     ${profile.audience ? `<fieldset class="flow-inline"><legend>Who is this for?</legend>
-      <label class="check"><input type="radio" name="audience" value="none_yet" ${profile.audience.value === 'none_yet' ? 'checked' : ''}> No one yet. Save it ready for when its audience is connected (for example, book readers).</label>
+      <label class="check"><input type="radio" name="audience" value="none_yet" ${profile.audience.value === 'none_yet' ? 'checked' : ''}> No one yet. Save it now and choose who it is for later.</label>
       <label class="check"><input type="radio" name="audience" value="webinar_signups" ${profile.audience.value === 'webinar_signups' ? 'checked' : ''}> People who registered for the current webinar and agreed to emails</label>
       <label class="check"><input type="radio" name="audience" value="book_readers" ${profile.audience.value === 'book_readers' ? 'checked' : ''}> Book readers: people who asked for the Before You Buy first chapter and ticked the email box</label>
       <p class="note">Saving or publishing never sends anything. Start always shows you exactly who will get it first. Book readers can also be sent it automatically when they sign up, once you switch that on.</p></fieldset>` : ''}
