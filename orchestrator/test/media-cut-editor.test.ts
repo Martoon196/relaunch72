@@ -18,7 +18,8 @@ test('owner CSRF form escapes hostile source filenames and saves only via POST',
   rights:'owned',state:'awaiting_probe',byteLength:1024,createdAt:'2026-11-15'}] as never;
  const html=creativeMediaEditorPage(shell,sources,[],()=>'33333333-3333-4333-8333-333333333333');
  assert.match(html,/name="_csrf"/);
- assert.match(html,/name="planJson"/);
+ assert.match(html,/type="hidden" name="planJson"/);
+ assert.doesNotMatch(html,/<textarea[^>]*name="planJson"/);
  assert.doesNotMatch(html,/<img src=x onerror/);
  assert.match(html,/media-cut-editor\.js/);
 });

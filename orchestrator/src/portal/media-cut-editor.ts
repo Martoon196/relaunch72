@@ -6,7 +6,7 @@
 export const MEDIA_CUT_EDITOR_SCRIPT=String.raw`(()=>{
 'use strict';
 for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
- const textarea=form.querySelector('textarea[name="planJson"]');
+ const textarea=form.querySelector('[name="planJson"]');
  let edit;try{edit=JSON.parse(textarea.value);}catch{continue;}
  if(!edit||!Array.isArray(edit.clips))continue;
  const node=(tag,text)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
@@ -157,7 +157,7 @@ for(const form of document.querySelectorAll('[data-rl72-cut-editor]')){
    status.focus();
   }else sync();
  });
- form.insertBefore(root,textarea.closest('label'));textarea.hidden=true;
+ form.insertBefore(root,textarea.closest('label')||textarea);textarea.hidden=true;
  format.value=String(edit.canvas);disclose.value=String(edit.disclosure);redraw();
 }
 })();`;
