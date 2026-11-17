@@ -572,3 +572,19 @@ test('S5 with D1: once keyword-first work is switched off, a section rewrite of 
   assert.doesNotMatch(req.messages[0]!.content, /search_requirements/);
   assert.equal((sec.generation as Any).searchDraft, undefined);
 });
+
+test('S2: a fault while building the requirements writes the article with the original writer, stamped "error", never a failed job', async () => {
+  const events: Any[] = [];
+  const s = await setup({ internalLog: (x) => events.push(x) });
+  const getPlan = s.h.store.getPlan.bind(s.h.store);
+  let calls = 0;
+  // The plan read made while building the requirements fails (found by its caller); every other read works.
+  (s.h.store as Any).getPlan = async (...a: Any[]) => { if (/searchFor/.test(new Error().stack ?? '')) { calls++; throw new Error('store hiccup'); } return (getPlan as Any)(...a); };
+  const { version, job, article } = await write(s, s.pillar.id);
+  assert.equal(job.state, 'done', job.error ?? '');
+  assert.ok(isV1(s.seen[0]!));
+  assert.deepEqual((version!.generation as Any).searchFallback, { schema: 1, reason: 'error' });
+  assert.notEqual(article!.editorialState, 'writing');
+  assert.deepEqual(events.map((x) => x.reason), ['error']);
+  assert.equal(calls, 1);
+});
