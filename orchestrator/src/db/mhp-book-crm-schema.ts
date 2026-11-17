@@ -17,4 +17,4 @@
  * checksum and re-run the migration contract and readiness tests.
  */
 export const MHP_BOOK_CRM_MIGRATION = '0159_mhp_book_crm.sql';
-export const MHP_BOOK_CRM_CHECKSUM = '653f5ab7bd206d39af6ce0286e4882a2120b6a4b3b27965e6502a22720363fd5';
+export const MHP_BOOK_CRM_CHECKSUM = '76fd4a6c894c6868ac65e14bdc466d8cbab20479177586b86bb9c994760a8607';

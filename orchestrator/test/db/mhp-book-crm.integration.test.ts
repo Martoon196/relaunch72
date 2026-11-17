@@ -118,6 +118,13 @@ async function listing(admin: Admin): Promise<string[]> {
     UNION ALL SELECT 'policy|'||schemaname||'.'||tablename||'|'||policyname||'|'||cmd||'|'||array_to_string(roles,',') FROM pg_policies
       WHERE (schemaname='app' AND tablename=ANY($1::text[])) OR 'r72_mhp_prospect_definer'=ANY(roles)
     UNION ALL SELECT 'function|'||p.oid::regprocedure::text||'|'||pg_get_userbyid(p.proowner) FROM pg_proc p WHERE p.proname LIKE 'mhp\\_book\\_%'
+    UNION ALL SELECT 'function-acl|'||p.oid::regprocedure::text||'|'||coalesce(a.grantee::regrole::text,'PUBLIC')||'|'||a.privilege_type||'|'||p.prosecdef::text||'|'||array_to_string(p.proconfig,',')
+      FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a WHERE p.proname LIKE 'mhp\_book\_%' AND a.grantee<>0
+    UNION ALL SELECT 'function-public|'||p.oid::regprocedure::text FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+      WHERE p.proname LIKE 'mhp\_book\_%' AND a.grantee=0
+    UNION ALL SELECT 'column|'||a.attrelid::regclass::text||'.'||a.attname||'|'||format_type(a.atttypid,a.atttypmod)||'|'||a.attnotnull::text FROM pg_attribute a
+      WHERE a.attrelid='app_private.mhp_prospect_signups'::regclass AND a.attnum>0 AND NOT a.attisdropped
+    UNION ALL SELECT 'constraint|'||conname||'|'||pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='app_private.mhp_prospect_signups'::regclass
     UNION ALL SELECT 'owned-functions|'||count(*)::text FROM pg_proc WHERE proowner='r72_mhp_prospect_definer'::regrole
     UNION ALL SELECT 'trigger|'||tgrelid::regclass::text||'|'||tgname FROM pg_trigger
       WHERE NOT tgisinternal AND tgrelid IN ('app_private.mhp_prospect_signups'::regclass,'app_private.mhp_prospects'::regclass)
@@ -133,9 +140,10 @@ async function rowsDigest(admin: Admin): Promise<Record<string, string>> {
   for (const table of [...CRM_TABLES.map(t => `app.${t}`), 'app.pipelines', 'app.pipeline_stages']) {
     out[table] = (await ownerQuery<{ d: string }>(admin, `SELECT coalesce(md5(string_agg(t::text, '|' ORDER BY t::text)),'') AS d FROM ${table} t WHERE workspace_id=$1`, [WS]))[0]!.d;
   }
-  for (const table of ['app_private.mhp_prospects', 'app_private.mhp_prospect_signups']) {
-    out[table] = (await ownerQuery<{ d: string }>(admin, `SELECT coalesce(md5(string_agg(t::text, '|' ORDER BY t::text)),'') AS d FROM ${table} t`))[0]!.d;
-  }
+  out['app_private.mhp_prospects'] = (await ownerQuery<{ d: string }>(admin, `SELECT coalesce(md5(string_agg(t::text, '|' ORDER BY t::text)),'') AS d FROM app_private.mhp_prospects t`))[0]!.d;
+  // Every column the sign-ups had before 0159, value for value; 0159's new phone column must be empty on every old row.
+  out['app_private.mhp_prospect_signups'] = (await ownerQuery<{ d: string }>(admin, `SELECT coalesce(md5(string_agg((to_jsonb(t)-'phone')::text, '|' ORDER BY (to_jsonb(t)-'phone')::text)),'') AS d FROM app_private.mhp_prospect_signups t`))[0]!.d;
+  out['phones on sign-ups'] = (await ownerQuery<{ n: string }>(admin, `SELECT count(*) FILTER (WHERE (to_jsonb(t)->>'phone') IS NOT NULL)::text AS n FROM app_private.mhp_prospect_signups t`))[0]!.n;
   return out;
 }
 
@@ -195,18 +203,25 @@ async function world(admin: Admin) {
   [createHash('sha256').update(token).digest(), createHash('sha256').update(`csrf${token}`).digest(), OWNER, WS]);
   const identity = { sessionToken: token, userId: OWNER, workspaceId: WS, userEmail: 'martin.howard1984@gmail.com' };
   const service = (ownerUserId: string | null = OWNER) => new MhpBookLeadService({ transactions: runner, ownerUserId, cursorSecret: SECRET,
-    registrants: t => growth.listRegistrants(t), workspaceOwner: who => readMhpWorkspaceOwner(web, who), log: line => logs.push(line),
+    registrants: t => growth.listRegistrants(t), bookSignups: t => growth.listBookSignups(t), workspaceOwner: who => readMhpWorkspaceOwner(web, who), log: line => logs.push(line),
     retryDelaysMs: [], schedule: () => undefined });
   /** The public form: the sign-up is committed, then the copy runs (awaited here so the test can look at the result). */
-  const signUp = async (signup: MhpSignup, books = service()) => {
+  const kept: string[] = [];
+  /** What the router does: capture, keep a book mobile on its sign-up (0159), then the CRM copy. */
+  const capture = async (signup: MhpSignup) => {
     const captured = await growth.capture(signup, null);
+    if (signup.kind === 'waitlist' && signup.module === MHP_BOOK_MODULE && signup.phone) kept.push(await growth.keepBookPhone(captured, signup.phone));
+    return captured;
+  };
+  const signUp = async (signup: MhpSignup, books = service()) => {
+    const captured = await capture(signup);
     const outcome = signup.kind === 'waitlist' ? await books.project(OWNER, bookCandidateFromCapture(signup, captured, Date.now())) : null;
     return { captured, outcome };
   };
   const commands = new CrmCommandService({ transactionRunner: base });
   const ownerContext = () => requestDatabaseContext({ workspaceId: WS, userId: OWNER, requestId: `owner-${randomUUID()}` });
   const close = async () => { await Promise.all([web.end(), identityPool.end(), crm.end()]); };
-  return { web, growth, runner, logs, identity, service, signUp, commands, ownerContext, close,
+  return { web, growth, runner, logs, identity, service, signUp, capture, kept, commands, ownerContext, close,
     setFault: (value: string | null) => { fault = value; }, transactions: () => transactions };
 }
 
@@ -229,11 +244,24 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     const freshRows = await rowsDigest(admin);
     assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
     const fresh159 = await listing(admin);
-    assert.deepEqual(fresh159, fresh158, 'on a fresh database 0159 changes no privilege, policy, function or trigger');
+    // On a fresh database 0159 changes nothing that existed; it adds exactly the column, its check and the two functions.
+    const added159 = fresh159.filter(l => !fresh158.includes(l)), removed159 = fresh158.filter(l => !fresh159.includes(l));
+    assert.deepEqual(removed159, ['owned-functions|92']);
+    assert.deepEqual(added159.sort(), [
+      'column|app_private.mhp_prospect_signups.phone|text|false',
+      "constraint|mhp_prospect_signups_phone_check|CHECK (((phone IS NULL) OR (((length(phone) >= 6) AND (length(phone) <= 30)) AND (phone ~ '^[0-9 +()-]+$'::text))))",
+      'function-acl|app_private.mhp_book_signup_keep_phone(uuid,uuid,text)|r72_identity_command|EXECUTE|true|search_path=pg_catalog',
+      'function-acl|app_private.mhp_book_signup_keep_phone(uuid,uuid,text)|r72_mhp_prospect_definer|EXECUTE|true|search_path=pg_catalog',
+      'function-acl|app_private.mhp_book_signups(bytea)|r72_mhp_prospect_definer|EXECUTE|true|search_path=pg_catalog',
+      'function-acl|app_private.mhp_book_signups(bytea)|r72_web|EXECUTE|true|search_path=pg_catalog',
+      'function|app_private.mhp_book_signup_keep_phone(uuid,uuid,text)|r72_mhp_prospect_definer',
+      'function|app_private.mhp_book_signups(bytea)|r72_mhp_prospect_definer',
+      'owned-functions|94',
+    ].sort());
     assert.deepEqual(await rowsDigest(admin), freshRows);
     assert.ok(fresh158.includes('table-acl|app.contact_points|SELECT|r72_owner'), "0134's SELECT on app.contact_points is there before and kept");
     await script(admin, sql159);
-    assert.deepEqual(await listing(admin), fresh158, 'a second run of the file is a no-op');
+    assert.deepEqual(await listing(admin), fresh159, 'a second run of the file is a no-op');
     if (outDir) {
       await writeFile(path.join(outDir, 'fresh-0158.txt'), fresh158.join('\n') + '\n');
       await writeFile(path.join(outDir, 'fresh-0159.txt'), fresh159.join('\n') + '\n');
@@ -250,6 +278,7 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     assert.deepEqual(removed, ['owned-functions|92'], 'the quick fix only added things (the count of owned functions goes 92 to 93)');
     assert.deepEqual(trimmed(added).sort(), [
       'function|app_private.mhp_book_contact_after_signup()|r72_mhp_prospect_definer',
+      'function-acl|app_private.mhp_book_contact_after_signup()|r72_mhp_prospect_definer|EXECUTE|true|search_path=pg_catalog',
       'owned-functions|93',
       ...['contact_points|mhp_book_point_insert|INSERT', 'contact_points|mhp_book_point_read|SELECT', 'contacts|mhp_book_contact_insert|INSERT',
         'contacts|mhp_book_contact_read|SELECT', 'opportunities|mhp_book_opportunity_insert|INSERT', 'opportunities|mhp_book_opportunity_read|SELECT',
@@ -275,12 +304,11 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     const prod159Result = await runMigrations(admin);
     assert.deepEqual(prod159Result.applied, [MHP_BOOK_CRM_MIGRATION]);
     const prod159 = await listing(admin);
-    assert.deepEqual(prod159, before, 'production-shaped converges to exactly the fresh state');
-    assert.deepEqual(prod159, fresh158, 'and to exactly what a fresh database has');
+    assert.deepEqual(prod159, fresh159, 'production-shaped converges to exactly what a fresh database has after 0159');
     assert.deepEqual(await rowsDigest(admin), rowsBefore, 'no CRM, prospect or sign-up row was touched');
     assert.ok(Number((await ownerQuery<{ n: string }>(admin, 'SELECT count(*) AS n FROM app_private.mhp_prospect_signups'))[0]!.n) > Number(signupsBefore[0]!.n));
     await script(admin, sql159);
-    assert.deepEqual(await listing(admin), before, 'a retry after success is a no-op');
+    assert.deepEqual(await listing(admin), fresh159, 'a retry after success is a no-op');
     assert.equal((await runMigrations(admin)).applied.length, 0);
     if (outDir) {
       await writeFile(path.join(outDir, 'prod-0158.txt'), prod158.join('\n') + '\n');
@@ -344,11 +372,14 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
 
       // A new sign-up with the trigger AND the new code live: one enquiry, one task, the trigger's lead enriched.
       const both = await w.signUp(bookSignup('both-live@example.com', 'Bea', '07700 900101'));
+      // Code before 0159: the keep-phone function and the owner read are missing; both are skipped softly.
+      assert.deepEqual(w.kept, ['missing']);
+      assert.equal(await w.growth.listBookSignups(w.identity.sessionToken), null);
       assert.equal(both.outcome?.outcome, 'enriched');
       const bea = (await lead(admin, 'both-live@example.com'))!;
       assert.equal(bea.opportunities.length, 1);
       assert.equal(bea.tasks.length, 1);
-      assert.deepEqual(bea.points.map(p => [p.kind, p.consent]), [['email', 'opted_in'], ['phone', 'opted_out']]);
+      assert.deepEqual(bea.points.map(p => [p.kind, p.consent]), [['email', 'opted_in'], ['phone', 'unknown']]);
       assert.equal((bea.fields.mhpSignup as Record<string, unknown>).consentVersion, MHP_CONSENT_VERSION);
       assert.equal((bea.fields.mhpSignup as Record<string, unknown>).consentGiven, true);
       assert.equal((bea.fields.mhpSignup as Record<string, unknown>).link, 'https://martinhowardproperty.co.uk/book/');
@@ -387,7 +418,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
       const afterMartin = (await lead(admin, 'martin-reader@example.com'))!;
       assert.deepEqual(afterMartin.opportunities, beforeMartin.opportunities);
       assert.deepEqual(afterMartin.tasks, beforeMartin.tasks);
-      assert.deepEqual(afterMartin.points.map(p => [p.kind, p.normalized, p.consent]), [['email', 'martin-reader@example.com', 'opted_in'], ['phone', '07700900100', 'opted_out']]);
+      assert.deepEqual(afterMartin.points.map(p => [p.kind, p.normalized, p.consent]), [['email', 'martin-reader@example.com', 'opted_in'], ['phone', '07700900100', 'unknown']]);
       assert.equal((await w.signUp(bookSignup('martin-reader@example.com', 'Martin', '07700 900100'))).outcome?.outcome, 'present');
 
       // A CRM fault no longer loses anything: the same renamed pipeline, the sign-up is saved, the next catch-up adds it.
@@ -406,7 +437,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
       for (const [index, step] of steps.entries()) {
         const email = `fault-${index}@example.com`;
         const signup = bookSignup(email, `Fault ${index}`, `07700 9002${String(index).padStart(2, '0')}`);
-        const captured = await w.growth.capture(signup, null);
+        const captured = await w.capture(signup);
         w.setFault(step);
         await assert.rejects(w.service().project(OWNER, bookCandidateFromCapture(signup, captured, Date.now())), new RegExp(`injected fault|New enquiry stage unavailable`), step);
         // The automatic path: logged in plain words, never thrown.
@@ -426,7 +457,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
         const made = (await lead(admin, `fault-${index}@example.com`))!;
         assert.equal(made.opportunities.length, 1);
         assert.equal(made.tasks.length, 1);
-        assert.deepEqual(made.points.map(p => p.kind), ['email'], 'the mobile was only in the failed request (see the note above)');
+        assert.deepEqual(made.points.map(p => p.kind), ['email', 'phone'], 'a CRM outage longer than the retries no longer loses the mobile: it is on the sign-up');
       }
       assert.equal((await lead(admin, 'kept@example.com'))!.opportunities.length, 1);
 
@@ -541,7 +572,8 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
       const pressed = await resolved.importBatch(w.identity, randomUUID(), '');
       assert.equal(pressed.failed, false);
       assert.equal(pressed.added, 0);
-      assert.equal(resolved.automatic, true, 'after an owner visit the resolved owner is used for new sign-ups');
+      assert.equal(resolved.automatic, false, 'no silent arming: without a configured owner, sign-ups wait for the press');
+      assert.equal(resolved.mode, 'no_owner');
       assert.equal(await readMhpWorkspaceOwner(w.web, w.identity), OWNER);
 
       assert.equal(await sendsDigest(admin), String(sends0).replace(/^\d+/, n => String(Number(n) + webinar.captured.queued)),
@@ -568,7 +600,7 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
       assert.deepEqual(made.points.map(p => [p.kind, p.verified]), [['email', false], ['phone', false]]);
       assert.equal((await w.signUp(bookSignup('zoe@example.com', null, '07700 900106'))).outcome?.outcome, 'present');
       assert.equal((await lead(admin, 'zoe@example.com'))!.opportunities.length, 1);
-      assert.equal((await lead(admin, 'zoe@example.com'))!.points.find(p => p.kind === 'phone')!.consent, 'opted_out', "today's form: the mobile is for the book only");
+      assert.equal((await lead(admin, 'zoe@example.com'))!.points.find(p => p.kind === 'phone')!.consent, 'unknown', "today's form: the mobile is for the book only, said in the task, never as an opt-out");
 
       // The book form's named wordings: texts/WhatsApp offers recorded only with the +messages tick.
       const versioned = (email: string, version: string, phone: string | null) => ({ ...bookSignup(email, 'Vee', phone), consentVersion: version });
@@ -580,7 +612,7 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
       assert.deepEqual(stored.map(r => r.v), ['book-2026-11+messages'], 'the wording agreed is the stored evidence');
       // No tick, then a later sign-up with the tick: upgraded (it was this projection's own "about the book only").
       await w.signUp(versioned('up@example.com', 'book-2026-11', '07700 900202'));
-      assert.equal(await phoneOf('up@example.com'), 'opted_out');
+      assert.equal(await phoneOf('up@example.com'), 'unknown');
       assert.match((await lead(admin, 'up@example.com'))!.tasks[0]!.description!, /^Texts and WhatsApp: about the book only\.$/m);
       assert.equal((await w.signUp(versioned('up@example.com', 'book-2026-11+messages', '07700 900202'))).outcome?.outcome, 'enriched');
       assert.equal(await phoneOf('up@example.com'), 'opted_in');
@@ -592,7 +624,7 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
       await ownerQuery(admin, `INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,state,reason,source,actor_kind,endpoint_identity_sha256,occurred_at)
         VALUES($1,$2,$3,'sms','suppressed','stop_keyword','sms.inbound','webhook',public.digest('x','sha256'),now())`, [WS, stopPoint.contact, stopPoint.id]);
       await w.signUp(versioned('stop@example.com', 'book-2026-11+messages', '07700 900203'));
-      assert.equal(await phoneOf('stop@example.com'), 'opted_out', 'a STOP always wins');
+      assert.equal(await phoneOf('stop@example.com'), 'unknown', 'a STOP always wins: never upgraded');
       // Not ticking again is not a withdrawal: an opted-in mobile stays opted in.
       await w.signUp(versioned('msg@example.com', 'book-2026-11', '07700 900201'));
       assert.equal(await phoneOf('msg@example.com'), 'opted_in');
@@ -601,6 +633,169 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
       const statuses = await w.service().statuses(w.identity, registrants);
       const messagesOf = (email: string) => { const st = statuses.byProspect.get(registrants.find(r => r.email === email)!.id); return st?.state === 'in_leads' ? st.messages : 'missing'; };
       assert.deepEqual(['up@example.com', 'msg@example.com', 'zoe@example.com'].map(messagesOf), [true, false, false]);
+    } finally { await w.close(); }
+  } finally { await admin.end().catch(() => undefined); }
+});
+
+
+/** The owner WhatsApp gate's answer for a number (0151), called as its owner. */
+async function waBlocked(admin: Admin, number: string): Promise<string | null> {
+  const owner = (await admin.query<{ o: string }>("SELECT pg_get_userbyid(proowner) AS o FROM pg_proc WHERE oid='app_private.mhp_wa_owner_number_blocked(text)'::regprocedure")).rows[0]!.o;
+  const client = await admin.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL ROLE ${owner}`);
+    const value = (await client.query<{ v: string | null }>('SELECT app_private.mhp_wa_owner_number_blocked($1) AS v', [number])).rows[0]!.v;
+    await client.query('ROLLBACK');
+    return value;
+  } finally { client.release(); }
+}
+
+test('fix round after 0159: WhatsApp gate unchanged, race losers enrich, durable mobile through restart/outage/no owner, webinar numbers never used', { skip, timeout: 900_000 }, async () => {
+  const admin = await openTestDatabase();
+  try {
+    await resetDisposable();
+    await runMigrations(admin, await prefixDirectory(158));
+    await script(admin, SEED, 'COMMIT', 'r72_owner');
+    // A pl/pgsql function holding a %ROWTYPE of the sign-ups table, compiled on a long-lived connection before 0159,
+    // keeps working on that connection after 0159 adds the column (the event-phone and sequence functions do this).
+    await script(admin, `CREATE FUNCTION app_private.book_crm_rowtype_probe() RETURNS integer LANGUAGE plpgsql AS $f$
+      DECLARE s app_private.mhp_prospect_signups%ROWTYPE; n integer := 0;
+      BEGIN FOR s IN SELECT * FROM app_private.mhp_prospect_signups LOOP n := n + 1; END LOOP; RETURN n; END $f$`, 'COMMIT', 'r72_owner');
+    const held = await admin.connect();
+    try {
+      await held.query('SET ROLE r72_owner');
+      await held.query('SELECT app_private.book_crm_rowtype_probe()');
+      assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+      await ownerQuery(admin, `INSERT INTO app_private.mhp_prospects(email) VALUES('rowtype@example.com')`);
+      await ownerQuery(admin, `INSERT INTO app_private.mhp_prospect_signups(prospect_id,kind,label,consent_given,consent_version)
+        SELECT id,'sheet','Probe',true,'site-2026-10' FROM app_private.mhp_prospects WHERE email='rowtype@example.com'`);
+      assert.equal((await held.query<{ n: number }>('SELECT app_private.book_crm_rowtype_probe() AS n')).rows[0]!.n, 1);
+    } finally { await held.query('RESET ROLE').catch(() => undefined); held.release(); }
+    await script(admin, 'DROP FUNCTION app_private.book_crm_rowtype_probe()', 'COMMIT', 'r72_owner');
+
+    const w = await world(admin);
+    try {
+      const sends0 = await sendsDigest(admin);
+      // M1: the owner WhatsApp gate answers the same before and after any book sign-up, with or without the tick, and
+      // for a number another contact already holds (written another way).
+      const holder = await w.commands.createLead(w.ownerContext(), { commandKey: `wa-${randomUUID()}`, displayName: 'WhatsApp person', ownerUserId: OWNER,
+        source: 'owner:manual', contactPoints: [{ kind: 'email', value: 'wa-person@example.com' }, { kind: 'whatsapp', value: '+447700900555' }, { kind: 'phone', value: '+447700900555' }],
+        pipelineId: (await ownerQuery<{ id: string }>(admin, "SELECT id FROM app.pipelines WHERE workspace_id=$1 AND slug='enquiries'", [WS]))[0]!.id,
+        stageId: (await ownerQuery<{ id: string }>(admin, "SELECT id FROM app.pipeline_stages WHERE workspace_id=$1 AND slug='new'", [WS]))[0]!.id });
+      const numbers = ['447700900123', '447700900124', '447700900555'];
+      const before = await Promise.all(numbers.map(n => waBlocked(admin, n)));
+      await w.signUp(bookSignup('m1-none@example.com', 'Nia', '07700 900123'));
+      await w.signUp({ ...bookSignup('m1-tick@example.com', 'Tia', '07700 900124'), consentVersion: 'book-2026-11+messages' });
+      await w.signUp(bookSignup('m1-stranger@example.com', 'Stan', '07700 900555'));
+      await w.signUp({ ...bookSignup('m1-stranger2@example.com', 'Stan', '+44 7700 900555'), consentVersion: 'book-2026-11' });
+      assert.deepEqual(await Promise.all(numbers.map(n => waBlocked(admin, n))), before, 'no book sign-up changes the WhatsApp gate');
+      assert.equal((await ownerQuery(admin, "SELECT 1 FROM app.contact_points WHERE workspace_id=$1 AND kind='phone' AND consent_status='opted_out'", [WS])).length, 0,
+        'the projection never writes opted_out on a phone point');
+      const stranger = (await lead(admin, 'm1-stranger@example.com'))!;
+      assert.deepEqual(stranger.points.map(p => p.kind), ['email'], "someone else's number (07… or +44…) is never attached");
+      const holderPoints = await ownerQuery<{ contact: string; consent: string }>(admin, "SELECT contact_id AS contact, consent_status AS consent FROM app.contact_points WHERE workspace_id=$1 AND normalized_value='+447700900555'", [WS]);
+      assert.ok(holderPoints.every(p => p.contact === holder.contactId && p.consent === 'unknown'), "the other contact's points are untouched");
+      assert.equal((await lead(admin, 'm1-tick@example.com'))!.points.find(p => p.kind === 'phone')!.consent, 'opted_in');
+      assert.match((await lead(admin, 'm1-none@example.com'))!.tasks[0]!.description!, /^Texts and WhatsApp: about the book only\.$/m);
+
+      // S1: three sign-ups per person racing (two different mobiles and one without), plus the catch-up and the button:
+      // everyone ends with every mobile they typed.
+      const people = Array.from({ length: 8 }, (_, i) => `race-${i}@example.com`);
+      const service = w.service(), other = w.service();
+      const one = async (email: string, phone: string | null, books: MhpBookLeadService) => {
+        const signup = bookSignup(email, 'Race', phone);
+        const captured = await w.capture(signup);
+        await books.project(OWNER, bookCandidateFromCapture(signup, captured, Date.now()));
+      };
+      await Promise.all([...people.flatMap((email, i) => [one(email, `07700 9011${String(i).padStart(2, '0')}`, service), one(email, null, other),
+        one(email, `07700 9012${String(i).padStart(2, '0')}`, service)]), other.catchUp(w.identity, undefined, { limit: 25, budgetMs: 60_000 }),
+        service.importBatch(w.identity, randomUUID(), '')]);
+      for (const [i, email] of people.entries()) {
+        const made = (await lead(admin, email))!;
+        assert.equal(made.opportunities.length, 1, email);
+        assert.equal(made.tasks.length, 1, email);
+        const pad = String(i).padStart(2, '0');
+        assert.deepEqual(made.points.filter(p => p.kind === 'phone').map(p => p.normalized).sort(), [`077009011${pad}`, `077009012${pad}`], email);
+      }
+
+      // A restart between the capture and the copy: the mobile is on the sign-up; the next catch-up makes the lead with
+      // it and with the exact consent evidence.
+      const restart = await w.capture({ ...bookSignup('restart@example.com', 'Rhea', '07700 900130'), consentVersion: 'book-2026-11+messages' });
+      assert.equal(w.kept.at(-1), 'kept');
+      assert.equal(await lead(admin, 'restart@example.com'), null);
+      await w.service().catchUp(w.identity, undefined, { budgetMs: 60_000 });
+      const rhea = (await lead(admin, 'restart@example.com'))!;
+      assert.deepEqual(rhea.points.map(p => [p.kind, p.normalized, p.consent]), [['email', 'restart@example.com', 'opted_in'], ['phone', '07700900130', 'opted_in']]);
+      const evidence = rhea.fields.mhpSignup as Record<string, unknown>;
+      assert.deepEqual([evidence.signupId, evidence.consentGiven, evidence.consentVersion, evidence.recordedFrom],
+        [restart.signupId, true, 'book-2026-11+messages', 'sign-up-record'], 'exact evidence, not nulls');
+      assert.match(rhea.tasks[0]!.description!, /^Mobile: 07700 900130 \(they asked for a call\)/m);
+
+      // A CRM outage longer than the retries: the copy fails, the mobile is kept, the catch-up later adds it.
+      const outage = bookSignup('outage@example.com', 'Otto', '07700 900131');
+      const kept = await w.capture(outage);
+      w.setFault('/* crm.insert-contact */');
+      await assert.rejects(w.service().project(OWNER, bookCandidateFromCapture(outage, kept, Date.now())));
+      w.setFault(null);
+      await w.service().catchUp(w.identity, undefined, { budgetMs: 60_000 });
+      assert.deepEqual((await lead(admin, 'outage@example.com'))!.points.map(p => p.kind), ['email', 'phone']);
+
+      // No configured owner: nothing is copied silently, the page says how many wait, one press brings them in with mobiles.
+      const unowned = w.service(null);
+      const nobody = bookSignup('no-owner@example.com', 'Noor', '07700 900132');
+      const nobodyCaptured = await w.capture(nobody);
+      unowned.afterCapture(nobody, nobodyCaptured);
+      assert.deepEqual(await unowned.catchUp(w.identity), { processed: 0, failed: 0 });
+      assert.equal(await lead(admin, 'no-owner@example.com'), null);
+      const registrants = (await w.growth.listRegistrants(w.identity.sessionToken)).filter(r => r.signups.includes(MHP_BOOK_INTEREST_LABEL));
+      const waiting = await unowned.statuses(w.identity, registrants);
+      assert.equal(waiting.mode, 'no_owner');
+      assert.equal(waiting.waiting, 1);
+      assert.equal(waiting.book?.get(nobodyCaptured.prospectId)?.mobile, '07700 900132', 'the page shows the mobile before the person is in Leads');
+      assert.ok(w.logs.some(l => /wait for "Bring book sign-ups into Leads", because no MHP lead owner is configured/.test(l)));
+      let pressed = await unowned.importBatch(w.identity, randomUUID(), '');
+      while (pressed.hasMore) pressed = await unowned.importBatch(w.identity, randomUUID(), pressed.cursor!);
+      assert.deepEqual((await lead(admin, 'no-owner@example.com'))!.points.map(p => p.kind), ['email', 'phone']);
+
+      // S3: a webinar-given number is never a book mobile; the task says "No mobile given".
+      await w.growth.capture(webinarSignup('both-kinds@example.com'), null);
+      assert.equal((await ownerQuery<{ p: string }>(admin, "SELECT phone AS p FROM app_private.mhp_prospects WHERE email='both-kinds@example.com'"))[0]!.p, '07700 900777');
+      await w.capture(bookSignup('both-kinds@example.com', 'Viewer'));
+      await w.service().catchUp(w.identity, undefined, { budgetMs: 60_000 });
+      const both = (await lead(admin, 'both-kinds@example.com'))!;
+      assert.deepEqual(both.points.map(p => p.kind), ['email']);
+      assert.match(both.tasks[0]!.description!, /^No mobile given\.$/m);
+      // Non-book sign-ups never have the new column set.
+      assert.equal((await ownerQuery(admin, "SELECT 1 FROM app_private.mhp_prospect_signups WHERE phone IS NOT NULL AND NOT (kind='waitlist' AND module='book-before-you-buy')")).length, 0);
+
+      // S6: an unsubscribe reaches Leads at the next visit; ticking again lifts our own opt-out.
+      const sub = await w.signUp(bookSignup('sub@example.com', 'Sue'));
+      await w.growth.unsubscribe(sub.captured.prospectId);
+      await w.service().catchUp(w.identity, undefined, { budgetMs: 60_000 });
+      assert.equal((await lead(admin, 'sub@example.com'))!.points[0]!.consent, 'opted_out');
+      await w.signUp(bookSignup('sub@example.com', 'Sue'));
+      assert.equal((await lead(admin, 'sub@example.com'))!.points[0]!.consent, 'opted_in');
+
+      // The keep-phone function writes only a fresh, phone-less book sign-up of that prospect; logins are fenced.
+      const fresh = await w.growth.capture(bookSignup('fence@example.com', 'Fen'), null);
+      assert.equal(await w.growth.keepBookPhone({ ...fresh, prospectId: randomUUID() }, '07700 900140'), 'not_kept');
+      assert.equal(await w.growth.keepBookPhone(fresh, 'not a number'), 'not_kept');
+      assert.equal(await w.growth.keepBookPhone(fresh, '07700 900140'), 'kept');
+      assert.equal(await w.growth.keepBookPhone(fresh, '07700 900141'), 'not_kept', 'never overwritten');
+      const webinar = await w.growth.capture(webinarSignup('fence-web@example.com'), null);
+      assert.equal(await w.growth.keepBookPhone(webinar, '07700 900142'), 'not_kept');
+      const old = await w.growth.capture(bookSignup('fence-old@example.com', 'Ola'), null);
+      await ownerQuery(admin, "UPDATE app_private.mhp_prospect_signups SET created_at=created_at-interval '11 minutes' WHERE id=$1", [old.signupId]);
+      assert.equal(await w.growth.keepBookPhone(old, '07700 900144'), 'not_kept', 'only within 10 minutes of the sign-up');
+      await assert.rejects(w.web.query("SELECT app_private.mhp_book_signup_keep_phone(gen_random_uuid(),gen_random_uuid(),'07700 900143')"), /permission denied/);
+      const id = await login(admin, 'r72_identity_command', 1);
+      try { await assert.rejects(id.query("SELECT app_private.mhp_book_signups(decode(repeat('00',32),'hex'))"), /permission denied/); } finally { await id.end(); }
+
+      // Nothing sent or queued by the book path: only the two webinar captures may queue their own emails (none here,
+      // the configured webinar date has passed); messages, deliveries, provider operations and both ledgers unchanged.
+      const tail = (d: string) => d.split(',').slice(1).join(',');
+      assert.equal(tail(await sendsDigest(admin)), tail(sends0));
     } finally { await w.close(); }
   } finally { await admin.end().catch(() => undefined); }
 });

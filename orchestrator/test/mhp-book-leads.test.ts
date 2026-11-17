@@ -111,11 +111,13 @@ test('with no lead owner configured and no owner visit yet, the copy waits for t
   service.afterCapture(book(), { prospectId: PROSPECT, signupId: WS });
   assert.deepEqual(r.calls, []);
   assert.equal(logs.length, 1);
-  assert.match(logs[0]!, /^mhp book leads: a book sign-up was saved but not copied into Leads yet/);
+  assert.match(logs[0]!, /^mhp book leads: book sign-ups are saved \(with their mobiles\) but wait for "Bring book sign-ups into Leads", because no MHP lead owner is configured/);
+  assert.equal(service.mode, 'no_owner');
   assert.throws(() => new MhpBookLeadService({ transactions: r.transactions, registrants: async () => [], ownerUserId: 'not-a-uuid', cursorSecret: SECRET }));
 });
 
-function growthFixture(bookLeads?: ConstructorParameters<typeof MhpBookLeadService>[0] | 'throws') {
+function growthFixture(bookLeads?: ConstructorParameters<typeof MhpBookLeadService>[0] | 'throws',
+  keepBookPhone?: (captured: { prospectId: string; signupId: string }, phone: string) => Promise<'kept' | 'not_kept' | 'missing'>) {
   const captured: MhpSignup[] = [];
   const portal = { kind: 'postgres', secure: true, sessionSecret: 'mhp159-synthetic-secret-at-least32', abuseHashSecret: 'mhp159-abuse-secret-at-least32',
     auth: { resolve: async (token: string) => token === TOKEN ? { sessionToken: TOKEN, userId: USER, workspaceId: WS, userEmail: 'owner@example.invalid' } : null },
@@ -125,6 +127,7 @@ function growthFixture(bookLeads?: ConstructorParameters<typeof MhpBookLeadServi
     : bookLeads ? new MhpBookLeadService(bookLeads) : undefined;
   const deps = { portal, unsubscribeSecret: 's'.repeat(48), marketingMode: 'test', learning: {} as never,
     growth: { capture: async (s: MhpSignup) => { captured.push(s); return { prospectId: PROSPECT, signupId: WS, campaign: s.kind === 'webinar' ? 'webinar-2026-11-04' : null, entryEventSequence: s.kind === 'webinar' ? '1' : null, queued: 0 }; },
+      ...(keepBookPhone ? { keepBookPhone } : {}),
       story: async () => {}, unsubscribe: async () => true, summary: async () => ({}) as never, listApplications: async () => [], listRegistrants: async () => [] },
     ...(service ? { bookLeads: service } : {}) };
   async function request(fields: Record<string, string>) {
@@ -274,8 +277,11 @@ test('CONSENT_FORM names an allow-listed wording; +messages only with the texts 
     const stored = await version({ CONSENT_FORM: hostile, OPT_IN_MESSAGES: '1' });
     assert.ok(stored === 'site-2026-10', `${hostile.slice(0, 30)} -> ${String(stored)}`);
   }
-  // A webinar without the email tick cannot carry the texts wording.
-  assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' }, forms.webinarNoTick), 'book-2026-11');
+  // S5: the new fields belong to the book form only (label AND module); any other form gets today's default, never an error.
+  for (const other of [forms.webinarNoTick, forms.webinar, forms.sheet, forms.course, { ...BOOK_FORM, CHEATSHEET_MODULE: 'other-module' }, { ...BOOK_FORM, CHEATSHEET: 'Another book' }]) {
+    assert.equal(await version({ CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' }, other), 'site-2026-10');
+    assert.equal('consentVersion' in (parseMhpSignup(new URLSearchParams({ ...other, CONSENT_FORM: 'book-2026-11', OPT_IN_MESSAGES: '1' })) as MhpSignup), false);
+  }
   assert.equal(mhpMessagesConsented('book-2026-11+messages'), true);
   for (const value of ['book-2026-11', 'site-2026-10', 'forged+messages', null, undefined]) assert.equal(mhpMessagesConsented(value), false);
   // A hand-built sign-up with an unlisted version is stored with the default.
@@ -317,4 +323,29 @@ test('sequence and owner email pages outside the brand workspace answer the same
   const html = marketingWorkspaceFirstPage();
   assert.match(html, /<p>Open the MHP marketing workspace first\.<\/p>/);
   assert.match(html, /<a href="\/hq\/marketing">Go to the MHP marketing workspace<\/a>/);
+});
+
+
+test('a book mobile is kept on its sign-up after the capture; skipped before 0159, a failure is logged without the number; the answer never changes', async () => {
+  const baseline = await growthFixture().request(BOOK_FORM);
+  const calls: string[] = [];
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (line: string) => { warnings.push(String(line)); };
+  try {
+    for (const keep of [async () => 'kept' as const, async () => 'missing' as const, async () => 'not_kept' as const,
+      async () => { throw Object.assign(new Error('number 07700 900159 refused'), { code: '23514' }); }]) {
+      const f = growthFixture(undefined, async (captured, phone) => { calls.push(`${captured.signupId}:${phone}`); return keep(); });
+      assert.deepEqual(await f.request(BOOK_FORM), baseline);
+    }
+    assert.deepEqual(calls, Array(4).fill(`${WS}:07700 900159`));
+    assert.deepEqual(warnings, ['mhp book leads: mobile not kept (23514)']);
+    // Never for a book form without a mobile, nor for any other form with one.
+    calls.length = 0;
+    for (const form of [{ ...BOOK_FORM, PHONE: '' }, forms.webinar, { ...forms.sheet, PHONE: '07700 900159' }, { ...forms.course, PHONE: '07700 900159' }]) {
+      const f = growthFixture(undefined, async (captured, phone) => { calls.push(phone); return 'kept'; });
+      assert.deepEqual(await f.request(form), await growthFixture().request(form));
+    }
+    assert.deepEqual(calls, []);
+  } finally { console.warn = original; }
 });
