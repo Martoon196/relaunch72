@@ -15,7 +15,7 @@
  * - The visible text of the result is always exactly the owner's edited text.
  */
 
-const MARKER = /[ \t]*\[src:[A-Za-z0-9-]{1,64}\]/g;
+const MARKER = /(?<![ \t])[ \t]*\[src:[A-Za-z0-9-]{1,64}\]/g;
 
 /** The text the owner sees while editing. */
 export function withoutCitations(text: string): string {

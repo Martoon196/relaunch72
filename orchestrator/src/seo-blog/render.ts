@@ -42,7 +42,7 @@ function inline(text: string, citeNumber: (id: string) => number | null, canonic
   let out = escapeHtml(text);
   // The marker takes the spaces before it, so a hidden source leaves no gap before punctuation
   // ("5% [src:x]." renders "5%." rather than "5% .") and a shown one sits against its word.
-  out = out.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
+  out = out.replace(/(?<![ \t])[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
     const n = citeNumber(id);
     return n ? `<sup><a href="#source-${n}">[${n}]</a></sup>` : '';
   });
@@ -269,7 +269,7 @@ export function mergeSitemap(existing: string, urls: readonly { loc: string; las
 
 export function exportMarkdown(body: ArticleBody, meta: { canonicalUrl: string | null; versionId: string; articleId: string }): string {
   const cites = citationNumbers(body);
-  const strip = (t: string) => t.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
+  const strip = (t: string) => t.replace(/(?<![ \t])[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
   const front = [
     '---',
     `title: ${JSON.stringify(body.title)}`,
