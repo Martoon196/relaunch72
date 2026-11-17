@@ -16,6 +16,7 @@ import { EMAIL_PROTECTION_MIGRATION, EMAIL_PROTECTION_CHECKSUM } from './email-p
 import { EMAIL_ALLOWLIST_MIGRATION, EMAIL_ALLOWLIST_CHECKSUM } from './email-allowlist-schema.js';
 import { AFFILIATE_MIGRATION, AFFILIATE_CHECKSUM } from './affiliate-schema.js';
 import { MHP_BOOK_CRM_MIGRATION, MHP_BOOK_CRM_CHECKSUM } from './mhp-book-crm-schema.js';
+import { MHP_BOOK_READERS_MIGRATION, MHP_BOOK_READERS_CHECKSUM } from './mhp-book-readers-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -337,6 +338,12 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[157]?.checksum===AFFILIATE_CHECKSUM
       && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM
       && applied.get(MHP_BOOK_CRM_MIGRATION)===MHP_BOOK_CRM_CHECKSUM) applied.delete(MHP_BOOK_CRM_MIGRATION);
+  // Successor bridge, the same shape again: a build whose bundled migrations end exactly at 159 stays ready after the
+  // exact 160. It helps only a 159-file build that contains this code; the released 159 build (cda1d9d) does not have it.
+  if (migrations.length===159 && migrations[158]?.filename===MHP_BOOK_CRM_MIGRATION
+      && migrations[158]?.checksum===MHP_BOOK_CRM_CHECKSUM
+      && applied.get(MHP_BOOK_CRM_MIGRATION)===MHP_BOOK_CRM_CHECKSUM
+      && applied.get(MHP_BOOK_READERS_MIGRATION)===MHP_BOOK_READERS_CHECKSUM) applied.delete(MHP_BOOK_READERS_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
@@ -443,6 +450,14 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename===MHP_BOOK_CRM_MIGRATION && pending[0]?.checksum===MHP_BOOK_CRM_CHECKSUM
       && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM
       && applied.get(EMAIL_ALLOWLIST_MIGRATION)===EMAIL_ALLOWLIST_CHECKSUM) return;
+  // The book readers audience (160) needs the exact book CRM (159) beneath it. While 160 is pending, book readers
+  // can be chosen and saved but not started or switched on ("ready after one database step"); webinar starts keep the
+  // safety release's path.
+  if (migrations.length===160 && migrations[159]?.filename===MHP_BOOK_READERS_MIGRATION
+      && migrations[158]?.filename===MHP_BOOK_CRM_MIGRATION && pending.length===1
+      && pending[0]?.filename===MHP_BOOK_READERS_MIGRATION && pending[0]?.checksum===MHP_BOOK_READERS_CHECKSUM
+      && applied.get(MHP_BOOK_CRM_MIGRATION)===MHP_BOOK_CRM_CHECKSUM
+      && applied.get(AFFILIATE_MIGRATION)===AFFILIATE_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

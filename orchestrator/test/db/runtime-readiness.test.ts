@@ -22,6 +22,7 @@ import { EMAIL_PROTECTION_CHECKSUM, EMAIL_PROTECTION_MIGRATION } from '../../src
 import { EMAIL_ALLOWLIST_CHECKSUM, EMAIL_ALLOWLIST_MIGRATION } from '../../src/db/email-allowlist-schema.js';
 import { AFFILIATE_CHECKSUM, AFFILIATE_MIGRATION } from '../../src/db/affiliate-schema.js';
 import { MHP_BOOK_CRM_CHECKSUM, MHP_BOOK_CRM_MIGRATION } from '../../src/db/mhp-book-crm-schema.js';
+import { MHP_BOOK_READERS_CHECKSUM, MHP_BOOK_READERS_MIGRATION } from '../../src/db/mhp-book-readers-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -681,13 +682,15 @@ test('Affiliate Studio data layer (158) cutover requires the exact applied allow
 });
 
 test('book trigger retirement (159) cutover requires the exact applied Affiliate Studio data layer (158) and allow-list (157), and nothing beyond it', async()=>{
-  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  // The exact 159-file book CRM release, reconstructed from today's source (160 is a separate release).
+  const all=(await discoverMigrations()).slice(0,159).map(({filename,checksum})=>({filename,checksum}));
+  const releaseDir=await prefixDirectory(159,'book159-cutover');
   assert.equal(all.length,159);
   assert.deepEqual(all[158],{filename:MHP_BOOK_CRM_MIGRATION,checksum:MHP_BOOK_CRM_CHECKSUM});
   assert.deepEqual(all[157],{filename:AFFILIATE_MIGRATION,checksum:AFFILIATE_CHECKSUM});
   assert.deepEqual(all[156],{filename:EMAIL_ALLOWLIST_MIGRATION,checksum:EMAIL_ALLOWLIST_CHECKSUM});
   const through158=all.slice(0,158), retire=all[158]!;
-  const capable=(rows:typeof all,dir?:string)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
+  const capable=(rows:typeof all,dir:string=releaseDir)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
   // Exactly 0159 pending (the code goes out first), or applied: ready.
   await capable(through158); await capable(all);
   // Two pending (0158 and 0159): not ready.
@@ -717,6 +720,57 @@ test('book trigger retirement (159) cutover requires the exact applied Affiliate
   const crlf=await variant('crlf',MHP_BOOK_CRM_MIGRATION,sql.replace(/\n/g,'\r\n'));
   await capable(through158,crlf);
   assert.equal(createHash('sha256').update(sql,'utf8').digest('hex'),MHP_BOOK_CRM_CHECKSUM);
+});
+
+test('book readers audience (160) cutover requires the exact applied book CRM (159) and Affiliate Studio (158), and nothing beyond it', async()=>{
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,160);
+  assert.deepEqual(all[159],{filename:MHP_BOOK_READERS_MIGRATION,checksum:MHP_BOOK_READERS_CHECKSUM});
+  assert.deepEqual(all[158],{filename:MHP_BOOK_CRM_MIGRATION,checksum:MHP_BOOK_CRM_CHECKSUM});
+  const through159=all.slice(0,159), readers=all[159]!;
+  const capable=(rows:typeof all,dir?:string)=>assertRuntimeSchemaCurrent(runtimePool(rows),dir,{});
+  // Exactly 0160 pending (the code goes out first), or applied: ready.
+  await capable(through159); await capable(all);
+  // Two pending (0159 and 0160): not ready.
+  await assert.rejects(capable(all.slice(0,158)),/schema is behind by 2/);
+  // 0160 applied with another checksum, or out of order: not ready.
+  await assert.rejects(capable([...through159,{...readers,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...all.slice(0,158),readers]),/not a contiguous prefix|behind/);
+  // 0159 or 0158 not exactly as released: not ready.
+  await assert.rejects(capable([...through159.slice(0,158),{...through159[158]!,checksum:'0'.repeat(64)}]),/checksum changed/);
+  await assert.rejects(capable([...through159.slice(0,157),{...through159[157]!,checksum:'0'.repeat(64)},through159[158]!]),/checksum changed/);
+  await assert.rejects(capable([...all,{filename:'0161_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // A build whose 0160 file was renamed, or changed by one byte, is not admitted while it is pending.
+  const source=await discoverMigrations();
+  const variant=async(label:string,name:string,sql:string)=>{
+    const dir=await mkdtemp(path.join(tmpdir(),`r72-book160-${label}-`));
+    await Promise.all(source.slice(0,159).map(m=>writeFile(path.join(dir,m.filename),m.sql,'utf8')));
+    await writeFile(path.join(dir,name),sql,'utf8');
+    return dir;
+  };
+  const sql=source[159]!.sql;
+  const renamed=await variant('renamed','0160_mhp_book_readers_audience_v2.sql',sql);
+  await assert.rejects(capable(through159,renamed),/schema is behind by 1 migration\(s\); first pending: 0160_mhp_book_readers_audience_v2\.sql/);
+  const altered=await variant('altered',MHP_BOOK_READERS_MIGRATION,sql.replace('SET LOCAL lock_timeout=\'5s\';','SET LOCAL lock_timeout=\'6s\';'));
+  await assert.rejects(capable(through159,altered),/schema is behind by 1 migration\(s\); first pending: 0160_mhp_book_readers_audience\.sql/);
+  const extraByte=await variant('byte',MHP_BOOK_READERS_MIGRATION,sql+' ');
+  await assert.rejects(capable(through159,extraByte),/schema is behind by 1/);
+  const crlf=await variant('crlf',MHP_BOOK_READERS_MIGRATION,sql.replace(/\n/g,'\r\n'));
+  await capable(through159,crlf);
+  assert.equal(createHash('sha256').update(sql,'utf8').digest('hex'),MHP_BOOK_READERS_CHECKSUM);
+});
+
+test('book CRM 159 binary stays ready after the exact book readers audience (160) and nothing else', async()=>{
+  const directory=await prefixDirectory(159,'book159-historical');
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const rows=all.slice(0,159);
+  const check=(r:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(r),directory,{});
+  await check(rows);
+  await check([...rows,all[159]!]);
+  await assert.rejects(check([...rows,{...all[159]!,checksum:'0'.repeat(64)}]),/migration not present|checksum/);
+  await assert.rejects(check([...rows,{filename:'0160_mhp_book_readers_audience_v2.sql',checksum:MHP_BOOK_READERS_CHECKSUM}]),/migration not present/);
+  await assert.rejects(check([...rows,all[159]!,{filename:'0161_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  await assert.rejects(check([...rows.slice(0,158),{...rows[158]!,checksum:'0'.repeat(64)},all[159]!]),/checksum changed|migration not present/);
 });
 
 test('Affiliate Studio 158 binary stays ready after the exact book trigger retirement (159) and nothing else', async()=>{

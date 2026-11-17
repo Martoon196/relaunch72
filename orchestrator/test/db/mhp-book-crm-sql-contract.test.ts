@@ -18,7 +18,8 @@ test('0159 is the 159th bundled file and its pinned checksum is exactly its byte
   const sql = (await readFile(file, 'utf8')).replace(/\r\n?/g, '\n');
   assert.equal(createHash('sha256').update(sql, 'utf8').digest('hex'), MHP_BOOK_CRM_CHECKSUM);
   const all = await discoverMigrations();
-  assert.equal(all.length, 159);
+  // 0160 (book readers audience) is a later, separate release.
+  assert.ok(all.length >= 159);
   assert.deepEqual([all[158]!.filename, all[158]!.checksum], [MHP_BOOK_CRM_MIGRATION, MHP_BOOK_CRM_CHECKSUM]);
 });
 

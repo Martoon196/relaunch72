@@ -233,7 +233,8 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
   try {
     await resetDisposable();
     const all = await discoverMigrations();
-    assert.equal(all.length, 159);
+    // 0160 (book readers audience) is a later, separate release: this test stops at 0159.
+    assert.ok(all.length >= 159);
     assert.equal(all[158]!.filename, MHP_BOOK_CRM_MIGRATION);
     const sql159 = all[158]!.sql;
 
@@ -242,7 +243,7 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     await script(admin, SEED, 'COMMIT', 'r72_owner');
     const fresh158 = await listing(admin);
     const freshRows = await rowsDigest(admin);
-    assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+    assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
     const fresh159 = await listing(admin);
     // On a fresh database 0159 changes nothing that existed; it adds exactly the column, its check and the two functions.
     const added159 = fresh159.filter(l => !fresh158.includes(l)), removed159 = fresh158.filter(l => !fresh159.includes(l));
@@ -301,7 +302,7 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     // A run of 0159 rolled back half way (here: at its end) leaves the production-shaped state exactly as it was.
     await script(admin, sql159, 'ROLLBACK');
     assert.deepEqual(await listing(admin), prod158);
-    const prod159Result = await runMigrations(admin);
+    const prod159Result = await runMigrations(admin, await prefixDirectory(159));
     assert.deepEqual(prod159Result.applied, [MHP_BOOK_CRM_MIGRATION]);
     const prod159 = await listing(admin);
     assert.deepEqual(prod159, fresh159, 'production-shaped converges to exactly what a fresh database has after 0159');
@@ -309,7 +310,7 @@ test('0159 changes nothing on a fresh database and converges a production-shaped
     assert.ok(Number((await ownerQuery<{ n: string }>(admin, 'SELECT count(*) AS n FROM app_private.mhp_prospect_signups'))[0]!.n) > Number(signupsBefore[0]!.n));
     await script(admin, sql159);
     assert.deepEqual(await listing(admin), fresh159, 'a retry after success is a no-op');
-    assert.equal((await runMigrations(admin)).applied.length, 0);
+    assert.equal((await runMigrations(admin, await prefixDirectory(159))).applied.length, 0);
     if (outDir) {
       await writeFile(path.join(outDir, 'prod-0158.txt'), prod158.join('\n') + '\n');
       await writeFile(path.join(outDir, 'prod-0159.txt'), prod159.join('\n') + '\n');
@@ -406,7 +407,7 @@ test('order A: the new code with the trigger live, then 0159, then the new code 
 
     // 0159 by the runner. Every row stays as it is; the build stays ready.
     const rows = await rowsDigest(admin);
-    assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+    assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
     assert.deepEqual(await rowsDigest(admin), rows);
     w = await world(admin);
     try {
@@ -588,7 +589,7 @@ test('order B: fresh to 0159 first, then the new code', { skip, timeout: 900_000
     await resetDisposable();
     await runMigrations(admin, await prefixDirectory(158));
     await script(admin, SEED, 'COMMIT', 'r72_owner');
-    assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+    assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
     const w = await world(admin);
     try {
       await assertRuntimeSchemaCurrent(w.web, undefined, {});
@@ -666,7 +667,7 @@ test('fix round after 0159: WhatsApp gate unchanged, race losers enrich, durable
     try {
       await held.query('SET ROLE r72_owner');
       await held.query('SELECT app_private.book_crm_rowtype_probe()');
-      assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+      assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
       await ownerQuery(admin, `INSERT INTO app_private.mhp_prospects(email) VALUES('rowtype@example.com')`);
       await ownerQuery(admin, `INSERT INTO app_private.mhp_prospect_signups(prospect_id,kind,label,consent_given,consent_version)
         SELECT id,'sheet','Probe',true,'site-2026-10' FROM app_private.mhp_prospects WHERE email='rowtype@example.com'`);
@@ -812,7 +813,7 @@ test('last round: a stuck person is skipped and never blocks the button; keep-ph
       const before = bookSignup('pre-0159@example.com', 'Pia', '07700 900301');
       const c0 = await w.growth.capture(before, null);
       assert.equal(await w.growth.keepBookPhone(c0, '07700 900301'), 'missing');
-      assert.deepEqual((await runMigrations(admin)).applied, [MHP_BOOK_CRM_MIGRATION]);
+      assert.deepEqual((await runMigrations(admin, await prefixDirectory(159))).applied, [MHP_BOOK_CRM_MIGRATION]);
       await new Promise(resolve => setTimeout(resolve, 5_200));
       const after = await w.growth.capture(bookSignup('post-0159@example.com', 'Pol', '07700 900302'), null);
       assert.equal(await w.growth.keepBookPhone(after, '07700 900302'), 'kept');
