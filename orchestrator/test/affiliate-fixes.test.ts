@@ -1058,3 +1058,21 @@ test('S-f: the Amazon-family exclusion is asked at every redirect hop, so a midd
     assert.equal(o!.allowUrl!('https://ready.example/power-cuts'), true);
   }
 });
+
+test('N-5: the served search description of a product article stays within 160 characters, "Ad: " included', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  const long = 'A plain guide to the few things worth keeping at home for a power cut, and why each of them earns its place in the cupboard by the back door all the year round.';
+  assert.ok(long.length > 156 && long.length <= 160, String(long.length));
+  const v = await s.engine.editArticle(OWNER, s.brand.id, article.id, version.id, { metaDescription: long });
+  const served = publicBody(v.body).metaDescription;
+  assert.ok(served.startsWith(AD_PREFIX));
+  assert.ok(served.length <= 160, `${served.length}: ${served}`);
+  assert.match(served, /…$/);
+  const html = renderArticlePage(v.body, { siteName: 'Harbour', canonicalUrl: `${SITE}/blog/x/`, blogIndexUrl: `${SITE}/blog/`, locale: 'en-GB', publishedAt: '2026-11-02T10:00:00.000Z', articleId: article.id, versionId: v.id, contentSha: v.contentSha });
+  const meta = /<meta name="description" content="([^"]*)"/.exec(html)![1]!.replace(/&#39;/g, "'");
+  assert.ok(meta.length <= 160, `${meta.length}`);
+  // A short description is served whole, and an article with no links is never touched.
+  assert.equal(publicBody({ ...v.body, metaDescription: 'Short and plain, well within the limit for a search result description.' }).metaDescription, 'Ad: Short and plain, well within the limit for a search result description.');
+  assert.equal(publicBody({ ...v.body, affiliate: undefined, metaDescription: 'x'.repeat(170) }).metaDescription.length, 170);
+});

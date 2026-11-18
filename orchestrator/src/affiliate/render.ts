@@ -28,7 +28,21 @@ export function publicTitle(title: string, affiliate: ArticleAffiliate | undefin
 export function publicBody<T extends { readonly title: string; readonly seoTitle: string; readonly metaDescription: string; readonly excerpt: string; readonly affiliate?: ArticleAffiliate }>(body: T): T {
   if (!body.affiliate?.links.length) return body;
   return { ...body, title: publicTitle(body.title, body.affiliate), seoTitle: publicTitle(body.seoTitle, body.affiliate),
-    metaDescription: publicTitle(body.metaDescription, body.affiliate), excerpt: publicTitle(body.excerpt, body.affiliate) };
+    metaDescription: withinDescriptionLimit(publicTitle(body.metaDescription, body.affiliate)), excerpt: publicTitle(body.excerpt, body.affiliate) };
+}
+
+/** The longest search description we serve; the stored one is checked against the same limit. */
+export const MAX_DESCRIPTION = 160;
+/**
+ * A served description within 160 characters, "Ad: " included (review N-5): when the label pushes it over, it is cut at
+ * the last whole word that fits and ends with "…". Never cut otherwise.
+ */
+export function withinDescriptionLimit(text: string, max = MAX_DESCRIPTION): string {
+  if (text.length <= max) return text;
+  const room = text.slice(0, max - 1);
+  const space = room.lastIndexOf(' ');
+  const cut = (space > max * 0.6 ? room.slice(0, space) : room).replace(/[\s,;:.\-–—]+$/u, '');
+  return `${cut}…`;
 }
 
 /** The label readers see first. Empty when there are no links. */
