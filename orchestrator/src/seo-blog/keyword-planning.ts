@@ -327,21 +327,63 @@ function beats(other: FitScore, mine: FitScore): boolean {
 }
 const ties = (other: FitScore, mine: FitScore) => other.fits && other.share === mine.share && other.matched === mine.matched;
 
+/** Whether two meaning-word sets are the same: twin phrases ("boiler repair", "boiler repair near me", "best boiler repair"). */
+function sameWords(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const w of a) if (!b.has(w)) return false;
+  return true;
+}
+
+/**
+ * How closely a phrase's own wording, stop words included ("near me", "uk", "best"), is in the brief: the share of its
+ * words found, then how many. Only used to order twin phrases, whose meaning words are the same.
+ */
+function wording(phrase: string, brief: ReadonlySet<string>): { readonly share: number; readonly matched: number } {
+  const words = new Set(tokens(phrase).map(simpleStem));
+  let matched = 0;
+  for (const w of words) if (brief.has(w)) matched++;
+  return { share: words.size ? matched / words.size : 0, matched };
+}
+
+/**
+ * Whether twin `other` is worded closer to the brief than `mine` (review2 P1): a higher share of the phrase's own words
+ * in the brief, or the same share over more of them. Twins worded equally close ("estate agent fees", "estate agents
+ * fees") cannot be told apart even by their wording, so the planner's choice among them stands: refusing it would leave
+ * the article with no number at all, and either number is for a phrase the article is about.
+ */
+function closerTwin(other: ShortlistRow, mine: ShortlistRow, brief: ReadonlySet<string>): boolean {
+  const o = wording(other.phrase, brief), m = wording(mine.phrase, brief);
+  return o.share > m.share || (o.share === m.share && o.matched > m.matched);
+}
+
 /**
  * Whether `row` is the phrase for this brief among the target candidates: it fits (`fitScore`), no other target
  * candidate fits better, and none fits exactly as well (a tie is left unbound: there is no way to tell them apart).
+ * One exception to the tie (review2 P1): twin phrases, whose meaning words are the same ("boiler repair", "boiler
+ * repair near me", "boiler repair uk"), always tie, so between twins the one worded closer to the brief wins
+ * (`closerTwin`: "near me" in the brief picks "boiler repair near me", else "boiler repair" is closer). A tie with any
+ * phrase that is not a twin still binds neither.
  * `except` are candidates not compared against (for a secondary phrase: the brief's own target).
  */
 export function bestFit(row: ShortlistRow, text: { readonly question: string; readonly title: string }, targets: readonly ShortlistRow[], except: ReadonlySet<string> = new Set()): 'fits' | 'does_not_fit' | 'fits_another_better' | 'tied' {
   const mine = fitScore(row.phrase, text);
   if (!mine.fits) return 'does_not_fit';
+  const myWords = meaningWords(row.phrase);
+  let brief: Set<string> | null = null;
   let tied = false;
   for (const other of targets) {
     if (other.id === row.id || except.has(other.id) || other.phrase === row.phrase) continue;
     const o = fitScore(other.phrase, text);
     if (beats(o, mine)) return 'fits_another_better';
+    if (!ties(o, mine)) continue;
+    // A twin binds only when no other twin is worded closer to the brief.
+    if (sameWords(meaningWords(other.phrase), myWords)) {
+      brief ??= new Set([...tokens(text.question), ...tokens(text.title)].map(simpleStem));
+      if (closerTwin(other, row, brief)) tied = true;
+      continue;
+    }
     // The same share over the same number of words: the brief cannot tell the two apart, so neither is bound.
-    if (ties(o, mine)) tied = true;
+    tied = true;
   }
   return tied ? 'tied' : 'fits';
 }
