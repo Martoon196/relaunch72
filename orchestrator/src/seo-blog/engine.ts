@@ -2717,8 +2717,9 @@ export class SeoBlogEngine {
   }
 
   /**
-   * Whether product articles may go to this website now (review M7): null when they may, or the plain reason they may
-   * not. They may not while the latest after-publishing check of a product page on it failed or could not be made.
+   * Whether articles with product links may go to this website now (review M7): null when they may, or the plain reason
+   * they may not. They may not while the latest after-publishing check of a product page on it failed or could not be
+   * made. The callers apply it only to a version that carries product links (review P2).
    */
   private async affiliateDestinationBlock(brandId: string, destinationId: string): Promise<string | null> {
     const checks = (await this.store.listPublications(brandId)).filter((p) => p.destinationId === destinationId && p.affiliateCheck)
@@ -3207,7 +3208,9 @@ export class SeoBlogEngine {
         if (isProductArticle(s.version, brief)) {
           // The block was read for the website scheduled before the lock; a schedule changed meanwhile waits for the next pass.
           if (s.article.schedule?.destinationId !== article.schedule?.destinationId) return { kind: 'skip', why: 'The schedule changed meanwhile.' };
-          if (productBlock) return { kind: 'hold', article: { ...s.article, hold: { reason: 'destination', detail: productBlock, at: now } } };
+          // Only a version carrying product links is blocked: the same article with its links removed is how the owner
+          // corrects a page that went out unmarked (review P2).
+          if (productBlock && s.version?.body.affiliate?.links.length) return { kind: 'hold', article: { ...s.article, hold: { reason: 'destination', detail: productBlock, at: now } } };
         }
         const issue=this.websitePublicationIssue(s.destination!,s.version!,s.brand.settings,s.article);
         if(issue)return {kind:'hold',article:{...s.article,hold:{reason:'destination',detail:issue,at:now}}};
@@ -3497,7 +3500,7 @@ export class SeoBlogEngine {
         if (decision.decision === 'hold') {
           return cancel(`Not re-sent: ${decision.hold.detail}`, { ...decision.hold, at: now });
         }
-        if (productBlock) return cancel(`Not re-sent: ${productBlock}`, { reason: 'destination', detail: productBlock, at: now });
+        if (productBlock && s.version?.body.affiliate?.links.length) return cancel(`Not re-sent: ${productBlock}`, { reason: 'destination', detail: productBlock, at: now });
         if (decision.decision !== 'publish') {
           return cancel(`Not re-sent: ${decision.decision === 'skip' ? decision.why : 'no longer due'}.`, clearUnknownHold ?? { reason: 'owner', detail: 'Choose a new time.', at: now });
         }

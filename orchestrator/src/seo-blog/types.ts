@@ -753,7 +753,7 @@ export interface PolicySnapshot {
 }
 
 export interface Publication {
-  /** A product article only (Affiliate Studio): the latest after-publishing check of the ad label and paid-link marking. */
+  /** A product article only (Affiliate Studio): the latest after-publishing check of the ad label and the note saying each product link is paid. */
   readonly affiliateCheck?: import('../affiliate/page-check.js').AffiliatePageCheck;
   /** Once latched by independent verification, immutable; null means legacy first instant is unavailable. */
   readonly firstVerifiedAt?: IsoInstant | null;

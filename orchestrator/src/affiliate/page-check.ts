@@ -7,8 +7,10 @@
  *   - every product link the article carries, each marked `rel` with both `sponsored` and `nofollow`, and no other
  *     shop link without that marking.
  * A page that cannot be read is "not verified", never passed. The result is kept on the publication; a website whose
- * latest product page did not pass takes no further product article until a later check passes. No website is
- * changed by this check: none of the publishers can take an article down again, so nothing is withdrawn.
+ * latest product page did not pass takes no further article with product links until a later check passes; a version
+ * with no product links may still go (review P2: removing the links and publishing again is the owner's only way to
+ * correct a page that went out unmarked). No website is changed by this check: none of the publishers can take an
+ * article down again, so nothing is withdrawn.
  */
 
 import type { FetchTransport } from '../seo-blog/safe-fetch.js';
@@ -24,9 +26,11 @@ export interface AffiliatePageCheck {
 }
 
 /** Owner-facing words: plain, no mechanism. */
-export const AFFILIATE_PAGE_ALERT = 'The published page is missing the ad label or the paid-link marking. Readers must see the label before any product link, and every product link must be marked as a paid link. No more product articles will go to this website until its page passes this check. Ask whoever looks after your website to keep the label and the link marking, then choose Check again on this article.';
-export const AFFILIATE_PAGE_UNVERIFIED = 'We could not open the published page to check its ad label and paid-link marking, so it counts as not checked. No more product articles will go to this website until the check passes. Choose Check again on this article once the page opens.';
-export const AFFILIATE_PAGE_BLOCK = 'Product articles are paused for this website: the last published product page was missing the ad label or the paid-link marking, or could not be checked.';
+export const AFFILIATE_PAGE_ALERT = 'Your website changed this page when it put it up. Readers must see the “Ad” label before the first product link and the Amazon statement, and each product link must carry a hidden note saying it is a paid link, but something is missing on the page. Until a product page on this website passes this check, no more articles with product links will go to it. '
+  + 'You can fix this page yourself: remove its product links (“Remove this link” under Product links), then approve and publish it again. The page then has no paid links in it. '
+  + 'If someone looks after your website for you, you can ask them instead to keep the “Ad” label, the Amazon statement and each link’s note exactly as we send them (for them: every product link must keep rel="sponsored nofollow"), then choose Check again on this article.';
+export const AFFILIATE_PAGE_UNVERIFIED = 'We could not open the published page to check that it shows the “Ad” label and the Amazon statement and that each product link says it is a paid link, so it counts as not checked. No more articles with product links will go to this website until the check passes. Choose Check again on this article once the page opens. An article with its product links removed can still be published.';
+export const AFFILIATE_PAGE_BLOCK = 'Articles with product links are paused for this website: the last published product page was missing the “Ad” label, the Amazon statement or the note on its links saying they are paid links, or could not be checked. To publish this article here now, remove its product links, then approve it and choose a time again.';
 export const AFFILIATE_PAGE_PASSED = 'The published page shows the ad label and marks every product link as paid.';
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };

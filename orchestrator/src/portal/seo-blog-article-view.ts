@@ -671,7 +671,7 @@ function deliveryChecks(shell: Shell, p: Publication, destination: PublicDestina
   const rows = evidence ? [['The article', evidence.article], ['Your blog page', evidence.index], ...evidence.categories.map((c, i) => [`Topic page ${i + 1}`, c] as const), ['Your site map (for Google)', evidence.sitemap]] as const : [];
   const repair = destination?.websiteCapability?.protocol === 'v2' && destination.websiteCapability.capabilities.repair.sitemap;
   return `<div class="ap-delivery"><h3>Is it showing on your website?</h3>${evidence ? `<ul class="ap-list">${rows.map(([what, check]) => { const at = check.at ? instant(check.at, shell.brand!.timezone) : null; return `<li>${e(what)}: ${e(label(check.state))}${at ? ` <span class="ap-note">(checked ${e(shortWhen(at.date, at.time))})</span>` : ''}${check.state === 'different' && check.detail ? `<br><span class="ap-note">${e(check.detail)}</span>` : ''}</li>`; }).join('')}</ul>` : '<p class="ap-note">We have not checked it yet.</p>'}
-${p.sitemapRepair ? `<p class="ap-note">Site map repair: ${e(p.sitemapRepair.state)}. ${e(p.sitemapRepair.detail)}</p>` : ''}${p.affiliateCheck ? `<p class="ap-note">The ad label and paid-link marking: ${e(p.affiliateCheck.state === 'passed' ? AFFILIATE_PAGE_PASSED : p.affiliateCheck.state === 'failed' ? 'missing on the published page.' : 'not checked yet, because the page could not be opened.')}</p>` : ''}
+${p.sitemapRepair ? `<p class="ap-note">Site map repair: ${e(p.sitemapRepair.state)}. ${e(p.sitemapRepair.detail)}</p>` : ''}${p.affiliateCheck ? `<p class="ap-note">The “Ad” label and the note saying each product link is paid: ${e(p.affiliateCheck.state === 'passed' ? AFFILIATE_PAGE_PASSED : p.affiliateCheck.state === 'failed' ? 'missing on the published page.' : 'not checked yet, because the page could not be opened.')}</p>` : ''}
 ${postButton(shell, `${base}/delivery-recheck`, { publicationId: p.id }, 'Check again')}
 ${repair ? `<details class="ap-choice"><summary class="ap-textbutton">Add it to the site map only</summary><form method="post" action="${base}/sitemap-repair">${csrfField(shell.csrf)}${hidden({ publicationId: p.id, commandId: randomUUID() })}<p class="ap-note">This only adds this article to your site map. The article itself is not sent again.</p>${p.sitemapRepair?.uncertain && p.sitemapRepair.state !== 'done' ? '<label class="ap-check"><input type="checkbox" name="acknowledgeUnknown" value="1" required> I have checked the earlier attempt and want to try again.</label>' : ''}<button class="secondary" type="submit">Add to the site map</button></form></details>` : ''}</div>`;
 }
@@ -731,7 +731,7 @@ function bar(inner: string): string {
 
 /**
  * Affiliate Studio, after publishing (review M7): when the published page of this product article is missing the ad
- * label or the paid-link marking, or could not be checked, the owner is told at the top of the article, plainly.
+ * label or the note on its links saying they are paid, or could not be checked, the owner is told at the top of the article, plainly.
  */
 function affiliatePageAlert(d: ArticlePageData): string {
   const latest = d.publications.filter((p) => p.affiliateCheck).sort((x, y) => Date.parse(y.affiliateCheck!.at) - Date.parse(x.affiliateCheck!.at))[0]?.affiliateCheck;

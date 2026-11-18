@@ -647,7 +647,7 @@ test('M7: the published page is read back; a page that lost the label or the pai
   assert.equal(alert.message, AFFILIATE_PAGE_ALERT);
   assert.equal(ownerActivityWords(alert.message, alert.kind), AFFILIATE_PAGE_ALERT, 'shown to the owner exactly');
   const page = await call(service(s.engine, s.aff), who(s.brand.id), 'GET', `/portal/seo-blog/b/${s.brand.id}/articles/${first.article.id}`);
-  assert.match(page.body, /<section class="ap-fix" role="alert"><p><strong>The published page is missing the ad label or the paid-link marking\./);
+  assert.match(page.body, /<section class="ap-fix" role="alert"><p><strong>Your website changed this page when it put it up\./);
   // A second product article to the same website is held, not sent.
   const second = await (async () => {
     await s.engine.requestProductArticle(OWNER, s.brand.id, { commandId: randomUUID(), kind: 'comparison', topic: 'Torch or radio for a power cut', productIds: s.aff.products_.slice(0, 2).map((p) => p.productId) });
@@ -870,4 +870,51 @@ test('P1: an article with product links goes only to the website registered with
   await scheduleAndRun(s, article.id, harbour, '10:00', '2026-11-04');
   assert.equal((await art(s, article.id)).delivery, 'published');
   assert.equal(linkedPages(s).length, 1);
+});
+
+test('P2: after a page fails its check, the same article with its product links removed is published over it; the alert says so in plain words, and linked articles stay paused', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  const dest = await connectGithub(s);
+  await s.engine.approve(OWNER, s.brand.id, article.id, version.id);
+  await scheduleAndRun(s, article.id, dest);
+  let d = await s.engine.getArticle(OWNER, s.brand.id, article.id);
+  assert.equal(d.publications[0]!.affiliateCheck?.state, 'passed');
+  // The website strips the paid-link marking (as the Property Predator sanitiser does).
+  const path = 'blog/what-to-keep-for-a-power-cut/index.html';
+  s.h.github.files().set(path, s.h.github.files().get(path)!.replace(/ rel="sponsored nofollow noopener"/g, ' rel="noopener"'));
+  await s.engine.reobservePublication(OWNER, s.brand.id, article.id, d.publications[0]!.id);
+  d = await s.engine.getArticle(OWNER, s.brand.id, article.id);
+  assert.equal(d.publications[0]!.affiliateCheck?.state, 'failed');
+  // The alert: plain words, the way out the owner has alone, and what to ask a website person if they have one.
+  const alert = (await s.engine.activity(OWNER, s.brand.id, 20)).find((x) => x.kind === 'affiliate.page_alert')!;
+  assert.equal(alert.message, AFFILIATE_PAGE_ALERT);
+  assert.match(AFFILIATE_PAGE_ALERT, /You can fix this page yourself: remove its product links .*then approve and publish it again\./);
+  assert.match(AFFILIATE_PAGE_ALERT, /If someone looks after your website for you, you can ask them/);
+  for (const text of [AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_BLOCK, AFFILIATE_PAGE_UNVERIFIED]) assert.doesNotMatch(text, /paid-link marking|whoever looks after/);
+  const page = await call(service(s.engine, s.aff), who(s.brand.id), 'GET', `/portal/seo-blog/b/${s.brand.id}/articles/${article.id}`);
+  assert.match(page.body, /You can fix this page yourself/);
+  assert.doesNotMatch(visible(page.body), /paid-link marking/);
+  // The way out: every product link removed, approved and published again on the same website.
+  let v = d.version!;
+  for (const l of version.body.affiliate!.links) v = await s.engine.removeAffiliateLink(OWNER, s.brand.id, article.id, v.id, l.productId);
+  assert.equal(v.body.affiliate?.links.length ?? 0, 0);
+  await s.engine.approve(OWNER, s.brand.id, article.id, v.id);
+  await scheduleAndRun(s, article.id, dest, '09:00', '2026-11-04');
+  const fixed = await art(s, article.id);
+  assert.equal(fixed.hold, null, JSON.stringify(fixed.hold));
+  assert.equal(fixed.delivery, 'published');
+  assert.equal(fixed.publishedVersionId, v.id);
+  assert.doesNotMatch(s.h.github.files().get(path)!, /amazon\.co\.uk\/dp\//, 'no unmarked product link left on the live page');
+  // Articles that do carry product links are still paused for this website.
+  await s.engine.requestProductArticle(OWNER, s.brand.id, { commandId: randomUUID(), kind: 'comparison', topic: 'Torch or radio for a power cut', productIds: s.aff.products_.slice(0, 2).map((p) => p.productId) });
+  await s.worker.tick('w');
+  const row = (await s.engine.listArticles(OWNER, s.brand.id)).find((r) => r.article.id !== article.id)!;
+  const d0 = await s.engine.getArticle(OWNER, s.brand.id, row.article.id);
+  const v2 = await s.engine.editArticle(OWNER, s.brand.id, row.article.id, d0.version!.id, { title: 'Torch or radio: which helps more when the lights go out', seoTitle: 'Torch or radio when the lights go out' });
+  assert.ok(v2.body.affiliate?.links.length);
+  await s.engine.approve(OWNER, s.brand.id, row.article.id, v2.id);
+  await scheduleAndRun(s, row.article.id, dest, '10:00', '2026-11-05');
+  const held = await art(s, row.article.id);
+  assert.deepEqual({ delivery: held.delivery, reason: held.hold?.reason, detail: held.hold?.detail }, { delivery: 'none', reason: 'destination', detail: AFFILIATE_PAGE_BLOCK });
 });
