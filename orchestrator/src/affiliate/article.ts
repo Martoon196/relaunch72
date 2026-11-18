@@ -299,6 +299,25 @@ function testedByName(names: readonly string[]): RegExp | null {
   return namedCache.get(key)!;
 }
 
+/** A website's host as Amazon lists it: lower case, no "www.", no trailing dot (null when it cannot be read). */
+export function siteHost(url: string | null | undefined): string | null {
+  try { return url ? new URL(url).hostname.toLowerCase().replace(/\.+$/u, '').replace(/^www\./u, '') || null : null; } catch { return null; }
+}
+
+/**
+ * Review P1: Amazon only allows its links on the websites listed in the owner's Associates account, so an article with
+ * product links may only be published on the website saved with the owner's Amazon UK details. Null when it may; the
+ * plain reason, naming both websites, when it may not. A version with no product links carries no paid link.
+ */
+export function affiliateSiteProblem(pageUrl: string | null | undefined, affiliate: Pick<ArticleAffiliate, 'registeredSite' | 'links'> | null | undefined): string | null {
+  if (!affiliate?.links.length) return null;
+  const page = siteHost(pageUrl), registered = siteHost(affiliate.registeredSite);
+  if (page && registered && page === registered) return null;
+  return `This article has Amazon product links, so it can only go on ${registered ?? 'the website saved with your Amazon UK details'}, the website saved with your Amazon UK details. `
+    + `It was set to go on ${page ?? 'a website we could not read'}. Choose ${registered ?? 'that website'} instead, or remove the product links. `
+    + 'If you have added this other website to your Amazon account, change the website in your Amazon UK details in Settings first.';
+}
+
 /** Every surface of an article a reader sees (on the page, in search results, in a link preview), with where it is. */
 export function readerSurfaces(b: { readonly title: string; readonly seoTitle: string; readonly metaDescription: string; readonly excerpt: string; readonly image: { readonly alt: string };
   readonly intro: string; readonly conclusion: string; readonly sections: readonly { readonly heading: string; readonly body: string }[]; readonly faqs: readonly { readonly q: string; readonly a: string }[];

@@ -8,7 +8,7 @@ import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED }
 import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
 import { AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_BLOCK, AFFILIATE_PAGE_PASSED, AFFILIATE_PAGE_UNVERIFIED, checkAffiliatePage } from '../affiliate/page-check.js';
 import { usableProductSource, withoutAffiliateParams } from '../affiliate/article.js';
-import { bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
+import { affiliateSiteProblem, bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt } from '../stages/prompt.js';
@@ -2702,6 +2702,20 @@ export class SeoBlogEngine {
     return n;
   }
 
+  /** Review P1: where this version would be published, and why its product links may not go there (null when they may). */
+  private affiliateSiteIssue(destination: Destination, version: ArticleVersion, article: Pick<Article, 'publishedUrl'>): string | null {
+    if (!version.body.affiliate?.links.length) return null;
+    const url = version.websiteTarget?.target.canonicalUrl ?? article.publishedUrl ?? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, version.body.slug);
+    return affiliateSiteProblem(url, version.body.affiliate);
+  }
+
+  /** Refuses, when the owner chooses a website, a version with product links for a website not registered with Amazon (review P1). */
+  private async requireAffiliateSite(brandId: string, article: Article, destination: Destination): Promise<void> {
+    const version = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    const issue = version ? this.affiliateSiteIssue(destination, version, article) : null;
+    if (issue) throw new SeoBlogError(409, issue, 'affiliate_site');
+  }
+
   /**
    * Whether product articles may go to this website now (review M7): null when they may, or the plain reason they may
    * not. They may not while the latest after-publishing check of a product page on it failed or could not be made.
@@ -2886,6 +2900,7 @@ export class SeoBlogEngine {
     const destination = await this.store.getDestination(brandId, input.destinationId);
     if (!destination) throw new SeoBlogError(400, 'Choose a connected website for this article.');
     await this.requireCurrentProductLinks(brandId, article);
+    await this.requireAffiliateSite(brandId, article, destination);
     const conversion = localToUtc(input.localDate, input.localTime, brand.timezone);
     if (Date.parse(conversion.utc) <= Date.parse(this.now())) throw new SeoBlogError(400, 'Choose a time in the future. Missed times are never published late.');
     const next = await this.store.updateArticle({
@@ -2998,8 +3013,10 @@ export class SeoBlogEngine {
       }
     } else slot = ownSlot(input.when.localDate.trim(), input.when.localTime.trim(), brand.timezone, now);
     if (!slot) throw new SeoBlogError(409, 'There is no free publishing day in your plan. Choose “Publish later” to pick a time. Nothing was approved.', 'no_slot');
-    // Product links are checked against the current products on every press, approved already or not (review M1).
+    // Product links are checked against the current products on every press, approved already or not (review M1), and
+    // may only go on the website registered with Amazon (review P1).
     await this.requireCurrentProductLinks(brandId, article);
+    await this.requireAffiliateSite(brandId, article, site);
     // Approval: the existing step, bound to this exact version, refusing critical check failures.
     const approvedNow = !approvalIsCurrent(article, version);
     const previousApproval = article.approval;
@@ -3277,6 +3294,9 @@ export class SeoBlogEngine {
   }
 
   private websitePublicationIssue(destination:Destination,version:ArticleVersion,settings:Brand['settings'],article:Article):string|null {
+    // Review P1: product links go only on the website registered with Amazon, judged on the page's own public address.
+    const affiliateSite = this.affiliateSiteIssue(destination, version, article);
+    if (affiliateSite) return affiliateSite;
     if(version.websiteTarget)return targetEligibility(destination,version.websiteTarget);
     if(article.publishedUrl===publisherFor(this.deps.publishers,destination.type).publicUrlFor(destination,version.body.slug))return null;
     if(destination.websiteCapability?.protocol==='v2'&&settings.programme?.structure?.destinationId===destination.id&&settings.programme.structure.website)return 'Review and save the installed website root and categories for this exact article version before publishing.';

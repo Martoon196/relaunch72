@@ -840,3 +840,34 @@ test('S-b: through the engine, the product\'s own name in a testing claim is cau
   assert.deepEqual(await critical(s, article.id), []);
   void v3;
 });
+
+const connectBay = (s: Setup) => s.engine.connectDestination(OWNER, s.brand.id, { type: 'content_api', label: 'Bay', credential: 'x'.repeat(40),
+  config: { endpoint: 'https://bay.example/api/blog/publish', publicBaseUrl: 'https://bay.example' } });
+
+test('P1: an article with product links goes only to the website registered with Amazon; another connected website is refused at scheduling and held at the gate, naming both', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  const harbour = await connectGithub(s);
+  const bay = await connectBay(s);
+  await s.engine.approve(OWNER, s.brand.id, article.id, version.id);
+  // Choosing the other website is refused, plainly, naming both.
+  const a = await art(s, article.id);
+  await assert.rejects(s.engine.schedule(OWNER, s.brand.id, article.id, a.rowVersion, { localDate: '2026-11-03', localTime: '09:00', destinationId: bay.id }),
+    (e: Error) => /can only go on harbour\.example/.test(e.message) && /set to go on bay\.example/.test(e.message));
+  await assert.rejects(s.engine.approveAndSchedule(OWNER, s.brand.id, article.id, { versionId: version.id, when: { localDate: "2026-11-03", localTime: "09:00" }, destinationId: bay.id }), /can only go on harbour\.example/);
+  // A schedule that reached the other website anyway (made before this rule, or by any other path) is held at the gate.
+  const now = await art(s, article.id);
+  await s.h.store.updateArticle({ ...now, schedule: { publishAtUtc: '2026-11-03T09:00:00.000Z', localDate: '2026-11-03', localTime: '09:00', timezone: 'Europe/London', destinationId: bay.id, setAt: s.h.clock.now(), setBy: OWNER.userId } });
+  s.h.clock.set('2026-11-03T09:00:30.000Z');
+  await s.worker.tick('w');
+  const held = await art(s, article.id);
+  assert.equal(held.delivery, 'none');
+  assert.equal(held.hold?.reason, 'destination');
+  assert.match(held.hold!.detail, /can only go on harbour\.example, the website saved with your Amazon UK details\. It was set to go on bay\.example\./);
+  assert.equal(s.h.site.articles.size, 0, 'nothing reached bay.example');
+  // The registered website takes it.
+  await s.engine.hold(OWNER, s.brand.id, article.id, held.rowVersion, false);
+  await scheduleAndRun(s, article.id, harbour, '10:00', '2026-11-04');
+  assert.equal((await art(s, article.id)).delivery, 'published');
+  assert.equal(linkedPages(s).length, 1);
+});
