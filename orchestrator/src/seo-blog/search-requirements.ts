@@ -230,6 +230,24 @@ export function notATopic(h: string): boolean {
     || RISKY_CLAIM.test(h) || (CLAIM.test(h) && (NAME_RUN.test(h) || NAMEISH.test(h) || /\b(?:we|our|us)\b/i.test(h))) || /\b(?:we|our|us)\b/i.test(h) && /\b(?:offer|charge|fees?|prices?|team|clients?|service)\b/i.test(h);
 }
 
+/** Blame words, in any case: a question calling a business a scam is never one the writer should repeat. */
+const BLAME = /\b(?:scams?|scammers?|scammed|fraud(?:ulent|sters?)?|rip[- ]?offs?|ripped off|cowboys?|crooks?|con ?artists?|cons? men)\b/i;
+/** "why is acme the best", "is openrent really the cheapest": a ranking claim about one named thing. */
+const RANKED = /\b(?:is|are|was|were)\s+([\p{L}\p{N}.&'-]+)\s+(?:really\s+|still\s+)?(?:the\s+)?(?:best|cheapest|worst|top|leading|number one|#1|most trusted)\b/iu;
+const PRONOUNS = new Set(['the', 'a', 'an', 'it', 'this', 'that', 'there', 'they', 'which', 'what', 'who', 'one', 'he', 'she', 'these', 'those', 'you', 'we', 'i']);
+
+/**
+ * Why a searched question is not one the writer should be told to answer: the topic filter's tests for promises,
+ * proof, ratings, money, percentages and risky claims, blame words in any case, a ranking claim about a named thing
+ * outside the phrase, or a phone number.
+ */
+export function notAQuestion(q: string, phrase: string): boolean {
+  const ranked = RANKED.exec(q)?.[1]?.toLowerCase();
+  const own = new Set(foldTokens(phrase));
+  return PHONE.test(q) || MONEY.test(q) || PERCENT.test(q) || RATING.test(q) || PROMISE.test(q) || PROOF.test(q) || RISKY_CLAIM.test(q) || BLAME.test(q)
+    || Boolean(ranked && !PRONOUNS.has(ranked) && !own.has(tokenRoot(ranked)));
+}
+
 /** The registrable part of a host ("www.news.example.co.uk" gives "example.co.uk"), for counting different sites. */
 export function registrableHost(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -371,8 +389,12 @@ export function searchRequirements(input: {
     const near = (x: string) => topicSimilarity(x, primary) >= 0.6;
     const natural_variants = dedupe([...phrases([seo.primary.parent]), ...secondaryAll.filter(near)], [primary]).slice(0, limits.variants);
     const secondary_phrases = secondaryAll.filter((x) => !near(x) && !natural_variants.includes(x)).slice(0, limits.secondary);
-    // A question carrying a phone number is never something a searcher asked: drop it.
-    const questions_to_answer = dedupe(list(seo.questions).map((q) => cleanSearchText(textOf(q, 'text'), SEARCH_CAPS.questionChars, ex)).filter((x): x is string => Boolean(x) && !PHONE.test(x!))).slice(0, limits.questions);
+    // Most-searched first (unmeasured last, list order kept among equals), then the claim filter, then the cap: a
+    // question carrying a phone number, a promise, proof, a rating, money, a percentage, a risky claim, blame or a
+    // ranking of a named business is never one the writer is told to answer.
+    const searches = (q: unknown) => { const n = isObject(q) ? q.searches : null; return typeof n === 'number' && Number.isFinite(n) ? n : -1; };
+    const ranked = list(seo.questions).map((q, i) => ({ q, i })).sort((a, b) => searches(b.q) - searches(a.q) || a.i - b.i).map(({ q }) => q);
+    const questions_to_answer = dedupe(ranked.map((q) => cleanSearchText(textOf(q, 'text'), SEARCH_CAPS.questionChars, ex)).filter((x): x is string => Boolean(x) && !notAQuestion(x!, primary))).slice(0, limits.questions);
     const pages = (Array.isArray(input.pages) ? input.pages : []).slice(0, SEARCH_CAPS.outlinePages);
     const linkable = new Set((Array.isArray(input.linkable) ? input.linkable : []).map((l) => l?.url));
     const internal_links = dedupe(list(input.brief.internalLinks).filter((l): l is string => typeof l === 'string' && /^https:\/\/[^\s<>"]+$/.test(l) && l.length <= SEARCH_CAPS.linkChars && linkable.has(l))).slice(0, SEARCH_CAPS.links);

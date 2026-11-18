@@ -420,7 +420,8 @@ export function briefSeo(input: { readonly targetQuery: string; readonly binding
   const primary = input.binding.primary;
   const questions = primary
     ? input.pool.rows.filter((r) => freshness(r.measuredAt, input.now) !== 'expired' && QUESTION_START.test(r.phrase) && asksAbout(r.phrase, primary.phrase))
-      .sort((a, b) => (a.key < b.key ? -1 : 1)).slice(0, 8).map((r) => ({ text: r.phrase, searches: null, source: 'searched' as const }))
+      // Most-searched first, so the length setting's cap keeps the questions people ask most (key order among equals).
+      .sort((a, b) => (b.searches ?? -1) - (a.searches ?? -1) || (a.key < b.key ? -1 : 1)).slice(0, 8).map((r) => ({ text: r.phrase, searches: null, source: 'searched' as const }))
     : [];
   return {
     schema: 2,

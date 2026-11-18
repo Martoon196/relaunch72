@@ -272,3 +272,38 @@ test('S1: a title replaced by a passing option, or failing only a lesser check, 
   assert.equal(Ch.searchFieldsHeld({ searchDraft: { description: { chosen: 'model', main: ['excluded', 'too_long'] } } } as Any)[0]!.message,
     'The short description names a subject your business has asked us to avoid, and no better wording was available, so this article waits for your approval.');
 });
+
+// ─── S4: questions are filtered like topics, and the most searched come first ─
+
+const HOSTILE_QUESTIONS: [string, number][] = [['is harbour lettings tenancy deposit protection a scam', 40], ['why is openrent the best for tenancy deposit protection', 30], ['does tenancy deposit protection guarantee 12% returns', 20],
+  ['what is the tenancy deposit protection helpline 0300 037 1000', 20], ['is tenancy deposit protection no longer required after 2026', 20], ['can you ignore tenancy deposit protection rules', 20]];
+
+test('S4: promise, proof, rating, money, percentage, risky-claim, blame and ranking questions never reach the block; ordinary ones do', () => {
+  for (const q of ['does tenancy deposit protection guarantee 12 returns', 'is tenancy deposit protection no longer required after 2026', 'is harbour lettings tenancy deposit protection a scam',
+    'is acme deposits a rip-off', 'is tenancy deposit protection fraud common', 'why is openrent the best for tenancy deposit protection', 'is acme really the cheapest deposit scheme',
+    'what is the tenancy deposit protection helpline 0300 037 1000', 'is tenancy deposit protection worth £50', 'does tenancy deposit protection cover 100% of the deposit',
+    'is tenancy deposit protection rated 5 stars', 'which tenancy deposit protection scheme has testimonials', 'are landlords exempt from tenancy deposit protection'])
+    assert.ok(SR.notAQuestion(q, PHRASE), q);
+  for (const q of ['how does tenancy deposit protection work', 'what is the best tenancy deposit protection scheme', 'is tenancy deposit protection the best way to protect a deposit',
+    'how much does tenancy deposit protection cost', 'who pays for tenancy deposit protection', 'is it the best time to protect a tenancy deposit', 'what happens if a landlord ignores tenancy deposit protection'])
+    assert.ok(!SR.notAQuestion(q, PHRASE), q);
+});
+
+test('S4 through the engine: the most searched question survives the cap; none of the reviewer\'s hostile rows reaches any length setting', async () => {
+  const s = await F.setup({ rows: [...F.DEPOSITS, ...HOSTILE_QUESTIONS] });
+  const stored = s.pillar.seo!.questions.map((q) => q.text);
+  assert.equal(stored[0], 'how does tenancy deposit protection work', 'most searched first (90 searches)');
+  for (const length of ['concise', 'standard', 'in-depth'] as const) {
+    const r = SR.searchRequirements({ brief: s.pillar, pages: [], length, linkable: [], exclusions: [] })!;
+    assert.equal(r.questions_to_answer[0], 'how does tenancy deposit protection work', length);
+    for (const [q] of HOSTILE_QUESTIONS.filter(([q]) => !/ignore/.test(q))) assert.ok(!r.questions_to_answer.some((x) => x.startsWith(q.slice(0, 30))), `${length}: ${q}`);
+  }
+  // Questions with numbers (a later record) are ordered by them before the cap; unmeasured ones keep their order after.
+  const brief = { outline: [], internalLinks: [], seo: seoOf({}, { questions: [{ text: 'who pays for tenancy deposit protection', searches: null }, { text: 'what is tenancy deposit protection', searches: 10 }, { text: 'how does tenancy deposit protection work', searches: 90 }] }) } as Any;
+  assert.deepEqual(SR.searchRequirements({ brief, pages: [], length: 'concise', linkable: [], exclusions: [] })!.questions_to_answer, ['how does tenancy deposit protection work', 'what is tenancy deposit protection']);
+});
+
+test('S4: both v2 prompts say a question\'s business name or claim is never repeated', () => {
+  assert.match(loadPrompt('seo-blog-article-v2.md').body, /questions_to_answer: [^\n]*Never repeat a business name or a claim a question contains\./);
+  assert.match(loadPrompt('seo-blog-section-v2.md').body, /never repeating a business name or a claim it contains\./);
+});

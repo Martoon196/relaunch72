@@ -25,7 +25,7 @@ How to use them:
 - primary_phrase: once in seo_title, once in meta_description and once within the first 100 words of the intro, as written or with natural grammar. The title (H1) says what the article answers; it need not repeat the phrase. Put the phrase or a close variant in ONE section heading and, besides the intro, in a full sentence in one other part (a section or the conclusion); use natural_variants elsewhere.
 - Every appearance of the phrase or a variant counts as a use, including in a heading or an FAQ question. Across the intro, headings, sections, FAQs and conclusion, use them at most phrase_use_limit times (in a short article, no more than four in total); reword a question or heading rather than repeat the phrase.
 - secondary_phrases: only where each fits naturally.
-- questions_to_answer: answer each one the sources or brand profile support, in a section or an FAQ; leave out the rest.
+- questions_to_answer: answer each one the sources or brand profile support, in a section or an FAQ; leave out the rest. Never repeat a business name or a claim a question contains.
 - topics_top_results_cover: headings several pages ranking for this phrase share. Cover one only where the supplied sources support it, in your own words; never copy a heading.
 - length: aim for min_words to max_words; never pad.
 - internal_links: link one only where it genuinely helps the reader and it is also in <linkable_pages>.
