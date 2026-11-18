@@ -12,7 +12,12 @@ import { loadPrompt } from '../src/stages/prompt.js';
 import * as Ch from '../src/seo-blog/checks.js';
 import * as F from './seo-blog-writer-requirements-fixtures.js';
 import * as E from '../src/seo-blog/engine.js';
-import { harness } from './seo-blog-fixtures.js';
+import * as G from '../src/seo-blog/generation.js';
+import { MethodController } from '../src/seo-blog/method-packs.js';
+import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
+import { harness, OWNER } from './seo-blog-fixtures.js';
+import { fixtureBrand } from './rl72-method-fixtures.js';
+import { UpgradeFixtureModel, upgradeSnapshot } from './rl72-upgrade-fixtures.js';
 import type { ArticleBrief, ArticleVersion } from '../src/seo-blog/types.js';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -340,4 +345,53 @@ test('N5: the duplicate-title check makes one list read and at most TAKEN_TITLE_
   assert.ok(!read.includes('v138'), 'never the article being written');
   assert.equal(read[0], 'v139', 'newest first');
   assert.ok(!titles.includes('Title v139') && titles.includes('Title v137'), 'a failed read gives fewer titles, never a failure');
+});
+
+// ─── The five mutation survivors of the second review (section 6) ────────────
+
+test('mutation gap N19: a structured method run sends the native schema, where both option lists are required string arrays', async () => {
+  const f = fixtureBrand(), store = new MemoryMethodStore(), model = new UpgradeFixtureModel();
+  store.snapshots.set(f.brand.id, upgradeSnapshot(f.brand.id, ['production-core', 'blog-writing', 'visual-briefing']));
+  const brief = { ...f.brief, seo: seoOf({ phrase: 'household maintenance checks', candidateId: 'id-h' }) } as Any;
+  const search = SR.searchRequirements({ brief, pages: [], length: 'concise', linkable: [], exclusions: f.profile.exclusions })!;
+  const llm = await new MethodController(store, true).prepare(model, { ...f, stage: 'blog', stages: ['blog', 'visual-brief'], assetRef: 'article:' + f.brief.id, sources: ['S1', 'fixture-source'], baselineTokens: 32000,
+    evidence: { research: f.sources, editorialFormat: { formatId: 'checklist', rationale: 'Checks suit this practical question.' } } });
+  await G.writeArticle(llm, { ...f, brief, linkable: [], length: 'concise', search } as Any);
+  const req = model.requests.find((r: Any) => r.meta?.stage === 'SEO_BLOG_ARTICLE')!;
+  const article = (req.outputSchema as Any).properties.article;
+  assert.ok(article.required.includes('title_options') && article.required.includes('description_options'), 'required in what the provider is sent');
+  assert.deepEqual(article.properties.title_options, { type: 'array', items: { type: 'string' } });
+  assert.deepEqual(article.properties.description_options, { type: 'array', items: { type: 'string' } });
+});
+
+test('mutation gap N23: a word mixing Latin with Cyrillic or Greek letters is dropped as a look-alike spelling', () => {
+  assert.equal(SR.cleanSearchText('Dеposit rules for landlords', 80), null, 'Cyrillic е inside a Latin word');
+  assert.equal(SR.cleanSearchText('Tenancy dεposit rules', 80), null, 'Greek ε inside a Latin word');
+  assert.equal(SR.cleanSearchText('Deposit rules for landlords', 80), 'Deposit rules for landlords');
+});
+
+test('mutation gap N24: a question carrying a phone number never reaches the block', () => {
+  const brief = { outline: [], internalLinks: [], seo: seoOf({}, { questions: [{ text: 'what is the tenancy deposit protection helpline 0300 037 1000', searches: null }, { text: 'who pays for tenancy deposit protection', searches: null }] }) } as Any;
+  assert.deepEqual(SR.searchRequirements({ brief, pages: [], length: 'concise', linkable: [], exclusions: [] })!.questions_to_answer, ['who pays for tenancy deposit protection']);
+});
+
+test('mutation gap N27: topResultPages never returns the business\'s own pages, on any sub-domain', () => {
+  const src = (url: string, i: number): Any => ({ id: `s${i}`, url, title: 't', retrievedAt: 'x', passage: 'p', provider: 'f', primary: false, query: PHRASE, outline: { headings: ['How it works'], words: 900 } });
+  const sources = [src('https://harbour.example/guide', 0), src('https://blog.harbour.example/p', 1), src('https://www.harbour.example/q', 2), src('https://rank1.example/a', 3), src('https://rank2.example/b', 4)];
+  assert.deepEqual(SR.topResultPages(sources, PHRASE, 'https://harbour.example').map((s) => s.url), ['https://rank1.example/a', 'https://rank2.example/b']);
+  assert.equal(SR.topResultPages(sources, PHRASE, null).length, 5, 'no website: every page');
+});
+
+test('mutation gap N33: a section rewrite stores the block it was given, so the next section rewrite still gets it', async () => {
+  const s = await F.setup();
+  const { article, version } = await F.write(s, s.pillar.id);
+  const block = version!.generation!.searchDraft!.requirements;
+  const first = await s.e.regenerateSection(OWNER, s.brandId, article!.id, version!.id, version!.body.sections[0]!.id, 'tighter');
+  assert.deepEqual(first.generation!.searchDraft!.requirements, block, 'stored on the section version');
+  assert.equal(first.generation!.searchDraft!.requirementsSha, SR.requirementsSha(block));
+  const second = await s.e.regenerateSection(OWNER, s.brandId, article!.id, first.id, first.body.sections[1]!.id, 'shorter');
+  const req = s.seen.at(-1)!;
+  assert.equal(req.system, loadPrompt('seo-blog-section-v2.md').body, 'the second rewrite still uses the versioned section prompt');
+  assert.deepEqual(JSON.parse(/<search_requirements>\n([\s\S]*?)\n<\/search_requirements>/.exec(req.messages[0]!.content)![1]!), block);
+  assert.deepEqual(second.generation!.searchDraft!.requirements, block);
 });
