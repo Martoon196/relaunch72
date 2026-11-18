@@ -189,7 +189,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
         const fresh = randomUUID();
         html(res, changed ? 409 : 400, mhpSequenceStartConfirmPage({ csrf, plan, commandId: fresh, token: startToken(portal.sessionSecret, token, fresh, plan, now), problem, changed }));
       };
-      if (field('confirm') !== 'yes') { again(await sequences.startPlan(identity, context.requestId, itemId, versionId), 'Tick “Yes, send to these people” to confirm, then press Start. Nothing was sent.'); return true; }
+      if (field('confirm') !== 'yes') { again(await sequences.startPlan(identity, context.requestId, itemId, versionId), 'Tick the “Yes, send to…” box to confirm, then press Start. Nothing was sent.'); return true; }
       if (now - issued > CONFIRMATION_TTL_MS || issued > now + 60_000) {
         again(await sequences.startPlan(identity, context.requestId, itemId, versionId), undefined, { previousCount: Number(f.count), added: [], removed: [], reason: 'This confirmation was more than 30 minutes old, so here is the current list again. Nothing was sent.' }); return true;
       }

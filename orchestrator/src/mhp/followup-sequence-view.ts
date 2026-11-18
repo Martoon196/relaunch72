@@ -39,6 +39,8 @@ const BASE = '/hq/marketing/sequences';
 const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${e(value)}">`;
 const time = (value: string | null) => value ? new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** "this 1 person" / "these 3 people": never "these 1 person". */
+const theseOf = (n: number): string => (n === 1 ? 'this 1 person' : `these ${n} people`);
 export const waitWords = (minutes: number) => minutes === 0 ? 'straight away' : minutes % 1440 === 0 ? plural(minutes / 1440, 'day') : minutes % 60 === 0 ? plural(minutes / 60, 'hour') : plural(minutes, 'minute');
 export const sequenceHref = (itemId: string, versionId: string, extra = '') => `${BASE}?item=${encodeURIComponent(itemId)}&version=${encodeURIComponent(versionId)}${extra}`;
 const blockers: Readonly<Record<string, string>> = {
@@ -114,7 +116,7 @@ function topNote(note: MhpSequenceNote | undefined): string {
   if (!note || note.c === 'p') return '';
   let text: string, details = '';
   if (note.c === 'pub') text = 'Published. Nobody was emailed. When you are ready, press Start: you will see exactly who gets it before anything is sent.';
-  else if (note.c === 'a') text = `This sequence had already been started for these ${plural(note.n, 'person', 'people')}. Pressing the button again sent nothing new.`;
+  else if (note.c === 'a') text = `This sequence had already been started for ${theseOf(note.n)}. Pressing the button again sent nothing new.`;
   else if (note.c === 'k') text = note.r ? `That was already ${note.a === 'on' ? 'on' : 'off'}; nothing new happened.`
     : note.a === 'on' ? 'Switched on. From now on, each new book sign-up who agrees to emails gets this sequence: the first email within a few minutes, the rest on schedule. Nobody who signed up earlier was added.'
       : 'Switched off. New book sign-ups are no longer added. People already in the sequence carry on; pause them if they should stop too.';
@@ -333,7 +335,7 @@ export function mhpSequenceStartConfirmPage(input: MhpStartConfirmInput): string
     <h2>The ${plural(plan.count, 'person', 'people')}</h2>${recipientList(plan.recipients)}
     <h2>Held back</h2>${held.length ? `<ul>${held.map(line => `<li>${e(line)}</li>`).join('')}</ul><p class="note">These people are not emailed.</p>` : '<p>Nobody is held back.</p>'}${alreadyList}
     ${plan.remainingAfter ? `<p class="notice">${plural(plan.remainingAfter, 'more person', 'more people')} can receive this too. At most 500 people start in one go: confirm these first, then press Start again for the rest.</p>` : ''}
-    <form method="post" action="${BASE}/start">${fields}<div class="confirm-box"><label class="check" for="start-confirm"><input id="start-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send to these ${plural(plan.count, 'person', 'people')}</label></div>
+    <form method="post" action="${BASE}/start">${fields}<div class="confirm-box"><label class="check" for="start-confirm"><input id="start-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send to ${theseOf(plan.count)}</label></div>
       <div class="actions"><button>Start for ${plural(plan.count, 'person', 'people')}</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form></section>`, false);
 }
 /** Short confirmation for pausing (undone by resuming) or stopping (final) everyone in a sequence. */
@@ -355,7 +357,7 @@ export function mhpSequenceResumeAllPage(input: { csrf: string; commandId: strin
     <h1>${plan.ready ? `Resume ${plural(plan.people.length, 'person', 'people')}?` : 'Nobody can be resumed from here'}</h1>
     ${plan.ready ? `<p>Their next emails go when they are due, which is straight away for anyone whose next email was already due.</p>${recipientList(plan.people.map(run => ({ prospectId: run.id, firstName: run.firstName, email: run.email })))}
       ${plan.needsCheck ? `<p class="note">${plural(plan.needsCheck, 'person needs', 'people need')} checking on their own card first and will not be resumed here.</p>` : ''}
-      <form method="post" action="${BASE}/resume-all">${fields}<div class="confirm-box"><label class="check" for="resume-confirm"><input id="resume-confirm" type="checkbox" name="confirm" value="yes" required> Yes, resume these ${plural(plan.people.length, 'person', 'people')}</label></div><div class="actions"><button>Resume ${plural(plan.people.length, 'person', 'people')}</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form>`
+      <form method="post" action="${BASE}/resume-all">${fields}<div class="confirm-box"><label class="check" for="resume-confirm"><input id="resume-confirm" type="checkbox" name="confirm" value="yes" required> Yes, resume ${theseOf(plan.people.length)}</label></div><div class="actions"><button>Resume ${plural(plan.people.length, 'person', 'people')}</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form>`
       : `<p><strong>${e(plan.refusal ?? '')}</strong></p><div class="actions"><a class="button" href="${e(back)}">Back to the sequence</a></div>`}</section>`, false);
 }
 export function mhpSequenceEntryConfirmPage(input: { csrf: string; commandId: string; detail: MhpSequenceReview; expiresAt: string; until: string; webinar: { label: string | null; date: string | null } }): string {

@@ -74,7 +74,7 @@ test('the confirmation names everyone, the timing and who is held back; ticking 
   assert.deepEqual(world.calls.filter(call => call === 'enrol'), []);
   // Not ticked: nothing starts, the same page comes back asking for the tick.
   const fields = c.formFields(confirm.body, `${BASE}/start`);
-  const unticked = await c.post(`${BASE}/start`, fields); assert.equal(unticked.status, 400); assert.match(unticked.body, /Tick “Yes, send to these people”/u);
+  const unticked = await c.post(`${BASE}/start`, fields); assert.equal(unticked.status, 400); assert.match(unticked.body, /Tick the “Yes, send to…” box/u);
   fields.set('confirm', 'yes');
   const started = await c.post(`${BASE}/start`, fields); assert.equal(started.status, 303); assert.match(started.headers.location!, /#result$/u);
   const landed = visibleText((await c.follow(started)).body);

@@ -6,6 +6,8 @@ import type { MhpEmailRecipient, MhpEmailSchedulePlan, MhpEmailUnsentPlan } from
 const BASE = '/hq/marketing/emails';
 const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${e(value)}">`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** "this 1 person" / "these 3 people": never "these 1 person". */
+const theseOf = (n: number): string => (n === 1 ? 'this 1 person' : `these ${n} people`);
 const time = (value: string) => new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 export const emailHref = (itemId: string, versionId: string, extra = '') => `${BASE}?item=${encodeURIComponent(itemId)}&version=${encodeURIComponent(versionId)}${extra}`;
 const STYLES = `${MHP_OWNER_STYLES}label{display:block;font-weight:700;margin:20px 0}.check{display:flex;gap:12px;align-items:flex-start}.check input{margin-top:6px;width:22px;height:22px;flex:none}.list{border:1px solid #d9ded4;border-radius:12px;padding:0;margin:12px 0;list-style:none}.list li{padding:10px 14px;border-top:1px solid #eceee8;overflow-wrap:anywhere}.list li:first-child{border-top:0}.confirm-box{border:2px solid #e8a33d;border-radius:12px;padding:16px;margin:20px 0;background:#fffaf0}.toplinks{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0 0 16px}.toplinks a{display:inline-flex;align-items:center;min-height:44px}`;
@@ -33,7 +35,7 @@ export function mhpEmailScheduleConfirmPage(input: MhpEmailScheduleConfirmInput)
     ${plan.mode === 'test' ? '<p class="notice">Email is in test mode: only your test addresses actually receive anything.</p>' : ''}
     <h2>The ${plural(plan.count, 'person', 'people')}</h2>${people(plan.recipients)}
     <h2>Held back</h2>${held.length ? `<ul>${held.map(line => `<li>${e(line)}</li>`).join('')}</ul><p class="note">These people are not emailed.</p>` : '<p>Nobody is held back.</p>'}
-    <form method="post" action="${BASE}/schedule">${fields}<div class="confirm-box"><label class="check" for="schedule-confirm"><input id="schedule-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send to these ${plural(plan.count, 'person', 'people')}</label></div>
+    <form method="post" action="${BASE}/schedule">${fields}<div class="confirm-box"><label class="check" for="schedule-confirm"><input id="schedule-confirm" type="checkbox" name="confirm" value="yes" required> Yes, send to ${theseOf(plan.count)}</label></div>
       <div class="actions"><button>Schedule for ${plural(plan.count, 'person', 'people')}</button><a class="button secondary" href="${e(back)}">Cancel</a></div></form></section>`);
 }
 export function mhpEmailUnsentConfirmPage(input: { csrf: string; commandId: string; action: 'replace' | 'cancel'; plan: MhpEmailUnsentPlan; dueAt: string; expiresAt: string; token: Readonly<Record<string, string>>; changed?: boolean }): string {
@@ -48,7 +50,7 @@ export function mhpEmailUnsentConfirmPage(input: { csrf: string; commandId: stri
       : `They will not be sent. Nobody is added or emailed.${plan.inFlight ? ` ${plural(plan.inFlight, 'email is', 'emails are')} already being sent and cannot be called back.` : ''}`;
   return frame(replace ? 'Replace unsent emails' : 'Cancel unsent emails', `<div class="toplinks"><a href="${e(back)}">← Back to the email</a></div>${changed}<section class="card"><div class="eyebrow">${replace ? 'Replace' : 'Cancel'} · ${e(plan.title)}</div>
     <h1>${e(heading)}</h1><p>${e(text)}</p>
-    ${plan.ready ? `<form method="post" action="${BASE}/${input.action}">${fields}${replace ? `<div class="confirm-box"><label class="check" for="replace-confirm"><input id="replace-confirm" type="checkbox" name="confirm" value="yes" required> Yes, change these ${plural(plan.unsent, 'unsent email')}</label></div>` : ''}
+    ${plan.ready ? `<form method="post" action="${BASE}/${input.action}">${fields}${replace ? `<div class="confirm-box"><label class="check" for="replace-confirm"><input id="replace-confirm" type="checkbox" name="confirm" value="yes" required> Yes, change ${plan.unsent === 1 ? 'this 1 unsent email' : `these ${plan.unsent} unsent emails`}</label></div>` : ''}
       <div class="actions"><button>${replace ? `Change ${plural(plan.unsent, 'email')}` : `Cancel ${plural(plan.unsent, 'email')}`}</button><a class="button secondary" href="${e(back)}">${replace ? 'Cancel' : 'Keep them'}</a></div></form>`
       : `<div class="actions"><a class="button" href="${e(back)}">Back to the email</a></div>`}</section>`);
 }

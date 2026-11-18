@@ -169,7 +169,7 @@ export async function handleMhpOwnerEmail(req: IncomingMessage, res: ServerRespo
         const fresh = randomUUID();
         respond(res, changed ? 409 : 400, mhpEmailScheduleConfirmPage({ csrf, commandId: fresh, plan, now, token: scheduleToken(portal.sessionSecret, token, fresh, plan, now), problem, changed }), true);
       };
-      if (field('confirm') !== 'yes') { again(await emails.schedulePlan(identity, context.requestId, itemId, versionId, dueAt, expiresAt), 'Tick “Yes, send to these people” to confirm, then press Schedule. Nothing was scheduled.');return true; }
+      if (field('confirm') !== 'yes') { again(await emails.schedulePlan(identity, context.requestId, itemId, versionId, dueAt, expiresAt), 'Tick the “Yes, send to…” box to confirm, then press Schedule. Nothing was scheduled.');return true; }
       if (stale) { again(await emails.schedulePlan(identity, context.requestId, itemId, versionId, dueAt, expiresAt), undefined, { previousCount: Number(field('count')), reason: 'This confirmation was more than 30 minutes old, so here is the current list again. Nothing was scheduled.' });return true; }
       const result = await emails.schedule(identity, context.requestId, { commandId, itemId, versionId, dueAt, expiresAt, count: Number(field('count')), digest: field('digest'), confirmed: true });
       if (result.kind === 'changed') { again(result.plan, undefined, { previousCount: result.previousCount });return true; }
