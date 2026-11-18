@@ -1080,3 +1080,10 @@ test('N-5: the served search description of a product article stays within 160 c
   assert.equal(publicBody({ ...v.body, metaDescription: 'Short and plain, well within the limit for a search result description.' }).metaDescription, 'Ad: Short and plain, well within the limit for a search result description.');
   assert.equal(publicBody({ ...v.body, affiliate: undefined, metaDescription: 'x'.repeat(170) }).metaDescription.length, 170);
 });
+
+test('N-6: the Amazon UK details card says that saving a new tracking ID takes back approvals', async () => {
+  const s = await setup();
+  const page = await call(service(s.engine, s.aff), who(s.brand.id), 'GET', `/portal/seo-blog/b/${s.brand.id}/publishing`);
+  assert.equal(page.status, 200);
+  assert.match(visible(page.body), /Saving a new tracking ID or website takes back your approval of every article with product links that is not on your website yet: open each one, choose Update the links, then approve it again\./);
+});
