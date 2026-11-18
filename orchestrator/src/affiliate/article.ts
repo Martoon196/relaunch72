@@ -377,11 +377,13 @@ export function pruneAffiliate(affiliate: ArticleAffiliate | undefined, sections
 /** Each link against the current catalogue and tracking ID: what changed, what is retired, what is fine. */
 export function linkStatus(affiliate: ArticleAffiliate, catalogue: readonly AffiliateProduct[], settings: ProgrammeSettings | null): { productId: string; name: string; state: 'current' | 'changed' | 'retired' }[] {
   const programme = programmeFor(affiliate.programme);
+  // Links made for another website count as changed: the publish gate judges the website saved in the version (review P1).
+  const otherSite = Boolean(settings) && siteHost(affiliate.registeredSite) !== siteHost(settings!.registeredSite);
   return affiliate.links.map((l) => {
     const p = catalogue.find((x) => x.productId === l.productId);
     if (!p || p.status === 'retired') return { productId: l.productId, name: l.name, state: 'retired' as const };
     const ok = Boolean(settings && programme?.validateLink(p.affiliateUrl, settings.trackingId).ok && programme.validateLink(l.url, settings.trackingId).ok);
-    return { productId: l.productId, name: l.name, state: ok && p.affiliateUrl === l.url ? 'current' as const : 'changed' as const };
+    return { productId: l.productId, name: l.name, state: ok && !otherSite && p.affiliateUrl === l.url ? 'current' as const : 'changed' as const };
   });
 }
 

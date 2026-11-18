@@ -989,3 +989,23 @@ test('S-a: approvals are taken back before the new tracking ID is saved; a lost 
     assert.equal((await art(s, article.id)).approval, null);
   }
 });
+
+test('P1: after the Amazon website is changed, the article\'s old links count as changed, so it cannot be approved for the old website again', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  await connectGithub(s);
+  const bay = await connectBay(s);
+  await s.engine.approve(OWNER, s.brand.id, article.id, version.id);
+  const r = await call(service(s.engine, s.aff), who(s.brand.id), 'POST', `/portal/seo-blog/b/${s.brand.id}/affiliate/settings`, { form: [['commandId', randomUUID()], ['revision', '1'], ['trackingId', 'harbour-21'], ['registeredSite', 'bay.example'], ['siteListed', '1'], ['accountMine', '1']] });
+  assert.equal(r.isError, false, r.notice);
+  assert.equal((await art(s, article.id)).approval, null, 'a new website takes the approval back');
+  await assert.rejects(s.engine.approve(OWNER, s.brand.id, article.id, version.id), /Update the links/);
+  const page = await call(service(s.engine, s.aff), who(s.brand.id), 'GET', `/portal/seo-blog/b/${s.brand.id}/articles/${article.id}`);
+  assert.match(page.body, /Update the links/);
+  const updated = await s.engine.refreshAffiliateLinks(OWNER, s.brand.id, article.id, version.id);
+  assert.equal(updated.body.affiliate!.registeredSite, 'https://bay.example');
+  // The business's own website is still harbour.example, so the existing check refuses the links until the two agree.
+  assert.ok((await critical(s, article.id)).some((i) => i.code === 'affiliate.site_mismatch'));
+  await assert.rejects(s.engine.approve(OWNER, s.brand.id, article.id, updated.id), /critical issues/);
+  void bay;
+});
