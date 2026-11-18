@@ -10,7 +10,7 @@
 import type { Article, ArticleBrief, ArticleVersion, Brand, Destination } from '../seo-blog/types.js';
 import { SEO_GROUP_LABELS, seoNextSteps, seoScore, type SeoCheck, type SeoFix, type SeoScore } from '../seo-blog/seo-score.js';
 import { SEO_BLOG_BASE } from './seo-blog-view.js';
-import { hasSearchTarget } from '../seo-blog/search-requirements.js';
+import { hasSearchTarget, storedRequirements, type SearchRequirements } from '../seo-blog/search-requirements.js';
 import { escapeHtml as e } from './ui.js';
 
 export const SEO_PANEL_START = '<!--r72-seo-panel-->';
@@ -34,15 +34,38 @@ function addressOf(a: Article, v: ArticleVersion): string | null {
 const scored = new WeakMap<ArticleVersion, { readonly b: Brand; readonly d: SeoPanelData; readonly s: SeoScore }>();
 
 /**
- * The one search phrase the panel names and scores: the measured target when the brief carries one written to the
- * search standard (the same shape check the writer uses), otherwise the brief's own target question. The aim card,
- * the demand card and the score all use this, so the page never names one phrase and scores another. Never throws,
- * whatever shape a stored brief has.
+ * The phrase a brief aims for: the measured target when the brief carries one written to the search standard (the same
+ * shape check the writer uses), otherwise the brief's own target question. A measured number on the brief belongs to
+ * this phrase, so the demand card always names it. Never throws, whatever shape a stored brief has.
  */
-export function panelPhrase(brief: ArticleBrief | null | undefined): string {
+export function briefPhrase(brief: ArticleBrief | null | undefined): string {
   if (!brief || typeof brief !== 'object') return '';
   if (hasSearchTarget(brief)) return (brief.seo!.primary.phrase as string).trim();
   return typeof brief.targetQuery === 'string' ? brief.targetQuery.trim() : '';
+}
+
+const isRecord = (x: unknown): x is Record<string, unknown> => Boolean(x) && typeof x === 'object' && !Array.isArray(x);
+
+/** The search block this version was written with (stored on its generation record), or null. Never throws. */
+export function writtenRequirements(v: ArticleVersion | null | undefined): SearchRequirements | null {
+  const gen: unknown = isRecord(v) ? v.generation : null;
+  const draft = isRecord(gen) ? gen.searchDraft : null;
+  return isRecord(draft) ? storedRequirements(draft.requirements) : null;
+}
+
+/**
+ * The one search phrase the panel names and scores: the phrase the writer was actually given. A version written with
+ * the search block: that block's phrase. A version the original writer wrote although the brief stores a target
+ * (recorded as a fallback): the brief's question, as that writer was given it. Anything else (an owner edit, an older
+ * version): the brief's phrase. Never throws.
+ */
+export function panelPhrase(brief: ArticleBrief | null | undefined, v?: ArticleVersion | null): string {
+  if (!brief || typeof brief !== 'object') return '';
+  const written = writtenRequirements(v);
+  if (written) return written.primary_phrase.trim();
+  const gen: unknown = isRecord(v) ? v.generation : null;
+  if (isRecord(gen) && isRecord(gen.searchFallback)) return typeof brief.targetQuery === 'string' ? brief.targetQuery.trim() : '';
+  return briefPhrase(brief);
 }
 
 /** The scored result for this version, with the site's own addresses for telling internal links from outside ones. */
@@ -58,7 +81,7 @@ export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): S
   const checkIssues = ranHere ? d.article.checks!.issues : null;
   const staleCheckIssues = !ranHere && d.article.checks ? d.article.checks.issues : null;
   // A brief with a measured target is scored against the phrase the writer was given, not the question; others as before.
-  const brief = d.articleBrief && hasSearchTarget(d.articleBrief) ? { ...d.articleBrief, targetQuery: panelPhrase(d.articleBrief) } : d.articleBrief ?? null;
+  const brief = d.articleBrief && (hasSearchTarget(d.articleBrief) || writtenRequirements(v)) ? { ...d.articleBrief, targetQuery: panelPhrase(d.articleBrief, v) } : d.articleBrief ?? null;
   const s = seoScore(brief, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
   scored.set(v, { b, d, s });
   return s;
@@ -95,9 +118,9 @@ function longDate(iso: string): string | null {
 }
 const VISITS = 'How many visits this brings depends on where the page ranks in Google.';
 
-function aimCard(brief: ArticleBrief | null | undefined): string {
+function aimCard(brief: ArticleBrief | null | undefined, v: ArticleVersion): string {
   if (!brief) return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3><p>The search phrase is not on record for this article. It was planned before we kept this information.</p><p class="ap-note">The score below still checks everything that does not need the phrase.</p></section>`;
-  const phrase = panelPhrase(brief);
+  const phrase = panelPhrase(brief, v);
   const questions = (Array.isArray(brief.relatedQuestions) ? brief.relatedQuestions : []).filter((q) => typeof q === 'string' && q.trim()).slice(0, 12);
   const why = typeof brief.whyFit === 'string' ? brief.whyFit.trim() : '';
   return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3>
@@ -113,7 +136,7 @@ function demandCard(brief: ArticleBrief | null | undefined): string {
   if (demand && demand.kind === 'measured') {
     const volume = typeof demand.volume === 'number' && Number.isFinite(demand.volume) && demand.volume >= 0 ? Math.round(demand.volume) : null;
     const when = typeof demand.retrievedAt === 'string' ? longDate(demand.retrievedAt) : null;
-    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google for <span class="sp-phrase">${e(panelPhrase(brief))}</span></p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
+    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google for <span class="sp-phrase">${e(briefPhrase(brief))}</span></p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
   }
   return `${head}<p>We do not have search numbers for this phrase yet.</p><p class="ap-note">${VISITS}</p></section>`;
 }
@@ -228,7 +251,7 @@ export function seoPanel(shell: { brand?: Brand | null }, d: SeoPanelData, v: Ar
   const s = articleSeoScore(b, d, v);
   const base = articleBase(b, d.article);
   return `${SEO_PANEL_START}<details class="ap-fold sp" id="seo"${open ? ' open' : ''}><summary><h2>SEO report: ${s.score} out of 100</h2></summary><div class="ap-fold-body"><style>${SEO_PANEL_CSS}</style>
-<div class="sp-grid">${aimCard(d.articleBrief)}${demandCard(d.articleBrief)}${scoreCard(s, base, v, d.article)}${tagsCard(d, v)}</div></div></details>${SEO_PANEL_END}`;
+<div class="sp-grid">${aimCard(d.articleBrief, v)}${demandCard(d.articleBrief)}${scoreCard(s, base, v, d.article)}${tagsCard(d, v)}</div></div></details>${SEO_PANEL_END}`;
 }
 
 export const SEO_PANEL_CSS = `

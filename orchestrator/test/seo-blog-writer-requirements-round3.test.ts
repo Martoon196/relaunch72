@@ -82,3 +82,37 @@ test('P1: no brief shape throws on the article page, and schema-1, observed and 
   assert.equal(Panel.panelPhrase(null), '');
   assert.equal(Panel.panelPhrase('x' as unknown as ArticleBrief), '');
 });
+
+// ─── S6: the panel scores the phrase the writer was given ────────────────────
+
+const block = (o: Any = {}): Any => ({ primary_phrase: PHRASE, natural_variants: [], secondary_phrases: [], questions_to_answer: [], topics_top_results_cover: [],
+  length: { min_words: 1100, max_words: 1800, basis: 'length_preference' }, phrase_use_limit: 4, internal_links: [], ...o });
+const genWith = (extra: Any): Any => ({ mode: 'simulated', model: 'm', promptVersion: 'p', tokensIn: 0, tokensOut: 0, ...extra });
+
+test('S6: a version written with the search block is named and scored by that block\'s phrase; a recorded fallback by the question the writer was given', () => {
+  // The brief's stored target differs from what the version was written with (the block is the record of what was sent).
+  const brief = { ...panelBase, seo: seoOf({ phrase: 'landlord tax advice' }) };
+  const written = namedPhrases(brief, versionOf(panelBody, genWith({ searchDraft: { schema: 1, requirementsSha: 'x', requirements: block() } })));
+  assert.equal(written.aim, PHRASE);
+  assert.match(written.check!, new RegExp(`uses “${PHRASE}”`));
+  // The measured number belongs to the brief's phrase, so the demand card keeps naming that one.
+  assert.equal(written.demand, 'landlord tax advice');
+  // The reviewer's case: the phrase names an exclusion, the writer fell back to the original prompt (the question).
+  for (const reason of ['phrase_dropped', 'switch_off', 'damaged', 'error']) {
+    const fell = namedPhrases(brief, versionOf(panelBody, genWith({ searchFallback: { schema: 1, reason } })));
+    assert.equal(fell.aim, QUESTION, reason);
+    assert.doesNotMatch(fell.check!, /landlord tax advice/, reason);
+    assert.match(fell.check!, /how does tenancy deposit protection work/, reason);
+  }
+  // No record either way (an owner edit, an older version): the brief's phrase, as in P1.
+  assert.equal(namedPhrases(brief, versionOf(panelBody, null)).aim, 'landlord tax advice');
+});
+
+test('S6: a damaged generation record never throws and is read as no record', () => {
+  const brief = { ...panelBase, seo: seoOf() };
+  for (const generation of ['x', 5, [], { searchDraft: 'x' }, { searchDraft: { requirements: null } }, { searchDraft: { requirements: { primary_phrase: 3 } } }, { searchDraft: { requirements: block({ questions_to_answer: 'x' }) } }, { searchFallback: 'x' }]) {
+    let r: ReturnType<typeof namedPhrases> | undefined;
+    assert.doesNotThrow(() => { r = namedPhrases(brief, versionOf(panelBody, generation)); }, JSON.stringify(generation));
+    assert.equal(r!.aim, PHRASE, JSON.stringify(generation));
+  }
+});
