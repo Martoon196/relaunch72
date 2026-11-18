@@ -224,10 +224,42 @@ const RISKY_CLAIM = /\b(?:cures?|cured|heals?|treats? (?:asthma|cancer|anxiety|d
 /** Two or more capitalised words together that are not the heading's first word: a business or product name. */
 const NAME_RUN = /(?:^|\s)\S+\s+(?:\p{Lu}[\p{L}&'-]+\s+)*\p{Lu}[\p{L}&'-]+\s+\p{Lu}[\p{L}&'-]+/u;
 
+/**
+ * A heading in Title Case: most longer words after the first are capitalised, so a capital letter says nothing about
+ * whether a word is a name ("How to Avoid Deposit Disputes").
+ */
+function titleCased(h: string): boolean {
+  const ws = h.split(/\s+/).slice(1).map((w) => w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '')).filter((w) => w.length >= 4);
+  return ws.length >= 2 && ws.filter((w) => /^\p{Lu}/u.test(w)).length * 5 >= ws.length * 3;
+}
+/** Blame words: a claim about a business whatever the capitals. */
+const BLAME_CLAIM = /\b(?:scams?|fraud(?:ulent|sters?)?|rip[- ]?offs?|cowboys?|crooks?|steals?|stole|lies|liars?|cheats?)\b/i;
+/**
+ * In a Title Case heading, a praise or ranking word is a claim about a business when it names one the ways that still
+ * show (an acronym or a joined name such as "OpenRent", a run of capitalised words after a colon or "vs", or a
+ * capitalised word after "like", "such as", "including", "than" or "vs"), or when
+ * it is not in a generic place: leading the heading ("Top Tips for…", "Best Time to…", "Leading Causes of…", "Avoid These…"),
+ * "how to avoid" or "is best for". Blame words always are.
+ */
+function titleCaseClaim(h: string): boolean {
+  if (BLAME_CLAIM.test(h)) return true;
+  if (/(?:^|[\s(])(?:\p{Lu}{2,}\b|\p{Lu}\p{Ll}+\p{Lu}\p{L}*)/u.test(h)) return true;
+  if (/(?::|\bvs\.?|\bversus)\s+(?:\p{Lu}[\p{L}&'-]*\s+)+\p{Lu}[\p{L}&'-]*/u.test(h)) return true;
+  if (/\b(?:[Ll]ike|[Ss]uch [Aa]s|[Vv][Ss]\.?|[Vv]ersus|[Ii]ncluding|[Tt]han)\s+\p{Lu}/u.test(h)) return true;
+  const generic = h.replace(/^(?:the\s+)?(?:top|best|leading|recommend(?:ed|s)?|trusted|award)\b|^avoid\s+(?=(?:these|this|those|common|costly|the|a|an|mistakes|pitfalls|delays|problems|penalties|fines)\b)/i, ' ').replace(/\bhow to avoid\b/gi, ' ').replace(/\b(?:is|are) best for\b/gi, ' ');
+  return CLAIM.test(generic);
+}
+/** "Guarantee" as a thing ("How Guarantees Work", "Warranty vs Guarantee") is a topic; a guarantee of an outcome is a promise. */
+const nounGuarantee = (h: string) => h.replace(/\bguarantees?\b(?!\s+(?:results?|returns?|profits?|success|approval|rankings?|income|savings?|you|your|that|to|a|an|the)\b)/gi, 'cover');
+/** A heading that asks rather than asserts: a risky subject in a question is a topic to answer from sources, not a claim. */
+const asks = (h: string) => /\?\s*$/.test(h) || /^(?:how|what|when|who|which|why|where)\b[^:.]*$/i.test(h);
+
 /** Why a heading is not a topic the writer should be told about (furniture, contact, price, rating or a claim). */
 export function notATopic(h: string): boolean {
-  return FURNITURE.test(h) || PHONE.test(h) || MONEY.test(h) || PERCENT.test(h) || RATING.test(h) || PROMISE.test(h) || PROOF.test(h)
-    || RISKY_CLAIM.test(h) || (CLAIM.test(h) && (NAME_RUN.test(h) || NAMEISH.test(h) || /\b(?:we|our|us)\b/i.test(h))) || /\b(?:we|our|us)\b/i.test(h) && /\b(?:offer|charge|fees?|prices?|team|clients?|service)\b/i.test(h);
+  const g = nounGuarantee(h);
+  const claim = CLAIM.test(g) && (/\b(?:we|our|us)\b/i.test(g) || (titleCased(g) ? titleCaseClaim(g) : NAME_RUN.test(g) || NAMEISH.test(g)));
+  return FURNITURE.test(h) || PHONE.test(h) || MONEY.test(h) || PERCENT.test(h) || RATING.test(h) || PROMISE.test(g) || PROOF.test(h)
+    || (RISKY_CLAIM.test(h) && !asks(h)) || claim || /\b(?:we|our|us)\b/i.test(h) && /\b(?:offer|charge|fees?|prices?|team|clients?|service)\b/i.test(h);
 }
 
 /** Blame words, in any case: a question calling a business a scam is never one the writer should repeat. */

@@ -307,3 +307,18 @@ test('S4: both v2 prompts say a question\'s business name or claim is never repe
   assert.match(loadPrompt('seo-blog-article-v2.md').body, /questions_to_answer: [^\n]*Never repeat a business name or a claim a question contains\./);
   assert.match(loadPrompt('seo-blog-section-v2.md').body, /never repeating a business name or a claim it contains\./);
 });
+
+// ─── S3: ordinary Title Case headings are topics; names and claims still are not ─
+
+test('S3: ordinary Title Case headings survive the topic filter; competitor names, blame, promises and furniture are still dropped', () => {
+  const topic = (h: string) => { const c = SR.cleanSearchText(h, 80, []); return c !== null && !SR.notATopic(c); };
+  for (const h of ['How to Avoid Deposit Disputes', 'Top Tips for First-Time Landlords', 'Who Is Exempt From the Rules?', 'Best Time to Service Your Boiler', 'The Best Way to Store Coffee Beans',
+    'Leading Causes of Flat Roof Leaks', 'Best Practice for Check-In Reports', 'Avoid These Common Mistakes', 'Which Boiler Is Best for a Three-Bed House?', 'How Guarantees Work',
+    'What Does a Guarantee Cover?', 'Manufacturer Warranty vs Guarantee', 'When You No Longer Need a Licence', 'How Sealant Cures', 'Recommended Boiler Service Intervals', 'Trusted Trader Schemes Explained'])
+    assert.ok(topic(h), h);
+  for (const h of ['Why OpenRent Is the Best Choice', 'Is Harbour Lettings a Scam?', 'Harbour Lettings: The Best Agents in Leeds', 'Best Letting Agents in Leeds: Harbour Lettings Reviewed',
+    'Foxtons Beats Every Other Agent', 'Top Agents Like Foxtons and Savills', 'Avoid Harbour Lettings at All Costs', 'Why We Are the Best Agents in Leeds', 'Guaranteed Returns for Every Landlord',
+    'We Guarantee Results', 'Landlords Are Exempt From Deposit Rules', 'The Cheapest Agent in Leeds: Harbour Lettings', 'Award-Winning Harbour Lettings', 'Top Rated Letting Agent in Leeds',
+    'Why OpenRent beats agents', 'Related Posts', 'Leave a Reply', 'Cures for Squeaky Floorboards', 'Black mould cures asthma naturally'])
+    assert.ok(!topic(h), h);
+});
