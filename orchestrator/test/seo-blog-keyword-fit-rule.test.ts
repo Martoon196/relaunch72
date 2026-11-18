@@ -105,8 +105,11 @@ test('F1: the reviewer\'s pair table (86 pairs): right pairs refused and wrong p
   t.diagnostic(`right pairs refused ${refused.length}/${right.length}; wrong pairs accepted ${accepted.length}/${wrong.length}`);
   // Shipped half rule: 4/36 and 42/50. A pair has no shortlist, so the best-fit comparison cannot act here.
   assert.equal(right.length, 36); assert.equal(wrong.length, 50);
-  assert.deepEqual(refused.map((p) => p.phrase), ['property valuation', 'mortgage broker fees'], 'only pure paraphrases (worth/valuation, adviser/broker)');
-  assert.equal(accepted.length, 27);
+  // Bounds, not exact counts (review2 SF3): the rule may improve, but no right pair beyond the two pure paraphrases
+  // (worth/valuation, adviser/broker) may be refused, and no more than the 27 wrong pairs at the first fix may pass.
+  const PARAPHRASES = ['property valuation', 'mortgage broker fees'];
+  for (const p of refused) assert.ok(PARAPHRASES.includes(p.phrase), `right pair refused: ${p.phrase} ⇐ ${p.q}`);
+  assert.ok(accepted.length <= 27, `wrong pairs accepted rose to ${accepted.length} (at most 27)`);
   for (const note of ['number', 'single letter dropped', 'code', 'negation', 'stem new/news', 'stem sit/site', 'stem plan/planning', 'stem rat/rate'])
     assert.ok(!accepted.some((p) => p.note === note), `every "${note}" pair is refused`);
   for (const phrase of ['plumber leeds', 'boiler repair leeds', 'estate agents york']) assert.ok(!accepted.some((p) => p.note === 'place' && p.phrase === phrase), phrase);
