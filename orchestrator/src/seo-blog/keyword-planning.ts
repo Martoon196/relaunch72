@@ -187,6 +187,13 @@ const LETTER_QUALIFIERS = new Set(['band', 'class', 'grade', 'type', 'zone', 'le
 /** Prepositions after which a capitalised name in a question is read as a place (see `phraseFits`). */
 const PLACE_PREPOSITIONS = new Set(['in', 'near', 'around', 'across', 'from', 'at', 'outside', 'within', 'throughout']);
 /**
+ * Of those, the ones that also name things that are not places ("income from Airbnb", "a table at Côte"): a name after
+ * them only refuses a phrase that holds part of it (New York against "york"), never one that names no place.
+ */
+const LOOSE_PLACE_PREPOSITIONS = new Set(['from', 'at']);
+/** Small words that a question in sentence case never capitalises mid-sentence; one capitalised marks a title-cased question. */
+const TITLE_SMALL_WORDS = new Set(['an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'with', 'is', 'are', 'do', 'does', 'can']);
+/**
  * A few UK property word families a suffix rule must not be stretched to: each form maps to one word. Deliberately
  * small and explicit, so the stemmer itself can stay cautious.
  */
@@ -260,26 +267,94 @@ export function meaningWords(text: string): Set<string> {
 }
 
 /**
+ * Words that sit in front of a place's name without changing which place it is (North London is in London, Greater
+ * Manchester takes in Manchester). In a phrase they still count: "estate agents south london" is not for North London.
+ */
+const AREA_WORDS = new Set(['north', 'south', 'east', 'west', 'northern', 'southern', 'eastern', 'western', 'central', 'greater', 'inner', 'outer', 'upper', 'lower', 'mid',
+  'northeast', 'northwest', 'southeast', 'southwest'].map(simpleStem));
+/** The nations of the UK and their names. A phrase that names none is for the whole market, so it is for each of them. */
+const NATIONS = new Set(['england', 'scotland', 'wales', 'ireland', 'britain'].map(simpleStem));
+const NATION_NAME_WORDS = new Set([...NATIONS, ...['great', 'united', 'kingdom'].map(simpleStem)]);
+/** Capitalised words that follow "in", "from" or "at" without being places: months, days and holidays ("from April"). */
+const NOT_PLACES = new Set(['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'christmas', 'easter', 'spring', 'summer', 'autumn', 'winter'].map(simpleStem));
+
+/** A place a question names (see `placesIn`). */
+interface Place {
+  /** Its meaning words without the area words: the place itself (North London: london). */
+  readonly words: ReadonlySet<string>;
+  /** Every meaning word of its name, area words included (North London: north, london). */
+  readonly name: ReadonlySet<string>;
+  /** A nation of the UK (England, Scotland, Wales, Northern Ireland, Great Britain, the United Kingdom). */
+  readonly nation: boolean;
+  /** After a preposition that may also name something other than a place ("from", "at"). */
+  readonly loose: boolean;
+}
+
+/**
+ * Whether a question is written in title case ("Who Pays For Repairs In Rented Houses?"), where a capital letter says
+ * nothing about a place: a small word such as "For" or "In" capitalised mid-sentence, or more than two in three words
+ * after the first capitalised (of four or more). Single letters ("band A") and "I" are not counted.
+ */
+function titleCased(question: string): boolean {
+  const parts = question.split(/\s+/).filter(Boolean);
+  let words = 0, capitals = 0;
+  for (let i = 1; i < parts.length; i++) {
+    if (/[.?!:;]$/.test(parts[i - 1]!)) continue;
+    const word = parts[i]!.replace(/^[^\p{L}]+/u, '');
+    const bare = word.replace(/[^\p{L}]+$/u, '');
+    if (bare.length < 2 || /^I['’]/u.test(word)) continue;
+    words++;
+    if (!/^\p{Lu}/u.test(bare)) continue;
+    capitals++;
+    if (TITLE_SMALL_WORDS.has(bare.toLowerCase())) return true;
+  }
+  return words >= 4 && capitals * 3 > words * 2;
+}
+
+/**
  * Places a question names: a capitalised name (one word or several in a row, not at the start of a sentence, not an
  * all-capitals abbreviation, not "I") right after "in", "near", "around", "across", "from", "at", "outside", "within"
- * or "throughout". Each place is its set of meaning words. Titles are not read: they capitalise every word.
+ * or "throughout". Months, days and holidays are not places ("from April"). Titles are not read: they capitalise every
+ * word; nor is a question written in title case (`titleCased`), for the same reason.
  */
-function placesIn(question: string): Set<string>[] {
+function placesIn(question: string): Place[] {
+  if (titleCased(question)) return [];
   const parts = question.split(/\s+/).filter(Boolean);
-  const places: Set<string>[] = [];
+  const places: Place[] = [];
   for (let i = 1; i < parts.length; i++) {
     const before = parts[i - 1]!;
-    if (/[.?!:;]$/.test(before) || !PLACE_PREPOSITIONS.has(before.toLowerCase().replace(/[^\p{L}]/gu, ''))) continue;
-    const place = new Set<string>();
+    const preposition = before.toLowerCase().replace(/[^\p{L}]/gu, '');
+    if (/[.?!:;]$/.test(before) || !PLACE_PREPOSITIONS.has(preposition)) continue;
+    const name = new Set<string>();
     for (let j = i; j < parts.length; j++) {
       const word = parts[j]!;
       if (!/^\p{Lu}\p{Ll}/u.test(word)) break;
-      for (const w of meaningWords(word.replace(/['’]s\b/u, ''))) place.add(w);
+      for (const w of meaningWords(word.replace(/['’]s\b/u, ''))) if (!NOT_PLACES.has(w)) name.add(w);
       if (/[.?!:;,]$/.test(word)) break;
     }
-    if (place.size) places.push(place);
+    const words = new Set([...name].filter((w) => !AREA_WORDS.has(w)));
+    if (!words.size) continue;
+    const nation = [...words].every((w) => NATION_NAME_WORDS.has(w)) && [...words].some((w) => NATIONS.has(w) || w === simpleStem('kingdom'));
+    places.push({ words, name, nation, loose: LOOSE_PLACE_PREPOSITIONS.has(preposition) });
   }
   return places;
+}
+
+/** Whether a place named in the question rules a phrase out (see `fitScore`). */
+function placeRefuses(place: Place, phrase: ReadonlySet<string>, missing: boolean, half: boolean): boolean {
+  // A nation: a phrase that names another nation is for somewhere else ("landlord registration scotland" against a
+  // question about England). A phrase that names none is for the whole market, so a missing word does not refuse it
+  // ("landlord gas safety certificate" on a gas safety check in England), unless only half the phrase is in the brief.
+  if (place.nation) return [...phrase].some((w) => NATIONS.has(w) && !place.words.has(w)) || half;
+  const shared = [...place.words].filter((w) => phrase.has(w)).length;
+  // Part of the place's name only: New York against "york".
+  if (shared > 0 && shared < place.words.size) return true;
+  // The same place, but the phrase names another part of it: North London against "estate agents south london".
+  if (shared > 0) return [...phrase].some((w) => AREA_WORDS.has(w) && !place.name.has(w));
+  // Another place while a word of the phrase is missing: Bradford against "plumber leeds". After "from" or "at", which
+  // also name things that are not places ("income from Airbnb"), only when no more than half the phrase is in the brief.
+  return missing && (!place.loose || half);
 }
 
 /** How a phrase fits a brief: whether it passes the hard checks, and its share and count of matched meaning words. */
@@ -289,9 +364,14 @@ export interface FitScore { readonly fits: boolean; readonly share: number; read
  * The fit of one phrase to one brief (its question and title). It fits when all of these hold:
  * - at least half of the phrase's meaning words are in the brief (the half rule);
  * - every required word is in the brief: each word with a digit, each negation, each qualified or numbered letter;
- * - the question does not name a different place: no place named in the question (see `placesIn`) shares a word with
- *   the phrase without being wholly in it (New York against "york"), and none names a place outside the phrase while
- *   one of the phrase's own words is missing (Bradford against "plumber leeds").
+ * - the question does not name a different place (`placesIn`, `placeRefuses`): no place named in the question shares
+ *   a word with the phrase without being wholly in it (New York against "york") or names another part of it (North
+ *   London against "south london"), and none names a place outside the phrase while one of the phrase's own words is
+ *   missing (Bradford against "plumber leeds"). Area words in the question do not make another place (North London
+ *   and Greater Manchester are in "london" and "manchester"). A nation is another place only for a phrase that names
+ *   another nation or is only half in the brief. Months, days and holidays are not places. A name after "from" or "at"
+ *   refuses a phrase that holds part of it, or one only half in the brief. A question written in title case names no
+ *   place the rule can read.
  * A phrase with no meaning word (stop words only) never fits. Lower-case place names inside a phrase cannot be told
  * from ordinary words, so "letting agents reading" against "read a letting agent's contract" is left to the
  * comparison with the other candidates in `bindByIds`.
@@ -308,11 +388,8 @@ export function fitScore(phrase: string, text: { readonly question: string; read
   if (matched * 2 < size) return fail;
   for (const w of p.required) if (!brief.has(w)) return fail;
   const missing = matched < size;
-  for (const place of placesIn(text.question)) {
-    const shared = [...place].filter((w) => p.words.has(w)).length;
-    if (shared > 0 && shared < place.size) return fail;
-    if (shared === 0 && missing) return fail;
-  }
+  const half = matched * 2 === size;
+  for (const place of placesIn(text.question)) if (placeRefuses(place, p.words, missing, half)) return fail;
   return { fits: true, share, matched, size };
 }
 

@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bestFit, bindByIds, planningCandidates, type PlanningCandidates, type ShortlistRow } from '../src/seo-blog/keyword-planning.js';
+import { bestFit, bindByIds, phraseFits, planningCandidates, type PlanningCandidates, type ShortlistRow } from '../src/seo-blog/keyword-planning.js';
 import { buildKeywordPool } from '../src/seo-blog/keyword-pool.js';
 import { newClusters, newPairs } from './keyword-fit-cases-review2.js';
 
@@ -134,4 +134,50 @@ test('P2 on the reviewer\'s data: both pillars that lost their phrase now bind, 
   for (const phrase of ['landlord insurance', 'loft conversion']) assert.ok(!p.rightRefused.some((r) => r.startsWith(`${phrase} ⇐`)), phrase);
   assert.deepEqual(s.slipsBound, [], 'no sibling slip binds');
   assert.ok(s.refused.length <= 1, `correct refused ${s.refused.length}/56 (at most 1: "boiler service" against servicing, a stem miss)`);
+});
+
+test('P3: the place rule binds a local phrase for the business\'s own area and still refuses a phrase for another place', () => {
+  // The reviewer's refused right pairs, each with the place it names.
+  const right: [string, string, string][] = [
+    ['estate agents london', 'How do I choose an estate agent in North London?', 'Estate Agents in North London: How to Choose'],
+    ['plumber manchester', 'Who is a reliable plumber in Greater Manchester?', 'Plumbers in Greater Manchester You Can Rely On'],
+    ['wedding venues yorkshire', 'How do I choose a wedding venue in North Yorkshire?', 'Wedding Venues in North Yorkshire: Questions to Ask'],
+    ['wedding venues north yorkshire', 'How do I choose a wedding venue in North Yorkshire?', 'Wedding Venues in North Yorkshire: Questions to Ask'],
+    ['landlord gas safety certificate', 'How often do landlords need a gas safety check in England?', 'Gas Safety Checks for Landlords'],
+    ['eviction notice period', 'How much notice does a landlord have to give in Scotland?', 'Eviction Notice in Scotland: How Long Tenants Get'],
+    ['stamp duty calculator', 'How much stamp duty will I pay from April?', 'Working Out Your Stamp Duty'],
+    ['furnished holiday let tax', 'How is income from Airbnb taxed?', 'Holiday Let Tax Rules'],
+    ['house repairs', 'Who Pays For Repairs In Rented Houses?', 'Repairs In A Rental: Who Pays'],
+    ['landlord insurance cost', 'How Much Is Landlord Insurance In January?', 'Landlord Insurance Prices'],
+    ['boiler repair cost', 'What does boiler repair cost at Christmas?', 'Boiler Repair Prices'],
+    ['emergency plumber leeds', 'Who can I call for an emergency plumber in Central Leeds?', 'Emergency Plumbers in Central Leeds'],
+  ];
+  for (const [phrase, q, title] of right) assert.equal(phraseFits(phrase, t(q, title)), true, `${phrase} ⇐ ${q}`);
+  // A phrase for another place is still refused.
+  const wrong: [string, string, string][] = [
+    ['plumber leeds', 'How do I find a plumber in Bradford?', 'Finding a Plumber in Bradford'],
+    ['plumber leeds', 'Can a plumber from Bradford work on my boiler?', 'Hiring a Plumber From Bradford'],
+    ['boiler repair leeds', 'How much does boiler repair cost in Sheffield?', 'Boiler Repair Costs in Sheffield'],
+    ['estate agents york', 'Which estate agents are best in New York?', 'New York Estate Agents Compared'],
+    ['estate agents york', 'How do I choose an estate agent in North Yorkshire?', 'Estate Agents in North Yorkshire'],
+    ['estate agents south london', 'How do I choose an estate agent in North London?', 'Estate Agents in North London: How to Choose'],
+    ['plumber manchester', 'Who is a reliable plumber in Greater London?', 'Plumbers in Greater London'],
+    ['landlord registration scotland', 'Do I have to register as a landlord in England?', 'Landlord Registration in England'],
+    ['eviction notice scotland', 'How much notice does a landlord give in Wales?', 'Eviction Notice in Wales'],
+    ['tenant referencing', 'What documents must I see before letting to a new tenant in England?', 'Right to Rent Checks: A Step-by-Step Guide'],
+    ['afternoon tea york', 'Where can I get a good afternoon tea in New York?', 'Afternoon Tea in New York'],
+  ];
+  for (const [phrase, q, title] of wrong) assert.equal(phraseFits(phrase, t(q, title)), false, `${phrase} ⇐ ${q}`);
+});
+
+test('P3 on the reviewer\'s data: every right pair that names a place binds, with no more wrong pairs accepted and no sibling slip', (t) => {
+  const p = pairTable(), s = shortlistTable();
+  t.diagnostic(`pairs: right refused ${p.rightRefused.length}/56, wrong accepted ${p.wrongAccepted.length}/52; shortlists: correct refused ${s.refused.length}/56, slips bound ${s.slipsBound.length}/336`);
+  const placeNotes = newPairs.filter((x) => x.kind === 'right' && /place/.test(x.note ?? ''));
+  assert.equal(placeNotes.length, 9);
+  for (const x of placeNotes) assert.ok(!p.rightRefused.includes(`${x.phrase} ⇐ ${x.q}`), `${x.phrase} ⇐ ${x.q}`);
+  // Wrong pairs accepted were 31/52 at cda1d9dc; the place fix must not add one.
+  assert.ok(p.wrongAccepted.length <= 31, `wrong pairs accepted ${p.wrongAccepted.length}`);
+  for (const x of newPairs.filter((y) => y.kind === 'wrong' && y.note === 'place')) assert.ok(!p.wrongAccepted.includes(`${x.phrase} ⇐ ${x.q}`), `${x.phrase} ⇐ ${x.q}`);
+  assert.deepEqual(s.slipsBound, []);
 });
