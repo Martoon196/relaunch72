@@ -33,6 +33,18 @@ function addressOf(a: Article, v: ArticleVersion): string | null {
 /** One score per page view: the summary line and the report share it (keyed by the very objects of this render). */
 const scored = new WeakMap<ArticleVersion, { readonly b: Brand; readonly d: SeoPanelData; readonly s: SeoScore }>();
 
+/**
+ * The one search phrase the panel names and scores: the measured target when the brief carries one written to the
+ * search standard (the same shape check the writer uses), otherwise the brief's own target question. The aim card,
+ * the demand card and the score all use this, so the page never names one phrase and scores another. Never throws,
+ * whatever shape a stored brief has.
+ */
+export function panelPhrase(brief: ArticleBrief | null | undefined): string {
+  if (!brief || typeof brief !== 'object') return '';
+  if (hasSearchTarget(brief)) return (brief.seo!.primary.phrase as string).trim();
+  return typeof brief.targetQuery === 'string' ? brief.targetQuery.trim() : '';
+}
+
 /** The scored result for this version, with the site's own addresses for telling internal links from outside ones. */
 export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): SeoScore {
   const hit = scored.get(v);
@@ -46,7 +58,7 @@ export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): S
   const checkIssues = ranHere ? d.article.checks!.issues : null;
   const staleCheckIssues = !ranHere && d.article.checks ? d.article.checks.issues : null;
   // A brief with a measured target is scored against the phrase the writer was given, not the question; others as before.
-  const brief = d.articleBrief && hasSearchTarget(d.articleBrief) ? { ...d.articleBrief, targetQuery: d.articleBrief.seo!.primary.phrase } : d.articleBrief ?? null;
+  const brief = d.articleBrief && hasSearchTarget(d.articleBrief) ? { ...d.articleBrief, targetQuery: panelPhrase(d.articleBrief) } : d.articleBrief ?? null;
   const s = seoScore(brief, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
   scored.set(v, { b, d, s });
   return s;
@@ -85,7 +97,7 @@ const VISITS = 'How many visits this brings depends on where the page ranks in G
 
 function aimCard(brief: ArticleBrief | null | undefined): string {
   if (!brief) return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3><p>The search phrase is not on record for this article. It was planned before we kept this information.</p><p class="ap-note">The score below still checks everything that does not need the phrase.</p></section>`;
-  const phrase = typeof brief.targetQuery === 'string' ? brief.targetQuery.trim() : '';
+  const phrase = panelPhrase(brief);
   const questions = (Array.isArray(brief.relatedQuestions) ? brief.relatedQuestions : []).filter((q) => typeof q === 'string' && q.trim()).slice(0, 12);
   const why = typeof brief.whyFit === 'string' ? brief.whyFit.trim() : '';
   return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3>
@@ -101,7 +113,7 @@ function demandCard(brief: ArticleBrief | null | undefined): string {
   if (demand && demand.kind === 'measured') {
     const volume = typeof demand.volume === 'number' && Number.isFinite(demand.volume) && demand.volume >= 0 ? Math.round(demand.volume) : null;
     const when = typeof demand.retrievedAt === 'string' ? longDate(demand.retrievedAt) : null;
-    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google for <span class="sp-phrase">${e((brief?.seo && brief.seo.primary.basis !== 'none' && typeof brief.seo.primary.phrase === 'string' && brief.seo.primary.phrase.trim()) || (typeof brief?.targetQuery === 'string' ? brief.targetQuery.trim() : ''))}</span></p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
+    if (volume !== null) return `${head}<p class="sp-big"><strong>${e(volume.toLocaleString('en-GB'))}</strong> searches a month in Google for <span class="sp-phrase">${e(panelPhrase(brief))}</span></p>${when ? `<p class="ap-note">Measured on ${e(when)}.</p>` : ''}<p class="ap-note">${VISITS}</p></section>`;
   }
   return `${head}<p>We do not have search numbers for this phrase yet.</p><p class="ap-note">${VISITS}</p></section>`;
 }
