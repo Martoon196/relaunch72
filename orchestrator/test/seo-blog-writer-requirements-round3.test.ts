@@ -6,12 +6,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as P from '../src/portal/seo-blog-seo-panel.js';
-import * as S from '../src/seo-blog/seo-score.js';
+import * as Sc from '../src/seo-blog/seo-score.js';
+import * as SR from '../src/seo-blog/search-requirements.js';
 import { loadPrompt } from '../src/stages/prompt.js';
 import type { ArticleBrief, ArticleVersion } from '../src/seo-blog/types.js';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const Panel = P as Any;
+const S = Sc as Any;
 
 // ─── Panel fixtures (the reviewer's scripts/panel.ts) ────────────────────────
 
@@ -149,4 +151,35 @@ test('P2: an article that uses the block\'s questions word for word as FAQ quest
 test('P2: prompt v2 asks for the phrase inside a full sentence in a second part of the article, besides the intro', () => {
   const v2 = loadPrompt('seo-blog-article-v2.md').body;
   assert.match(v2, /besides the intro, in a full sentence in one other part \(a section or the conclusion\)/);
+});
+
+// ─── S5: the use limit counts the phrase's words as the score does ───────────
+
+test('S5: phrase_use_limit counts "best", "uk" and years as the score does, so an article at the limit is never "a little high"', () => {
+  const phrase = 'best combi boiler uk 2026';
+  // Five main words for the score: about 2% of 1,100 words is 22 word-uses, so four uses (it was six from two words).
+  assert.equal(SR.phraseUseLimit(phrase, 1100, 'standard'), 4);
+  for (const p of [phrase, 'boiler service cost uk', 'best landlord insurance for student lets', 'conveyancing', PHRASE]) {
+    for (const length of ['concise', 'standard', 'in-depth'] as const) {
+      const min = SR.LENGTH_RANGE[length].min;
+      const limit = SR.phraseUseLimit(p, min, length);
+      // The share the score computes at exactly `limit` uses (it counts a share only above four uses).
+      const share = limit > 4 ? Math.round((limit * S.phraseWeight(p) * 1000) / min) / 10 : 0;
+      assert.ok(share <= S.PHRASE_HIGH, `${p} ${length}: ${limit} uses is ${share}%`);
+    }
+  }
+  // The reviewer's case end to end: reworded questions, every use spent in the body, at the band's minimum length.
+  const r = SR.searchRequirements({ brief: { outline: [], internalLinks: [], seo: seoOf({ phrase }) } as Any, pages: [], length: 'standard', linkable: [], exclusions: [] })!;
+  const filler = 'People often keep clear records because careful paperwork helps everyone understand what happened and when each step took place.';
+  const para = (n: number) => Array.from({ length: n }, () => filler).join(' ');
+  let uses = 0;
+  const use = () => (uses++ < r.phrase_use_limit ? ` Many owners ask about the ${phrase} at this point in the process.` : '');
+  const body: Any = { ...panelBody, seoTitle: `${phrase}: a plain guide`, metaDescription: `The ${phrase} explained in plain words: what to look for, what to ask and how to choose well.`,
+    intro: `This guide explains the ${phrase} in plain words for owners.${(uses++, '')} ${para(3)}`,
+    sections: ['What it covers', 'Common mistakes', 'What to do next', 'Where to get help'].map((heading, i) => ({ id: `s${i}`, heading, body: `${para(12)}${use()}${i === 0 ? use() : ''}` })),
+    faqs: ['What else is worth checking?', 'Who should be told?', 'When does it end?', 'What does it cost?'].map((q) => ({ q, a: para(2) })), conclusion: para(2) };
+  const brief = { ...panelBase, targetQuery: `which ${phrase} should I buy`, seo: seoOf({ phrase }) };
+  const s = P.articleSeoScore(brand, dataFor(brief), versionOf(body, genWith({ searchDraft: { schema: 1, requirementsSha: 'x', requirements: r } })));
+  assert.ok(s.measures.phraseShare <= S.PHRASE_HIGH, `share ${s.measures.phraseShare}%`);
+  assert.deepEqual(S.seoGate(s).reasons.filter((x: string) => /more often/i.test(x)), []);
 });

@@ -22,10 +22,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { topicSimilarity, topicTokens } from './dedupe.js';
+import { topicSimilarity } from './dedupe.js';
 import { ASSERTIVE, PROMISE, PROOF, figureInText, materialFigures } from './checks.js';
 import { GLOBAL_BANNED_PHRASES } from '../qa/banned.js';
 import { decodeEntities } from './html.js';
+import { phraseWeight } from './seo-score.js';
 import type { ArticleBrief, LengthPreference, ResearchSource } from './types.js';
 
 // ─── Caps ────────────────────────────────────────────────────────────────────
@@ -333,10 +334,11 @@ export function commonTopics(pages: readonly ResearchSource[], skip: readonly st
 /**
  * The most uses of the phrase (or a close variant) the body should carry: about 2% of the shortest length in the band
  * per main word of the phrase, never under 3, never over the length setting's ceiling. Keeps an article that follows
- * the block in full under the score's "a little high" share (2.5%).
+ * the block in full under the score's "a little high" share (2.5%). Main words are counted exactly as the score counts
+ * them ("best", "guide", "uk" and years included), so the two never disagree.
  */
 export function phraseUseLimit(phrase: string, minWords: number, preference: LengthPreference): number {
-  const main = Math.max(1, topicTokens(phrase).size);
+  const main = phraseWeight(phrase);
   return Math.max(3, Math.min(LENGTH_LIMITS[preference]?.maxUses ?? 6, Math.floor((0.02 * minWords) / main)));
 }
 

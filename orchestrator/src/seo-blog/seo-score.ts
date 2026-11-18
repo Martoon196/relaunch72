@@ -437,6 +437,13 @@ function phraseOf(text: string): Phrase {
   const kept = raw.filter((w) => !STOP.has(w));
   return { raw, s: stems(raw), need: [...new Set((kept.length ? kept : raw).map(stem))] };
 }
+/**
+ * How many words a phrase weighs in the use share: its main words counted exactly as the share counts them (a one-word
+ * phrase weighs PHRASE_ONE_WORD). The writer's use limit is set from this, so the limit and the share always agree.
+ */
+export function phraseWeight(text: string): number {
+  return Math.max(phraseOf(typeof text === 'string' ? text : '').need.length, PHRASE_ONE_WORD);
+}
 const meaningStems = (ws: readonly string[]) => [...new Set(ws.filter((w) => !STOP.has(w)).map(stem))];
 
 /**
