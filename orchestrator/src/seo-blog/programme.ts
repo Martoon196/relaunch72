@@ -81,6 +81,8 @@ export interface ProgrammeRun {
   readonly modelRejection?: {readonly record:GenerationRecord;readonly reason:'schema'|'method'|'content';readonly at:string};
   readonly planId?: string;
   readonly hold?: string;
+  /** Strict setting, autopilot plans only: when the one automatic re-check of a failed search-numbers lookup was queued. */
+  readonly numbersRecheckAt?: string;
 }
 export interface ProgrammeResearchHold {
   readonly logicalRunId: string;

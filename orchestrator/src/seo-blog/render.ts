@@ -9,6 +9,7 @@
  * invented.
  */
 
+import { disclosureHtml, productLinkHtml } from '../affiliate/render.js';
 import { escapeHtml, escapeXml } from './html.js';
 import type { ArticleBody, ArticleSourceCitation } from './types.js';
 
@@ -42,7 +43,7 @@ function inline(text: string, citeNumber: (id: string) => number | null, canonic
   let out = escapeHtml(text);
   // The marker takes the spaces before it, so a hidden source leaves no gap before punctuation
   // ("5% [src:x]." renders "5%." rather than "5% .") and a shown one sits against its word.
-  out = out.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
+  out = out.replace(/(?<![ \t])[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => {
     const n = citeNumber(id);
     return n ? `<sup><a href="#source-${n}">[${n}]</a></sup>` : '';
   });
@@ -182,9 +183,10 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     `<article>`,
     `<h1>${escapeHtml(body.title)}</h1>`,
     `<p class="meta">${body.author ? `By ${escapeHtml(body.author.name)} · ` : ''}<time datetime="${escapeHtml(ctx.publishedAt)}">${escapeHtml(dateLabel)}</time></p>`,
+    disclosureHtml(body.affiliate),
     body.image.url ? `<figure><img src="${escapeHtml(body.image.url)}" alt="${escapeHtml(body.image.alt)}"${body.image.width ? ` width="${body.image.width}"` : ''}${body.image.height ? ` height="${body.image.height}"` : ''} loading="eager"></figure>` : '',
     md(body.intro),
-    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}`),
+    ...body.sections.map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${md(s.body, true)}${body.affiliate ? `\n${productLinkHtml(body.affiliate, s.id)}` : ''}`),
     body.faqs.length ? `<h2>Frequently asked questions</h2>\n${body.faqs.map((f) => `<h3>${escapeHtml(f.q)}</h3>\n${md(f.a)}`).join('\n')}` : '',
     md(body.conclusion),
     body.cta ? `<p><a class="cta" href="${escapeHtml(body.cta.url)}">${escapeHtml(body.cta.label)}</a></p>` : '',
@@ -269,7 +271,7 @@ export function mergeSitemap(existing: string, urls: readonly { loc: string; las
 
 export function exportMarkdown(body: ArticleBody, meta: { canonicalUrl: string | null; versionId: string; articleId: string }): string {
   const cites = citationNumbers(body);
-  const strip = (t: string) => t.replace(/[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
+  const strip = (t: string) => t.replace(/(?<![ \t])[ \t]*\[src:([A-Za-z0-9-]{1,64})\]/g, (_m, id: string) => { const n = cites.number(id); return n ? `[^${n}]` : ''; });
   const front = [
     '---',
     `title: ${JSON.stringify(body.title)}`,

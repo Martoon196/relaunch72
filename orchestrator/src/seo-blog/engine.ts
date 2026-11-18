@@ -5,6 +5,8 @@ import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED }
  * actor and brand; access is re-checked on every call.
  */
 
+import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
+import { bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt } from '../stages/prompt.js';
@@ -85,7 +87,7 @@ interface PlanExecution {
 }
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
-import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
+import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from './engine-stamp.js';
 import { supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
@@ -98,6 +100,27 @@ import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllo
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
 const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
 /** Of those, the answers that stand in for a request skipped because the research allowance was too small. */
+/** At most this many dropped-id entries in the operator log line. */
+export const DROP_LOG_ENTRIES = 40;
+/** The operator log line for ids dropped at binding: counts, a count per reason, and the first 40 entries, capped. */
+export function keywordDropLog(input: { brandId: string; planId: string; candidates: number; binding: { stripped: number; unfit: number; withdrawn: number; dropped: readonly { key: string; field: string; id: string | null; reason: string }[] } }): string {
+  const cap = (v: string | null, n: number) => (v === null ? null : v.slice(0, n));
+  const byReason: Record<string, number> = {};
+  for (const d of input.binding.dropped) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+  return JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId: input.brandId, planId: input.planId, candidates: input.candidates,
+    stripped: input.binding.stripped, unfit: input.binding.unfit, withdrawn: input.binding.withdrawn, total: input.binding.dropped.length, byReason,
+    dropped: input.binding.dropped.slice(0, DROP_LOG_ENTRIES).map((d) => ({ brief: cap(d.key, 80), field: cap(d.field, 12), id: cap(d.id, 12), reason: cap(d.reason, 24) })),
+    ...(input.binding.dropped.length > DROP_LOG_ENTRIES ? { omitted: input.binding.dropped.length - DROP_LOG_ENTRIES } : {}) });
+}
+
+/**
+ * A planning task held (strict setting) after a search-numbers lookup whose outcome is unknown: it is never bought
+ * again for that task, so Retry cannot help; a fresh plan from Topics can.
+ */
+export function numbersOutcomeUnknown(job: Job): boolean {
+  const run = job.kind === 'plan' ? programmeRun(job) : null;
+  return !!run && run.hold === 'engine_incomplete' && run.attempts.some((a) => a.kind === 'metrics' && !a.receivedAt);
+}
 const NUMBERS_ALLOWANCE = new WeakSet<object>();
 const allowanceSkippedNumbers = <T extends object>(receipt: T): T => { NUMBERS_ALLOWANCE.add(receipt); return unavailableNumbers(receipt); };
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
@@ -155,6 +178,11 @@ export interface EngineDeps {
   readonly keywordResearch?: KeywordResearchProvider | null;
   /** Read-only method assignments for the strict setting when the method switch is off (to tell an expected method from none). */
   readonly methodAssignments?: Pick<MethodStore, 'snapshot'>;
+  /**
+   * The business's products and Amazon UK details, read in the signed-in owner's own session (AFFILIATE_STUDIO,
+   * portal only; the worker has none). Null when 0158 is not opened yet or the business is not the session's own.
+   */
+  readonly affiliate?: { read(brandId: string): Promise<{ readonly catalogue: readonly AffiliateProduct[]; readonly settings: ProgrammeSettings | null } | null> };
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
@@ -1166,6 +1194,12 @@ export class SeoBlogEngine {
       const source=programmeInputSnapshot(s,authority);
       if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
       const withRun={...current,payload:{...current.payload,programme:run,...(candidatesNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:candidatesNow.primary,...(candidatesNow.secondary.length?{keywordSecondary:candidatesNow.secondary}:{})}:{})}};
+      // A plan was made while this task waited for its one numbers re-check (strict setting): stop here, without
+      // another lookup, model call or plan.
+      if(run.numbersRecheckAt&&!run.modelReceipt&&s.plans.some((p)=>p.createdAt>run!.numbersRecheckAt!)) {
+        const now=this.now();
+        return {job:{...withRun,state:'done',leaseOwner:null,leaseExpiresAt:null,error:null,progress:NUMBERS_RECHECK_SUPERSEDED,updatedAt:now},writeJob:true};
+      }
       if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
@@ -1175,13 +1209,20 @@ export class SeoBlogEngine {
       const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
       const hold=s.brand.settings.programme?.researchHold??legacy;
       const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
-      if(hold && !explicit && !(hold.jobId===current.id && run.modelReceipt)) {
+      // The owner's Retry on this same task, held only because its numbers lookup failed (strict setting): it resumes
+      // this task, for an autopilot plan as for an owner-requested one. It repeats only that lookup.
+      const own=s.brand.settings.programme?.researchHold;
+      const numbersResume=!explicit&&!!own&&own.jobId===current.id&&current.payload.resumeHoldId===own.logicalRunId&&current.payload.numbersRetry===true&&run.hold==='engine_incomplete'&&!run.modelStart;
+      if(hold && !explicit && !numbersResume && !(hold.jobId===current.id && run.modelReceipt)) {
         const held=this.programmeHeld(s,withRun,run,'research_held',legacy?'An older planning task needs review. No historical supplier code or charge was inferred. A managing owner can explicitly resume with a new intent.':'Research is held. A managing owner can review and explicitly resume with a new intent.');
         return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
       }
       if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt&&!(a.supplierTask&&this.deps.search.readTask)) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
-      return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
-        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}:{})};
+      // The numbers-retry marker is used once: cleared as the task resumes, so it can never resume a later hold.
+      const used=('numbersRetry' in withRun.payload)?(({numbersRetry:_n,...rest})=>({...withRun,payload:rest}))(withRun.payload):withRun;
+      return {job:{...used,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
+        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}
+          :numbersResume?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null}}}:{})};
     });
     if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
     const run=programmeRun(ready)!;
@@ -1256,7 +1297,21 @@ export class SeoBlogEngine {
         }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
-        if(error instanceof EngineIncompleteError) return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        if(error instanceof EngineIncompleteError) {
+          // Strict setting, autopilot plan, one failed numbers lookup: check it once more by itself (nobody may be
+          // watching Topics), within the research allowance, reusing every saved search. Never twice, never for an
+          // owner-requested plan (the owner's Retry does that), never for a lookup whose outcome is unknown.
+          const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
+          if(this.deps.requireFullEngine===true&&error.gap==='numbers'&&authority.origin!=='manual'&&!latest.numbersRecheckAt&&!latest.modelStart&&!latest.modelReceipt&&latest.metricsWarning
+            &&!latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)&&ceiling>0&&s.usage.search_calls+1<=ceiling) {
+            const now=this.now();
+            return {job:{...current,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+NUMBERS_RECHECK_DELAY_MS).toISOString(),
+              payload:{...current.payload,programme:{...latest,metricsWarning:undefined,numbersRecheckAt:now}},error:null,progress:NUMBERS_RECHECK_MESSAGE,updatedAt:now},writeJob:true};
+          }
+          // A lookup whose outcome is unknown is never bought again for this plan: say so, and point to what works.
+          if(error.gap==='numbers'&&latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)) return this.programmeHeld(s,current,latest,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers_unknown);
+          return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        }
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
       });
     }
@@ -1269,6 +1324,15 @@ export class SeoBlogEngine {
     if(prior) return prior;
     const hold=brand.settings.programme?.researchHold??legacyPlanningHold(jobs,brand.settings.programme?.researchAcknowledgements);
     if(hold && input.resumeHoldId!==hold.logicalRunId) throw new SeoBlogError(409,'Research is held after an earlier outcome. Review the programme status and explicitly resume with a new research intent.');
+    // A plan already waits for its one numbers re-check (strict setting): asking now runs that task now, rather than
+    // starting a second plan beside it.
+    const waiting=jobs.find((j)=>j.kind==='plan'&&j.state==='queued'&&!!programmeRun(j)?.numbersRecheckAt&&!programmeRun(j)?.modelReceipt);
+    if(waiting) {
+      const now=this.now();
+      if(Date.parse(waiting.runAfter)<=Date.parse(now)) return waiting;
+      try { return await this.store.updateJob({...waiting,runAfter:now,progress:NUMBERS_RECHECK_NOW,updatedAt:now}); }
+      catch { return (await this.store.getJob(brandId,waiting.id))??waiting; }
+    }
     const readiness = await this.readinessFor(brand);
     if (!readiness.canPlan) throw new SeoBlogError(409, `Before planning: ${readiness.missing.filter((m) => !m.includes('website for publishing')).join(' ')}`, 'not_ready');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
@@ -1359,8 +1423,13 @@ export class SeoBlogEngine {
     ];
     const usedSlugs = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
     const briefs: ArticleBrief[] = [];
-    // Bound by the ids the planner returned, never by similarity; unknown or repeated ids are stripped.
-    const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids })), candidates) : null;
+    // Bound by the ids the planner returned, never by similarity; unknown or repeated ids are stripped, and a chosen
+    // phrase that does not fit the brief's own question or title is dropped (the brief stays unbound).
+    const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids,
+      text: { question: item.target_query, title: item.working_title } })), candidates) : null;
+    // Internal only: an operator log line, never an activity line or any client-visible text.
+    // Bounded: the counts, a count per reason, and at most the first 40 entries, each field length-capped.
+    if (binding?.dropped.length) console.info(keywordDropLog({ brandId, planId, candidates: ids?.size ?? 0, binding }));
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
       let slug = item.slug;
@@ -1412,7 +1481,7 @@ export class SeoBlogEngine {
       inputs: { focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl },
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
       engine: planStamp,
-      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0 } } : {}),
+      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0, unfit: binding?.unfit ?? 0, withdrawn: binding?.withdrawn ?? 0 } } : {}),
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
     if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
@@ -1604,7 +1673,8 @@ export class SeoBlogEngine {
     const sourceKnowledgeSha=websiteSha(this.knowledgeRefs(await this.activeKnowledge(brandId)));
     const { article: created } = await this.store.createArticle({
       id: randomUUID(), brandId, briefId: brief.id, planId: brief.planId, slug: brief.slug, editorialState: 'writing',
-      currentVersionId: null, requiresApproval: false, approval: null, checks: null, schedule: null, hold: null,
+      // A product article always waits for the owner's approval.
+      currentVersionId: null, requiresApproval: Boolean(brief.products), approval: null, checks: null, schedule: null, hold: null,
       delivery: 'none', publishedVersionId: null, publishedUrl: null, lastAttemptAt: null, publishedAt: null, failure: null,
       createdAt: this.now(), rowVersion: 1,
     });
@@ -1640,7 +1710,7 @@ export class SeoBlogEngine {
     if (brief.status !== 'generating') await this.store.saveBrief({ ...brief, status: 'generating', articleId: article.id });
     if (article.editorialState !== 'writing') article = await this.store.updateArticle({ ...article, editorialState: 'writing' });
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
-    const sources = await this.sourcesForBrief(brandId, brief);
+    const sources = brief.products ? await this.productSources(brand, brief) : await this.sourcesForBrief(brandId, brief);
     const linkable = await this.linkable(brandId);
     // A brief with a measured target phrase is written to the search standard (prompt v2) only while the engine is
     // configured for keyword-first work (the planner's own condition); every other brief is sent exactly as before, with
@@ -1671,7 +1741,10 @@ export class SeoBlogEngine {
       image: previous?.body.image ?? { kind: 'none', url: null, alt: v.image_alt, provenance: 'No image selected yet.', width: null, height: null },
       author: brand.settings.author,
     };
-    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,false,claimedJob);
+    // Product links are bound in code to the part about each product; they are never in the prose.
+    const withLinks: ArticleBody = brief.products ? { ...body, affiliate: bindAffiliate(body.sections, brief.products) } : body;
+    // A product article gets no social drafts in this slice (no model call for them).
+    const version = await this.appendVersion(brand, article, withLinks, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,Boolean(brief.products),claimedJob);
     await this.store.saveBrief({ ...(await this.store.getBrief(brandId, brief.id))!, status: 'generated', articleId: article.id });
     await this.log(brandId, payload.requestedBy ?? 'system', previous ? 'article.regenerated' : 'article.generated', `“${body.title}” ${previous ? 'regenerated' : 'written'} (version ${version.number}).`, article.id);
     await this.queueAutomaticArticleImage(brand, article, version, profile);
@@ -1777,6 +1850,8 @@ export class SeoBlogEngine {
     brand: Brand, article: Article, body: ArticleBody, change: VersionChange, changedSectionId: string | null, actor: string,
     generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string, skipPromotionGeneration=false, claimedJob?:Job,
   ): Promise<ArticleVersion> {
+    // An article with product links gets no social drafts (Affiliate Studio, slice 1): no model call for them.
+    if (body.affiliate?.links.length) skipPromotionGeneration = true;
     const versions = await this.store.listVersions(brand.id, article.id);
     const prior=versions.find((v)=>v.id===article.currentVersionId);
     if(article.publishedUrl&&body.slug!==new URL(article.publishedUrl).pathname.split('/').filter(Boolean).at(-1))throw new SeoBlogError(409,'An already-published article keeps its original slug and URL.');
@@ -2269,6 +2344,16 @@ export class SeoBlogEngine {
       citations: version.body.citations,
       author: brand.settings.author,
     };
+    // Product links are pinned like sources: an edit never sets them, and a deleted part takes its link with it.
+    const { affiliate: _sent, ...rest } = body;
+    const pinned = pruneAffiliate(version.body.affiliate, rest.sections);
+    const edited: ArticleBody = pinned ? { ...rest, affiliate: pinned } : rest;
+    return this.saveEdit(brand, actor, article, version, edited, edit, profile, brief);
+  }
+
+  private async saveEdit(brand: Brand, actor: Actor, article: Article, version: ArticleVersion, body: ArticleBody, edit: Partial<Omit<ArticleBody, 'citations' | 'author'>>, profile: BrandProfile, brief: ArticleBrief): Promise<ArticleVersion> {
+    const brandId = brand.id, articleId = article.id;
+    const sections = edit.sections;
     if (sha256(body) === version.contentSha) return version;
     const onlyMeta = sections === undefined && edit.intro === undefined && edit.conclusion === undefined && edit.faqs === undefined;
     const change: VersionChange = edit.image && Object.keys(edit).length === 1 ? 'image_changed' : onlyMeta ? 'metadata_changed' : 'edited';
@@ -2620,9 +2705,120 @@ export class SeoBlogEngine {
     return result;
   }
 
+  // ─── Product articles (AFFILIATE_STUDIO) ─────────────────────────────────
+
+  /** How many live articles carry product links (read only). */
+  async linkedLiveArticles(actor: Actor, brandId: string): Promise<number> {
+    await this.brandFor(actor, brandId);
+    let n = 0;
+    for (const a of await this.store.listArticles(brandId)) {
+      if (a.delivery !== 'published' || !a.publishedVersionId) continue;
+      if ((await this.store.getVersion(brandId, a.publishedVersionId))?.body.affiliate?.links.length) n++;
+    }
+    return n;
+  }
+
+  /** Whether product articles are offered by this engine (the switch is on and the owner's session can read products). */
+  get productArticlesReady(): boolean { return Boolean(this.deps.affiliate); }
+
+  private async affiliateCatalogue(brandId: string): Promise<{ readonly catalogue: readonly AffiliateProduct[]; readonly settings: ProgrammeSettings | null }> {
+    const read = this.deps.affiliate ? await this.deps.affiliate.read(brandId) : null;
+    if (!read) throw new SeoBlogError(409, 'Products are not available for this business right now.', 'affiliate_unavailable');
+    return read;
+  }
+
+  /** Every link must match the current product and tracking ID before approval; otherwise one press updates them. */
+  private async requireCurrentLinks(brandId: string, affiliate: ArticleAffiliate): Promise<void> {
+    const read = this.deps.affiliate ? await this.deps.affiliate.read(brandId).catch(() => null) : null;
+    if (!read) throw new SeoBlogError(409, 'The product links could not be checked against your products, so this cannot be approved here yet.', 'affiliate_unchecked');
+    if (linkStatus(affiliate, read.catalogue, read.settings).some((l) => l.state !== 'current')) throw new SeoBlogError(409, 'A product or its link has changed since this was written. Update the links, then approve.', 'affiliate_stale');
+  }
+
+  /**
+   * A product article: one accepted plan and one brief composed in code (no planning call), with the products frozen
+   * as they are now, then the usual write task. Idempotent per command.
+   */
+  async requestProductArticle(actor: Actor, brandId: string, input: { commandId: string; kind: ProductArticleKind | string; topic: string; productIds: readonly string[] }): Promise<Job> {
+    const brand = await this.brandFor(actor, brandId);
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
+    const h = sha256(`product-article:${brandId}:${input.commandId}`);
+    const briefId = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    const existing = await this.store.getBrief(brandId, briefId);
+    if (existing) return this.enqueue(brandId, 'write', `write:${briefId}`, { briefId, requestedBy: actor.userId });
+    const { catalogue, settings } = await this.affiliateCatalogue(brandId);
+    if (!settings) throw new SeoBlogError(409, 'Add your Amazon UK tracking ID and website first.', 'affiliate_settings');
+    const snap = productSnapshot({ kind: input.kind, topic: input.topic, productIds: input.productIds }, catalogue, settings);
+    if (!snap.ok) throw new SeoBlogError(400, snap.reason, 'affiliate_invalid');
+    const { profile, stale } = await this.currentFactsKey(brandId);
+    if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm your Brand DNA before writing.', 'not_ready');
+    await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
+    const fields = productBriefFields(snap.value);
+    const planned = await this.store.listBriefs(brandId), articles = await this.store.listArticles(brandId);
+    const used = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
+    const base = slugify(snap.value.topic).slice(0, 70) || 'products';
+    let slug = base; for (let n = 2; used.has(slug); n++) slug = `${base}-${n}`.slice(0, 80);
+    const now = this.now(), planId = randomUUID();
+    const brief: ArticleBrief = {
+      id: briefId, planId, brandId, role: 'pillar', slug, workingTitle: fields.workingTitle, targetQuery: fields.targetQuery, searchIntent: fields.searchIntent,
+      relatedQuestions: [], angle: fields.angle, outline: fields.outline, keyPoints: fields.keyPoints, cta: null, internalLinks: [], whyFit: fields.whyFit,
+      demand: { kind: 'qualitative', rationale: 'Products chosen by the business.' }, sourceIds: [],
+      duplicate: { verdict: 'distinct', score: 0, against: null, againstKind: null, advice: '' }, status: 'accepted', suggestedAtUtc: null, articleId: null,
+      products: snap.value,
+    };
+    const plan: TopicPlan = { id: planId, brandId, status: 'accepted', topic: snap.value.topic, moneyPage: null, briefIds: [briefId], sources: [],
+      inputs: { focus: null, excluded: [], sourceArticleUrl: null }, profileVersion: profile.version, inventoryAt: null,
+      generation: { mode: this.deps.llm?.mode === 'live' ? 'live' : 'simulated', model: 'none', promptVersion: 'product-brief@1', tokensIn: 0, tokensOut: 0 }, createdAt: now, acceptedAt: now };
+    await this.store.savePlan(plan);
+    await this.store.saveBrief(brief);
+    await this.log(brandId, actor.userId, 'affiliate.article_requested', `Product article requested: “${snap.value.topic}” with ${snap.value.products.length} products.`, briefId);
+    return this.enqueue(brandId, 'write', `write:${briefId}`, { briefId, requestedBy: actor.userId });
+  }
+
+  /** Research for a product article, once: the topic and product names, never the shop's own pages. */
+  private async productSources(brand: Brand, brief: ArticleBrief): Promise<ResearchSource[]> {
+    const plan = await this.store.getPlan(brand.id, brief.planId);
+    if (plan?.sources.length) return [...plan.sources];
+    if (!plan || this.deps.search.mode !== 'live' || !brief.products) return [];
+    await this.requireBudget(brand, 'search_calls', 3);
+    const research = await researchQueries({ queries: [brief.products.topic, ...brief.products.products.map((p) => p.productName)].slice(0, 3), search: this.deps.search, transport: this.deps.transport,
+      locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: null, maxSources: 8, excludeHosts: ['amazon.co.uk', 'amazon.com', 'amzn.to'] }).catch(() => null);
+    if (!research) return [];
+    if (research.searchCalls > 0) await this.store.recordUsage({ brandId: brand.id, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: `product:${brief.id}` });
+    await this.store.savePlan({ ...plan, sources: research.sources });
+    return research.sources;
+  }
+
+  /** Update every product link to the current product and tracking ID (retired products lose their link). A new version; approval is reset. */
+  async refreshAffiliateLinks(actor: Actor, brandId: string, articleId: string, expectedVersionId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    if (!version.body.affiliate) throw new SeoBlogError(409, 'This article has no product links.');
+    const { catalogue, settings } = await this.affiliateCatalogue(brandId);
+    if (!settings) throw new SeoBlogError(409, 'Add your Amazon UK tracking ID and website first.', 'affiliate_settings');
+    const body: ArticleBody = { ...version.body, affiliate: refreshedAffiliate(version.body.affiliate, catalogue, settings) };
+    if (sha256(body) === version.contentSha) return version;
+    const next = await this.appendVersion(brand, article, body, 'metadata_changed', null, actor.userId, null, profile, brief, undefined, true);
+    await this.log(brandId, actor.userId, 'affiliate.links_updated', `Product links updated (version ${next.number}). Approval was reset.`, articleId);
+    return next;
+  }
+
+  /** Remove one product's link. The disclosure goes only when the last link goes. */
+  async removeAffiliateLink(actor: Actor, brandId: string, articleId: string, expectedVersionId: string, productId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    const a = version.body.affiliate;
+    if (!a || !a.links.some((l) => l.productId === productId)) throw new SeoBlogError(404, 'That product link was not found.');
+    const body: ArticleBody = { ...version.body, affiliate: { ...a, links: a.links.filter((l) => l.productId !== productId) } };
+    const next = await this.appendVersion(brand, article, body, 'metadata_changed', null, actor.userId, null, profile, brief, undefined, true);
+    await this.log(brandId, actor.userId, 'affiliate.link_removed', `A product link was removed (version ${next.number}). Approval was reset.`, articleId);
+    return next;
+  }
+
   async setRequiresApproval(actor: Actor, brandId: string, articleId: string, rowVersion: number, required: boolean): Promise<Article> {
     await this.brandFor(actor, brandId);
     const article = await this.mutableArticle(brandId, articleId, rowVersion);
+    const current = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    if (!required && current?.body.affiliate?.links.length) throw new SeoBlogError(409, 'An article with product links always waits for your approval.', 'affiliate_approval');
     const next = await this.store.updateArticle({ ...article, requiresApproval: required });
     await this.log(brandId, actor.userId, 'article.approval_flag', `Article ${required ? 'now needs' : 'no longer needs'} your approval before publishing.`, articleId);
     return next;
@@ -2634,6 +2830,7 @@ export class SeoBlogEngine {
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
     if (article.currentVersionId !== versionId) throw new SeoBlogError(409, 'A newer version exists. Review the current version before approving.', 'stale_write');
     const version = await this.store.getVersion(brandId, versionId);
+    if (version?.body.affiliate?.links.length) await this.requireCurrentLinks(brandId, version.body.affiliate);
     const facts = await this.currentFactsKey(brandId);
     let checks = article.checks;
     if (!checksAreCurrent(checks, version, facts.key)) checks = await this.checkVersion(brand, version!);
@@ -2919,7 +3116,9 @@ export class SeoBlogEngine {
     const version = article?.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
     if (!article || !version) throw new SeoBlogError(404, 'That article has no version yet.');
     if (format === 'markdown') {
-      return { filename: `${version.body.slug}.md`, contentType: 'text/markdown; charset=utf-8', body: exportMarkdown(version.body, { canonicalUrl: article.publishedUrl, versionId: version.id, articleId }) };
+      // Product links never go into a document or email copy (the programme's rules); say so in the copy.
+      const md = exportMarkdown(version.body, { canonicalUrl: article.publishedUrl, versionId: version.id, articleId });
+      return { filename: `${version.body.slug}.md`, contentType: 'text/markdown; charset=utf-8', body: version.body.affiliate?.links.length ? `${md.trimEnd()}\n\n_Product links are not included in this copy._\n` : md };
     }
     return { filename: `${version.body.slug}.html`, contentType: 'text/html; charset=utf-8', body: await this.preview(actor, brandId, articleId, version.id) };
   }
@@ -3524,7 +3723,11 @@ export class SeoBlogEngine {
       // Held only because the search-numbers lookup failed or was skipped for allowance (strict setting): Retry repeats
       // that one lookup, within the allowance, and reuses every saved search.
       const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
-      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined}}:{})},state:'queued',runAfter:this.now(),error:null,
+      // Retry would only skip the same unknown lookup again: refuse with the true words instead.
+      if(numbersRetry&&numbersOutcomeUnknown(job)) throw new SeoBlogError(409,ENGINE_GAP_MESSAGE.numbers_unknown,'numbers_unknown');
+      const payload:Record<string,unknown>={...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})};
+      if(!numbersRetry) delete payload.numbersRetry; // A marker left from an earlier numbers retry never carries over.
+      return this.store.updateJob({...job,payload,state:'queued',runAfter:this.now(),error:null,
         progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');

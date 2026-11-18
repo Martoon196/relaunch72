@@ -6,6 +6,7 @@ import { principalAbuseAdmission, sourceAbuseAdmission } from '../portal/abuse.j
 import { parseCookies } from '../server/admin/session.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
+import { MARKETING_WORKSPACE_FIRST, marketingWorkspaceFirstPage } from './marketing-workspace-view.js';
 import type { MhpSequenceAction, MhpSequenceSaveInput, MhpSequenceService } from './followup-sequence-service.js';
 import { mhpSequenceNewDraft, mhpSequencePage, type MhpSequencePageInput } from './followup-sequence-view.js';
 import { MHP_SEQUENCE_EDITOR_SCRIPT } from './followup-sequence-client.js';
@@ -110,6 +111,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     const detail = await sequences.review(identity, context.requestId, field('itemId'), field('versionId'));
     respond(res, 200, await page({ detail, message }), 'text/html; charset=utf-8'); return true;
   } catch (error) { outcome = 'service_error'; const known = error instanceof MhpCommerceError || error instanceof FlowWorkspaceError;
+    if (error instanceof MhpCommerceError && error.message === MARKETING_WORKSPACE_FIRST) { respond(res, error.status, marketingWorkspaceFirstPage(), 'text/html; charset=utf-8'); return true; }
     respond(res, known ? error.status : error instanceof FlowDraftValidationError ? 400 : 503, known || error instanceof FlowDraftValidationError ? error.message : 'Sequence controls are temporarily unavailable.'); }
   finally { await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome))); }
   return true;

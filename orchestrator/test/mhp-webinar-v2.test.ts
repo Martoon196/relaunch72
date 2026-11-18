@@ -6,11 +6,13 @@ import type { PostgresPortalDeps } from '../src/portal/router.js';
 import { handleMhpGrowth } from '../src/mhp/growth-router.js';
 import { MhpGrowthError, PgMhpGrowthService, mhpWebinarConfig, parseMhpApplication } from '../src/mhp/growth-service.js';
 import type { Pool } from 'pg';
+import { parseMhpSignup, mhpSchedule, type MhpRegistrantRecord } from '../src/mhp/growth-service.js';
+import { MHP_BOOK_INTEREST_LABEL } from '../src/mhp/book-interest.js';
 
 const SITE='https://martinhowardproperty.co.uk', APP='https://app.martinhowardproperty.co.uk';
 const TOKEN='A'.repeat(43), USER='a1360000-0000-4000-8000-000000000001', WS='a1360000-0000-4000-8000-000000000002';
 const applicationForm={NAME:'Applicant Test',EMAIL:'applicant@example.invalid',PHONE:'07700 900136',LOCATION:'Test area',EXPERIENCE:'None yet',DOOR:'Source',HOURS:'5 to 10',OBJECTIVE:'A clear ninety day objective',OBSTACLE:'Direction',SUPPORT:'Group mentoring',PRICE_UNDERSTOOD:'yes',DISCUSS:'yes',CONSENT:'1',SOURCE:'site'};
-function fixture(owner=true){
+function fixture(owner=true, registrants: MhpRegistrantRecord[]=[]){
  const calls={apply:0,events:0,apps:0,registrants:0,capturedConsent:null as boolean|null,handoffs:0};
  const portal={kind:'postgres',secure:true,sessionSecret:'mhp136-synthetic-secret-at-least32',abuseHashSecret:'mhp136-abuse-secret-at-least32',
   auth:{resolve:async(token:string)=>token===TOKEN?{sessionToken:TOKEN,userId:USER,workspaceId:WS,userEmail:'owner@example.invalid'}:null},
@@ -20,7 +22,7 @@ function fixture(owner=true){
  const deps={portal,unsubscribeSecret:'s'.repeat(48),marketingMode:'test',learning:{} as never,
   growth:{capture:async(s:{consent:boolean})=>{calls.capturedConsent=s.consent;return {prospectId:USER,signupId:WS,campaign:'webinar-2026-11-04',entryEventSequence:'1',queued:4};},story:async()=>{},unsubscribe:async()=>true,summary:async()=>{checkOwner();return {} as never;},
    apply:async()=>{calls.apply++;return {applicationId:USER,prospectId:WS};},event:async()=>{calls.events++;return true;},
-   listApplications:async()=>{checkOwner();calls.apps++;return [];},listRegistrants:async()=>{checkOwner();calls.registrants++;return [];}},
+   listApplications:async()=>{checkOwner();calls.apps++;return [];},listRegistrants:async()=>{checkOwner();calls.registrants++;return registrants;}},
   phoneSignup:{fromSignup:async()=>{calls.handoffs++;return {capability:'C'.repeat(43),maxAge:900};}}};
  async function request(method:string,path:string,fields:Record<string,string>={},headers:Record<string,string>={}){
   const result={status:0,headers:{} as Record<string,string>,body:''};
@@ -70,4 +72,24 @@ test('PG adapter uses the new closed capture/claim and owner capabilities; optio
  assert.ok(calls.some(x=>x.sql.includes('mhp_claim_marketing_sends_v2')));assert.doesNotMatch(calls.map(x=>x.sql).join('\n'),/mhp_set_prospect_phone|INSERT|UPDATE/);
  const invalid={query:async()=>({rows:[{outcome:{applicationId:USER,prospectId:'forged'}}]})} as unknown as Pick<Pool,'query'>;
  await assert.rejects(new PgMhpGrowthService(pool,invalid,mhpWebinarConfig({})).apply(parseMhpApplication(new URLSearchParams(applicationForm)) as never,null),MhpGrowthError);
+});
+
+
+test('book interest uses waitlist capture without scheduling webinar or sheet emails',()=>{
+ const fields=new URLSearchParams({FIRSTNAME:'Reader',EMAIL:'reader@example.invalid',OPT_IN:'1',CHEATSHEET:MHP_BOOK_INTEREST_LABEL,CHEATSHEET_MODULE:'book-before-you-buy',CHEATSHEET_LINK:`${SITE}/book/`});
+ const signup=parseMhpSignup(fields);assert.notEqual(signup,'honeypot');if(signup==='honeypot')return;
+ assert.equal(signup.kind,'waitlist');assert.equal(signup.label,MHP_BOOK_INTEREST_LABEL);
+ assert.deepEqual(mhpSchedule(signup,mhpWebinarConfig({}),Date.now()),[]);
+ fields.set('OPT_IN','');assert.throws(()=>parseMhpSignup(fields),MhpGrowthError);
+});
+
+test('book HTML and CSV filter history after owner authorization and retain unsubscribed records',async()=>{
+ const base={id:USER,firstName:'Reader <script>',phone:null,level:null,marketingConsent:true,unsubscribed:false,firstSeenAt:'2026-11-17T00:00:00Z',lastSignupAt:'2026-11-17T00:00:00Z',webinar:false,applied:false};
+ const people:MhpRegistrantRecord[]=[{...base,email:'reader@example.invalid',signups:[MHP_BOOK_INTEREST_LABEL]},{...base,id:WS,email:'unrelated@example.invalid',signups:['Webinar']},{...base,id:'a1360000-0000-4000-8000-000000000003',email:'stopped@example.invalid',signups:['Webinar',MHP_BOOK_INTEREST_LABEL],unsubscribed:true}];
+ const f=fixture(true,people);
+ const html=await f.request('GET','/hq/registrants?audience=book');assert.equal(html.status,200);assert.match(html.body,/reader@example.invalid/);assert.match(html.body,/stopped@example.invalid/);assert.doesNotMatch(html.body,/unrelated@example.invalid/);assert.match(html.body,/Reader &lt;script&gt;/);assert.match(html.body,/audience=book/);assert.equal(html.headers['cache-control'],'no-store');
+ const csv=await f.request('GET','/hq/registrants?audience=book&format=csv');assert.match(csv.headers['content-disposition']!,/mhp-before-you-buy-interest/);assert.match(csv.body,/stopped@example.invalid/);assert.doesNotMatch(csv.body,/unrelated@example.invalid/);
+ const all=await f.request('GET','/hq/registrants');assert.match(all.body,/unrelated@example.invalid/);
+ assert.equal((await fixture(false,people).request('GET','/hq/registrants?audience=book&format=csv')).status,403);
+ assert.equal((await f.request('GET','/hq/registrants?audience=book',{}, {cookie:''})).status,303);
 });

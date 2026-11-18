@@ -1,3 +1,5 @@
+import { bookInterestRegistrants } from './book-interest.js';
+import { isBookSignup, type MhpBookLeadService } from './book-leads-service.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -16,7 +18,7 @@ import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabi
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
-  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'> & Partial<Pick<PgMhpGrowthService, 'apply' | 'event' | 'listApplications' | 'listRegistrants'>>;
+  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'> & Partial<Pick<PgMhpGrowthService, 'apply' | 'event' | 'listApplications' | 'listRegistrants' | 'keepBookPhone'>>;
   learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse' | 'mergeWithLive'>;
   unsubscribeSecret: string;
   marketingMode: string;
@@ -25,6 +27,8 @@ export interface MhpGrowthRouterDependencies {
   kits?: Pick<PgMhpKitService, 'myKits' | 'file' | 'importZip'>;
   /** Single-use applicant payment links (MHP Stripe account). */
   offers?: Pick<PgMhpCommerceService, 'billingEnabled' | 'privateOffers' | 'createPrivateOffer' | 'withdrawPrivateOffer'>;
+  /** Book sign-ups into Leads: started after the sign-up is committed (never awaited), and the owner's catch-up and status. */
+  bookLeads?: Pick<MhpBookLeadService, 'afterCapture' | 'statuses' | 'catchUp'>;
 }
 
 const SITE_ORIGINS = new Set([MHP_SITE_ORIGIN, 'https://www.martinhowardproperty.co.uk']);
@@ -180,6 +184,19 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
       const signup = parseMhpSignup(fields);
       if (signup !== 'honeypot') {
         const captured = await deps.growth.capture(signup, source, now);
+        // 0159: a book sign-up's mobile is kept on that sign-up row (one statement, awaited). Before 0159 the function is
+        // missing and this is skipped; any failure is logged without the number and never changes the answer.
+        let mobileKept = false;
+        if (signup.phone && deps.growth.keepBookPhone && isBookSignup(signup)) {
+          try { mobileKept = (await deps.growth.keepBookPhone(captured, signup.phone)) === 'kept'; }
+          catch (error) {
+            const code = (error as { code?: unknown })?.code;
+            console.warn(`mhp book leads: mobile not kept${typeof code === 'string' ? ` (${code.slice(0, 20)})` : ''}`);
+          }
+        }
+        // The sign-up is committed. Copying a book sign-up into Leads is started here and never awaited: it cannot
+        // change this response, its timing or the evidence just saved (afterCapture ignores every other sign-up).
+        try { deps.bookLeads?.afterCapture(signup, captured, now, mobileKept); } catch { /* Logged and retried inside; the visitor is unaffected. */ }
         if (signup.kind === 'webinar' && deps.phoneSignup) {
           // This optional step must never undo or conceal an accepted registration.
           const handoff = await deps.phoneSignup.fromSignup(captured, source, now).catch(() => null);
@@ -259,14 +276,22 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     if (path === '/hq/registrants') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
       if (!deps.growth.listRegistrants) throw new HttpError(503, 'Registrants are temporarily unavailable.');
-      const registrants = await deps.growth.listRegistrants(token);
+      const bookOnly = url.searchParams.get('audience') === 'book';
+      const allRegistrants = await deps.growth.listRegistrants(token);
+      const registrants = bookOnly ? bookInterestRegistrants(allRegistrants) : allRegistrants;
       if (url.searchParams.get('format') === 'csv') {
-        const csv = registrantsCsv(registrants);
-        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="mhp-registrants.csv"',
+        // The book CSV adds "Texts/WhatsApp offers" (from Leads; read only, no catch-up started by a download).
+        const csvLeads = bookOnly && deps.bookLeads ? await deps.bookLeads.statuses(identity, registrants).catch(() => undefined) : undefined;
+        const csv = registrantsCsv(registrants, csvLeads);
+        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${bookOnly ? 'mhp-before-you-buy-interest' : 'mhp-registrants'}.csv"`,
           'cache-control': 'no-store', 'content-length': String(Buffer.byteLength(csv)), 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff' });
         res.end(csv); return true;
       }
-      send(res, 200, hqRegistrantsPage(registrants)); return true;
+      // Book interest: bring anyone missing into Leads first (bounded), then show who is in Leads now.
+      const leads = bookOnly && deps.bookLeads
+        ? await deps.bookLeads.catchUp(identity, registrants).catch(() => null).then(() => deps.bookLeads!.statuses(identity, registrants)).catch(() => null)
+        : undefined;
+      send(res, 200, hqRegistrantsPage(registrants, bookOnly, leads ?? (bookOnly && deps.bookLeads ? { available: false, byProspect: new Map(), inLeads: 0, total: registrants.length } : undefined))); return true;
     }
     if (path === '/hq/course') {
       if (method === 'GET') {

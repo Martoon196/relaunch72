@@ -172,6 +172,7 @@ relaunch72 service:
 | `SEO_BLOG_KEYWORD_METRICS=dataforseo` | Optional measured demand, using the same credentials as research; otherwise demand is labelled qualitative. Still opt-in. |
 | `SEO_BLOG_REQUIRE_FULL_ENGINE=true` | Strict setting, off by default. Planning holds (before anything is spent where it can) when research is not live, search numbers are not switched on, a numbers request failed or was skipped for allowance, fewer than 3 usable sources were found, or the business's assigned writing method would not run. "The supplier answered with no data" goes on. Writing holds when the writing method (blog plus visual brief, the stages the writer resolves) is assigned but would not run, or the brief's stamp says it was planned under the strict setting without numbers; briefs planned before the setting was on are exempt ("planned before") and are written. When planning held only because the numbers lookup failed or was skipped for allowance, Retry beside the task in Activity repeats that one lookup within the allowance and reuses every saved search. Owner messages are neutral (`ENGINE_GAP_MESSAGE`; not switched on, skipped for allowance and failed each have their own). With it on and `SEO_BLOG_METHOD_PACKS` off, a read-only assignment reader is composed so an expected method is told apart from none. |
 | `SEO_BLOG_KEYWORD_POOL=true` | Keyword lists and keyword-first planning, off by default (see below). Needs the research credentials and `SEO_BLOG_RESEARCH_PROVIDER` not `none`. |
+| `AFFILIATE_STUDIO=enabled` | Affiliate Studio screens, portal only, new look only, off by default: Products inside Articles, Write a product article, Amazon UK details in Settings, what Amazon reported in Results. Needs migration 0158; before it is applied every screen says products are not switched on yet. Product articles always wait for approval, get no social drafts, and carry code-rendered links and the disclosure (`src/affiliate/article.ts`, `render.ts`). |
 | `SEO_BLOG_MAX_DOCUMENT_BYTES`, `SEO_BLOG_MAX_IMAGE_BYTES`, `SEO_BLOG_WORKER_INTERVAL_MS`, `SEO_BLOG_WORKER_BATCH` | Optional limits. |
 
 Every plan, brief and article version carries an internal `engine` stamp (outside the article body and its hash): strict on or off; research; numbers (`measured`, `no_data`, `unavailable`, `off`, `not_recorded`); the writing method (`active`, `not_assigned`, `inactive`, `off`, `not_used`) and its receipt id. It is never shown to a business owner.
@@ -236,6 +237,36 @@ entered in the MHP brand's GitHub-static connection (`branch=main`, `publicBaseU
 - The combined multi-brand calendar filter is not built; each brand has its own calendar.
 - Drag-and-drop was not browser-automated; the equivalent form path is tested.
 - MHP has no branded blog template yet; the neutral default template is used until one is committed.
+
+## Known limits of the SEO score (the meaning check's to-do list)
+
+`src/seo-blog/seo-score.ts` gives each article version a deterministic 0 to 100 score; `seoGate()` is one of two
+conditions an automatic rewrite must meet. It counts words, so it is necessary, not sufficient: the other condition is
+a separate meaning check that judges whether the text says something. Five review rounds showed that a word count can
+always be stepped round one notch further out, and that every tightening risks refusing good pages. So the score
+catches cheap, blatant rubbish where that costs nothing on the 73 good articles and variants of the review corpora,
+and stops there. What it lets through is
+listed below; the meaning check must catch each of these. The list is kept exact by the tests
+(`KNOWN_LIMITS` in `orchestrator/test/seo-score-review5-rubbish.ts`, asserted in `seo-score-review5.test.ts`): every
+example passes the gate at the score shown, and every rubbish article of every corpus that passes is listed.
+
+| Known limit | Example (score with a picture) | Why a word count cannot decide it |
+| --- | --- | --- |
+| **Fluent empty filler** | Mad-lib sentences that say nothing (98) | Grammatical sentences that say nothing look like sentences that say something; only meaning tells them apart. |
+| **Very short keyword items under the 25% line** | Keyword lines as blockquotes, 23.8% of the words (98) | A kit list is 19.8% very short items and a price list 13.8%; keyword lines at 11% to 24% look the same, and "Spare pegs", "Spare socks" is one word changed too. |
+| **Long keyword items with no full stop** | Five 15-word keyword bullets per part (98) | Such items have the small words of a sentence, and a thorough checklist is 45% items as long. |
+| **Different two- or three-word sentences of prose** | Three different keyword sentences per part (92) | Short sentences are ordinary ("Yes.", "Stir well."); only repeats are caught, from the sixth. |
+| **Four-word template sentences** | 60 sentences like "We buy Leeds houses." (95) | One-word-changed templates are matched from five words; at four words any two plain sentences would match. |
+| **One long run-on in a long article** | One 140-word keyword run-on, 16.9% of the prose (97) | The article quoting a regulation has 14.7% in sentences of over 40 words. |
+| **Two of the three main words of the phrase** | 24 sentences saying "property deal" for "appraise a property deal" (100) | Counting them refuses a good price guide (2.7%). |
+| **The phrase split by a full stop or across two list items** | The phrase split across two bullets (97) | Readers and search engines do not read it as the phrase; the list measures hold the volume. |
+| **A page title of keywords** | A 60-word keyword page title (97) | The page title is one line outside the text measures. |
+| **Keyword questions with empty answers** | 150 keyword questions with no answer (97) | Questions are not sentences of the text; empty parts are a must-fix of the quality checks when they run. |
+| **Different bullets of four to nine words count as content** | An FAQ page without a picture, refused at 84, plus 33 different four-word bullets in four parts (89) | Steps are content: leaving them out of length, part length and sentence length lowers 11, 9 and 4 good pages. They never move the phrase, repetition or list measures, and a refused page passed only within five points of the bar. |
+
+Two good pages score lower than at d4e5527 and still pass: a camping kit list (96 to 93) and a hospital-bag checklist
+(94 to 93), because very short items do not count towards length or a part's length. That is the rule that keeps
+different short bullets from ever raising a score.
 
 ## Social promotion delivery through brand-registered accounts (0132)
 
