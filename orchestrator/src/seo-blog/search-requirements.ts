@@ -448,6 +448,20 @@ const TITLE_CASE_WORDS = new Set(['A', 'An', 'The', 'And', 'Or', 'But', 'For', '
 
 const norm = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 const wordSet = (s: string) => new Set(stripInvisible(s).normalize('NFKC').toLowerCase().replace(/[’']s\b/g, '').split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+/** Small numbers in words and digits, both ways: "4 schemes" is stated by "four schemes", and "four" by "4". */
+const SMALL_NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+const TENS: Record<string, string> = { thirty: '30', forty: '40', fifty: '50', sixty: '60', seventy: '70', eighty: '80', ninety: '90' };
+const DIGITS_OF_WORD: Record<string, string> = { ...Object.fromEntries(SMALL_NUMBERS.map((w, i) => [w, String(i)])), ...TENS };
+/** "one" is also a pronoun ("how to choose one"), so a digit 0 or 1 must be stated as a digit. */
+const WORD_OF_DIGITS: Record<string, string> = Object.fromEntries(Object.entries(DIGITS_OF_WORD).filter(([, d]) => d !== '0' && d !== '1').map(([w, d]) => [d, w]));
+/** Abbreviations every article may use without naming them in its prose. */
+const GENERIC_ACRONYMS = new Set(['faq', 'faqs']);
+/** The text with every occurrence of the phrase (its words in order, any punctuation or spacing between them) replaced by a plain word. */
+function withoutPhrase(text: string, phrase: string): string {
+  const parts = phrase.normalize('NFKC').split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!parts.length) return text;
+  return text.normalize('NFKC').replace(new RegExp(`(?<![\\p{L}\\p{N}])${parts.join('[^\\p{L}\\p{N}]+')}(?![\\p{L}\\p{N}])`, 'giu'), 'phrase');
+}
 
 export interface OptionContext {
   readonly phrase: string;
@@ -475,13 +489,30 @@ export function optionProblems(raw: unknown, kind: 'title' | 'description', ctx:
   if (text.length > limits.max) add('too_long');
   if (!containsPhrase(text, ctx.phrase)) add('no_phrase');
   if (/(?:…|\.\.\.)$/.test(text) || DANGLING.test(text) || (kind === 'description' && !/[.?]$/.test(text))) add('cut_off');
-  if (/!/.test(text) || CLICKBAIT.test(text) || PROMISE.test(text) || GLOBAL_BANNED_PHRASES.some((b) => text.toLowerCase().includes(b)) || /\b\p{Lu}{4,}\b/u.test(text.replace(/\b(?:HMRC|HMLR|SDLT|LBTT|EPCS?|HMOS?|GDPR|FAQS?)\b/g, ''))) add('clickbait');
+  // The phrase's own words are never clickbait or shouting (a phrase may itself say "best", "scams" or "UPVC"); an
+  // abbreviation in capitals is not shouting when the article uses it.
+  const phraseWords = wordSet(ctx.phrase);
+  const clickbait = [...text.matchAll(new RegExp(CLICKBAIT.source, 'gi'))].some((m) => ![...wordSet(m[0])].every((w) => phraseWords.has(w)));
+  const shouting = (text.match(/\b\p{Lu}{4,}\b/gu) ?? []).some((w) => !/^(?:HMRC|HMLR|SDLT|LBTT|EPCS?|HMOS?|GDPR|FAQS?)$/.test(w) && !proseWords.has(w.toLowerCase()) && !phraseWords.has(w.toLowerCase()));
+  if (/!/.test(text) || clickbait || PROMISE.test(text) || GLOBAL_BANNED_PHRASES.some((b) => text.toLowerCase().includes(b)) || shouting) add('clickbait');
   if (/[<>]|\[|\]\(|[*_`#~]|&(?:#\d+|#x[0-9a-f]+|[a-z]+);|\p{Extended_Pictographic}|^["'“‘«]|["'”’»]$/iu.test(text)) add('markup');
-  if (/https?:|\bwww\./i.test(text) || ADDRESS_LIKE.slice(1).some((re) => re.test(text))) add('address');
-  // Every figure must be one the article states: material figures by value, and any other number as a whole number.
-  const numbers = [...materialFigures(text), ...(text.match(/\b\d+(?:\.\d+)?\b/g) ?? [])];
-  if (numbers.some((f) => !figureInText(f, prose))) add('new_figure');
-  for (const m of text.matchAll(NUMBER_WORDS)) if (!proseWords.has(m[0].toLowerCase().split(' ')[0]!)) { add('new_figure'); break; }
+  // A web address the phrase itself carries ("booking.com fees") is the phrase, not a link.
+  const unphrased = withoutPhrase(text, ctx.phrase);
+  if (/https?:|\bwww\./i.test(unphrased) || ADDRESS_LIKE.slice(1).some((re) => re.test(unphrased))) add('address');
+  // Every figure must be one the article states: material figures (money, percentages, grouped and decimal numbers,
+  // two or more digits) by value, so "£1,200" and "10,000" match the article's own; any other digit as a whole number.
+  // A small whole number counts as stated when the article spells it ("4 schemes" for "four schemes").
+  const stated = (f: string) => figureInText(f, prose) || (/^\d+$/.test(f) && Boolean(WORD_OF_DIGITS[f]) && proseWords.has(WORD_OF_DIGITS[f]!));
+  const material = materialFigures(text);
+  let rest = text.replace(MARKER, ' ');
+  for (const f of material) rest = rest.replace(f, ' ');
+  if ([...material, ...(rest.match(/\b\d+(?:\.\d+)?\b/g) ?? [])].some((f) => !stated(f))) add('new_figure');
+  for (const m of text.matchAll(NUMBER_WORDS)) {
+    const w = m[0].toLowerCase().split(' ')[0]!;
+    // "one" at the end of a clause or before "of" is a pronoun ("how to choose one", "one of the schemes"), not a figure.
+    if (w === 'one' && /^\s*(?:$|[.,:;?!)–—-]|of\b)/i.test(text.slice(m.index! + m[0].length))) continue;
+    if (!proseWords.has(w) && !(DIGITS_OF_WORD[w] && figureInText(DIGITS_OF_WORD[w]!, prose))) { add('new_figure'); break; }
+  }
   if (mentionsExclusion(text, ctx.exclusions ?? [])) add('excluded');
   if (PROOF.test(text)) add('unverified_proof');
   if (NEGATED_RULE.test(text) && !norm(prose).includes(norm(NEGATED_RULE.exec(text)![0]))) add('unsupported_claim');
@@ -502,7 +533,11 @@ export function optionProblems(raw: unknown, kind: 'title' | 'description', ctx:
     const w = t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/[’']s$/u, '');
     // A joined spelling is a name as a whole ("OpenRent", "Acme-Lettings") only when the whole is unknown; each part of
     // "plain-English" is looked up on its own.
-    const known = (x: string) => proseWords.has(x.toLowerCase()) || brandWords.has(x.toLowerCase()) || TITLE_CASE_WORDS.has(x) || !/\p{Lu}/u.test(x);
+    // An abbreviation in capitals is known when the article uses it, singular or plural ("ASTs" for "AST").
+    const acronym = (x: string) => /^\p{Lu}{2,}s?$/u.test(x) && [x.toLowerCase(), x.toLowerCase().replace(/s$/, ''), `${x.toLowerCase()}s`].some((k) => proseWords.has(k) || GENERIC_ACRONYMS.has(k));
+    // A capitalised ordinary word the article uses in the singular or plural ("Homeowner" for "homeowners") is known too.
+    const inProse = (x: string) => [x, `${x}s`, `${x}es`, x.replace(/s$/, ''), x.replace(/es$/, '')].some((k) => proseWords.has(k));
+    const known = (x: string) => inProse(x.toLowerCase()) || brandWords.has(x.toLowerCase()) || TITLE_CASE_WORDS.has(x) || !/\p{Lu}/u.test(x) || acronym(x);
     if (!start && w && !known(w) && !w.split(/[-–]/).every(known)) add('unknown_name');
   });
   if (kind === 'title' && (ctx.takenTitles ?? []).some((t) => typeof t === 'string' && norm(t) === norm(text))) add('duplicate');

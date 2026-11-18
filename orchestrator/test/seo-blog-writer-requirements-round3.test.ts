@@ -183,3 +183,54 @@ test('S5: phrase_use_limit counts "best", "uk" and years as the score does, so a
   assert.ok(s.measures.phraseShare <= S.PHRASE_HIGH, `share ${s.measures.phraseShare}%`);
   assert.deepEqual(S.seoGate(s).reasons.filter((x: string) => /more often/i.test(x)), []);
 });
+
+// ─── P3: honest Google titles and descriptions are not refused ───────────────
+
+const OPT_PROSE = 'You must protect the deposit within 30 days of getting it [src:S1]. The Compliance Plan costs £49 per month. Deposits are capped at 5 weeks of rent [src:S2]. Rules changed in 2019. Around 10,000 landlords were fined, and the average award was £1,200. There are four schemes to compare. Landlords in England and Wales use one of them. An AST is the usual tenancy, and many homeowners let rooms. Some flat roofs use EPDM.';
+const optCtx = { phrase: PHRASE, proseText: OPT_PROSE, exclusions: ['Tax advice'], brandName: 'Harbour Lettings', takenTitles: ['Tenancy deposit protection: our earlier guide'] };
+
+test('P3: figures the article states (grouped with commas, or spelled as words), abbreviations it uses and the phrase\'s own words pass', () => {
+  for (const [label, title, ctx] of [
+    ['grouped figure', 'Tenancy deposit protection: why 10,000 landlords were fined', optCtx],
+    ['grouped money', 'Tenancy deposit protection: the £1,200 average award', optCtx],
+    ['digit for a spelled number', 'Tenancy deposit protection: 4 schemes compared', optCtx],
+    ['word for a digit', 'Tenancy deposit protection: five weeks of rent at most', optCtx],
+    ['pronoun "one"', 'Tenancy deposit protection: how to choose one', { ...optCtx, proseText: 'Landlords compare the schemes.' }],
+    ['abbreviation the article uses', 'Tenancy deposit protection and EPDM flat roofs', optCtx],
+    ['plural of an abbreviation the article uses', 'Tenancy deposit protection for ASTs explained', optCtx],
+    ['FAQs', 'Tenancy deposit protection FAQs for landlords', optCtx],
+    ['Title Case word the article uses in the plural', 'Tenancy deposit protection: a Homeowner’s guide', optCtx],
+    ['phrase with "best"', 'Best landlord insurance: best practice when you compare', { ...optCtx, phrase: 'best landlord insurance', proseText: 'Best landlord insurance depends on cover. Compare what is included.' }],
+    ['phrase with "scams"', 'Rental scams: how to spot them early', { ...optCtx, phrase: 'rental scams', proseText: 'Rental scams are common. Spot them early.' }],
+    ['phrase with an abbreviation', 'UPVC windows cost: a homeowner guide', { ...optCtx, phrase: 'upvc windows cost', proseText: 'Windows cost more when large. A homeowner guide.' }],
+    ['phrase with a domain', 'Booking.com fees for hosts explained', { ...optCtx, phrase: 'booking.com fees for hosts', proseText: 'Fees for hosts vary.' }],
+    ['a place the article names', 'Tenancy deposit protection in Leeds: what landlords do', { ...optCtx, proseText: `${OPT_PROSE} Most of our landlords are in Leeds.` }],
+  ] as const) assert.deepEqual(SR.optionProblems(title, 'title', ctx as Any), [], label);
+  assert.deepEqual(SR.optionProblems('Tenancy deposit protection explained: 10,000 landlords fined and awards of £1,200 on average.', 'description', optCtx), []);
+  // The writer's own passing title with a local place is kept, never replaced by a generic option.
+  const kept = SR.chooseSearchFields({ seoTitle: 'Tenancy deposit protection in Leeds: what landlords do', metaDescription: 'Tenancy deposit protection explained for landlords in Leeds: the four schemes and the 30 day deadline.', titleOptions: ['Tenancy deposit protection: a plain guide'], descriptionOptions: [],
+    proseText: `${OPT_PROSE} Most of our landlords are in Leeds.`, requirements: block(), brandName: 'Harbour Lettings' });
+  assert.equal(kept.seoTitle, 'Tenancy deposit protection in Leeds: what landlords do');
+  assert.equal(kept.record.title!.chosen, 'model');
+});
+
+test('P3: what should still be refused is refused (figures the article does not state, shouting, clickbait outside the phrase, names, addresses)', () => {
+  for (const [title, want, ctx] of [
+    ['Tenancy deposit protection: the 1 rule that matters', 'new_figure', optCtx],
+    ['Tenancy deposit protection: 9 things to check', 'new_figure', optCtx],
+    ['Tenancy deposit protection: 20 landlord questions', 'new_figure', optCtx],
+    ['Tenancy deposit protection for £4 a month', 'new_figure', optCtx],
+    ['Tenancy deposit protection: 12,000 landlords fined', 'new_figure', optCtx],
+    ['Tenancy deposit protection: ninety percent get it wrong', 'new_figure', optCtx],
+    ['Tenancy deposit protection: six schemes compared', 'new_figure', optCtx],
+    ['Tenancy deposit protection: the one rule that matters', 'new_figure', { ...optCtx, proseText: 'Landlords compare the schemes.' }],
+    ['Tenancy deposit protection: best practice for landlords', 'clickbait', optCtx],
+    ['Best landlord insurance: the cheapest cover', 'clickbait', { ...optCtx, phrase: 'best landlord insurance', proseText: 'Best landlord insurance depends on cover.' }],
+    ['Tenancy deposit protection: HUGE changes for landlords', 'clickbait', optCtx],
+    ['Tenancy deposit protection and UPVC window damage', 'clickbait', optCtx],
+    ['Tenancy deposit protection: why OpenRent beats agents', 'unknown_name', optCtx],
+    ['Tenancy deposit protection in Scotland explained', 'unknown_name', optCtx],
+    ['Tenancy deposit protection by acme-lettings.co.uk', 'address', optCtx],
+    ['Booking.com fees for hosts at acme.co.uk', 'address', { ...optCtx, phrase: 'booking.com fees for hosts', proseText: 'Fees for hosts vary.' }],
+  ] as const) assert.ok(SR.optionProblems(title, 'title', ctx as Any).includes(want as Any), `${title}: ${JSON.stringify(SR.optionProblems(title, 'title', ctx as Any))}`);
+});
