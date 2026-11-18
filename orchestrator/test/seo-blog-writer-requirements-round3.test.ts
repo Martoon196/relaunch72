@@ -11,6 +11,8 @@ import * as SR from '../src/seo-blog/search-requirements.js';
 import { loadPrompt } from '../src/stages/prompt.js';
 import * as Ch from '../src/seo-blog/checks.js';
 import * as F from './seo-blog-writer-requirements-fixtures.js';
+import * as E from '../src/seo-blog/engine.js';
+import { harness } from './seo-blog-fixtures.js';
 import type { ArticleBrief, ArticleVersion } from '../src/seo-blog/types.js';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -321,4 +323,21 @@ test('S3: ordinary Title Case headings survive the topic filter; competitor name
     'We Guarantee Results', 'Landlords Are Exempt From Deposit Rules', 'The Cheapest Agent in Leeds: Harbour Lettings', 'Award-Winning Harbour Lettings', 'Top Rated Letting Agent in Leeds',
     'Why OpenRent beats agents', 'Related Posts', 'Leave a Reply', 'Cures for Squeaky Floorboards', 'Black mould cures asthma naturally'])
     assert.ok(!topic(h), h);
+});
+
+// ─── N5: the duplicate-title check is bounded ────────────────────────────────
+
+test('N5: the duplicate-title check makes one list read and at most TAKEN_TITLE_READS version reads, newest articles first', async () => {
+  const h = harness();
+  const articles = Array.from({ length: 140 }, (_, i) => ({ id: `a${i}`, currentVersionId: i % 7 === 0 ? null : `v${i}`, createdAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString() }));
+  let lists = 0; const read: string[] = [];
+  h.store.listArticles = (async () => { lists++; return articles; }) as Any;
+  h.store.getVersion = (async (_b: string, id: string) => { read.push(id); if (id === 'v139') throw new Error('read failed'); return { body: { seoTitle: `Title ${id}` } }; }) as Any;
+  const titles: string[] = await (h.engine as Any).takenSeoTitles('brand', 'a138');
+  assert.equal(lists, 1);
+  assert.equal(E.TAKEN_TITLE_READS, 50);
+  assert.equal(read.length, E.TAKEN_TITLE_READS, 'bounded');
+  assert.ok(!read.includes('v138'), 'never the article being written');
+  assert.equal(read[0], 'v139', 'newest first');
+  assert.ok(!titles.includes('Title v139') && titles.includes('Title v137'), 'a failed read gives fewer titles, never a failure');
 });

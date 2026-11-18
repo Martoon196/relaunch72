@@ -202,6 +202,9 @@ export interface EngineDeps {
   readonly internalLog?: (event: { readonly event: string; readonly brandId: string; readonly subjectId: string; readonly reason: string }) => void;
 }
 
+/** The duplicate-title check reads the current version of at most this many of the business's newest other articles. */
+export const TAKEN_TITLE_READS = 50;
+
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
 export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000,
   /** Brand DNA: up to twelve website pages (8,000 characters each) plus the owner's documents, and one possible correction pass. */
@@ -1605,15 +1608,17 @@ export class SeoBlogEngine {
   }
 
   /**
-   * The current Google titles of the business's other articles (a chosen title must not repeat one). Store reads only;
-   * a read that fails gives fewer titles, never a failed write.
+   * The current Google titles of the business's other articles (a chosen title must not repeat one), from its
+   * TAKEN_TITLE_READS most recently created articles: one list read and at most that many version reads per write,
+   * however large the business grows. Store reads only; a read that fails gives fewer titles, never a failed write.
    */
   private async takenSeoTitles(brandId: string, articleId: string): Promise<string[]> {
     const titles: string[] = [];
     const articles = await this.store.listArticles(brandId).catch(() => [] as Article[]);
-    for (const a of articles) {
-      if (a.id === articleId || !a.currentVersionId) continue;
-      const v = await this.store.getVersion(brandId, a.currentVersionId).catch(() => null);
+    const others = articles.filter((a) => a.id !== articleId && a.currentVersionId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)).slice(0, TAKEN_TITLE_READS);
+    for (const a of others) {
+      const v = await this.store.getVersion(brandId, a.currentVersionId!).catch(() => null);
       if (v && typeof v.body?.seoTitle === 'string' && v.body.seoTitle.trim()) titles.push(v.body.seoTitle);
     }
     return titles;
