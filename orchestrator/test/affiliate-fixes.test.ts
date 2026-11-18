@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { SeoBlogEngine, type EngineDeps } from '../src/seo-blog/engine.js';
 import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
@@ -1136,4 +1136,34 @@ test('M07: the affiliate routes refuse stores of another business by themselves 
   const form: Record<string, string> = { commandId: randomUUID(), revision: '0', trackingId: 'stranger-21', registeredSite: 'harbour.example', siteListed: '1', accountMine: '1' };
   await assert.rejects(affiliatePost({ res: {} as ServerResponse, engine: s.engine, actor: OWNER, brandId: s.brand.id, rest: 'affiliate/settings', stores: other, f: (n) => form[n] ?? null, all: () => [], file: null, ok: () => {}, fail: () => {} }), notFound);
   assert.equal(other.settings_, null, 'nothing was saved into the other business');
+});
+
+test('N-9: a report upload is refused once 2 MB (and the form around it) has been read, not after reading up to the general limit', async () => {
+  const s = await setup();
+  const svc = service(s.engine, s.aff), id = who(s.brand.id), base = `/portal/seo-blog/b/${s.brand.id}`;
+  async function upload(fileBytes: number, declareLength: boolean) {
+    const b = 'XXBOUNDARY', csrf = portalCsrfToken(SECRET, id.sessionToken);
+    const head = Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="_csrf"\r\n\r\n${csrf}\r\n--${b}\r\nContent-Disposition: form-data; name="month"\r\n\r\n2026-10\r\n--${b}\r\nContent-Disposition: form-data; name="file"; filename="s.csv"\r\nContent-Type: text/csv\r\n\r\nTracking ID,Earnings\r\n`);
+    const tail = Buffer.from(`\r\n--${b}--\r\n`);
+    let read = 0;
+    const chunk = Buffer.alloc(64 * 1024, 0x61);
+    async function* stream() { yield head; read += head.length; for (let n = 0; n < fileBytes; n += chunk.length) { yield chunk; read += chunk.length; } yield tail; }
+    const req = Readable.from(stream()) as unknown as IncomingMessage;
+    const total = head.length + Math.ceil(fileBytes / chunk.length) * chunk.length + tail.length;
+    Object.assign(req, { method: 'POST', url: `${base}/results/report`, headers: { host: 'portal.example', origin: 'https://portal.example', 'content-type': `multipart/form-data; boundary=${b}`, ...(declareLength ? { 'content-length': String(total) } : {}), cookie: 'r72_content_look=new' } });
+    let status = 0, headers: Record<string, string> = {};
+    const res = { writeHead(st: number, hd: Record<string, string>) { status = st; headers = hd; return res; }, setHeader() {}, end() {} } as unknown as ServerResponse;
+    await handleSeoBlog(req, res, new URL(`${base}/results/report`, 'https://portal.example'), { service: svc, identity: id, requestId: 'r', sessionSecret: SECRET, vaultReady: true, contentAreaPreview: 'enabled' } as Parameters<typeof handleSeoBlog>[3]);
+    const loc = headers.location ? new URL(headers.location, 'https://x') : null;
+    return { status, read, location: loc?.pathname ?? '', error: loc?.searchParams.get('e') ? Buffer.from(loc.searchParams.get('e')!, 'base64url').toString() : '' };
+  }
+  const big = await upload(15 * 1024 * 1024, false);
+  assert.equal(big.status, 303);
+  assert.equal(big.location, `${base}/results`);
+  assert.match(big.error, /must not be empty or larger than 2 MB/);
+  assert.ok(big.read < 2.3 * 1024 * 1024, `stopped reading at ${big.read} bytes`);
+  const declared = await upload(15 * 1024 * 1024, true);
+  assert.match(declared.error, /larger than 2 MB/);
+  assert.ok(declared.read < 2.3 * 1024 * 1024, `stopped reading at ${declared.read} bytes`);
+  assert.equal(s.aff.reports_.length, 0);
 });

@@ -51,6 +51,7 @@ import type { BackgroundChoice } from '../creative-studio/service.js';
 import { CONTENT_AREA_LOOK_PATH, contentAreaBack, contentAreaCookie, contentAreaCookieOn, contentAreaPreviewAllowed } from './content-area-preview.js';
 import { contentKeywordsPage } from './content-area-keywords.js';
 import type { KeywordChoices } from '../seo-blog/keyword-store-shape.js';
+import { MAX_REPORT_BYTES, REPORT_MESSAGES } from '../affiliate/amazon-tracking-report.js';
 import { affiliateGet, affiliatePost, affiliateReportsCard, affiliateSettingsCard, isAffiliateGet, isAffiliatePost } from './affiliate-routes.js';
 import { articlePills } from './affiliate-views.js';
 import { affiliateReader, type AffiliateStores } from './affiliate-service.js';
@@ -260,7 +261,15 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const contentType = String(req.headers['content-type'] ?? '');
       const multipart = /^multipart\/form-data/i.test(contentType);
       if (!multipart && !/^application\/x-www-form-urlencoded/i.test(contentType)) throw new SeoBlogError(415, 'Use the form on the page.');
-      const body = await readBody(req, multipart ? 21 * 1024 * 1024 : 600 * 1024);
+      // Amazon's report (Affiliate Studio only): refused as soon as more than 2 MB (plus the form around it) has been read,
+      // never read up to the general upload limit first (review N-9).
+      const reportUpload = multipart && rest === 'results/report' && previewOn && Boolean(brandId) && sameWorkspace(identity, brandId) && Boolean(input.service.affiliateFor);
+      let body: Buffer;
+      try { body = await readBody(req, reportUpload ? MAX_REPORT_BYTES + 64 * 1024 : multipart ? 21 * 1024 * 1024 : 600 * 1024); }
+      catch (error) {
+        if (!reportUpload || !(error instanceof SeoBlogError) || error.status !== 413) throw error;
+        return redirect(res, `${back('results')}?${signedMessage(input.sessionSecret, 'e', REPORT_MESSAGES.size)}`);
+      }
       const form: FormData = multipart ? parseMultipartForm(body, contentType) : { fields: new URLSearchParams(body.toString('utf8')), file: null };
       const f = (name: string) => form.fields.get(name);
       if (!verifyPortalCsrf(input.sessionSecret, identity.sessionToken, f('_csrf') ?? undefined)) throw new SeoBlogError(403, 'Your form expired. Refresh the page and try again.');
