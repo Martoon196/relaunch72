@@ -11,7 +11,7 @@ import * as G from '../src/seo-blog/generation.js';
 import * as SR from '../src/seo-blog/search-requirements.js';
 import * as H from '../src/seo-blog/html.js';
 import { articleSeoScore } from '../src/portal/seo-blog-seo-panel.js';
-import { seoScore } from '../src/seo-blog/seo-score.js';
+import { seoGate, seoScore } from '../src/seo-blog/seo-score.js';
 import { providerJsonSchema, type LlmRequest } from '../src/llm/client.js';
 import { loadPrompt } from '../src/stages/prompt.js';
 import { researchQueries, type SearchHit, type SearchProvider } from '../src/seo-blog/research.js';
@@ -225,6 +225,11 @@ test('B4a: the visible score judges the measured phrase when the brief has one; 
   assert.equal(old.score, seoScore(plain, body, { siteHosts: [null, null, null], selfUrl: null, checkIssues: null, staleCheckIssues: null }).score, 'no target: scored against the question as before');
 });
 
+/** The score the article page shows for a version written with block `r` (stored on its generation record, as the engine stores it). */
+let panelVersions = 0;
+const panelScoreOf = (brief: Any, body: ArticleBody, r: SR.SearchRequirements) => articleSeoScore({ id: 'b', website: null } as Any, { article: { checks: null, publishedUrl: null } as Any, articleBrief: brief, destinations: [] },
+  { id: `pv-${++panelVersions}`, body, generation: { mode: 'simulated', model: 'm', promptVersion: 'p', tokensIn: 0, tokensOut: 0, searchDraft: { schema: 1, requirementsSha: SR.requirementsSha(r), requirements: r } } } as Any);
+
 // The reviewer's stuffing.ts builder: an article that follows the block in full, for each length setting.
 const vocab = 'landlords often keep clear records because careful paperwork helps everyone understand what happened during a let and when each step took place so disputes become easier to settle fairly while agents tenants and owners can check dates amounts signatures receipts inventories photographs letters emails notices certificates schedules statements reminders agreements renewals inspections repairs payments refunds deductions claims evidence timelines'.split(' ');
 let k = 0;
@@ -251,11 +256,14 @@ for (const [phrase, questions] of [[PHRASE, ['how long does tenancy deposit prot
         questions: questions.map((text) => ({ text, searches: null, source: 'searched' })) }) } as Any;
       const r = SR.searchRequirements({ brief, pages: [], length, linkable: [], exclusions: [] } as Any)!;
       assert.ok(r.questions_to_answer.length <= SR.LENGTH_LIMITS[length].questions && r.natural_variants.length <= SR.LENGTH_LIMITS[length].variants && r.secondary_phrases.length <= SR.LENGTH_LIMITS[length].secondary);
-      const score = seoScore({ targetQuery: phrase, relatedQuestions: r.questions_to_answer as string[], searchIntent: 'learn' }, followed(r), { checkIssues: [] });
+      // The production path: the panel scores the brief as stored (its own planner questions only) and the version as
+      // written (the block on its generation record), never the block's questions passed in by hand.
+      const score = panelScoreOf({ ...brief, targetQuery: `how does ${phrase} work in practice`, relatedQuestions: ['What should a landlord check first?'], searchIntent: 'learn' }, followed(r), r);
       const use = score.checks.find((c) => c.id === 'phrase.use')!;
       assert.notEqual(use.result, 'fail', use.found);
       assert.doesNotMatch(use.found, /stuffed|a little high/, use.found);
       assert.equal(score.checks.find((c) => c.id === 'phrase.heading')!.result, 'pass', 'the ONE heading use the prompt now asks for');
+      assert.deepEqual(seoGate(score).reasons.filter((x) => /search phrase/i.test(x)), [], 'the final gate refuses nothing on a phrase rule');
     });
   }
 }
@@ -278,7 +286,7 @@ test('B4b: even an article that uses every item of the block verbatim (ignoring 
       const brief = { outline: [], internalLinks: [], seo: seoOf({ phrase, parent: `${phrase} rules` }, { secondary: [{ phrase: `${phrase} schemes`, candidateId: 'a' }, { phrase: `${phrase} deadlines`, candidateId: 'b' }, { phrase: `${phrase} certificates`, candidateId: 'b2' }, { phrase: 'landlord paperwork', candidateId: 'c' }, { phrase: 'tenant rights', candidateId: 'd' }, { phrase: 'check-in reports', candidateId: 'e' }, { phrase: 'inventory photos', candidateId: 'f' }],
         questions: questions.map((text) => ({ text, searches: null, source: 'searched' })) }) } as Any;
       const r = SR.searchRequirements({ brief, pages: [], length, linkable: [], exclusions: [] } as Any)!;
-      const score = seoScore({ targetQuery: phrase, relatedQuestions: r.questions_to_answer as string[], searchIntent: 'learn' }, followedFully(r), { checkIssues: [] });
+      const score = panelScoreOf({ ...brief, targetQuery: `how does ${phrase} work in practice`, relatedQuestions: [], searchIntent: 'learn' }, followedFully(r), r);
       const use = score.checks.find((c) => c.id === 'phrase.use')!;
       assert.notEqual(use.result, 'fail', `${phrase} ${length}: ${use.found}`);
       assert.doesNotMatch(use.found, /stuffed/, `${phrase} ${length}: ${use.found}`);

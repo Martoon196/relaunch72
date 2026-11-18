@@ -146,7 +146,9 @@ test('token cost: the largest possible block for each length setting plus the ad
   const long = (n: number, c: string) => (c + ' ').repeat(Math.floor(n / 2)).slice(0, n).trim() || c;
   const v1 = loadPrompt('seo-blog-article.md').body.length, v2 = loadPrompt(ARTICLE_PROMPT_V2).body.length;
   const promptDelta = v2 - v1;
-  assert.ok(promptDelta <= 2_600, `added prompt wording ${promptDelta} characters`);
+  // Round 3 added two clauses (the phrase in a sentence in a second part; a question's business name or claim is never
+  // repeated): the allowance rose from 2,600 to 2,750 characters and each ceiling by about 40 tokens.
+  assert.ok(promptDelta <= 2_750, `added prompt wording ${promptDelta} characters`);
   const sizes: Record<string, number> = {};
   for (const length of ['concise', 'standard', 'in-depth'] as const) {
     const l = LENGTH_LIMITS[length];
@@ -162,7 +164,7 @@ test('token cost: the largest possible block for each length setting plus the ad
     sizes[length] = Math.ceil((block + promptDelta) / 4);
     console.log(`[measure] ${length}: block at the caps ${block} chars + prompt delta ${promptDelta} chars = ~${sizes[length]} tokens`);
   }
-  assert.ok(sizes.concise! <= 1_200 && sizes.standard! <= 1_300 && sizes['in-depth']! <= 1_450);
+  assert.ok(sizes.concise! <= 1_250 && sizes.standard! <= 1_360 && sizes['in-depth']! <= 1_500, JSON.stringify(sizes));
 });
 
 // ─── The schema ──────────────────────────────────────────────────────────────

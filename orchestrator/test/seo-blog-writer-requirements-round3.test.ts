@@ -6,6 +6,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as P from '../src/portal/seo-blog-seo-panel.js';
+import * as S from '../src/seo-blog/seo-score.js';
+import { loadPrompt } from '../src/stages/prompt.js';
 import type { ArticleBrief, ArticleVersion } from '../src/seo-blog/types.js';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -115,4 +117,36 @@ test('S6: a damaged generation record never throws and is read as no record', ()
     assert.doesNotThrow(() => { r = namedPhrases(brief, versionOf(panelBody, generation)); }, JSON.stringify(generation));
     assert.equal(r!.aim, PHRASE, JSON.stringify(generation));
   }
+});
+
+// ─── P2: the block's questions are on record for the final score ─────────────
+
+test('P2: an article that uses the block\'s questions word for word as FAQ questions is not refused for the phrase in most sub-headings', () => {
+  // The reviewer's b4c case: standard length, four sections, every question asked verbatim within the use limit.
+  const phrase = 'boiler service';
+  const questions = ['how long does X last', 'what is X', 'who pays for X', 'when did X start'].map((q) => q.replace('X', phrase));
+  const r = block({ primary_phrase: phrase, questions_to_answer: questions, phrase_use_limit: 6 });
+  const filler = 'People often keep clear records because careful paperwork helps everyone understand what happened during the work and when each step took place.';
+  const para = (n: number) => Array.from({ length: n }, () => filler).join(' ');
+  const body: Any = { ...panelBody, seoTitle: `${phrase}: a plain guide`, metaDescription: `The ${phrase} explained in plain words: what to do, when to do it and how to stay organised.`,
+    intro: `This guide explains ${phrase} in plain words. ${para(3)}`,
+    sections: ['How boiler service works', 'Common mistakes', 'What to do next', 'Where to get help'].map((heading, i) => ({ id: `s${i}`, heading, body: para(12) })),
+    faqs: questions.map((q) => ({ q: `${q[0]!.toUpperCase()}${q.slice(1)}?`, a: para(2) })), conclusion: para(2) };
+  const brief = { ...panelBase, targetQuery: `how does ${phrase} work in practice`, relatedQuestions: ['What should an owner check first?'], seo: seoOf({ phrase }) };
+  const d = dataFor(brief);
+  const v = versionOf(body, genWith({ searchDraft: { schema: 1, requirementsSha: 'x', requirements: r } }));
+  const s = P.articleSeoScore(brand, d, v);
+  const gate = S.seoGate(s);
+  assert.deepEqual(gate.reasons.filter((x: string) => /search phrase/i.test(x)), [], JSON.stringify(s.measures));
+  // The block's questions are shown as on record, after the brief's own, without repeats.
+  assert.deepEqual(Panel.questionsOnRecord(brief, v), ['What should an owner check first?', ...questions]);
+  assert.deepEqual(Panel.questionsOnRecord({ ...brief, relatedQuestions: ['Who pays for boiler service?'] }, v), ['Who pays for boiler service?', ...questions.filter((q) => q !== 'who pays for boiler service')]);
+  // Without the block on the version the brief's own questions only, exactly as before.
+  assert.deepEqual(Panel.questionsOnRecord(brief, versionOf(body, null)), ['What should an owner check first?']);
+  assert.match(visible(P.seoPanel({ brand }, d, v, true)), /when did boiler service start/);
+});
+
+test('P2: prompt v2 asks for the phrase inside a full sentence in a second part of the article, besides the intro', () => {
+  const v2 = loadPrompt('seo-blog-article-v2.md').body;
+  assert.match(v2, /besides the intro, in a full sentence in one other part \(a section or the conclusion\)/);
 });

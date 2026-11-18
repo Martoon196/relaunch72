@@ -22,7 +22,7 @@ Search requirements. <brief>.search_requirements says what people searching for 
 3. The writing method supplied in this request, and the brief's angle, outline and editorial format.
 4. Search requirements come last. Skip any requirement that would break one of the above, without comment.
 How to use them:
-- primary_phrase: once in seo_title, once in meta_description and once within the first 100 words of the intro, as written or with natural grammar. The title (H1) says what the article answers; it need not repeat the phrase. Put the phrase or a close variant in ONE section heading; use natural_variants elsewhere.
+- primary_phrase: once in seo_title, once in meta_description and once within the first 100 words of the intro, as written or with natural grammar. The title (H1) says what the article answers; it need not repeat the phrase. Put the phrase or a close variant in ONE section heading and, besides the intro, in a full sentence in one other part (a section or the conclusion); use natural_variants elsewhere.
 - Every appearance of the phrase or a variant counts as a use, including in a heading or an FAQ question. Across the intro, headings, sections, FAQs and conclusion, use them at most phrase_use_limit times (in a short article, no more than four in total); reword a question or heading rather than repeat the phrase.
 - secondary_phrases: only where each fits naturally.
 - questions_to_answer: answer each one the sources or brand profile support, in a section or an FAQ; leave out the rest.

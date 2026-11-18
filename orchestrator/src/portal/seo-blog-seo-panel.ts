@@ -68,6 +68,19 @@ export function panelPhrase(brief: ArticleBrief | null | undefined, v?: ArticleV
   return briefPhrase(brief);
 }
 
+/**
+ * The questions on record for this version: the brief's own, then the questions the search block gave the writer (when
+ * the version was written with one), without repeats. Never throws.
+ */
+export function questionsOnRecord(brief: ArticleBrief | null | undefined, v?: ArticleVersion | null): string[] {
+  const own = brief && typeof brief === 'object' && Array.isArray(brief.relatedQuestions) ? brief.relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0) : [];
+  const key = (q: string) => q.toLowerCase().replace(/[?\s]+$/u, '').replace(/\s+/gu, ' ').trim();
+  const out = [...own];
+  const seen = new Set(own.map(key));
+  for (const q of writtenRequirements(v)?.questions_to_answer ?? []) if (q.trim() && !seen.has(key(q))) { seen.add(key(q)); out.push(q); }
+  return out;
+}
+
 /** The scored result for this version, with the site's own addresses for telling internal links from outside ones. */
 export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): SeoScore {
   const hit = scored.get(v);
@@ -81,7 +94,11 @@ export function articleSeoScore(b: Brand, d: SeoPanelData, v: ArticleVersion): S
   const checkIssues = ranHere ? d.article.checks!.issues : null;
   const staleCheckIssues = !ranHere && d.article.checks ? d.article.checks.issues : null;
   // A brief with a measured target is scored against the phrase the writer was given, not the question; others as before.
-  const brief = d.articleBrief && (hasSearchTarget(d.articleBrief) || writtenRequirements(v)) ? { ...d.articleBrief, targetQuery: panelPhrase(d.articleBrief, v) } : d.articleBrief ?? null;
+  // A version written with the search block also has the block's questions on record: the writer was told to answer
+  // them, so a heading that asks one is excused like any other question on record.
+  const brief = d.articleBrief && (hasSearchTarget(d.articleBrief) || writtenRequirements(v))
+    ? { ...d.articleBrief, targetQuery: panelPhrase(d.articleBrief, v), relatedQuestions: questionsOnRecord(d.articleBrief, v) }
+    : d.articleBrief ?? null;
   const s = seoScore(brief, v.body, { siteHosts: hosts, selfUrl: self, checkIssues, staleCheckIssues });
   scored.set(v, { b, d, s });
   return s;
@@ -121,7 +138,7 @@ const VISITS = 'How many visits this brings depends on where the page ranks in G
 function aimCard(brief: ArticleBrief | null | undefined, v: ArticleVersion): string {
   if (!brief) return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3><p>The search phrase is not on record for this article. It was planned before we kept this information.</p><p class="ap-note">The score below still checks everything that does not need the phrase.</p></section>`;
   const phrase = panelPhrase(brief, v);
-  const questions = (Array.isArray(brief.relatedQuestions) ? brief.relatedQuestions : []).filter((q) => typeof q === 'string' && q.trim()).slice(0, 12);
+  const questions = questionsOnRecord(brief, v).slice(0, 12);
   const why = typeof brief.whyFit === 'string' ? brief.whyFit.trim() : '';
   return `<section class="sp-card" aria-labelledby="sp-aim"><h3 id="sp-aim">What this article is aiming for</h3>
 <dl class="sp-dl"><dt>The search phrase</dt><dd>${phrase ? `<span class="sp-phrase">${e(phrase)}</span>` : 'Not on record for this article.'}</dd>
