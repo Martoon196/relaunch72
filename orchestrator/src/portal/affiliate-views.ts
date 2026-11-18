@@ -21,7 +21,8 @@ const t = (s: unknown, max = 200) => e(cleanDisplay(s, max));
 /** "Articles | Products" at the top of both lists. */
 export function articlePills(b: Brand, current: 'articles' | 'products'): string {
   const pill = (to: 'articles' | 'products', label: string) => `<a class="af-pill" href="${e(href(b, to))}"${current === to ? ' aria-current="page"' : ''}>${label}</a>`;
-  return `<nav class="af-pills" aria-label="Articles and products">${pill('articles', 'Articles')}${pill('products', 'Products')}</nav>`;
+  // Their own style travels with them: the Articles list does not carry the rest of the affiliate styles (review S-d).
+  return `<nav class="af-pills" aria-label="Articles and products">${pill('articles', 'Articles')}${pill('products', 'Products')}</nav><style>${PILL_CSS}</style>`;
 }
 
 /** 0158 not applied yet: a normal state, said plainly. */
@@ -80,7 +81,7 @@ export function writePage(shell: Shell, b: Brand, d: { readonly opened: boolean;
   if (!d.opened) return page(shell, 'Write a product article', `${head}<p class="af-card">${e(NOT_OPENED)}</p>`);
   const programme = programmeFor('amazon_uk')!;
   const usable = d.settings ? d.products.filter((p) => p.status === 'active' && programme.validateLink(p.affiliateUrl, d.settings!.trackingId).ok) : [];
-  if (!d.settings || !usable.length) return page(shell, 'Write a product article', `${head}<p class="af-card">${d.settings ? 'Add a product first.' : 'Add your Amazon UK details and a product first.'} <a href="${e(href(b, 'products'))}">Open Products</a></p>`);
+  if (!d.settings || !usable.length) return page(shell, 'Write a product article', `${head}<p class="af-card">${d.settings ? 'Add a product first.' : 'Add your Amazon UK details and a product first.'} <a class="af-go" href="${e(href(b, 'products'))}">Open Products</a></p>`);
   const kinds = (Object.keys(KIND_LIMITS) as ProductArticleKind[]).map((k, i) => `<label class="af-tick"><input type="radio" name="kind" value="${k}"${i === 0 ? ' checked' : ''}> ${KIND_LABEL[k]} <span class="af-opt">(${KIND_LIMITS[k][0] === KIND_LIMITS[k][1] ? KIND_LIMITS[k][0] : `${KIND_LIMITS[k][0]} to ${KIND_LIMITS[k][1]}`} products)</span></label>`).join('');
   return page(shell, 'Write a product article', `${head}<form method="post" action="${e(href(b, 'products/write'))}" class="af-form af-card">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.commandId)}">
 <fieldset><legend>What kind of article</legend>${kinds}</fieldset>
@@ -149,10 +150,12 @@ function page(shell: Shell, title: string, body: string): string {
   return layout(shell, title, `<div class="ca-col">${body}</div>`, `<style>${CONTENT_PAGE_CSS}${AFFILIATE_CSS}</style>`);
 }
 
+/** Every tap target on these screens is at least 44 by 44 pixels, at any width (review S-d). */
+const PILL_CSS = `.af-pills{display:inline-flex;gap:4px;padding:4px;border-radius:var(--ca-radius-pill);background:var(--ca-surface);box-shadow:var(--ca-shadow);margin-bottom:14px}
+.af-pill{display:inline-flex;align-items:center;min-height:44px;min-width:44px;padding:0 18px;border-radius:var(--ca-radius-pill);font-weight:700;text-decoration:none;color:var(--ca-ink)!important}
+.af-pill[aria-current="page"]{background:var(--ca-ink);color:var(--ca-surface)!important}`;
 export const AFFILIATE_CSS = `
-.af-pills{display:inline-flex;gap:4px;padding:4px;border-radius:var(--ca-radius-pill);background:var(--ca-surface);box-shadow:var(--ca-shadow);margin-bottom:14px}
-.af-pill{display:inline-flex;align-items:center;min-height:40px;padding:0 18px;border-radius:var(--ca-radius-pill);font-weight:700;text-decoration:none;color:var(--ca-ink)!important}
-.af-pill[aria-current="page"]{background:var(--ca-ink);color:var(--ca-surface)!important}
+${PILL_CSS}
 .af-card{margin:0;padding:18px 20px;border-radius:var(--ca-radius-l);background:var(--ca-surface);box-shadow:var(--ca-shadow);display:grid;gap:10px;min-width:0}
 .af-list{list-style:none;margin:0;padding:0;display:grid;gap:12px}
 .af-item{padding:16px 20px;border-radius:var(--ca-radius-l);background:var(--ca-surface);box-shadow:var(--ca-shadow);display:grid;gap:6px;min-width:0}
@@ -160,8 +163,9 @@ export const AFFILIATE_CSS = `
 .af-notes{margin:0;white-space:pre-line;overflow-wrap:anywhere}.af-warn{margin:0;color:var(--ca-bad);font-weight:600}
 .af-form{display:grid;gap:8px;max-width:640px}.af-form label{font-weight:600}.af-form input:not([type=checkbox]):not([type=radio]),.af-form textarea{min-height:44px;padding:8px 12px;border:1px solid var(--ca-line);border-radius:10px;font:inherit;width:100%;box-sizing:border-box}
 .af-form fieldset{border:1px solid var(--ca-line);border-radius:12px;padding:12px 14px;display:grid;gap:8px;min-width:0}.af-form legend{font-weight:700;padding:0 6px}
-.af-tick{display:flex;gap:10px;align-items:flex-start;font-weight:500!important}.af-tick input{width:20px;height:20px;margin-top:2px}.af-opt{font-weight:400;color:var(--ca-muted)}
-.af-quiet{margin:0}.af-link{background:none;border:0;padding:6px 0;min-height:24px;color:var(--ca-link);font:600 14px var(--ca-font-body);cursor:pointer;text-decoration:underline}
+.af-tick{display:flex;gap:10px;align-items:center;min-height:44px;font-weight:500!important;cursor:pointer}.af-tick input{width:20px;height:20px;margin:0;flex:none}
+.af-form button{min-height:44px}.af-go{display:inline-flex;align-items:center;min-height:44px;min-width:44px}.af-opt{font-weight:400;color:var(--ca-muted)}
+.af-quiet{margin:0}.af-link{background:none;border:0;padding:0 4px;min-height:44px;min-width:44px;color:var(--ca-link);font:600 14px var(--ca-font-body);cursor:pointer;text-decoration:underline}
 .af-main{margin:0}.af-reports{margin:0;padding-left:1.2em;display:grid;gap:6px}
 .af-table{overflow-x:auto}.af-table table{border-collapse:collapse;width:100%;font-size:15px}.af-table th,.af-table td{padding:8px 10px;border-bottom:1px solid var(--ca-line);text-align:left}
 .r72-disclosure{padding:10px 14px;border-left:4px solid var(--ca-amber,#c47f00)}

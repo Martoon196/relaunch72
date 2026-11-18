@@ -1167,3 +1167,22 @@ test('N-9: a report upload is refused once 2 MB (and the form around it) has bee
   assert.ok(declared.read < 2.3 * 1024 * 1024, `stopped reading at ${declared.read} bytes`);
   assert.equal(s.aff.reports_.length, 0);
 });
+
+test('S-d: every tap target on the affiliate screens is styled at least 44 pixels (pills, ticks and radio labels, "Stop using", form buttons, "Open Products"), the Articles list included', async () => {
+  const s = await setup();
+  const svc = service(s.engine, s.aff), id = who(s.brand.id), base = `/portal/seo-blog/b/${s.brand.id}`;
+  const rule = (css: string, selector: string) => new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{[^}]*min-height:44px`).test(css);
+  const styles = (html: string) => [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n');
+  const products = styles((await call(svc, id, 'GET', `${base}/products`)).body);
+  for (const selector of ['.af-pill', '.af-tick', '.af-link', '.af-form button']) assert.ok(rule(products, selector), `${selector} is at least 44 pixels tall`);
+  assert.match(products, /\.af-link\{[^}]*min-width:44px/);
+  // The Articles list carries the pills' own style.
+  const articles = (await call(svc, id, 'GET', `${base}/articles`)).body;
+  assert.match(articles, /class="af-pills"/);
+  assert.ok(rule(styles(articles), '.af-pill'), 'pills on the Articles list are 44 pixels tall');
+  // "Open Products" on the empty Write page is a 44-pixel target, not a line of text.
+  const empty = new FakeAffiliate(s.brand.id);
+  const write = (await call(service(s.engine, empty), id, 'GET', `${base}/products/write`)).body;
+  assert.match(write, /<a class="af-go" href="[^"]+\/products">Open Products<\/a>/);
+  assert.ok(rule(styles(write), '.af-go'));
+});
