@@ -360,9 +360,9 @@ function closerTwin(other: ShortlistRow, mine: ShortlistRow, brief: ReadonlySet<
  * Whether `row` is the phrase for this brief among the target candidates: it fits (`fitScore`), no other target
  * candidate fits better, and none fits exactly as well (a tie is left unbound: there is no way to tell them apart).
  * One exception to the tie (review2 P1): twin phrases, whose meaning words are the same ("boiler repair", "boiler
- * repair near me", "boiler repair uk"), always tie, so between twins the one worded closer to the brief wins
- * (`closerTwin`: "near me" in the brief picks "boiler repair near me", else "boiler repair" is closer). A tie with any
- * phrase that is not a twin still binds neither.
+ * repair near me", "boiler repair uk"), always tie, so between twins wholly in the brief the one worded closer to it
+ * wins (`closerTwin`: "near me" in the brief picks "boiler repair near me", else "boiler repair" is closer). Twins only
+ * half in the brief, and a tie with any phrase that is not a twin, still bind neither.
  * `except` are candidates not compared against (for a secondary phrase: the brief's own target).
  */
 export function bestFit(row: ShortlistRow, text: { readonly question: string; readonly title: string }, targets: readonly ShortlistRow[], except: ReadonlySet<string> = new Set()): 'fits' | 'does_not_fit' | 'fits_another_better' | 'tied' {
@@ -376,8 +376,9 @@ export function bestFit(row: ShortlistRow, text: { readonly question: string; re
     const o = fitScore(other.phrase, text);
     if (beats(o, mine)) return 'fits_another_better';
     if (!ties(o, mine)) continue;
-    // A twin binds only when no other twin is worded closer to the brief.
-    if (sameWords(meaningWords(other.phrase), myWords)) {
+    // A twin wholly in the brief binds only when no other twin is worded closer to it. Twins that only half fit (a
+    // "boiler repair" pair on a boiler servicing article) still tie: there the tie is the only thing that refuses them.
+    if (mine.share === 1 && sameWords(meaningWords(other.phrase), myWords)) {
       brief ??= new Set([...tokens(text.question), ...tokens(text.title)].map(simpleStem));
       if (closerTwin(other, row, brief)) tied = true;
       continue;

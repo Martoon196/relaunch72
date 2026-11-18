@@ -35,6 +35,9 @@ test('P1: of twin phrases (same meaning words: "near me", "uk", "best", a plural
   const fees = ['estate agent fees', 'estate agents fees', 'online estate agents'];
   assert.equal(bindOne(fees, 'estate agent fees', 'How much do estate agents charge to sell a house?', 'Estate Agent Fees Explained').phrase, 'estate agent fees');
   assert.equal(bindOne(fees, 'estate agents fees', 'How much do estate agents charge to sell a house?', 'Estate Agent Fees Explained').phrase, 'estate agents fees');
+  // Twins only half in the brief still tie (the reviewer's orphan case: "boiler repair" on a boiler servicing article).
+  assert.deepEqual(bindOne(['boiler repair', 'boiler repair near me', 'new boiler cost'], 'boiler repair', 'How often should a boiler be serviced?', 'Boiler Servicing: How Often and What It Includes'),
+    { phrase: null, reason: 'tied' });
   // A tie with a phrase that is not a twin still binds neither.
   const landlord = ['landlord insurance', 'landlord tax', 'landlord licence'].map((p, i) => short(p, i));
   assert.equal(bestFit(landlord[0]!, t('What must a landlord do by law?'), landlord), 'tied');
