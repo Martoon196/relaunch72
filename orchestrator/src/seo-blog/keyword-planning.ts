@@ -363,6 +363,10 @@ function closerTwin(other: ShortlistRow, mine: ShortlistRow, brief: ReadonlySet<
  * repair near me", "boiler repair uk"), always tie, so between twins wholly in the brief the one worded closer to it
  * wins (`closerTwin`: "near me" in the brief picks "boiler repair near me", else "boiler repair" is closer). Twins only
  * half in the brief, and a tie with any phrase that is not a twin, still bind neither.
+ * A second exception (review2 P2): a pillar whose title names several of its sub-topics. When every phrase that fits
+ * better is the same phrase with more words, and no single one of them covers all the extra words the brief names, the
+ * brief is broader than each of them and the broad phrase binds; when one of them covers them all, that narrower
+ * phrase is the article's and the broad one is refused, as before.
  * `except` are candidates not compared against (for a secondary phrase: the brief's own target).
  */
 export function bestFit(row: ShortlistRow, text: { readonly question: string; readonly title: string }, targets: readonly ShortlistRow[], except: ReadonlySet<string> = new Set()): 'fits' | 'does_not_fit' | 'fits_another_better' | 'tied' {
@@ -371,10 +375,17 @@ export function bestFit(row: ShortlistRow, text: { readonly question: string; re
   const myWords = meaningWords(row.phrase);
   let brief: Set<string> | null = null;
   let tied = false;
+  // The extra words of each narrower phrase (this phrase plus more words, all in the brief) that fits better.
+  const narrower: Set<string>[] = [];
   for (const other of targets) {
     if (other.id === row.id || except.has(other.id) || other.phrase === row.phrase) continue;
     const o = fitScore(other.phrase, text);
-    if (beats(o, mine)) return 'fits_another_better';
+    if (beats(o, mine)) {
+      const extra = mine.share === 1 && o.share === 1 ? extraWords(meaningWords(other.phrase), myWords) : null;
+      if (!extra) return 'fits_another_better';
+      narrower.push(extra);
+      continue;
+    }
     if (!ties(o, mine)) continue;
     // A twin wholly in the brief binds only when no other twin is worded closer to it. Twins that only half fit (a
     // "boiler repair" pair on a boiler servicing article) still tie: there the tie is the only thing that refuses them.
@@ -386,7 +397,22 @@ export function bestFit(row: ShortlistRow, text: { readonly question: string; re
     // The same share over the same number of words: the brief cannot tell the two apart, so neither is bound.
     tied = true;
   }
+  // Narrower phrases that fit better (review2 P2): when one of them covers every extra word the brief names, the
+  // article is about that narrower topic ("Landlord Insurance Cost: What Affects Your Premium"). When none does, the
+  // brief names several sub-topics ("Landlord Insurance: Cover, Costs and How to Compare Quotes") and is broader than
+  // each of them, so the broad phrase is its phrase.
+  if (narrower.length) {
+    const all = new Set(narrower.flatMap((x) => [...x]));
+    if (narrower.some((x) => [...all].every((w) => x.has(w)))) return 'fits_another_better';
+  }
   return tied ? 'tied' : 'fits';
+}
+
+/** The words `other` has beyond `mine` when it holds every word of `mine` and more (a narrower phrase), else null. */
+function extraWords(other: ReadonlySet<string>, mine: ReadonlySet<string>): Set<string> | null {
+  if (other.size <= mine.size) return null;
+  for (const w of mine) if (!other.has(w)) return null;
+  return new Set([...other].filter((w) => !mine.has(w)));
 }
 
 /**

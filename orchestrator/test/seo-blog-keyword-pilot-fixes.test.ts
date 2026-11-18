@@ -102,3 +102,36 @@ test('P1 on the reviewer\'s data: no twin tie refuses a correct choice, and no s
   for (const phrase of ['boiler repair', 'estate agent fees']) assert.ok(!p.rightRefused.some((r) => r.startsWith(`${phrase} ⇐`)), phrase);
   assert.deepEqual(s.slipsBound, [], 'no sibling slip binds');
 });
+
+test('P2: a pillar whose title names several sub-topics binds its broad phrase; an article about one sub-topic still refuses it', () => {
+  const insurance = ['landlord insurance', 'landlord insurance cost', 'landlord insurance quotes', 'landlord contents insurance'];
+  const pillar = ['What does landlord insurance cover and what does it cost?', 'Landlord Insurance: Cover, Costs and How to Compare Quotes'] as const;
+  const cost = ['How much does landlord insurance cost?', 'Landlord Insurance Cost: What Affects Your Premium'] as const;
+  const quotes = ['How do I compare landlord insurance quotes?', 'Comparing Landlord Insurance Quotes Properly'] as const;
+  assert.deepEqual(bindOne(insurance, 'landlord insurance', ...pillar), { phrase: 'landlord insurance', reason: null });
+  assert.deepEqual(bindOne(['loft conversion', 'loft conversion cost', 'loft conversion planning permission'], 'loft conversion', 'Is a loft conversion worth it?', 'Loft Conversions: Cost, Planning Permission and Added Value'),
+    { phrase: 'loft conversion', reason: null });
+  assert.deepEqual(bindOne(['self assessment', 'self assessment deadline', 'self assessment penalties', 'sole trader tax'], 'self assessment', 'How does self assessment work for a sole trader?',
+    'Self Assessment: Deadlines, Penalties and How to File'), { phrase: 'self assessment', reason: null });
+  // One sub-topic named: the narrower phrase is the article's; the broad one is refused, as before.
+  assert.deepEqual(bindOne(insurance, 'landlord insurance', ...cost), { phrase: null, reason: 'fits_another_better' });
+  assert.deepEqual(bindOne(insurance, 'landlord insurance', ...quotes), { phrase: null, reason: 'fits_another_better' });
+  assert.equal(bindOne(insurance, 'landlord insurance cost', ...cost).phrase, 'landlord insurance cost');
+  // A narrower phrase that covers every extra word still wins: "cost calculator" holds "cost".
+  const calc = ['landlord insurance', 'landlord insurance cost', 'landlord insurance cost calculator'];
+  assert.deepEqual(bindOne(calc, 'landlord insurance', 'How do I use a landlord insurance cost calculator?', 'Landlord Insurance Cost Calculator'), { phrase: null, reason: 'fits_another_better' });
+  // The sub-topic phrases do not bind on the pillar: two of them fit it equally well.
+  assert.deepEqual(bindOne(insurance, 'landlord insurance cost', ...pillar), { phrase: null, reason: 'tied' });
+  // A broad phrase only half in the brief gains nothing from narrower phrases.
+  assert.deepEqual(bindOne(['boiler service', 'boiler service cost', 'boiler service plan'], 'boiler service', 'How often does a boiler need checking?', 'Boiler Checks: Cost and Plans'),
+    { phrase: null, reason: 'fits_another_better' });
+});
+
+test('P2 on the reviewer\'s data: both pillars that lost their phrase now bind, and still no sibling slip binds', (t) => {
+  const s = shortlistTable(), p = pairTable();
+  t.diagnostic(`shortlists: correct refused ${s.refused.length}/56 [${s.refused.join('; ')}], slips bound ${s.slipsBound.length}/336`);
+  for (const pillar of ['G insurance broker: landlord insurance', 'H accountant: self assessment']) assert.ok(!s.refused.includes(pillar), pillar);
+  for (const phrase of ['landlord insurance', 'loft conversion']) assert.ok(!p.rightRefused.some((r) => r.startsWith(`${phrase} ⇐`)), phrase);
+  assert.deepEqual(s.slipsBound, [], 'no sibling slip binds');
+  assert.ok(s.refused.length <= 1, `correct refused ${s.refused.length}/56 (at most 1: "boiler service" against servicing, a stem miss)`);
+});
