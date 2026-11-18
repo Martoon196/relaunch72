@@ -60,6 +60,7 @@ export const REPORT_MESSAGES = Object.freeze({
   noRows: 'This report has no tracking ID rows.',
   unreadable: 'We could not read this file. Download the Tracking ID Summary from Amazon again and upload it without changing it.',
   encoding: 'We could not read the letters in this file. Upload the file exactly as Amazon gave it to you.',
+  extraCells: 'One of the rows in this file has more figures than there are column names, so we cannot tell which figure is which. This can happen when an amount is written with a comma, such as 1,50. Download the Tracking ID Summary from Amazon again and upload it without changing it.',
 });
 
 function normalise(s: string): string { return s.trim().toLowerCase().replace(/[\u00a0\s\-_./()]+/gu, ''); }
@@ -162,6 +163,9 @@ export function parseAmazonTrackingReport(text: string): AmazonTrackingIdReport 
   if (rows.length - headerAt - 1 > 2000) throw new AmazonReportError(REPORT_MESSAGES.tooManyIds);
   const output: TrackingIdReportRow[] = [];
   for (const r of rows.slice(headerAt + 1)) {
+    // A row with more filled cells than the header has columns is never read by position (review S-c): "1,50" unquoted in
+    // a comma file would otherwise be read as £1.00 with the 50 dropped. Empty cells at the end are harmless.
+    if (r.length > headers.length && r.slice(headers.length).some(Boolean)) throw new AmazonReportError(REPORT_MESSAGES.extraCells);
     const id = (r[idColumn] ?? '').trim();
     if (!id) continue;
     if (isTotalRow(id)) continue; // never counted twice

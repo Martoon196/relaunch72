@@ -1009,3 +1009,15 @@ test('P1: after the Amazon website is changed, the article\'s old links count as
   await assert.rejects(s.engine.approve(OWNER, s.brand.id, article.id, updated.id), /critical issues/);
   void bay;
 });
+
+test('S-c: a report row with more figures than the header is refused in plain words; empty trailing cells are fine', () => {
+  const H = 'Tracking ID,Clicks,Ordered Items,Shipped Items,Earnings\n';
+  const continental = readAmazonTrackingReport(`${H}harbour-21,1,1,1,1,50\n`);
+  assert.equal(continental.ok, false);
+  assert.match((continental as { reason: string }).reason, /more figures than there are column names/);
+  assert.match((continental as { reason: string }).reason, /such as 1,50/);
+  const trailing = readAmazonTrackingReport(`${H}harbour-21,1,1,1,1.50,,\n`);
+  assert.ok(trailing.ok && trailing.report.rows[0]!.earningsMinor === 150);
+  const tab = readAmazonTrackingReport('Tracking ID\tClicks\tEarnings\nharbour-21\t3\t£2.00\tsurprise\n');
+  assert.equal(tab.ok, false);
+});
