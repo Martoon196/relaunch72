@@ -733,7 +733,11 @@ test('N5 and N6: a month that has not started is refused, the same figures for a
   assert.equal(r.isError, false, r.notice);
   r = await up('2026-09');
   assert.equal(r.isError, true); assert.match(r.notice, /exactly the same figures as Amazon's report for October 2026/);
-  assert.match((await call(svc, id, 'GET', `${base}/results`)).body, /name="sameFiguresConfirmed"/);
+  // S-e: the tick is shown only on the page that refusal leads to, never on Results otherwise.
+  assert.match((await call(svc, id, 'GET', r.headers.location!)).body, /name="sameFiguresConfirmed"/);
+  assert.doesNotMatch((await call(svc, id, 'GET', `${base}/results`)).body, /sameFiguresConfirmed|even if its figures match/);
+  const otherError = await up('2099-11');
+  assert.doesNotMatch((await call(svc, id, 'GET', otherError.headers.location!)).body, /sameFiguresConfirmed/);
   r = await up('2026-09', file, [['sameFiguresConfirmed', '1']]);
   assert.equal(r.isError, false, r.notice);
   assert.equal(s.aff.reports_.length, 2);

@@ -15,7 +15,7 @@ import { cleanDisplay, quotedName, siteHost } from '../affiliate/article.js';
 import { monthRange } from '../affiliate/report-store.js';
 import type { AffiliateResult } from '../affiliate/product-store.js';
 import type { AffiliateStores } from './affiliate-service.js';
-import { monthName, productsPage, reportPage, reportsCard, programmeCard, writePage } from './affiliate-views.js';
+import { monthName, productsPage, reportPage, reportsCard, programmeCard, SAME_FIGURES_OPENING, writePage } from './affiliate-views.js';
 import type { Shell } from './seo-blog-view.js';
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -219,7 +219,7 @@ export async function affiliatePost(ctx: {
     // The same figures as another month's report: kept only when the owner says this file really is for this month (review N5).
     const listed = await stores.reports.list(brandId);
     const twin = listed.ok && monthRange(month) ? listed.value.find((x) => x.reportStart.slice(0, 7) !== month && sameFigures(x.summary, x.rowCount, reading.report)) : undefined;
-    if (twin && !tick('sameFiguresConfirmed')) return ctx.fail(`${base}/results`, `This file has exactly the same figures as Amazon's report for ${monthName(twin.reportStart)}. If it really is the report for ${monthName(`${month}-01`)}, tick the box that says so and add it again.`);
+    if (twin && !tick('sameFiguresConfirmed')) return ctx.fail(`${base}/results`, `${SAME_FIGURES_OPENING}${monthName(twin.reportStart)}. If it really is the report for ${monthName(`${month}-01`)}, tick the box that says so and add it again.`);
   }
   const r = await stores.reports.save({ workspaceId: brandId, month, originalText: decoded.text, commandId });
   if (!r.ok) return ctx.fail(`${base}/results`, message(r));

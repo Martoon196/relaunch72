@@ -130,9 +130,12 @@ ${d.reports.length ? `<ul class="af-reports">${d.reports.map(line).join('')}</ul
 <form method="post" action="${e(href(b, 'results/report'))}" enctype="multipart/form-data" class="af-form">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(d.commandId)}">
 <label for="af-month">Which month it covers</label><input id="af-month" type="month" name="month" required value="${e(d.thisMonth)}">
 <label for="af-file">The Tracking ID Summary file</label><input id="af-file" type="file" name="file" required accept=".csv,.tsv,.txt,text/csv,text/plain">
-<label class="af-tick"><input type="checkbox" name="sameFiguresConfirmed" value="1"> This file is for the month above, even if its figures match another month's.</label>
-<button type="submit" class="ca-btn-quiet">Add Amazon's report</button></form><style>${AFFILIATE_CSS}</style></section>`;
+${sameFiguresAsked(shell) ? '<label class="af-tick"><input type="checkbox" name="sameFiguresConfirmed" value="1"> This file is for the month above, even if its figures match another month\'s.</label>\n' : ''}<button type="submit" class="ca-btn-quiet">Add Amazon's report</button></form><style>${AFFILIATE_CSS}</style></section>`;
 }
+
+/** The words that begin the "exactly the same figures" refusal; the tick that answers it is shown only after it (review S-e). */
+export const SAME_FIGURES_OPENING = 'This file has exactly the same figures as Amazon\'s report for ';
+const sameFiguresAsked = (shell: Shell) => Boolean(shell.error?.startsWith(SAME_FIGURES_OPENING));
 
 export function reportPage(shell: Shell, b: Brand, r: SavedReport): string {
   const p = r.payload;
