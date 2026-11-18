@@ -11,7 +11,7 @@ import { SeoBlogError, type Brand } from '../seo-blog/types.js';
 import type { Actor, SeoBlogEngine } from '../seo-blog/engine.js';
 import { programmeFor, parseRegisteredSite } from '../affiliate/programmes.js';
 import { decodeReportBytes, readAmazonTrackingReport, reportTrackingIdProblem } from '../affiliate/amazon-tracking-report.js';
-import { cleanDisplay, quotedName } from '../affiliate/article.js';
+import { cleanDisplay, quotedName, siteHost } from '../affiliate/article.js';
 import { monthRange } from '../affiliate/report-store.js';
 import type { AffiliateResult } from '../affiliate/product-store.js';
 import type { AffiliateStores } from './affiliate-service.js';
@@ -101,18 +101,25 @@ export async function affiliatePost(ctx: {
 
   if (rest === 'affiliate/settings') {
     const revision = Number(f('revision') ?? '0');
+    const tracking = programme.validateTrackingId(f('trackingId') ?? ''), site = parseRegisteredSite(f('registeredSite') ?? '');
+    const typed = tracking.ok && site.ok && tick('siteListed') && tick('accountMine') ? { trackingId: tracking.trackingId, registeredSite: site.site } : null;
     const before = await stores.products.settings(brandId, 'amazon_uk');
+    // Approvals are taken back BEFORE the new details are saved (review S-a): if anything fails after this, nothing is
+    // left approved with a link made for the old tracking ID or website. Only articles whose links differ are touched.
+    let cleared = typed && before.ok && before.value ? await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, { settings: typed }) : 0;
     const r = await stores.products.saveSettings({ workspaceId: brandId, programme: 'amazon_uk', expectedRevision: Number.isSafeInteger(revision) ? revision : -1,
       trackingId: f('trackingId') ?? '', registeredSite: f('registeredSite') ?? '', siteListedConfirmed: tick('siteListed'), accountConfirmed: tick('accountMine'), commandId });
-    if (!r.ok) {
-      const tracking = programme.validateTrackingId(f('trackingId') ?? ''), site = parseRegisteredSite(f('registeredSite') ?? '');
-      return ctx.fail(`${base}/publishing#affiliate`, !tracking.ok ? tracking.reason : !site.ok ? site.reason : !tick('siteListed') || !tick('accountMine') ? 'Tick both boxes to confirm the website and tracking ID are yours.' : message(r));
-    }
     const after = await stores.products.settings(brandId, 'amazon_uk');
-    const saved = after.ok ? after.value : null, old = before.ok ? before.value : null;
-    // A changed tracking ID or website takes back approval of every linked article not yet live (review S1).
-    const cleared = saved && old && !r.value.replayed && (old.trackingId !== saved.trackingId || old.registeredSite !== saved.registeredSite)
-      ? await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, {}) : 0;
+    const saved = after.ok ? after.value : null;
+    // A stale or replayed form whose details are already the saved ones is the same save arriving again: it counts as
+    // saved, never as "changed somewhere else" (review S-a).
+    const alreadySaved = Boolean(typed && saved && saved.trackingId === typed.trackingId && siteHost(saved.registeredSite) === siteHost(typed.registeredSite));
+    if (!r.ok && !alreadySaved) {
+      return ctx.fail(`${base}/publishing#affiliate`, (!tracking.ok ? tracking.reason : !site.ok ? site.reason : !tick('siteListed') || !tick('accountMine') ? 'Tick both boxes to confirm the website and tracking ID are yours.' : message(r))
+        + (cleared ? ` ${clearedWords(cleared)}` : ''));
+    }
+    // Once more against what is saved now: an article approved meanwhile, or a save that arrived twice (review S-a).
+    if (saved) cleared += await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, { settings: saved });
     return ctx.ok(`${base}/publishing#affiliate`, `Your Amazon UK details are saved. Links use your tracking ID ${idWords(saved?.trackingId ?? (f('trackingId') ?? '').trim())}.${cleared ? ` ${clearedWords(cleared)}` : ''}`);
   }
 
@@ -160,10 +167,16 @@ export async function affiliatePost(ctx: {
   const retire = new RegExp(`^products/(${UUID})/retire$`, 'i').exec(rest);
   if (retire) {
     const productId = retire[1]!.toLowerCase();
+    // Articles linking to it lose their approval until their links are updated (review S1), BEFORE it is retired, so a
+    // lost second step never leaves one approved (review S-a). Only this business's own articles are read.
+    let cleared = await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, { productId });
     const r = await stores.products.retire({ workspaceId: brandId, productId, expectedRevision: Number(f('revision') ?? '0'), commandId });
-    if (!r.ok) return ctx.fail(`${base}/products`, message(r));
-    // Articles linking to it lose their approval until their links are updated (review S1).
-    const cleared = r.value.replayed ? 0 : await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, { productId });
+    if (!r.ok) {
+      // A stale or replayed form for a product that is retired by now is the same press arriving again (review S-a).
+      const now = await stores.products.get(brandId, productId);
+      if (!(now.ok && now.value?.status === 'retired')) return ctx.fail(`${base}/products`, message(r) + (cleared ? ` ${clearedWords(cleared)}` : ''));
+    }
+    cleared += await ctx.engine.affiliateDetailsChanged(ctx.actor, brandId, { productId });
     return ctx.ok(`${base}/products`, `You have stopped using that product. Articles already written keep their link until you update them.${cleared ? ` ${clearedWords(cleared)}` : ''}`);
   }
 

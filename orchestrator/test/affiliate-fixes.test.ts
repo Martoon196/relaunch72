@@ -918,3 +918,74 @@ test('P2: after a page fails its check, the same article with its product links 
   const held = await art(s, row.article.id);
   assert.deepEqual({ delivery: held.delivery, reason: held.hold?.reason, detail: held.hold?.detail }, { delivery: 'none', reason: 'destination', detail: AFFILIATE_PAGE_BLOCK });
 });
+
+test('S-a: approvals are taken back before the new tracking ID is saved; a lost second step, a replayed form or a stale form whose details are already saved still takes them back, without "changed somewhere else"', async () => {
+  const svcFor = (s: Setup) => service(s.engine, s.aff);
+  const form = (revision: string): [string, string][] => [['commandId', randomUUID()], ['revision', revision], ['trackingId', 'corrected-21'], ['registeredSite', 'harbour.example'], ['siteListed', '1'], ['accountMine', '1']];
+  async function approvedScheduled() {
+    const s = await setup();
+    const w = await writeOne(s);
+    const dest = await connectGithub(s);
+    await s.engine.approve(OWNER, s.brand.id, w.article.id, w.version.id);
+    const a = await art(s, w.article.id);
+    await s.engine.schedule(OWNER, s.brand.id, w.article.id, a.rowVersion, { localDate: '2026-11-03', localTime: '09:00', destinationId: dest.id });
+    return { s, ...w };
+  }
+  // (1) The database connection is lost right after the details are saved: the approval is already gone.
+  {
+    const { s, article } = await approvedScheduled();
+    const save = s.aff.products.saveSettings.bind(s.aff.products), real = s.engine.affiliateDetailsChanged.bind(s.engine);
+    let saved = false, boom = true;
+    (s.aff.products as { saveSettings: unknown }).saveSettings = async (a: never) => { const r = await save(a); saved = true; return r; };
+    s.engine.affiliateDetailsChanged = async (...a: Parameters<typeof real>) => { if (saved && boom) { boom = false; throw new Error('database connection lost'); } return real(...a); };
+    const f = form('1');
+    await call(svcFor(s), who(s.brand.id), 'POST', `/portal/seo-blog/b/${s.brand.id}/affiliate/settings`, { form: f }).catch(() => null);
+    assert.equal(s.aff.settings_!.trackingId, 'corrected-21');
+    assert.equal((await art(s, article.id)).approval, null, 'taken back before the save, so a lost second step leaves nothing approved with the old link');
+    // The same form sent again: saved, not "changed somewhere else".
+    const again = await call(svcFor(s), who(s.brand.id), 'POST', `/portal/seo-blog/b/${s.brand.id}/affiliate/settings`, { form: f });
+    assert.equal(again.isError, false, again.notice);
+    assert.doesNotMatch(again.notice, /somewhere else/);
+    assert.match(again.notice, /Your Amazon UK details are saved\. Links use your tracking ID “corrected-21”\./);
+    s.h.clock.set('2026-11-03T09:00:30.000Z');
+    await s.worker.tick('w');
+    assert.equal((await art(s, article.id)).hold?.reason, 'missing_approval');
+    assert.deepEqual(linkedPages(s), []);
+  }
+  // (2) The save went through but its answer was lost, and the article was approved again meanwhile: the stale form
+  // (stored ID already equals the typed one) still takes the approval back and says the details are saved.
+  {
+    const { s, article } = await approvedScheduled();
+    await s.aff.products.saveSettings({ workspaceId: s.brand.id, programme: 'amazon_uk', expectedRevision: 1, trackingId: 'corrected-21', registeredSite: SITE, siteListedConfirmed: true, accountConfirmed: true });
+    assert.ok((await art(s, article.id)).approval);
+    const r = await call(svcFor(s), who(s.brand.id), 'POST', `/portal/seo-blog/b/${s.brand.id}/affiliate/settings`, { form: form('1') });
+    assert.equal(r.isError, false, r.notice);
+    assert.doesNotMatch(r.notice, /somewhere else/);
+    assert.match(r.notice, /1 approved article with product links now waits for your approval again\./);
+    assert.equal((await art(s, article.id)).approval, null);
+    // A genuinely different save in between is still refused as changed elsewhere.
+    const other = await call(svcFor(s), who(s.brand.id), 'POST', `/portal/seo-blog/b/${s.brand.id}/affiliate/settings`, { form: [['commandId', randomUUID()], ['revision', '1'], ['trackingId', 'third-21'], ['registeredSite', 'harbour.example'], ['siteListed', '1'], ['accountMine', '1']] });
+    assert.equal(other.isError, true);
+    assert.equal(s.aff.settings_!.trackingId, 'corrected-21');
+  }
+  // (3) Retiring a product: taken back first; a retire whose product is already retired (a resent or stale form) still takes it back.
+  {
+    const { s, article, products } = await approvedScheduled();
+    const retire = s.aff.products.retire.bind(s.aff.products), real = s.engine.affiliateDetailsChanged.bind(s.engine);
+    let retired = false, boom = true;
+    (s.aff.products as { retire: unknown }).retire = async (a: never) => { const r = await retire(a); retired = true; return r; };
+    s.engine.affiliateDetailsChanged = async (...a: Parameters<typeof real>) => { if (retired && boom) { boom = false; throw new Error('database connection lost'); } return real(...a); };
+    const path = `/portal/seo-blog/b/${s.brand.id}/products/${products[0]!.productId}/retire`, f: [string, string][] = [['commandId', randomUUID()], ['revision', '1']];
+    await call(svcFor(s), who(s.brand.id), 'POST', path, { form: f }).catch(() => null);
+    assert.equal(s.aff.products_[0]!.status, 'retired');
+    assert.equal((await art(s, article.id)).approval, null);
+    // Approved again meanwhile (as a stale page might), then the same form again.
+    const a = await art(s, article.id);
+    await s.h.store.updateArticle({ ...a, approval: { versionId: a.currentVersionId!, contentSha: (await s.h.store.getVersion(s.brand.id, a.currentVersionId!))!.contentSha, approvedAt: s.h.clock.now(), approvedBy: OWNER.userId } as never });
+    const again = await call(svcFor(s), who(s.brand.id), 'POST', path, { form: f });
+    assert.equal(again.isError, false, again.notice);
+    assert.doesNotMatch(again.notice, /somewhere else/);
+    assert.match(again.notice, /You have stopped using that product\./);
+    assert.equal((await art(s, article.id)).approval, null);
+  }
+});

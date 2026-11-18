@@ -8,7 +8,8 @@ import { unlimited, monthlyCeiling, enforceManagedLimits, COMPATIBLE_UNLIMITED }
 import type { AffiliateProduct, ProgrammeSettings } from '../affiliate/product-store.js';
 import { AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_BLOCK, AFFILIATE_PAGE_PASSED, AFFILIATE_PAGE_UNVERIFIED, checkAffiliatePage } from '../affiliate/page-check.js';
 import { usableProductSource, withoutAffiliateParams } from '../affiliate/article.js';
-import { affiliateSiteProblem, bindAffiliate, linkStatus, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
+import { programmeFor } from '../affiliate/programmes.js';
+import { affiliateSiteProblem, bindAffiliate, linkStatus, siteHost, productBriefFields, productSnapshot, pruneAffiliate, refreshedAffiliate, type ArticleAffiliate, type ProductArticleKind } from '../affiliate/article.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt } from '../stages/prompt.js';
@@ -2678,25 +2679,37 @@ export class SeoBlogEngine {
   }
 
   /**
-   * The owner changed their Amazon UK details or stopped using a product (review S1): every approval of a linked
-   * article not yet live in that version is taken back, so nothing goes out with a link made before the change. With
-   * `productId`, only articles linking to that product. Returns how many approvals were taken back.
+   * The owner is changing their Amazon UK details or stopping a product (review S1): every approval of a linked article
+   * not yet live in that version is taken back, so nothing goes out with a link made before the change. With
+   * `productId`, only articles linking to that product. With `settings` (the details about to be saved, or saved), only
+   * articles whose links do not use that tracking ID or were made for another website. The portal calls this BEFORE it
+   * saves, and again after, so a lost second step, a replayed form or a stale form never leaves an old link approved
+   * (review S-a); a second call takes back nothing more. Returns how many approvals were taken back.
    */
-  async affiliateDetailsChanged(actor: Actor, brandId: string, change: { readonly productId?: string }): Promise<number> {
+  async affiliateDetailsChanged(actor: Actor, brandId: string, change: { readonly productId?: string; readonly settings?: { readonly trackingId: string; readonly registeredSite: string } }): Promise<number> {
     await this.brandFor(actor, brandId);
     let n = 0;
+    const outdated = (a: ArticleAffiliate) => {
+      if (change.productId) return a.links.some((l) => l.productId === change.productId);
+      if (!change.settings) return true;
+      const programme = programmeFor(a.programme);
+      return siteHost(a.registeredSite) !== siteHost(change.settings.registeredSite) || a.links.some((l) => !programme?.validateLink(l.url, change.settings!.trackingId).ok);
+    };
     for (const article of await this.store.listArticles(brandId)) {
       if (!article.approval || !article.currentVersionId) continue;
       if (article.delivery === 'published' && article.publishedVersionId === article.currentVersionId) continue;
       const version = await this.store.getVersion(brandId, article.currentVersionId);
-      const links = version?.body.affiliate?.links ?? [];
-      if (!links.length || (change.productId && !links.some((l) => l.productId === change.productId))) continue;
+      const affiliate = version?.body.affiliate;
+      if (!affiliate?.links.length || !outdated(affiliate)) continue;
+      let cleared = false;
       for (let i = 0; i < 3; i++) {
         const fresh = await this.store.getArticle(brandId, article.id);
         if (!fresh?.approval || fresh.currentVersionId !== article.currentVersionId) break;
-        try { await this.store.updateArticle({ ...fresh, approval: null }); n++; break; }
+        try { await this.store.updateArticle({ ...fresh, approval: null }); cleared = true; break; }
         catch (error) { if (!(error instanceof StaleWriteError)) throw error; }
       }
+      if (!cleared) continue;
+      n++;
       await this.log(brandId, actor.userId, 'affiliate.approval_cleared', 'Approval was taken back because your Amazon UK details or products changed. Update the links, then approve it again.', article.id);
     }
     return n;
