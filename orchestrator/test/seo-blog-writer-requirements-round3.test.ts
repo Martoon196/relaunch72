@@ -9,6 +9,8 @@ import * as P from '../src/portal/seo-blog-seo-panel.js';
 import * as Sc from '../src/seo-blog/seo-score.js';
 import * as SR from '../src/seo-blog/search-requirements.js';
 import { loadPrompt } from '../src/stages/prompt.js';
+import * as Ch from '../src/seo-blog/checks.js';
+import * as F from './seo-blog-writer-requirements-fixtures.js';
 import type { ArticleBrief, ArticleVersion } from '../src/seo-blog/types.js';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -233,4 +235,40 @@ test('P3: what should still be refused is refused (figures the article does not 
     ['Tenancy deposit protection by acme-lettings.co.uk', 'address', optCtx],
     ['Booking.com fees for hosts at acme.co.uk', 'address', { ...optCtx, phrase: 'booking.com fees for hosts', proseText: 'Fees for hosts vary.' }],
   ] as const) assert.ok(SR.optionProblems(title, 'title', ctx as Any).includes(want as Any), `${title}: ${JSON.stringify(SR.optionProblems(title, 'title', ctx as Any))}`);
+});
+
+// ─── S1: a failing Google field with no passing option waits for the owner ───
+
+test('S1: a Google title kept although it names an exclusion, an address, unproven proof or clickbait sets "needs approval" with a plain reason', async () => {
+  const s = await F.setup();
+  s.h.llm.articleOverride = (base: Any) => ({ ...base, seo_title: 'Tenancy deposit protection: award-winning help at acme-lettings.co.uk', title_options: ['Tenancy deposit protection explained!'] });
+  const { article, version } = await F.write(s, s.pillar.id);
+  assert.equal(version!.body.seoTitle, 'Tenancy deposit protection: award-winning help at acme-lettings.co.uk', 'kept: no option passed');
+  assert.equal(article!.requiresApproval, true);
+  const issue = article!.checks!.issues.find((i) => i.code === 'meta.seo_title_needs_check')!;
+  assert.match(issue.message, /^The Google title contains a web address and claims proof such as awards, reviews or ratings that the article does not show, and no better wording was available, so this article waits for your approval\.$/);
+  assert.equal(issue.severity, 'warning');
+  assert.doesNotMatch(issue.message + issue.fix, /model|claude|anthropic|dataforseo|supplier|method|prompt|option/i);
+  const activity = await s.h.store.listActivity(s.brandId, 500);
+  assert.ok(activity.some((a: Any) => a.kind === 'article.needs_approval' && a.message === issue.message));
+});
+
+test('S1: a title replaced by a passing option, or failing only a lesser check, publishes as before (no approval flag)', async () => {
+  const s = await F.setup();
+  s.h.llm.articleOverride = (base: Any) => ({ ...base, seo_title: 'Tenancy deposit protection: award-winning help', title_options: ['Tenancy deposit protection: a plain guide for landlords'] });
+  const replaced = await F.write(s, s.pillar.id);
+  assert.equal(replaced.version!.body.seoTitle, 'Tenancy deposit protection: a plain guide for landlords');
+  assert.equal(replaced.article!.requiresApproval, false);
+  assert.ok(!replaced.article!.checks!.issues.some((i) => /needs_check/.test(i.code)));
+  // Unknown name only (no serious failure): kept, recorded, no flag.
+  const other = s.briefs.find((b) => b.id !== s.pillar.id && SR.hasSearchTarget(b))!;
+  s.h.llm.articleOverride = (base: Any) => ({ ...base, seo_title: `${other.seo!.primary.phrase}: notes from Zedland`, title_options: [] });
+  const lesser = await F.write(s, other.id);
+  assert.ok(lesser.version!.generation!.searchDraft!.title!.main.includes('unknown_name'));
+  assert.equal(lesser.article!.requiresApproval, false);
+  // The helper reads only a record that kept a failing field.
+  assert.deepEqual(Ch.searchFieldsHeld(null), []);
+  assert.deepEqual(Ch.searchFieldsHeld({ searchDraft: { title: { chosen: 'option', main: ['excluded'] } } } as Any), []);
+  assert.equal(Ch.searchFieldsHeld({ searchDraft: { description: { chosen: 'model', main: ['excluded', 'too_long'] } } } as Any)[0]!.message,
+    'The short description names a subject your business has asked us to avoid, and no better wording was available, so this article waits for your approval.');
 });

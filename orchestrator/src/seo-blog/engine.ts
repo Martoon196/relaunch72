@@ -12,7 +12,7 @@ import type { LlmClient } from '../llm/client.js';
 import { loadPrompt } from '../stages/prompt.js';
 import { stageModel } from '../config.js';
 import type { KeywordProvider } from '../keyword/types.js';
-import { runChecks } from './checks.js';
+import { runChecks, searchFieldsHeld } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
   extractProfile, GenerationUnavailableError, GenerationRejectedError, CampaignGenerationRejectedError, proposeCluster, PLAN_SCHEMA_V2_VERSION, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
@@ -1689,6 +1689,7 @@ export class SeoBlogEngine {
     if (payload.fromVersionId && article.currentVersionId !== payload.fromVersionId) return article; // superseded meanwhile
     if(!payload.fromVersionId && article.campaignGeneration) {
       const retained=article.campaignGeneration;
+      if(searchFieldsHeld(retained.articleGeneration).length&&!article.requiresApproval)article=await this.store.updateArticle({...article,requiresApproval:true});
       await this.appendVersion(brand,article,retained.body,'generated',null,payload.requestedBy??'system',retained.articleGeneration,profile,brief,sourceKnowledgeSha,false,claimedJob);
       await this.store.saveBrief({...brief,status:'generated',articleId:article.id});
       const completed=(await this.store.getArticle(brandId,article.id))!;
@@ -1744,7 +1745,12 @@ export class SeoBlogEngine {
     // Product links are bound in code to the part about each product; they are never in the prose.
     const withLinks: ArticleBody = brief.products ? { ...body, affiliate: bindAffiliate(body.sections, brief.products) } : body;
     // A product article gets no social drafts in this slice (no model call for them).
+    // A Google title or description kept although it failed a serious check (no alternative passed) never publishes
+    // unseen: the article waits for the owner's approval, and the checks on this version say why in plain words.
+    const held = searchFieldsHeld(written.record);
+    if (held.length && !article.requiresApproval) article = await this.store.updateArticle({ ...article, requiresApproval: true });
     const version = await this.appendVersion(brand, article, withLinks, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,Boolean(brief.products),claimedJob);
+    for (const h of held) await this.log(brandId, payload.requestedBy ?? 'system', 'article.needs_approval', h.message, article.id);
     await this.store.saveBrief({ ...(await this.store.getBrief(brandId, brief.id))!, status: 'generated', articleId: article.id });
     await this.log(brandId, payload.requestedBy ?? 'system', previous ? 'article.regenerated' : 'article.generated', `“${body.title}” ${previous ? 'regenerated' : 'written'} (version ${version.number}).`, article.id);
     await this.queueAutomaticArticleImage(brand, article, version, profile);

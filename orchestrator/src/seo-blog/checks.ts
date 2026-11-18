@@ -12,7 +12,7 @@ import { GLOBAL_BANNED_PHRASES } from '../qa/banned.js';
 import { normalizeLoose, normalizeText } from '../util/text.js';
 import { topicSimilarity } from './dedupe.js';
 import { sameSite } from './inventory.js';
-import type { ArticleVersion, BrandProfile, CheckIssue, CheckReport, ResearchSource } from './types.js';
+import type { ArticleVersion, BrandProfile, CheckIssue, CheckReport, GenerationRecord, ResearchSource } from './types.js';
 
 export interface CheckContext {
   readonly profile: BrandProfile;
@@ -64,6 +64,36 @@ export function materialFigures(sentence: string): string[] {
 
 function digitsOf(figure: string): string {
   return figure.replace(/[^\d.]/g, '').replace(/\.0+$/, '').replace(/^0+(?=\d)/, '');
+}
+
+/** Failures of a Google title or description that must never publish without the owner seeing them, in plain words. */
+const HELD_PROBLEMS: Readonly<Record<string, string>> = {
+  excluded: 'names a subject your business has asked us to avoid',
+  address: 'contains a web address',
+  unverified_proof: 'claims proof such as awards, reviews or ratings that the article does not show',
+  clickbait: 'reads as clickbait',
+};
+
+/**
+ * The Google title and short description the writer kept although they failed a serious check and no alternative
+ * passed (recorded on the version's generation record when it was written with search requirements). Each comes with a
+ * plain-English reason for the owner. Empty for every other version. Never throws.
+ */
+export function searchFieldsHeld(generation: GenerationRecord | null | undefined): { readonly field: 'title' | 'description'; readonly problems: readonly string[]; readonly message: string; readonly fix: string }[] {
+  const draft: unknown = generation && typeof generation === 'object' ? (generation as { searchDraft?: unknown }).searchDraft : null;
+  if (!draft || typeof draft !== 'object') return [];
+  const out: { field: 'title' | 'description'; problems: string[]; message: string; fix: string }[] = [];
+  for (const field of ['title', 'description'] as const) {
+    const choice = (draft as Record<string, unknown>)[field] as { chosen?: unknown; main?: unknown } | undefined;
+    if (!choice || typeof choice !== 'object' || choice.chosen !== 'model' || !Array.isArray(choice.main)) continue;
+    const problems = choice.main.filter((p): p is string => typeof p === 'string' && p in HELD_PROBLEMS);
+    if (!problems.length) continue;
+    const what = field === 'title' ? 'The Google title' : 'The short description';
+    const why = problems.map((p) => HELD_PROBLEMS[p]!);
+    const list = why.length > 1 ? `${why.slice(0, -1).join(', ')} and ${why.at(-1)}` : why[0]!;
+    out.push({ field, problems, message: `${what} ${list}, and no better wording was available, so this article waits for your approval.`, fix: `Edit the ${field === 'title' ? 'Google title' : 'short description'} in “How it appears in Google”, then approve the article.` });
+  }
+  return out;
 }
 
 export function figureInText(figure: string, text: string): boolean {
@@ -217,6 +247,9 @@ export function runChecks(version: ArticleVersion, ctx: CheckContext): CheckRepo
       add('warning', 'voice.brand_rule', `The brand guidance says to avoid “${phrase}”.`, 'Rephrase in line with the brand voice.');
     }
   }
+
+  // ── Google title and short description kept although they failed a serious check (search requirements) ──
+  for (const held of searchFieldsHeld(version.generation)) add('warning', `meta.${held.field === 'title' ? 'seo_title' : 'description'}_needs_check`, held.message, held.fix, held.field === 'title' ? 'Google title' : 'Short description');
 
   const deduped = dedupeIssues(issues);
   const status = deduped.some((i) => i.severity === 'critical') ? 'critical' : deduped.length ? 'warnings' : 'pass';
