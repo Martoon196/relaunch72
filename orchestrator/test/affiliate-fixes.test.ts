@@ -22,6 +22,7 @@ import { programmeFor } from '../src/affiliate/programmes.js';
 import { AD_PREFIX, publicBody } from '../src/affiliate/render.js';
 import { affiliatePageProblems, AFFILIATE_PAGE_ALERT, AFFILIATE_PAGE_BLOCK, AFFILIATE_PAGE_UNVERIFIED } from '../src/affiliate/page-check.js';
 import { reportsCard } from '../src/portal/affiliate-views.js';
+import { affiliateGet, affiliatePost, affiliateReportsCard, affiliateSettingsCard } from '../src/portal/affiliate-routes.js';
 import { ContentApiPublisher, renderArticleFragment } from '../src/seo-blog/publishers/content-api.js';
 import { WordPressPublisher } from '../src/seo-blog/publishers/wordpress.js';
 import { renderArticlePage } from '../src/seo-blog/render.js';
@@ -1086,4 +1087,53 @@ test('N-6: the Amazon UK details card says that saving a new tracking ID takes b
   const page = await call(service(s.engine, s.aff), who(s.brand.id), 'GET', `/portal/seo-blog/b/${s.brand.id}/publishing`);
   assert.equal(page.status, 200);
   assert.match(visible(page.body), /Saving a new tracking ID or website takes back your approval of every article with product links that is not on your website yet: open each one, choose Update the links, then approve it again\./);
+});
+
+// ─── Mutation gaps (review N-2): one test per guard ──────────────────────────
+
+test('M04: the dispatcher hands the brief to the gate, so a link-free product article whose stored flag was forced off still waits for approval', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  const dest = await connectGithub(s);
+  await autoPublishOn(s);
+  let v = version;
+  for (const l of version.body.affiliate!.links) v = await s.engine.removeAffiliateLink(OWNER, s.brand.id, article.id, v.id, l.productId);
+  assert.equal(v.body.affiliate?.links.length ?? 0, 0);
+  const a = await art(s, article.id);
+  await s.engine.schedule(OWNER, s.brand.id, article.id, a.rowVersion, { localDate: '2026-11-03', localTime: '09:00', destinationId: dest.id });
+  // A row whose "needs my approval" flag is off (only the brief now says it is a product article).
+  const forced = await art(s, article.id);
+  await s.h.store.updateArticle({ ...forced, requiresApproval: false, approval: null });
+  s.h.clock.set('2026-11-03T09:00:30.000Z');
+  await s.worker.tick('w');
+  const held = await art(s, article.id);
+  assert.equal(held.delivery, 'none');
+  assert.equal(held.hold?.reason, 'missing_approval');
+  assert.deepEqual(siteFiles(s).filter(([k]) => k.includes('what-to-keep')), []);
+});
+
+test('M06: a POST for a business other than the one signed in never asks for the affiliate stores at all', async () => {
+  const h = harness();
+  const home = randomUUID();
+  const brandB = await readyBrand(h, 'Bay Supplies', 'https://bay-shop.example');
+  const engine = new SeoBlogEngine({ store: h.store, llm: h.llm, search: h.search, transport: h.web, publishers: new Map(), vault: h.vault, now: h.clock.now, batchLimit: 20 });
+  const asked: string[] = [];
+  const svc = { ...service(engine, new FakeAffiliate(home)), affiliateFor: (identity: PortalSessionIdentity) => { asked.push(identity.workspaceId); return new FakeAffiliate(identity.workspaceId); } } as PortalSeoBlogService;
+  for (const [path, form] of [['products', [['link', 'https://www.amazon.co.uk/dp/B0TORCH001']]], ['affiliate/settings', [['revision', '0'], ['trackingId', 'x-21']]], [`products/${randomUUID()}/retire`, [['revision', '1']]], ['products/write', [['topic', 't']]]] as [string, [string, string][]][]) {
+    await call(svc, who(home), 'POST', `/portal/seo-blog/b/${brandB.id}/${path}`, { form });
+    assert.deepEqual(asked, [], path);
+  }
+});
+
+test('M07: the affiliate routes refuse stores of another business by themselves (own()), for every read and write', async () => {
+  const s = await setup();
+  const other = new FakeAffiliate(randomUUID());
+  const shell = () => ({ brands: [s.brand], brand: s.brand, tab: null, csrf: 'c' }) as never;
+  const notFound = (e: unknown) => e instanceof Error && /not found/i.test(e.message) && (e as { status?: number }).status === 404;
+  await assert.rejects(affiliateGet({ engine: s.engine, actor: OWNER, brand: s.brand, rest: 'products', stores: other, shell }), notFound);
+  await assert.rejects(affiliateSettingsCard(other, shell(), s.brand), notFound);
+  await assert.rejects(affiliateReportsCard(other, shell(), s.brand, 0, s.h.clock.now()), notFound);
+  const form: Record<string, string> = { commandId: randomUUID(), revision: '0', trackingId: 'stranger-21', registeredSite: 'harbour.example', siteListed: '1', accountMine: '1' };
+  await assert.rejects(affiliatePost({ res: {} as ServerResponse, engine: s.engine, actor: OWNER, brandId: s.brand.id, rest: 'affiliate/settings', stores: other, f: (n) => form[n] ?? null, all: () => [], file: null, ok: () => {}, fail: () => {} }), notFound);
+  assert.equal(other.settings_, null, 'nothing was saved into the other business');
 });
