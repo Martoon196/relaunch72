@@ -36,11 +36,15 @@ function measuredMonth(at: string): string {
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? 'measured' : `measured, ${d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })}`;
 }
-/** The Demand cell: a measured number always names the phrase it was measured for (`6,600 searches a month for "landlord tax"`). */
+/**
+ * The Demand cell: a measured number always names the phrase it was measured for (`6,600 searches a month for "landlord
+ * tax"`). The cell keeps at least 10em (review2 SF1), so on a phone ordinary words wrap at spaces instead of breaking
+ * mid-word in a column squeezed to a few letters; only a word longer than that (a 300-letter phrase) breaks anywhere.
+ */
 function demandCell(brief: ArticleBrief): string {
   const d = measuredDemand(brief);
   if (!d) return brief.demand.kind === 'measured' ? '<span class="muted">Measured, no number on record</span>' : '<span class="muted">Qualitative</span>';
-  return `<span style="overflow-wrap:anywhere">Measured: ${e(demandSentence(d))}${d.retrievedAt ? ` (${e(measuredMonth(d.retrievedAt))})` : ''}</span>`;
+  return `<span class="demand-measured" style="display:inline-block;min-width:10em;overflow-wrap:anywhere">Measured: ${e(demandSentence(d))}${d.retrievedAt ? ` (${e(measuredMonth(d.retrievedAt))})` : ''}</span>`;
 }
 /** The founder's raw research diagnostic: the stored wording, the status code, the task reference. Nothing for a client. */
 function diagnosticDetail(shell: Shell, d: ResearchDiagnostic): string {
