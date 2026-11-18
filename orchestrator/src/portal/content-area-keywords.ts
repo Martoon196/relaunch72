@@ -212,7 +212,7 @@ const KEYWORDS_CSS = `
 .kw-how>summary{cursor:pointer;font-weight:600;color:var(--ca-link);min-height:24px;padding:4px 0}.kw-how p{margin:6px 0 0;color:var(--ca-muted);max-width:680px}
 .kw-empty,.kw-note{margin:0;padding:18px 20px;border-radius:var(--ca-radius-l);background:var(--ca-surface);color:var(--ca-muted)}
 .kw-list{list-style:none;margin:0;padding:0;display:grid;gap:12px}
-.kw-row{padding:16px 20px;border-radius:var(--ca-radius-l);background:var(--ca-surface);box-shadow:var(--ca-shadow);display:grid;gap:6px;min-width:0}
+.kw-row{padding:16px 20px;border-radius:var(--ca-radius-l);background:var(--ca-surface);box-shadow:var(--ca-shadow);display:grid;gap:6px;min-width:0;overflow-wrap:anywhere}
 .kw-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .kw-phrase{margin:0;font:700 17px/1.3 var(--ca-font-body);color:var(--ca-ink);overflow-wrap:anywhere;flex:1 1 220px}
 .kw-state,.kw-next,.kw-band{display:inline-flex;align-items:center;min-height:24px;padding:0 10px;border-radius:var(--ca-radius-pill);font-size:13px;font-weight:700;border:1px solid var(--ca-line);color:var(--ca-ink)}
@@ -222,6 +222,6 @@ const KEYWORDS_CSS = `
 .kw-facts{display:flex;flex-wrap:wrap;gap:6px 22px;margin:0}.kw-facts div{display:flex;gap:8px;align-items:center}.kw-facts dt{color:var(--ca-muted);font-size:14px}.kw-facts dd{margin:0;font-weight:600}
 .kw-easier{border-color:var(--ca-ok);color:var(--ca-ok)}.kw-medium{border-color:var(--ca-warn);color:var(--ca-warn)}.kw-harder{border-color:var(--ca-bad);color:var(--ca-bad)}
 .kw-est{margin:0;color:var(--ca-ink)}.kw-none{color:var(--ca-muted)}.kw-explain{color:var(--ca-muted)}
-.kw-fold>summary{cursor:pointer;font-weight:600;color:var(--ca-link);padding:6px 0}.kw-plain{margin:6px 0 0;padding-left:1.2em;color:var(--ca-muted)}
+.kw-fold>summary{cursor:pointer;font-weight:600;color:var(--ca-link);padding:6px 0}.kw-plain{margin:6px 0 0;padding-left:1.2em;color:var(--ca-muted);overflow-wrap:anywhere}
 @media(max-width:600px){.kw-row,.kw-summary{padding:14px 16px}.kw-row{gap:4px}.kw-phrase{font-size:16px;flex-basis:160px}.kw-searches,.kw-est{font-size:14px}.kw-facts{gap:2px 14px}.kw-facts dt{font-size:13px}}
 `;

@@ -461,7 +461,8 @@ test('a client sees no supplier, model, maker, method pack, rule id, product nam
   for (const n of ['overview', 'setup', 'topics', 'articles', 'article', 'article-failed', 'publishing', 'activity', 'calendar', 'social', 'dna']) for (const look of ['old look', 'new look']) assert.equal(pick(`${look} · ${n}`).status, 200, `${look} · ${n} renders`);
   assert.equal(pick('old look · profile status (JSON)').status, 200);
   has(pick('old look · profile status (JSON)').body, /"detail":"The writing service could not be reached/);
-  has(pick('old look · topics').body, /Measured: 880 searches\/month \(measured, Oct 2026\)/);
+  // F2: the number names its phrase (still no supplier, only the month).
+  has(pick('old look · topics').body, /Measured: 880 searches a month for &quot;[^&<]+&quot; \(measured, Oct 2026\)/);
   has(pick('old look · activity').body, /The writing service could not be reached/);
   has(pick('old look · topics').body, /Research is not available for this business right now/);
 });

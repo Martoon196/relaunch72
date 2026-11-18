@@ -237,6 +237,36 @@ entered in the MHP brand's GitHub-static connection (`branch=main`, `publicBaseU
 - Drag-and-drop was not browser-automated; the equivalent form path is tested.
 - MHP has no branded blog template yet; the neutral default template is used until one is committed.
 
+## Known limits of the SEO score (the meaning check's to-do list)
+
+`src/seo-blog/seo-score.ts` gives each article version a deterministic 0 to 100 score; `seoGate()` is one of two
+conditions an automatic rewrite must meet. It counts words, so it is necessary, not sufficient: the other condition is
+a separate meaning check that judges whether the text says something. Five review rounds showed that a word count can
+always be stepped round one notch further out, and that every tightening risks refusing good pages. So the score
+catches cheap, blatant rubbish where that costs nothing on the 73 good articles and variants of the review corpora,
+and stops there. What it lets through is
+listed below; the meaning check must catch each of these. The list is kept exact by the tests
+(`KNOWN_LIMITS` in `orchestrator/test/seo-score-review5-rubbish.ts`, asserted in `seo-score-review5.test.ts`): every
+example passes the gate at the score shown, and every rubbish article of every corpus that passes is listed.
+
+| Known limit | Example (score with a picture) | Why a word count cannot decide it |
+| --- | --- | --- |
+| **Fluent empty filler** | Mad-lib sentences that say nothing (98) | Grammatical sentences that say nothing look like sentences that say something; only meaning tells them apart. |
+| **Very short keyword items under the 25% line** | Keyword lines as blockquotes, 23.8% of the words (98) | A kit list is 19.8% very short items and a price list 13.8%; keyword lines at 11% to 24% look the same, and "Spare pegs", "Spare socks" is one word changed too. |
+| **Long keyword items with no full stop** | Five 15-word keyword bullets per part (98) | Such items have the small words of a sentence, and a thorough checklist is 45% items as long. |
+| **Different two- or three-word sentences of prose** | Three different keyword sentences per part (92) | Short sentences are ordinary ("Yes.", "Stir well."); only repeats are caught, from the sixth. |
+| **Four-word template sentences** | 60 sentences like "We buy Leeds houses." (95) | One-word-changed templates are matched from five words; at four words any two plain sentences would match. |
+| **One long run-on in a long article** | One 140-word keyword run-on, 16.9% of the prose (97) | The article quoting a regulation has 14.7% in sentences of over 40 words. |
+| **Two of the three main words of the phrase** | 24 sentences saying "property deal" for "appraise a property deal" (100) | Counting them refuses a good price guide (2.7%). |
+| **The phrase split by a full stop or across two list items** | The phrase split across two bullets (97) | Readers and search engines do not read it as the phrase; the list measures hold the volume. |
+| **A page title of keywords** | A 60-word keyword page title (97) | The page title is one line outside the text measures. |
+| **Keyword questions with empty answers** | 150 keyword questions with no answer (97) | Questions are not sentences of the text; empty parts are a must-fix of the quality checks when they run. |
+| **Different bullets of four to nine words count as content** | An FAQ page without a picture, refused at 84, plus 33 different four-word bullets in four parts (89) | Steps are content: leaving them out of length, part length and sentence length lowers 11, 9 and 4 good pages. They never move the phrase, repetition or list measures, and a refused page passed only within five points of the bar. |
+
+Two good pages score lower than at d4e5527 and still pass: a camping kit list (96 to 93) and a hospital-bag checklist
+(94 to 93), because very short items do not count towards length or a part's length. That is the rule that keeps
+different short bullets from ever raising a score.
+
 ## Social promotion delivery through brand-registered accounts (0132)
 
 See `docs/central-content-contract.md` for the contract. In short: owner observation → canonical `social_post` (text/plain, exact copy + URL) → separate exact approval → verified-public article → owner queues a slot through the brand's registered account (caps 0 = off) → canonical intent/job → SEO worker just-in-time 15-minute proof from the live article → calendar worker lease/begin-call/receipt under that brand's own connection. Every missing input is a recorded hold on the article (`socialDispatches`), never a silent drop or a claim of delivery. Instagram needs a real approved image (not provided by this run); LinkedIn text is independent. The Social tab lives at `/portal/seo-blog/b/<brand>/social`.

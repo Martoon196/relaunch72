@@ -445,8 +445,13 @@ export interface TopicPlan {
   readonly programme?: ProgrammeProvenance;
   /** Which parts of the engine ran for this plan (internal). */
   readonly engine?: EngineStamp;
-  /** Keyword-first planning only (internal): the output contract used, how many candidates were shown and how many returned ids were stripped. */
-  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number };
+  /**
+   * Keyword-first planning only (internal): the output contract used, how many candidates were shown, how many returned
+   * ids were stripped by the id rules, how many chosen phrases were dropped by the fit rule (`unfit`), and how many
+   * acceptable secondary phrases were withdrawn only because their brief was left without a target (`withdrawn`).
+   * `unfit` and `withdrawn` are absent on plans made before they existed.
+   */
+  readonly keywordPlanning?: { readonly contract: string; readonly candidates: number; readonly stripped: number; readonly unfit?: number; readonly withdrawn?: number };
   /** A product article's plan only: when its research ran, even if it found nothing (so it is never bought again). */
   readonly productResearchAt?: IsoInstant;
   readonly id: string;

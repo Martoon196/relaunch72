@@ -89,7 +89,7 @@ interface PlanExecution {
 }
 
 import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin, type MethodStore } from './method-packs.js';
-import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES } from './engine-stamp.js';
+import { briefNumbers, EngineIncompleteError, engineStamp, ENGINE_GAP_MESSAGE, MIN_PLAN_SOURCES, NUMBERS_RECHECK_DELAY_MS, NUMBERS_RECHECK_MESSAGE, NUMBERS_RECHECK_NOW, NUMBERS_RECHECK_SUPERSEDED } from './engine-stamp.js';
 import { supportedMarketForLocale, type KeywordResearchProvider, type LabsCallResult, type LabsMarket } from '../keyword/dataforseo-labs.js';
 import type { KeywordCandidate } from '../keyword/types.js';
 import type { PoolBusiness } from './keyword-pool.js';
@@ -101,6 +101,27 @@ import { acknowledgedAttempts, activeFill, cachedFor, dismissedPhrases, fillAllo
 const NUMBERS_UNAVAILABLE = new WeakSet<object>();
 const unavailableNumbers = <T extends object>(receipt: T): T => { NUMBERS_UNAVAILABLE.add(receipt); return receipt; };
 /** Of those, the answers that stand in for a request skipped because the research allowance was too small. */
+/** At most this many dropped-id entries in the operator log line. */
+export const DROP_LOG_ENTRIES = 40;
+/** The operator log line for ids dropped at binding: counts, a count per reason, and the first 40 entries, capped. */
+export function keywordDropLog(input: { brandId: string; planId: string; candidates: number; binding: { stripped: number; unfit: number; withdrawn: number; dropped: readonly { key: string; field: string; id: string | null; reason: string }[] } }): string {
+  const cap = (v: string | null, n: number) => (v === null ? null : v.slice(0, n));
+  const byReason: Record<string, number> = {};
+  for (const d of input.binding.dropped) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+  return JSON.stringify({ event: 'seo_blog.keyword_ids_dropped', brandId: input.brandId, planId: input.planId, candidates: input.candidates,
+    stripped: input.binding.stripped, unfit: input.binding.unfit, withdrawn: input.binding.withdrawn, total: input.binding.dropped.length, byReason,
+    dropped: input.binding.dropped.slice(0, DROP_LOG_ENTRIES).map((d) => ({ brief: cap(d.key, 80), field: cap(d.field, 12), id: cap(d.id, 12), reason: cap(d.reason, 24) })),
+    ...(input.binding.dropped.length > DROP_LOG_ENTRIES ? { omitted: input.binding.dropped.length - DROP_LOG_ENTRIES } : {}) });
+}
+
+/**
+ * A planning task held (strict setting) after a search-numbers lookup whose outcome is unknown: it is never bought
+ * again for that task, so Retry cannot help; a fresh plan from Topics can.
+ */
+export function numbersOutcomeUnknown(job: Job): boolean {
+  const run = job.kind === 'plan' ? programmeRun(job) : null;
+  return !!run && run.hold === 'engine_incomplete' && run.attempts.some((a) => a.kind === 'metrics' && !a.receivedAt);
+}
 const NUMBERS_ALLOWANCE = new WeakSet<object>();
 const allowanceSkippedNumbers = <T extends object>(receipt: T): T => { NUMBERS_ALLOWANCE.add(receipt); return unavailableNumbers(receipt); };
 import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
@@ -1169,6 +1190,12 @@ export class SeoBlogEngine {
       const source=programmeInputSnapshot(s,authority);
       if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
       const withRun={...current,payload:{...current.payload,programme:run,...(candidatesNow&&current.payload.keywordShortlist===undefined&&!current.payload.programme?{keywordShortlist:candidatesNow.primary,...(candidatesNow.secondary.length?{keywordSecondary:candidatesNow.secondary}:{})}:{})}};
+      // A plan was made while this task waited for its one numbers re-check (strict setting): stop here, without
+      // another lookup, model call or plan.
+      if(run.numbersRecheckAt&&!run.modelReceipt&&s.plans.some((p)=>p.createdAt>run!.numbersRecheckAt!)) {
+        const now=this.now();
+        return {job:{...withRun,state:'done',leaseOwner:null,leaseExpiresAt:null,error:null,progress:NUMBERS_RECHECK_SUPERSEDED,updatedAt:now},writeJob:true};
+      }
       if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
@@ -1178,13 +1205,20 @@ export class SeoBlogEngine {
       const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
       const hold=s.brand.settings.programme?.researchHold??legacy;
       const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
-      if(hold && !explicit && !(hold.jobId===current.id && run.modelReceipt)) {
+      // The owner's Retry on this same task, held only because its numbers lookup failed (strict setting): it resumes
+      // this task, for an autopilot plan as for an owner-requested one. It repeats only that lookup.
+      const own=s.brand.settings.programme?.researchHold;
+      const numbersResume=!explicit&&!!own&&own.jobId===current.id&&current.payload.resumeHoldId===own.logicalRunId&&current.payload.numbersRetry===true&&run.hold==='engine_incomplete'&&!run.modelStart;
+      if(hold && !explicit && !numbersResume && !(hold.jobId===current.id && run.modelReceipt)) {
         const held=this.programmeHeld(s,withRun,run,'research_held',legacy?'An older planning task needs review. No historical supplier code or charge was inferred. A managing owner can explicitly resume with a new intent.':'Research is held. A managing owner can review and explicitly resume with a new intent.');
         return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
       }
       if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt&&!(a.supplierTask&&this.deps.search.readTask)) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
-      return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
-        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}:{})};
+      // The numbers-retry marker is used once: cleared as the task resumes, so it can never resume a later hold.
+      const used=('numbersRetry' in withRun.payload)?(({numbersRetry:_n,...rest})=>({...withRun,payload:rest}))(withRun.payload):withRun;
+      return {job:{...used,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
+        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}
+          :numbersResume?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null}}}:{})};
     });
     if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
     const run=programmeRun(ready)!;
@@ -1259,7 +1293,21 @@ export class SeoBlogEngine {
         }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
-        if(error instanceof EngineIncompleteError) return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        if(error instanceof EngineIncompleteError) {
+          // Strict setting, autopilot plan, one failed numbers lookup: check it once more by itself (nobody may be
+          // watching Topics), within the research allowance, reusing every saved search. Never twice, never for an
+          // owner-requested plan (the owner's Retry does that), never for a lookup whose outcome is unknown.
+          const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
+          if(this.deps.requireFullEngine===true&&error.gap==='numbers'&&authority.origin!=='manual'&&!latest.numbersRecheckAt&&!latest.modelStart&&!latest.modelReceipt&&latest.metricsWarning
+            &&!latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)&&ceiling>0&&s.usage.search_calls+1<=ceiling) {
+            const now=this.now();
+            return {job:{...current,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+NUMBERS_RECHECK_DELAY_MS).toISOString(),
+              payload:{...current.payload,programme:{...latest,metricsWarning:undefined,numbersRecheckAt:now}},error:null,progress:NUMBERS_RECHECK_MESSAGE,updatedAt:now},writeJob:true};
+          }
+          // A lookup whose outcome is unknown is never bought again for this plan: say so, and point to what works.
+          if(error.gap==='numbers'&&latest.attempts.some((a)=>a.kind==='metrics'&&!a.receivedAt)) return this.programmeHeld(s,current,latest,'engine_incomplete',ENGINE_GAP_MESSAGE.numbers_unknown);
+          return this.programmeHeld(s,current,latest,'engine_incomplete',error.message);
+        }
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
       });
     }
@@ -1272,6 +1320,15 @@ export class SeoBlogEngine {
     if(prior) return prior;
     const hold=brand.settings.programme?.researchHold??legacyPlanningHold(jobs,brand.settings.programme?.researchAcknowledgements);
     if(hold && input.resumeHoldId!==hold.logicalRunId) throw new SeoBlogError(409,'Research is held after an earlier outcome. Review the programme status and explicitly resume with a new research intent.');
+    // A plan already waits for its one numbers re-check (strict setting): asking now runs that task now, rather than
+    // starting a second plan beside it.
+    const waiting=jobs.find((j)=>j.kind==='plan'&&j.state==='queued'&&!!programmeRun(j)?.numbersRecheckAt&&!programmeRun(j)?.modelReceipt);
+    if(waiting) {
+      const now=this.now();
+      if(Date.parse(waiting.runAfter)<=Date.parse(now)) return waiting;
+      try { return await this.store.updateJob({...waiting,runAfter:now,progress:NUMBERS_RECHECK_NOW,updatedAt:now}); }
+      catch { return (await this.store.getJob(brandId,waiting.id))??waiting; }
+    }
     const readiness = await this.readinessFor(brand);
     if (!readiness.canPlan) throw new SeoBlogError(409, `Before planning: ${readiness.missing.filter((m) => !m.includes('website for publishing')).join(' ')}`, 'not_ready');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
@@ -1360,8 +1417,13 @@ export class SeoBlogEngine {
     ];
     const usedSlugs = new Set([...planned.map((b) => b.slug), ...articles.map((a) => a.slug)]);
     const briefs: ArticleBrief[] = [];
-    // Bound by the ids the planner returned, never by similarity; unknown or repeated ids are stripped.
-    const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids })), candidates) : null;
+    // Bound by the ids the planner returned, never by similarity; unknown or repeated ids are stripped, and a chosen
+    // phrase that does not fit the brief's own question or title is dropped (the brief stays unbound).
+    const binding = keywordPool ? bindByIds(cluster.map((item) => ({ key: item.slug, primaryId: item.primary_phrase_id, secondaryIds: item.secondary_phrase_ids,
+      text: { question: item.target_query, title: item.working_title } })), candidates) : null;
+    // Internal only: an operator log line, never an activity line or any client-visible text.
+    // Bounded: the counts, a count per reason, and at most the first 40 entries, each field length-capped.
+    if (binding?.dropped.length) console.info(keywordDropLog({ brandId, planId, candidates: ids?.size ?? 0, binding }));
     for (const item of cluster) {
       const duplicate = assessDuplicate({ title: item.working_title, targetQuery: item.target_query, slug: item.slug }, pages, comparable);
       let slug = item.slug;
@@ -1413,7 +1475,7 @@ export class SeoBlogEngine {
       inputs: { focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl },
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
       engine: planStamp,
-      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0 } } : {}),
+      ...(ids ? { keywordPlanning: { contract: PLAN_SCHEMA_V2_VERSION, candidates: ids.size, stripped: binding?.stripped ?? 0, unfit: binding?.unfit ?? 0, withdrawn: binding?.withdrawn ?? 0 } } : {}),
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
     if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
@@ -3698,7 +3760,11 @@ export class SeoBlogEngine {
       // Held only because the search-numbers lookup failed or was skipped for allowance (strict setting): Retry repeats
       // that one lookup, within the allowance, and reuses every saved search.
       const numbersRetry=run!.hold==='engine_incomplete'&&!!run!.metricsWarning;
-      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined}}:{})},state:'queued',runAfter:this.now(),error:null,
+      // Retry would only skip the same unknown lookup again: refuse with the true words instead.
+      if(numbersRetry&&numbersOutcomeUnknown(job)) throw new SeoBlogError(409,ENGINE_GAP_MESSAGE.numbers_unknown,'numbers_unknown');
+      const payload:Record<string,unknown>={...job.payload,resumeHoldId:run!.logicalRunId,...(numbersRetry?{programme:{...run!,metricsWarning:undefined},numbersRetry:true}:{})};
+      if(!numbersRetry) delete payload.numbersRetry; // A marker left from an earlier numbers retry never carries over.
+      return this.store.updateJob({...job,payload,state:'queued',runAfter:this.now(),error:null,
         progress:numbersRetry?'Checking how many people search for these topics again. Saved searches are reused.':'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
     }
     if (isProfileJob(job) && profilePayload(job).reason === 'rejected') throw new SeoBlogError(409, 'This card was refused because it would have included something not found word for word in your pages or documents. Read your website again to ask for a new one.');

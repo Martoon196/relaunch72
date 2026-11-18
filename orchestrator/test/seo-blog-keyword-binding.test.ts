@@ -11,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Ajv } from 'ajv';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
 import { bindByIds, briefSeo, candidateIds, nearUsed, planningCandidates, planningShortlist, type PlanningCandidates } from '../src/seo-blog/keyword-planning.js';
-import { PLAN_PROMPT_V2, PLAN_SCHEMA, PLAN_SCHEMA_V2_VERSION, planSchemaWithCandidates, proposeCluster, GenerationRejectedError } from '../src/seo-blog/generation.js';
+import { PLAN_PROMPT_V2, PLAN_SCHEMA, PLAN_SCHEMA_V2_VERSION, planSchemaWithCandidates, proposeCluster } from '../src/seo-blog/generation.js';
 import { loadPrompt } from '../src/stages/prompt.js';
 import { MethodController } from '../src/seo-blog/method-packs.js';
 import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
@@ -125,7 +125,7 @@ test('4-A: ids are checked against what was sent: unknown, foreign, secondary-on
   assert.equal(stripped, 4 + 5);
 });
 
-test('4-A: the output contract: a new versioned prompt and schema; the schema refuses an id that was not sent; two targets alike are refused', async () => {
+test('4-A: the output contract: a new versioned prompt and schema; the schema shown refuses an id that was not sent; two targets alike are accepted and stripped at binding (N2)', async () => {
   const v2 = loadPrompt(PLAN_PROMPT_V2);
   assert.equal(v2.header.version, '2.0.0');
   assert.equal(v2.header.stage, 'SEO_BLOG_PLAN', 'same stage, so model overrides still apply');
@@ -148,13 +148,17 @@ test('4-A: the output contract: a new versioned prompt and schema; the schema re
   assert.equal(v(plan('K1', ['K7'])), false);
   assert.equal(new Ajv({ strict: false }).compile(PLAN_SCHEMA)(plan('K9')), true, 'the old contract is unchanged');
 
-  // A planner that insists on one target for two articles is refused after its one correction.
-  const model: LlmClient = { mode: 'mock', async complete(req: LlmRequest) {
-    const out = plan('K1'); out.supporting[0]!.primary_phrase_id = 'K1';
+  // N2 (was: refused after a correction): a planner that gives one target to two articles is accepted at once, with
+  // no correction call; the repeat is stripped when binding, so the first article keeps it.
+  let calls = 0;
+  const model: LlmClient = { mode: 'mock', async complete(_req: LlmRequest) {
+    calls++; const out = plan('K1'); out.supporting[0]!.primary_phrase_id = 'K1';
     out.pillar.internal_links = []; return { text: JSON.stringify(out), tokensIn: 1, tokensOut: 1, stopReason: 'end_turn', model: 'm' }; } };
   const { profile, sources } = fixtureBrand() as unknown as { profile: never; sources: never };
-  await assert.rejects(() => proposeCluster(model, { brandName: 'B', profile, inventory: [], sources, focus: null, excluded: [], sourceArticleUrl: null,
-    keywordCandidates: { targetIds: ['K1', 'K2'], allIds: ['K1', 'K2', 'K3'], block: [] } }), (e: unknown) => e instanceof GenerationRejectedError && /one article at most/.test((e as Error).message));
+  const accepted = await proposeCluster(model, { brandName: 'B', profile, inventory: [], sources, focus: null, excluded: [], sourceArticleUrl: null,
+    keywordCandidates: { targetIds: ['K1', 'K2'], allIds: ['K1', 'K2', 'K3'], block: [] } });
+  assert.equal(calls, 1, 'no correction call for an id slip');
+  assert.equal(accepted.value.supporting[0]!.primary_phrase_id, 'K1', 'the answer is kept as the planner returned it; binding strips it');
 });
 
 test('4-A: the planning method pack\'s validators pass with the new contract (structured planning carries the candidates and accepts the ids)', async () => {
