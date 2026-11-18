@@ -674,7 +674,7 @@ export async function rewriteSection(llm: LlmClient, input: {
       for (const m of v.body.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) if (!allowedLinks.has(m[1]!)) problems.push(`link ${m[1]} is not a listed page or source`);
       if (/<\s*[a-z!\/]/i.test(v.body)) problems.push('HTML is not allowed inside bodies');
       if (products?.keepHeading && v.heading.trim().toLowerCase() !== products.keepHeading.toLowerCase()) problems.push(`Keep the heading exactly "${products.keepHeading}".`);
-      if (products) for (const rule of new Set(readerSurfaces({ title: '', seoTitle: '', metaDescription: '', excerpt: '', image: { alt: '' }, intro: '', conclusion: '', sections: [v], faqs: [] }).flatMap((x) => textRuleBreaks(x.text)))) problems.push(`This product part breaks the product rules (${rule.replace(/_/g, ' ')}); follow them.`);
+      if (products) for (const rule of new Set(readerSurfaces({ title: '', seoTitle: '', metaDescription: '', excerpt: '', image: { alt: '' }, intro: '', conclusion: '', sections: [v], faqs: [] }).flatMap((x) => textRuleBreaks(x.text, [v.heading, ...products.brief.products.map((p) => p.productName)])))) problems.push(`This product part breaks the product rules (${rule.replace(/_/g, ' ')}); follow them.`);
       return problems;
     },
   });

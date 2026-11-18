@@ -155,19 +155,32 @@ function readable(text: string): string {
   return text.normalize('NFKC').replace(/[。．｡︒]/gu, '.').replace(/%2e/giu, '.').replace(/[​-‍⁠﻿­]/gu, '');
 }
 
+/** Words that make a bare amount a price ("only 2.50 ... a bargain", "the price is now 19.99"). */
+const PRICE_WORD = 'prices?|priced|pricing|costs?|costing|pay|paying|paid|spend|spending|rrp|retails?|retailing|sale|deals?|offers?|bargain|cheap(?:er|est)?|discount(?:ed|s)?|reduced|pounds?|pence|quid|per (?:pack|unit|item|box)';
 const AMOUNT = new RegExp([
   /[£$€¥]\s?\d/u.source, /\b\d[\d,]*(?:\.\d+)?\s?(?:pence|pounds?|quid|gbp|euros?|eur|dollars?|usd|bucks)\b/u.source, /\b(?:gbp|usd|eur|rrp)\s?:?\s?\d/u.source,
-  /\b(?:costs?|costing|priced|price[sd]?|for just|for only|only|just|now|was|from|under|less than|reduced to)\s+(?:about\s+|around\s+)?\d+[.,]\d{2}\b/u.source,
+  /\b(?:costs?|costing|priced|price[sd]?|for just|for only|reduced to)\s+(?:about\s+|around\s+)?\d+[.,]\d{2}\b/u.source,
+  // "only 2.50" or "from 10.30" is a price only with a price word near it: "only 2.50 metres" and "open from 10.30" are not (review S-b).
+  `(?<=\\b(?:${PRICE_WORD})\\b(?:[^.!?\\n]|\\.(?=\\d)){0,40})\\b(?:only|just|now|was|from|under|less than)\\s+(?:about\\s+|around\\s+)?\\d+[.,]\\d{2}\\b`,
+  `\\b(?:only|just|now|was|from|under|less than)\\s+(?:about\\s+|around\\s+)?\\d+[.,]\\d{2}\\b(?=(?:[^.!?\\n]|\\.(?=\\d)){0,40}\\b(?:${PRICE_WORD})\\b)`,
   /\b(?:a|one|two|three|five|ten|twenty|fifty)?\s?(?:tenner|fiver|quid)\b/u.source, /\brrp\b/u.source,
 ].join('|'), 'iu');
 const DEAL = new RegExp([
-  /\b\d{1,3}\s?(?:%|per\s?cent|percent)\s+(?:off|cheaper|less|discount|saving|reduction|lower)\b/u.source, /\bsave\s+(?:up to\s+|over\s+)?\d{1,3}\s?(?:%|per\s?cent|percent)/u.source, /\b(?:half|third|quarter)[- ]price\b/u.source, /\bhalf off\b/u.source,
+  /\b\d{1,3}\s?(?:%|per\s?cent|percent)\s+(?:off|cheaper|less|discount|saving|reduction|lower)\b/u.source,
+  // "Save 10% of your phone battery" is a share of something, not a discount, unless the price or cost follows (review S-b).
+  /\bsave\s+(?:up to\s+|over\s+)?\d{1,3}\s?(?:%|per\s?cent|percent)(?!\s+of\s+(?:your|the|its|their|our|my|a)\b(?![^.!?\n]{0,25}\b(?:price|cost|rrp|bill)s?\b))/u.source, /\b(?:half|third|quarter)[- ]price\b/u.source, /\bhalf off\b/u.source,
   /\b(?:on sale|sale price|discount(?:ed|s)?|deal of the day|lowest price|cheapest price|price (?:drop|cut)|save £|save up to|bargain|special offer|limited[- ]time offer|clearance)\b/u.source,
   /\b(?:black friday|cyber monday|prime day|boxing day)(?:\s+(?:deals?|sales?|offers?|price))?\b/u.source, /\b(?:great|good|best|top|today'?s|this week'?s|daily|lightning) deals?\b(?!\s+of\b)/u.source,
 ].join('|'), 'iu');
+/** Words that make "4 out of 5" a rating. */
+const RATING_WORD = 'stars?|rated|rating|ratings|rates|scored?|scores|reviews?|reviewers?|reviewed|buyers|customers|shoppers|users';
 const RATING = new RegExp([
-  /\b\d(?:\.\d)?\s?(?:out of|\/)\s?(?:5|five|10|ten)\b/u.source,
-  /\b(?:rated|rating of|rates|scores?|scored|gets?|got|given|earns?|earned|has|have|had|with|averag\w*|boasts?)\s+(?:a\s+|an\s+)?(?:\d(?:\.\d)?|one|two|three|four|five)(?:\s+out\s+of\s+(?:5|five))?[- ]?stars?\b/u.source,
+  /\b\d(?:\.\d)?\s?\/\s?(?:5|10)\b/u.source,
+  // "N out of 5" is a rating only beside stars, a rating, reviews or buyers: "use 3 out of 5 settings" is not (review S-b).
+  `(?<=\\b(?:${RATING_WORD})\\b(?:[^.!?\\n]|\\.(?=\\d)){0,30})\\b(?:\\d(?:\\.\\d)?|one|two|three|four|five)\\s+out of\\s+(?:5|five|10|ten)\\b`,
+  `\\b(?:\\d(?:\\.\\d)?|one|two|three|four|five)\\s+out of\\s+(?:5|five|10|ten)\\b(?=(?:[^.!?\\n]|\\.(?=\\d)){0,30}\\b(?:${RATING_WORD})\\b)`,
+  // A star rating of something other than the product (energy, food hygiene, a hotel) is not a product rating (review S-b).
+  /\b(?:rated|rating of|rates|scores?|scored|gets?|got|given|earns?|earned|has|have|had|with|averag\w*|boasts?)\s+(?:a\s+|an\s+)?(?:\d(?:\.\d)?|one|two|three|four|five)(?:\s+out\s+of\s+(?:5|five))?[- ]?stars?\b(?!\s+(?:energy|efficiency|hygiene|food|safety|fire|hotel|holiday|resort|restaurant|accommodation)\b)/u.source,
   /\b(?:\d(?:\.\d)?|one|two|three|four|five)[- ]stars?\s+(?:rating|ratings|reviews?|from|by|on)\b/u.source, /\bstar ratings?\b/u.source,
   /\b\d[\d,]*\+?\s+(?:customer\s+|happy\s+|positive\s+|verified\s+|glowing\s+|five[- ]star\s+)?(?:reviews|ratings)\b/u.source,
   /\b(?:thousands|hundreds|millions|lots|dozens|plenty) of (?:\w+\s+)?(?:reviews|ratings)\b/u.source,
@@ -176,12 +189,19 @@ const RATING = new RegExp([
 const STOCK = new RegExp([
   /(?<!\bkeep(?:s|ing)?\b(?:\s+[\w-]+){0,3}\s+)\bin stock\b/u.source, /\bout of stock\b/u.source, /\blow stock\b/u.source, /\bonly \d+ left\b/u.source, /\bsold out\b/u.source,
   /\bavailable (?:to (?:order|buy)|now|today)\b/u.source, /\b(?:with|via|on|amazon)\s+prime\b|\bprime (?:delivery|shipping|members?)\b/u.source,
-  /\b(?:next|same)[- ]day (?:delivery|dispatch|shipping)\b/u.source, /\bfree (?:delivery|shipping|returns)\b/u.source,
+  /\b(?:next|same)[- ]day (?:delivery|dispatch|shipping)\b/u.source, /\bfree (?:delivery|shipping|returns)\b(?!\s+(?:is|are)\s+not\b|\s+(?:isn't|aren't|cannot|can't)\b)/u.source,
   /\b(?:arrives?|arriving|delivered|delivery|ships?|shipped|dispatch(?:ed|es)?)\b[^.!?\n]{0,30}\b(?:today|tomorrow|next day|the next day|same day|within \d+)\b/u.source,
 ].join('|'), 'iu');
+const TESTER = "(?:we|i|our team|our experts|our editors|my team|the team)(?:'ve| have| had)?";
+/** What a testing claim is about: the products themselves (it, them, each, these, a count of them, "the products"). */
+const TESTED_THING = '(?:it|them|each|every|all|both|everything|these|those|this one|that one|one|ones|\\d+|two|three|four|five|six|seven|eight|nine|ten|dozens|several|many|lots|hundreds|(?:the|our|my) (?:[\\w-]+\\s+){0,2}?(?:products?|items?|picks|kit|models?|brands?|versions?|ones|lot|range|choices|recommendations))\\b';
+/** Reviewing or checking the products against their manuals or the official advice is reading, not testing. */
+const NOT_DOCUMENTS = "(?!\\s+(?:against|with)\\s+(?:the\\s+|their\\s+|its\\s+|our\\s+)?(?:[\\w'-]+\\s+){0,2}(?:manuals?|instructions|guidance|advice|specs?|specifications|labels?|listings?|websites?|leaflets?|details|information|documents?|paperwork|data)\\b)";
 const TESTED = new RegExp([
-  /\b(?:we|i|our team|our experts|our editors|my team|the team)(?:'ve| have| had)?\s+(?:\w+\s+)?(?:tested|reviewed|trialled|put (?:it|them) through)\b/u.source,
-  /\b(?:we|i|our team|our experts|our editors|my team|the team)(?:'ve| have| had)?\s+(?:\w+\s+)?checked (?:it|them|each|every|all|these|the products?)\b/u.source,
+  // "We tested/reviewed/checked" is a claim about the products only when what follows is them: "we tested the smoke alarm
+  // button every month" or "I have reviewed the government advice" is not (review S-b). Product names are added per call.
+  `\\b${TESTER}\\s+(?:\\w+\\s+)?(?:tested|trialled)\\s+${TESTED_THING}`, `\\b${TESTER}\\s+(?:\\w+\\s+)?put (?:it|them) through\\b`,
+  `\\b${TESTER}\\s+(?:\\w+\\s+)?(?:reviewed|checked)\\s+${TESTED_THING}${NOT_DOCUMENTS}`,
   /\b(?:tested|reviewed|checked|trialled|vetted) by (?:us|our|me|experts?|the team|real)\b/u.source, /\bhands[- ]on (?:test|testing|review)\b/u.source,
   /\bour (?:tests|testing|lab|verdict|reviewers?)\b/u.source, /\b(?:independently|lab|expert)[- ]tested\b/u.source, /\b(?:we|i) tried (?:it|them|each|every)\b/u.source,
 ].join('|'), 'iu');
@@ -251,14 +271,32 @@ export function usableProductSource(url: string): boolean {
 
 type TextRule = 'raw_merchant_link' | 'price_stated' | 'rating_or_stock' | 'untested_claim';
 /** What one piece of reader-facing text breaks, in a fixed order. */
-export function textRuleBreaks(text: string): TextRule[] {
+export function textRuleBreaks(text: string, productNames: readonly string[] = []): TextRule[] {
   const t = readable(text);
   const out: TextRule[] = [];
   if (MERCHANT.test(t) || addressesIn(t).some((u) => shopLinkProblem(u) !== null)) out.push('raw_merchant_link');
   if (AMOUNT.test(t) || DEAL.test(t)) out.push('price_stated');
   if (RATING.test(t) || STOCK.test(t)) out.push('rating_or_stock');
-  if (TESTED.test(t)) out.push('untested_claim');
+  if (TESTED.test(t) || testedByName(productNames)?.test(t)) out.push('untested_claim');
   return out;
+}
+
+const NAME_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'pack', 'set', 'kit', 'new', 'one', 'two', 'all', 'our', 'your', 'this', 'that', 'its', 'their', 'size', 'large', 'small', 'black', 'white']);
+const namedCache = new Map<string, RegExp | null>();
+/** "We tested the torch": a testing claim about a product named by a word of its name (the heading of its part). */
+function testedByName(names: readonly string[]): RegExp | null {
+  const words = [...new Set(names.flatMap((n) => readable(n).toLowerCase().split(/[^\p{L}\p{N}]+/u)).filter((w) => w.length >= 3 && !NAME_STOP.has(w) && !/^\d+$/u.test(w)))].sort();
+  if (!words.length) return null;
+  const key = words.join('|');
+  if (!namedCache.has(key)) {
+    if (namedCache.size > 200) namedCache.clear();
+    const noun = `(?:${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('|')})(?:e?s)?`;
+    namedCache.set(key, new RegExp([
+      `\\b${TESTER}\\s+(?:\\w+\\s+)?(?:tested|trialled)\\s+(?:the|our|my|this|that|each|every|both)\\s+(?:[\\w-]+\\s+){0,3}?${noun}\\b`,
+      `\\b${TESTER}\\s+(?:\\w+\\s+)?(?:reviewed|checked)\\s+(?:the|our|my|this|that|each|every|both)\\s+(?:[\\w-]+\\s+){0,3}?${noun}\\b${NOT_DOCUMENTS}`,
+    ].join('|'), 'iu'));
+  }
+  return namedCache.get(key)!;
 }
 
 /** Every surface of an article a reader sees (on the page, in search results, in a link preview), with where it is. */
@@ -292,7 +330,8 @@ export function productArticleProblems(v: { readonly title?: string; readonly se
   const surfaces = readerSurfaces({ title: v.title ?? '', seoTitle: v.seo_title ?? '', metaDescription: v.meta_description ?? '', excerpt: v.excerpt ?? '', image: { alt: v.image_alt ?? '' },
     intro: v.intro, conclusion: v.conclusion, sections: v.sections, faqs: v.faqs.map((f) => ({ q: f.q ?? '', a: f.a })) });
   const broken = new Map<TextRule, string[]>();
-  for (const s of surfaces) for (const rule of textRuleBreaks(s.text)) broken.set(rule, [...(broken.get(rule) ?? []), s.where]);
+  const names = [...p.products.map((x) => x.productName), ...v.sections.map((x) => x.heading)];
+  for (const s of surfaces) for (const rule of textRuleBreaks(s.text, names)) broken.set(rule, [...(broken.get(rule) ?? []), s.where]);
   for (const [rule, where] of broken) problems.push(`${RULE_FOR_WRITER[rule]} (in: ${[...new Set(where)].slice(0, 6).join(', ')})`);
   return problems;
 }
@@ -359,7 +398,8 @@ export function affiliateIssues(body: { readonly affiliate?: ArticleAffiliate; r
   const linked = Boolean(a?.links.length);
   if (!linked && !productArticle) return [];
   const out: AffiliateIssue[] = [];
-  for (const s of readerSurfaces(body)) for (const rule of textRuleBreaks(s.text)) out.push({ code: `affiliate.${rule}`, ...ISSUE_TEXT[rule], location: s.where });
+  const names = [...(a?.links ?? []).map((l) => l.name), ...body.sections.map((x) => x.heading)];
+  for (const s of readerSurfaces(body)) for (const rule of textRuleBreaks(s.text, names)) out.push({ code: `affiliate.${rule}`, ...ISSUE_TEXT[rule], location: s.where });
   // The button's own address and every cited source: never the shop, a short link or a paid link (review M5).
   if (body.cta && shopLinkProblem(body.cta.url)) out.push({ code: 'affiliate.raw_merchant_link', ...ISSUE_TEXT.raw_merchant_link, location: 'Button' });
   for (const c of body.citations ?? []) if (shopLinkProblem(c.url)) out.push({ code: 'affiliate.source_is_shop', message: 'One of the sources is the shop itself, a short link or a paid link. Sources must be independent pages.', fix: 'Write the article again so its research is done afresh.', location: 'Sources' });

@@ -810,3 +810,33 @@ test('N8: a product article\'s plan is not offered in Topics with "Generate sele
   assert.doesNotMatch(topics.body, /What to keep for a power cut/);
   assert.doesNotMatch(topics.body, /Generate selected articles/);
 });
+
+// ─── Second review (review2-affiliate-fixes.md) ──────────────────────────────
+
+test('S-b: honest sentences that only look like a price, rating, stock or testing claim are not caught; the real ones still are', () => {
+  const honest = ['The cable is only 2.50 metres long.', 'Our shop is open from 10.30 to 4.00 on Saturdays.', 'Save 10% of your phone battery by dimming the screen.', 'It has a 4-star energy rating.',
+    'Use 3 out of 5 settings for normal light.', 'Free returns are not something we can promise; check the shop.', 'We tested the smoke alarm button every month, as the fire service advises.',
+    'I have reviewed the government advice on power cuts.', 'We checked the products against the manufacturer manuals.', 'The kettle holds only 1.70 litres, just 0.50 more than the old one.'];
+  for (const sentence of honest) assert.deepEqual(textRuleBreaks(sentence), [], `should not be caught: ${sentence}`);
+  const caught: [string, string][] = [['The price is now 19.99 for the pair.', 'price_stated'], ['Only 19.99 at the moment, a real bargain.', 'price_stated'], ['From 9.99 per pack.', 'price_stated'],
+    ['Save 30% of the price this week.', 'price_stated'], ['Rated 4 out of 5 by buyers.', 'rating_or_stock'], ['It scores 4.5 out of 5 in reviews.', 'rating_or_stock'], ['4 out of 5 stars.', 'rating_or_stock'],
+    ['It has a 4-star rating from buyers.', 'rating_or_stock'], ['Free returns on every order.', 'rating_or_stock'], ['We tested the products for a month.', 'untested_claim'],
+    ['I reviewed them all.', 'untested_claim'], ['We tested 12 torches.', 'untested_claim'], ['We checked the products for a fortnight.', 'untested_claim'], ['We tested these in the garden.', 'untested_claim']];
+  for (const [sentence, rule] of caught) assert.ok(textRuleBreaks(sentence).includes(rule as never), `should be caught as ${rule}: ${sentence}`);
+  // A product named by a word of its name counts as "the product"; other things tested do not.
+  const names = ['Wind-up torch', 'Battery radio'];
+  for (const sentence of ['We tested the torch for a week.', 'I have checked the wind-up torches every winter.', 'We reviewed this little radio.']) assert.deepEqual(textRuleBreaks(sentence, names), ['untested_claim'], sentence);
+  for (const sentence of ['We tested the smoke alarm button every month.', 'We checked the radio against the manufacturer manual.']) assert.deepEqual(textRuleBreaks(sentence, names), [], sentence);
+});
+
+test('S-b: through the engine, the product\'s own name in a testing claim is caught and an honest sentence passes the checks', async () => {
+  const s = await setup();
+  const { article, version } = await writeOne(s);
+  const radio = version.body.sections.find((x) => x.heading === 'Battery radio')!;
+  const edit = (v: ArticleVersion, sentence: string) => s.engine.editArticle(OWNER, s.brand.id, article.id, v.id, { sections: v.body.sections.map((x) => x.id === radio.id ? { ...x, body: `${filler} ${sentence}` } : x) });
+  const v2 = await edit(version, 'We tested the radio for a week.');
+  assert.ok((await critical(s, article.id)).some((i) => i.code === 'affiliate.untested_claim' && i.location === 'Section “Battery radio”'));
+  const v3 = await edit(v2, 'We tested the smoke alarm button every month. Use 3 out of 5 settings. It has a 4-star energy rating. Free returns are not something we can promise.');
+  assert.deepEqual(await critical(s, article.id), []);
+  void v3;
+});
