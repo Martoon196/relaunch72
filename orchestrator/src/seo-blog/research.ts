@@ -300,7 +300,9 @@ export async function researchQueries(input: {
       if (input.excludeUrl?.(key)) continue;
       seen.add(key);
       try {
-        const page = await input.transport.fetch(key, { maxBytes: 1_500_000 });
+        // The exclusion is also asked at every redirect hop, so an excluded address is never requested (review S-f).
+        const exclude = input.excludeUrl;
+        const page = await input.transport.fetch(key, { maxBytes: 1_500_000, ...(exclude ? { allowUrl: (u: string) => !exclude(u) } : {}) });
         if (input.excludeUrl && page.finalUrl && input.excludeUrl(page.finalUrl)) { notes.push(`${key} led to an address that is not used.`); continue; }
         if (page.status !== 200 || !/html|text\/plain/i.test(page.contentType)) { notes.push(`${key} could not be read (HTTP ${page.status}).`); continue; }
         const encoding=(page.headers['content-encoding']??'identity').toLowerCase().trim();

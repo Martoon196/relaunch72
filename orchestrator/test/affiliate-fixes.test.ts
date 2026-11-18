@@ -28,7 +28,7 @@ import { renderArticlePage } from '../src/seo-blog/render.js';
 import { evaluatePublication } from '../src/seo-blog/policy.js';
 import { seoScore } from '../src/seo-blog/seo-score.js';
 import { ownerActivityWords, ownerWords, noticeWords } from '../src/seo-blog/owner-words.js';
-import type { FetchTransport } from '../src/seo-blog/safe-fetch.js';
+import { GuardedFetchTransport, type FetchOptions, type FetchTransport } from '../src/seo-blog/safe-fetch.js';
 import { websiteSha } from '../src/seo-blog/website-target.js';
 import { ResearchUnavailableError } from '../src/seo-blog/research.js';
 import type { Article, ArticleVersion, Brand, Destination } from '../src/seo-blog/types.js';
@@ -1020,4 +1020,41 @@ test('S-c: a report row with more figures than the header is refused in plain wo
   assert.ok(trailing.ok && trailing.report.rows[0]!.earningsMinor === 150);
   const tab = readAmazonTrackingReport('Tracking ID\tClicks\tEarnings\nharbour-21\t3\t£2.00\tsurprise\n');
   assert.equal(tab.ok, false);
+});
+
+test('S-f: the Amazon-family exclusion is asked at every redirect hop, so a middle hop on Amazon is never requested', async () => {
+  // The production transport, with its single-request step replaced (no network): public address literals need no lookup.
+  const requested: string[] = [];
+  const chain: Record<string, string> = { 'https://93.184.216.34/start': 'https://www.amazon.co.uk/dp/B0TORCH001?tag=stranger-21', 'https://www.amazon.co.uk/dp/B0TORCH001?tag=stranger-21': 'https://93.184.216.35/end',
+    'https://93.184.216.34/other': 'https://93.184.216.36/middle', 'https://93.184.216.36/middle': 'https://93.184.216.35/end' };
+  const t = new GuardedFetchTransport();
+  (t as unknown as { once: (u: URL) => Promise<unknown> }).once = async (u: URL) => {
+    requested.push(u.toString());
+    const next = chain[u.toString()];
+    return { url: u.toString(), finalUrl: u.toString(), status: next ? 302 : 200, contentType: 'text/html', body: Buffer.from('ok'), truncated: false, headers: next ? { location: next } : {} };
+  };
+  const allowUrl = (u: string) => usableProductSource(u);
+  await assert.rejects(t.fetch('https://93.184.216.34/start', { allowUrl }), /not used/);
+  assert.deepEqual(requested, ['https://93.184.216.34/start'], 'the Amazon hop was never requested');
+  // A chain with no excluded hop is followed as before.
+  requested.length = 0;
+  const page = await t.fetch('https://93.184.216.34/other', { allowUrl });
+  assert.equal(page.status, 200);
+  assert.deepEqual(requested, ['https://93.184.216.34/other', 'https://93.184.216.36/middle', 'https://93.184.216.35/end']);
+  // Research for a product article hands the exclusion to the transport for every page it reads.
+  const seen: (FetchOptions | undefined)[] = [];
+  const h0 = harness();
+  const transport: FetchTransport = { fetch: async (url, options) => { if (url.startsWith('https://ready.example/')) seen.push(options); return h0.web.fetch(url, options); } };
+  const s = await setup({ transport });
+  for (const [k, v] of s.h.web.pages) h0.web.pages.set(k, v);
+  h0.web.set('https://ready.example/power-cuts', '<html><head><title>Be ready</title></head><body><main><h1>Be ready</h1><p>What to keep for a power cut at home: a wind-up torch, a battery radio and a water carrier are what most households keep ready.</p></main></body></html>');
+  s.h.search.search = async function (this: { calls: number }) { this.calls++; return [{ url: 'https://ready.example/power-cuts', title: 'Be ready', snippet: '' }]; } as never;
+  await writeOne(s);
+  assert.ok(seen.length >= 1, 'the research page was read');
+  for (const o of seen) {
+    assert.equal(typeof o?.allowUrl, 'function');
+    assert.equal(o!.allowUrl!('https://www.amazon.co.uk/dp/B0TORCH001'), false);
+    assert.equal(o!.allowUrl!('https://amzn.to/abc'), false);
+    assert.equal(o!.allowUrl!('https://ready.example/power-cuts'), true);
+  }
 });

@@ -41,6 +41,11 @@ export interface FetchOptions {
   readonly accept?: string;
   readonly method?: 'GET' | 'HEAD';
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Asked before every request this fetch makes, the first and each redirect hop: an address it answers false for is
+   * never requested (review S-f: research for a product article never touches the Amazon family, even mid-chain).
+   */
+  readonly allowUrl?: (url: string) => boolean;
 }
 
 /** The single seam every outbound public fetch in the engine goes through. */
@@ -133,6 +138,7 @@ export class GuardedFetchTransport implements FetchTransport {
     const maxRedirects = options.maxRedirects ?? DEFAULT_FETCH_OPTIONS.maxRedirects;
     let current = validatePublicUrl(raw);
     for (let hop = 0; hop <= maxRedirects; hop++) {
+      if (options.allowUrl && !options.allowUrl(current.toString())) throw new SafeFetchError('blocked', 'This address is not used.');
       const pinned = await resolvePublic(current.hostname);
       const response = await this.once(current, pinned, maxBytes, timeoutMs, options);
       if ([301, 302, 303, 307, 308].includes(response.status)) {
